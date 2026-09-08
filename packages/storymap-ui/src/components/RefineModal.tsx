@@ -1,0 +1,315 @@
+"use client";
+
+import { useState } from "react";
+import { AlertTriangle, Check, ImagePlus, Sparkles, Wand2, X } from "lucide-react";
+import { cn } from "@/lib/cn";
+import { refineCardAction } from "@/app/actions";
+import { IMPROVEMENT_KINDS } from "@/lib/storymap/frameworks";
+import type { ImprovementKind } from "@/lib/storymap/frameworks";
+import type { ReopenDestination } from "@/lib/storymap/reopen";
+import type { Card, StatusDef } from "@/lib/storymap/types";
+
+/**
+ * Onde uma reabertura cai (R1). Daqui saem só o `id` e a DICA — o RÓTULO vem do BOARD (fonte da verdade).
+ * Antes eram nomes escritos à mão, e nenhum era `name` de step: você clicava em "Discovery" e o card caía
+ * em "Especificar". Ver o lint `step-label-consistency.test.ts`.
+ */
+const REOPEN_DESTINATIONS: { id: ReopenDestination; hint: string }[] = [
+  { id: "design-ux", hint: "Repensar a UX/UI — harness-refine roda no Design" },
+  { id: "desenvolver", hint: "Re-implementar direto no código" },
+  { id: "enriquecer", hint: "Repensar o problema/escopo antes" },
+];
+
+const inputCls =
+  "w-full rounded-lg border border-line bg-inset px-3 py-2 text-[15px] text-fg outline-none transition focus:border-rose-400 focus:ring-2 focus:ring-rose-100";
+
+/**
+ * "Refinar" — reopen a shipped story for improvement. Captures the free-text brief
+ * (intent + intensity), the kind (which biases the deep-skill roster and the entry
+ * column), an optional target route/screen and an optional current-state screenshot,
+ * then calls `refineCardAction` to stamp `mode: refine` and route the card into the
+ * `refinar` column (where `harness-refine` diagnoses the live code and routes onward).
+ */
+export function RefineModal({
+  boardId,
+  card,
+  statuses,
+  onCancel,
+  onDone,
+}: {
+  boardId: string;
+  card: Card;
+  /** Os steps do board — a FONTE do rótulo de cada destino (nunca escreva o nome à mão). */
+  statuses?: readonly StatusDef[];
+  onCancel: () => void;
+  onDone: (card: Card) => void;
+}) {
+  // O rótulo de cada destino vem do BOARD (StatusDef.name) — nunca de uma string local.
+  const destinations = REOPEN_DESTINATIONS.map((d) => ({
+    ...d,
+    label: statuses?.find((s) => s.id === d.id)?.name ?? d.id,
+  }));
+  const [brief, setBrief] = useState("");
+  const [kinds, setKinds] = useState<ImprovementKind[]>(["ux"]);
+  const [destination, setDestination] = useState<ReopenDestination>("design-ux");
+  const [target, setTarget] = useState("");
+
+  const toggleKind = (id: ImprovementKind) =>
+    setKinds((cur) => (cur.includes(id) ? cur.filter((k) => k !== id) : [...cur, id]));
+  const allSelected = kinds.length === IMPROVEMENT_KINDS.length;
+  const toggleAll = () => setKinds(allSelected ? [] : IMPROVEMENT_KINDS.map((k) => k.id));
+  const [screenshot, setScreenshot] = useState<string | null>(null); // data URL
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const onFile = (file?: File | null) => {
+    if (!file) {
+      setScreenshot(null);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setScreenshot(typeof reader.result === "string" ? reader.result : null);
+    reader.readAsDataURL(file);
+  };
+
+  const submit = async () => {
+    const b = brief.trim();
+    if (!b) {
+      setError("Escreva o feedback de refino — o que melhorar e por quê.");
+      return;
+    }
+    if (kinds.length === 0) {
+      setError("Escolha ao menos um tipo de melhoria.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    const res = await refineCardAction({
+      boardId,
+      cardId: card.id,
+      brief: b,
+      kinds,
+      destination,
+      target: target.trim() || null,
+      screenshotDataUrl: screenshot,
+    });
+    setSaving(false);
+    if (res.ok) {
+      // refineCardAction always returns the written card on success; this fallback is
+      // defensive only and MIRRORS what the server persisted (today's openedAt; the
+      // screenshot lives in the sidecar) so the optimistic card can't contradict disk.
+      onDone(
+        res.data?.card ?? {
+          ...card,
+          mode: "refine",
+          status: destination,
+          refinement: {
+            brief: b,
+            kinds,
+            target: target.trim() || null,
+            screenshot: card.refinement?.screenshot ?? null,
+            openedAt: new Date().toISOString().slice(0, 10),
+          },
+        },
+      );
+    } else {
+      setError(res.error);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 sm:p-6">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onCancel} />
+      <div className="relative flex max-h-[88vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl">
+        <div className="flex items-center justify-between border-b border-line px-6 py-4">
+          <div className="flex items-center gap-2.5">
+            <span className="inline-flex items-center gap-1.5 rounded-md bg-rose-50 dark:bg-rose-500/10 px-2 py-1 text-xs font-bold uppercase tracking-wide text-rose-600 dark:text-rose-300">
+              <Wand2 className="h-3.5 w-3.5" /> Refinar
+            </span>
+            <span className="truncate text-sm font-medium text-fg-muted">{card.title}</span>
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded p-1 text-fg-subtle transition hover:bg-surface-hover hover:text-fg-muted"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="board-scroll flex-1 space-y-4 overflow-y-auto px-6 py-5">
+          <div className="flex items-start gap-2 rounded-lg border border-rose-100 dark:border-rose-500/30 bg-rose-50/60 dark:bg-rose-500/10 px-3 py-2.5 text-[12px] leading-snug text-rose-900 dark:text-rose-200">
+            <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-rose-500 dark:text-rose-400" />
+            <span>
+              Reabre esta story <strong>já entregue</strong> em modo melhoria. O agente parte do que{" "}
+              <strong>já existe</strong> (não recria do zero), diagnostica o código/UX reais e, conforme o
+              seu feedback, faz polimento ou refatoração mais agressiva — em UI/UX apresentando novas
+              opções no Design.
+            </span>
+          </div>
+
+          <div>
+            <Label>Feedback (o que melhorar e por quê)</Label>
+            <textarea
+              autoFocus
+              value={brief}
+              onChange={(e) => setBrief(e.target.value)}
+              rows={5}
+              placeholder="Ex.: o card de evento está poluído e a hierarquia confunde. Quero algo mais limpo, talvez repensar o layout do zero — priorize legibilidade da data e do preço."
+              className={cn(inputCls, "resize-y leading-relaxed")}
+            />
+            <p className="mt-1 text-[11px] leading-snug text-fg-muted">
+              A intensidade (polir ↔ redesenhar) sai daqui: seja explícito se quer só ajustes ou uma
+              refatoração ampla.
+            </p>
+          </div>
+
+          <div>
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="text-xs font-semibold uppercase tracking-wide text-fg-muted">
+                Tipo de melhoria
+              </span>
+              <button
+                type="button"
+                onClick={toggleAll}
+                className="text-[11px] font-medium text-rose-600 dark:text-rose-300 transition hover:text-rose-500"
+              >
+                {allSelected ? "Limpar" : "Marcar todas"}
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {IMPROVEMENT_KINDS.map((k) => {
+                const active = kinds.includes(k.id);
+                return (
+                  <button
+                    key={k.id}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => toggleKind(k.id)}
+                    title={k.short}
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-semibold transition",
+                      active
+                        ? "bg-rose-600 text-white"
+                        : "bg-surface-hover text-fg-muted hover:bg-surface-hover hover:text-fg",
+                    )}
+                  >
+                    {active && <Check className="h-3 w-3" />}
+                    {k.name}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1 text-[11px] leading-snug text-fg-muted">
+              Marque um ou mais — pode combinar (ex.: UI + UX + copy).
+            </p>
+          </div>
+
+          <div>
+            <Label>Voltar para</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {destinations.map((d) => {
+                const active = destination === d.id;
+                return (
+                  <button
+                    key={d.id}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => setDestination(d.id)}
+                    title={d.hint}
+                    className={cn(
+                      "inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-semibold transition",
+                      active
+                        ? "bg-rose-600 text-white"
+                        : "bg-surface-hover text-fg-muted hover:text-fg",
+                    )}
+                  >
+                    {active && <Check className="h-3 w-3" />}
+                    {d.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-1 text-[11px] leading-snug text-fg-muted">
+              A coluna onde o card reentra — o agente de refino roda lá e segue o fluxo.
+            </p>
+          </div>
+
+          <div>
+            <Label>Alvo (rota/tela) — opcional</Label>
+            <input
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+              placeholder="ex.: /eventos/[id] ou “card de evento na home”"
+              className={inputCls}
+            />
+          </div>
+
+          <div>
+            <Label>Screenshot do estado atual — opcional</Label>
+            {screenshot ? (
+              <div className="flex items-center gap-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={screenshot}
+                  alt="estado atual"
+                  className="h-16 w-16 rounded-md border border-line object-cover"
+                />
+                <button
+                  type="button"
+                  onClick={() => setScreenshot(null)}
+                  className="text-xs font-medium text-fg-muted underline hover:text-rose-600"
+                >
+                  remover
+                </button>
+              </div>
+            ) : (
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-dashed border-line px-3 py-2 text-sm text-fg-muted transition hover:border-line-emphasis hover:bg-surface-hover">
+                <ImagePlus className="h-4 w-4" />
+                Anexar imagem
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  onChange={(e) => onFile(e.target.files?.[0])}
+                />
+              </label>
+            )}
+          </div>
+        </div>
+
+        {error && (
+          <div className="mx-6 mb-1 flex items-start gap-2 rounded-md border border-red-200 dark:border-red-500/30 bg-red-50 dark:bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-300">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span className="flex-1 leading-snug">{error}</span>
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2 border-t border-line px-6 py-4">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg px-4 py-2 text-sm font-medium text-fg-muted transition hover:bg-surface-hover"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={saving || !brief.trim() || kinds.length === 0}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-rose-600 px-5 py-2 text-sm font-semibold text-white transition hover:bg-rose-500 disabled:opacity-50"
+          >
+            <Wand2 className="h-4 w-4" />
+            {saving ? "Enviando…" : "Enviar para refino"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Label({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-fg-muted">{children}</div>
+  );
+}

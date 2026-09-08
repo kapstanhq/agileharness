@@ -1,0 +1,736 @@
+# Shared board TEMPLATE — every board INHERITS from here (readBoardConfig deep-merges _base under
+# each board.yaml; a board declares only its deltas). "Novo board = id + deltas." See B5 / ADR-057.
+#
+# Merge semantics (repo.ts mergeRawConfig):
+#   - statuses/columns: BASE order preserved; a board step/column with the same id shallow-overrides
+#     this one; board-only ids are appended. So a board inherits the canonical pipeline and tweaks
+#     per id (a different trigger/description) without re-declaring the whole thing.
+#   - releases/personas/systems/linkTypes: a board's own list wins outright; otherwise it inherits
+#     these (board vocabulary is board-specific; linkTypes are shared, so they live here).
+#   - OPT-OUT (`inheritPipeline: false` on a board): the board OWNS its statuses+columns outright —
+#     no union with this base. Used by product boards (acme/orbit) whose pipeline predates this
+#     canonical Stage→Step one, until Fase 5 migrates them (deleting the flag + their pipeline so
+#     they inherit here, same ids → zero card migration).
+#
+# _base is NOT a board: listBoards skips `_`-prefixed dirs and sanitizeId strips the `_`, so it can
+# never be loaded/rendered as one. Increment 1 extracted the identical linkTypes; Increment 2 (B5
+# Fase 5 mechanism) moves the canonical Stage→Step pipeline (columns + statuses) here — the `storymap`
+# board (its origin) now inherits it with zero pipeline delta.
+
+# A POLÍTICA DE RELEASE — a ÚNICA declaração de quem publica este board (src/lib/storymap/
+# release-policy.ts). Ela responde DUAS perguntas que antes moravam em três lugares capazes de se
+# contradizer (a lista `autorun.publishQueue.boards` do settings, o `autorun` do passo `Publicar`, e o
+# `orchestrator.riskMatrix.deploy`):
+#
+#   manual → o trabalho ACUMULA em `stage`, já integrado e sem conflito, até alguém PEDIR: um humano
+#            (botão Publicar na Esteira) ou um agente autorizado (`riskMatrix.deploy: auto` em modo
+#            autônomo). Um pedido leva o LOTE INTEIRO — a promoção é do board, não por card.
+#   auto   → tudo isso MAIS um produtor que pede sozinho sempre que há trabalho staged.
+#
+# Nos dois modos o pedido é servido pela MESMA máquina (fila, embargo, janela de ociosidade,
+# firePromoteAndDeploy). O modo decide só QUEM ORIGINA o pedido. O `autorun` do passo `Publicar` é
+# DERIVADO daqui — um board que o autore é reprovado pelo lint board-integrity.
+#
+# O default é `manual` por segurança: board que ainda não declarou política não começa publicando em
+# produção sozinho. Quem quer o contínuo opta por dentro (hoje só `storymap`).
+release:
+  mode: manual
+
+# WS3 (F2) — REGISTRO DE CAPACIDADES declarativo (BoardConfig.toolConfigs). Um step referencia estes
+# ids em toolkit.use/expect; o engine monta os --mcp-config, o prompt prescreve (guidance) e o settle
+# audita expected×used. {board} expande POR BOARD na resolução — um board que herda este bloco (nimbus,
+# acme) aponta para o SEU próprio grafo (storymap/graphify/nimbus.json), não para o do storymap. Uma
+# capacidade nova = 1 entrada aqui + toolkit.use nos steps: ZERO código (crítico p/ consumidores OSS).
+toolConfigs:
+  codegraph:
+    mcp: storymap/graphify/{board}.json
+    match: "^mcp__graphify__"
+    description: grafo de código do pacote deste board (query_graph/get_neighbors)
+  # CONTRATO DE CAPACIDADE (declarar → PROVAR → degradar). `browser` = "renderizar uma tela e olhar para
+  # ela". Dois provedores INTERCAMBIÁVEIS da MESMA capacidade, encadeados por `fallback`; o preflight
+  # testa na ordem e monta o que passar. O que isto conserta: antes, `browser` era só um mount de MCP, e
+  # "o JSON existe no disco" era tratado como "a capacidade funciona" — não era (servidor conectava, todo
+  # tool call falhava por falta de binário do Chrome). Provar custa ~2s e fica em cache; descobrir depois
+  # custou 89 turnos e US$5,98 num card que continuou parado.
+  browser:
+    mcp: storymap/qa-mcp.json
+    match: "^mcp__chrome-devtools__"
+    provides: browser
+    probe: node scripts/capability-probe/browser-mcp.mjs
+    probeTimeoutMs: 120000
+    fallback: browser-script
+    # FORA DA JAULA DO RUN, e é isto que nenhum probe consegue descobrir. O servidor MCP é filho do processo
+    # do CLI, e a contenção do ASRT embrulha as chamadas Bash — não o CLI. Medido: o npx, o chrome-devtools-mcp
+    # e todo o Chrome (zygote/gpu/renderer/utility) ficam em net:[4026531840], o MESMO netns do pid 1. Logo,
+    # sob contenção este Chrome NÃO alcança nada que o run suba dentro de uma chamada Bash: navegar para um
+    # servidor em `bwrap --unshare-net` devolve net::ERR_CONNECTION_REFUSED, enquanto o mesmo servidor no host
+    # responde. Não é falta de binário nem de probe melhor — é topologia, e por isso a declaração fica AQUI e
+    # o preflight a lê antes de sondar. (Pior ainda: o chrome-devtools devolve isError:false NESSE erro — a
+    # falha só aparece no texto —, então um probe apontado para a URL certa continuaria verde.)
+    outsideRunSandbox: true
+    description: navegador headless via chrome-devtools MCP — interativo (o agente navega e REAGE ao que vê)
+  browser-script:
+    cli: node scripts/visual-sweep.mjs
+    provides: browser
+    # O QUE ESTE PROBE PROVA, e o que ele não pode provar. Ele lança um Chromium DE VERDADE e grava um PNG,
+    # então cobre o que é propriedade do HOST: playwright resolvível, Chromium executável como root (o modo
+    # de falha que matou o provedor primário) e disco gravável. Ele NÃO navega — usa page.setContent sobre
+    # about:blank, e o page.goto só existe no caminho da varredura. Alcançar a URL alvo não é propriedade do
+    # host e sim da CHAMADA (sob contenção cada chamada Bash tem netns próprio), então NENHUM probe de
+    # capacidade pode medi-la; quem garante isso é o protocolo da skill subir o servidor e varrer na MESMA
+    # chamada. A versão anterior deste comentário afirmava que verde aqui não podia significar algo diferente
+    # de verde lá — era falso, e era falso justamente na frase que autorizava confiar no probe.
+    probe: node scripts/visual-sweep.mjs --probe
+    probeTimeoutMs: 60000
+    description: >-
+      varredura visual por script Playwright (`node scripts/visual-sweep.mjs --url … --label …`): captura
+      PNGs por breakpoint em .artifacts/screenshots/ e você JULGA lendo os PNGs com o tool Read
+
+# WS4 (F3) — PERFIS DE ROTA nomeados (BoardConfig.routeProfiles). O harness-enrich escolhe um pela
+# classificação que já faz (storyType + hasUiSurface) e estampa o `routing` do card a partir dele. O
+# kernel só lê `routing.skips` (nunca o rótulo). `express` pula os passos DISPENSÁVEIS + capa o modelo/
+# effort — um technical trivial deixa de pagar entrevista/design/priorizar em opus. Regra de coerência: um
+# perfil que pula `priorizar` obriga o enrich a gravar um priorityCall mínimo no MESMO run (gate fail-closed).
+routeProfiles:
+  full:
+    skips: []
+    description: pipeline completo (default de user story com UI nova)
+  standard:
+    skips: []
+    description: só os skips por tipo (comportamento atual)
+  express:
+    skips: [interview, design-ux, design-ui, com-design, ready, priorizar]
+    modelCap: sonnet
+    effortCap: medium
+    description: ajuste simples / technical trivial; o enrich grava priorityCall mínimo ao pular priorizar
+  # WS-7 (§7.2) — perfil MECÂNICO: trabalho FECHADO de máquina (reaplicar um delta, julgar hunks
+  # cosmético×substantivo — o `harness-resolve` do WS-10 spawna SEMPRE nele). Só CAPA (skips vazio): a
+  # economia aqui não é pular passo, é não pagar opus por tarefa determinística. É por rodar barato que a
+  # escada do D14 pode tentar o juiz ANTES do humano sem culpa de custo. Sem `maxTurns`: um trabalho
+  # mecânico não tem RICE nem tasks ⇒ o baseline lean (40) do model-routing já cai em cima — knob novo
+  # seria schema novo para o número que o mecanismo já dá.
+  mechanical:
+    skips: []
+    modelCap: sonnet
+    effortCap: medium
+    description: trabalho mecânico/fechado (resolução de conflito, juiz de hunks); turnos lean pelo baseline
+
+# WS4 (F3) — REGISTRO DE ESPECIALISTAS (BoardConfig.specialists), keyed por id OPACO → slug do agente
+# (.claude/agents/<slug>.md do repo consumidor) + quando engajar. A indireção id→agent é o que mantém o
+# storymap-ui AGNÓSTICO (nunca hardcoda nomes de agente). Um step referencia estes ids em
+# toolkit.specialists; o engine compõe a nota de delegação (Task subagent_type) no system prompt.
+specialists:
+  copywriting:
+    agent: conversion-copywriter
+    when: copy de UI/CTA/notificação
+  security:
+    agent: security-reviewer
+    when: rules, auth, pagamentos, dados sensíveis
+  performance:
+    agent: performance-auditor
+    when: render mobile, bundle, latência percebida
+
+# DEPLOY AGNÓSTICO (D-AG1, docs/plans/deploy-agnostic/) — descritor OPCIONAL de publicação por board
+# (BoardConfig.deploy). AUSENTE (todos os boards hoje) ou `kind: auto` ⇒ roteamento LEGADO derivado de
+# `package` (storymap → self-deploy detached via systemd; app do monorepo → `just orch-deploy <pkg>`),
+# byte-a-byte o comportamento atual. Um app QUALQUER declara como se publica SEM tocar código:
+#   deploy:
+#     kind: command                      # "auto" | "command" | "agent" (ausente: infere — command
+#                                        #   presente ⇒ command; só description ⇒ agent)
+#     command: "vercel deploy --prod"    # kind:command — shell do dono, `bash -lc` na raiz do repo,
+#                                        #   mesmo registry/log/settle do orch-deploy
+#     description: >-                    # kind:agent — receita em texto livre; um claude headless
+#       Rode `flyctl deploy` e confirme  #   bounded a executa e responde {ok, liveSha?}; o liveSha é
+#       o health em /api/health.         #   SEMPRE re-medido por ancestralidade antes da prova
+#     healthUrl: https://meuapp.com/api/health   # contexto p/ o agente confirmar o app no ar
+#     timeoutMinutes: 15                 # orçamento do agente (default 15)
+# Prova de publicação: o settle continua sendo a autoridade — sem prova medida o card ESPERA em
+# Publicar (watchdog deploy-unsettled escala). Nenhum board declara o bloco ainda (documentação, não default).
+
+# STAGES (colunas visuais) — agrupam os STEPS (statuses) consecutivos. O engine anda
+# os STEPS por ordem do array `statuses`; estas colunas são só agrupamento de exibição
+# (um step = coluna simples; vários = fase com sub-lanes). `owner` indica quem atua na
+# fase (humano/agente/sistema) — dica de UI, não muda o engine. Ver StatusDef.column.
+columns:
+  - id: backlog
+    name: Triagem
+    color: '#a78bfa'
+    owner: agent
+    # A ferramenta ao lado desta fase: as IDEIAS (`/board/<id>/ideias`) — o que ainda NÃO foi decidido
+    # e por isso não tem card nenhum (ADR-066). A Triagem recebe TAREFA (já se sabe o que fazer); a
+    # Ideia é o outro lado da mesma pergunta, e o cabeçalho da coluna ganha a porta para ela.
+    tool: ideias
+    description: >-
+      Entrada crua. Steps: Capturando (lane OCULTA da captura inteligente — você descreve a dor/objetivo e o
+      preview propõe os cards para você aceitar ali mesmo) e Triagem (inbox de report_issue/captura: classifica,
+      deduplica e roteia). Nada vira trabalho até passar para a Descoberta. O que ainda não está decidido não
+      entra aqui: vira Ideia (a porta acima), e volta como tarefa quando a exploração terminar.
+  - id: discovery
+    name: Descoberta
+    color: '#3b82f6'
+    owner: agent
+    threadSession: true
+    description: >-
+      Entender a story (sessão contínua — um agente, vários chapéus). Steps: Dúvidas (perguntas ao humano por
+      contexto), Especificar (narrativa + aceite como hipótese), Entrevista (3 usuários sintéticos + 1 lente
+      crítica validam/ajustam o aceite), Estimar (RICE/KANO/funil conforme a natureza da story) e A fazer
+      (go/no-go: aprovar a story para construir).
+  - id: prepare
+    name: Design
+    color: '#d946ef'
+    owner: agent
+    threadSession: true
+    description: >-
+      Design (só stories user) — sessão contínua, um agente: Jornada (fluxo de uso, sem telas) → Telas
+      (wireframes construídos a partir da jornada, mesma sessão) → Aprovar design (humano avalia jornada +
+      telas juntas e aprova ou pede mudança em texto livre).
+  - id: construcao
+    name: Construção
+    color: '#f97316'
+    owner: agent
+    description: >-
+      Construir a story de ponta a ponta: Pronto p/ dev (buffer até um run pegar) → Plano & Tarefas →
+      Desenvolver → Revisão de código → QA / Testes (TDD/BDD; sub-agentes de DB, backend e frontend dentro
+      do mesmo run; revisão de código e QA são continuação da construção).
+  - id: entrega
+    name: Entrega
+    color: '#a855f7'
+    owner: human
+    # A ferramenta que aprofunda esta fase: a Esteira (`/board/<id>/entrega`) mostra ONDE o código
+    # de cada card está — worktree, merge train, stage ou no ar. O cabeçalho da coluna no Kanban
+    # ganha a porta para ela. A COLUNA é a fase da story; a ESTEIRA é a máquina por baixo.
+    tool: entrega
+    description: >-
+      Aprovar a entrega e publicar — UM card num stepper, 2 toques humanos. ① Aprovar (com o QA
+      automatizado verde); daí integrar (código → stage), homologar e liberar acontecem automáticos.
+      ② Deploy (Publicar) promove stage → main e publica de uma vez; depois o card vai para No ar.
+  - id: live
+    name: No ar
+    color: '#16a34a'
+    owner: system
+    description: Entregue e em produção. Fim do pipeline.
+  - id: reentry
+    name: Reentrada (oculta)
+    color: '#f43f5e'
+    owner: human
+    description: >-
+      Bucket INTERNO oculto (story-ql5mjm): a coluna Reabertura foi ELIMINADA do kanban. Refinar/Corrigir/
+      Descontinuar viram AÇÃO de card (type/mode refine|fix|retire) que reentra direto numa coluna de
+      desenvolvimento — os status refinar/corrigir/descontinuar continuam existindo (lint + autorun) mas
+      todos são `hidden`, então esta coluna nunca renderiza. Não arraste cards para cá.
+  - id: archive
+    name: Arquivo
+    color: '#52525b'
+    owner: system
+    system: true
+    description: Terminais — arquivados, duplicados e cancelados. Fora do kanban; acessível pela lixeira no header do board.
+statuses:
+  - id: capturando
+    name: Capturando
+    color: '#a78bfa'
+    trigger: harness-capture
+    autorun: true
+    model: sonnet
+    effort: medium
+    maxTurns: 20
+    costGuard: true
+    hidden: true
+    column: backlog
+    description: >-
+      🤖 Automação (lane oculta): o harness-capture lê o texto livre do container (+ o feedback de refinamentos) e
+      gera uma PROPOSTA de cards (summary + itens) em proposals/<id>.json, com a disciplina de granularidade
+      (story≠task). NÃO cria os cards — só propõe e PARA aqui (não avança sozinho): o container descansa nesta
+      lane oculta até você revisar a proposta no Inbox — Aceitar cria os cards na Triagem e consome o
+      container; Refinar em texto livre regenera a proposta com o feedback.
+  - id: triage
+    name: Triagem
+    color: '#eab308'
+    staging: true
+    column: backlog
+    description: >-
+      📥 Caixa de entrada de bugs/melhorias reportados em texto livre (MCP report_issue ou captura inteligente). O
+      agente de triagem classifica (tipo + severidade + labels), deduplica e ROTEIA — aceitar (entra no fluxo),
+      duplicado, declinar ou adiar. Raia de staging: nada avança daqui sozinho, não é coluna de trabalho (ADR-056).
+  - id: grill
+    name: Dúvidas
+    short: DÚV
+    color: '#60a5fa'
+    trigger: harness-grill
+    autorun: false
+    model: sonnet
+    effort: medium
+    maxTurns: 15
+    costGuard: true
+    column: discovery
+    description: >-
+      🤖 Manual (human-in-the-loop): rode o harness-grill ("Rodar agora") para gerar perguntas ao humano e ganhar
+      contexto sobre a story antes de especificar. A skill escreve as perguntas no card e NÃO avança — o humano
+      responde e move para Especificar. Não auto-roda (autorun:false).
+  - id: enriquecer
+    name: Especificar
+    short: SPEC
+    color: '#3b82f6'
+    trigger: harness-enrich
+    autorun: true
+    model: sonnet
+    effort: medium
+    maxTurns: 20
+    costGuard: true
+    column: discovery
+    description: >-
+      🤖 Automação: o harness-enrich (re)classifica o storyType com confiança e, a partir da demanda capturada, escreve
+      a narrativa (Como/quero/para ou variante técnica) e os critérios de aceite (Gherkin recomendado) como PRIMEIRA
+      hipótese — a base que a Entrevista vai validar. Avança para Entrevista.
+  - id: interview
+    name: Entrevista
+    short: ENTR
+    color: '#818cf8'
+    trigger: harness-interview
+    autorun: true
+    model: sonnet
+    effort: high
+    maxTurns: 25
+    costGuard: true
+    skipForTypes:
+      - technical
+      - chore
+      - spike
+      - bug
+    dispensable: true
+    column: discovery
+    description: >-
+      🤖 Automação: o harness-interview simula 3 entrevistas com as personas do board (1 com lente crítica/cética)
+      CONTRA a narrativa + aceite já especificados, valida/ajusta os critérios onde a conversa contradiz a hipótese,
+      sintetiza dores/desejos/must-haves/riscos e avança para Estimar. Só stories user — technical/chore/spike/bug
+      pulam direto para Estimar (skipForTypes).
+  - id: priorizar
+    name: Estimar
+    short: EST
+    color: '#ec4899'
+    gate: hasRefinement
+    trigger: harness-prioritize
+    autorun: true
+    model: sonnet
+    effort: medium
+    maxTurns: 15
+    costGuard: true
+    dispensable: true
+    column: discovery
+    description: >-
+      🤖 Automação: o harness-prioritize pontua a story pela régua WSJF — valor, urgência e destravamento (cada um na
+      escala 1·2·3·5·8·13) divididos pelo tamanho — estimando contra as ÂNCORAS já pontuadas do board e contra o
+      que o produto já entregou, e a move para A fazer. A ordem do backlog cai dessa conta, então pontuar um card
+      novo não mexe no score de nenhum outro. Só entra aqui com a narrativa completa (role + quero/precisamos +
+      para/de modo que) e ≥1 critério de aceite (gate hasRefinement).
+  - id: pronta
+    name: A fazer
+    short: TODO
+    color: '#f59e0b'
+    gate: hasPrioritization
+    autorun: false
+    column: discovery
+    description: >-
+      Priorizada — PARADA go/no-go (saída da Descoberta): só humano mexe e arrasta para fora o que deve ser
+      construído. Só entra aqui com a prioridade avaliada (gate hasPrioritization: uma nota WSJF, ou o tier
+      argumentado; a priorização numérica antiga — RICE/KANO/funil — ainda satisfaz o gate, mas é legado).
+  - id: design-ux
+    name: Jornada
+    short: FLUXO
+    color: '#d946ef'
+    trigger: harness-ux
+    autorun: true
+    model: sonnet
+    effort: medium
+    maxTurns: 20
+    costGuard: true
+    skipForTypes:
+      - technical
+      - chore
+      - spike
+      - bug
+    dispensable: true
+    column: prepare
+    toolkit:
+      guidance: >-
+        Se o board tiver guia de estilo (nota de contexto), ele rege a estética: tokens por papel; cheque debt.
+    description: >-
+      🤖 Automação: o harness-ux desenha SÓ a jornada de uso — grafo estruturado (nós/arestas, renderizado como
+      diagrama SVG real) + texto livre de como o usuário chega/navega/usa a feature, ancorado em
+      JTBD/entrevistas/personas e conferido vs o resto do app — no bloco journey de wireframes/<id>.json; SEM
+      telas. Em re-runs lê o feedback[] não-resolvido do sidecar. Avança para Telas (mesma sessão). Só stories
+      `user`; technical/chore/spike/bug pulam o design (skipForTypes).
+  - id: design-ui
+    name: Telas
+    short: UI
+    color: '#c084fc'
+    trigger: harness-ui
+    autorun: true
+    model: sonnet
+    effort: high
+    maxTurns: 25
+    costGuard: true
+    skipForTypes:
+      - technical
+      - chore
+      - spike
+      - bug
+    dispensable: true
+    column: prepare
+    toolkit:
+      guidance: >-
+        Se o board tiver guia de estilo (nota de contexto), ele rege a estética: tokens por papel; cheque debt.
+    description: >-
+      🤖 Automação: o harness-ui compõe o CANVAS de design — telas com estados-chave, componentes, sub-fluxos e notas
+      (formatos dsl ou html sandboxed) — A PARTIR da jornada do harness-ux — que ele tem na MESMA sessão
+      (threadSession) e no bloco journey do sidecar — incorpora o feedback[] não-resolvido preservando artefatos
+      aprovados (ids estáveis), define o artefato primário (wireframeChosen, satisfaz o gate hasWireframe) e
+      avança para Aprovar design. Só stories user (skipForTypes).
+  - id: com-design
+    name: Aprovar design
+    short: APROV
+    color: '#e879f9'
+    gate: hasWireframe
+    autorun: false
+    skipForTypes:
+      - technical
+      - chore
+      - spike
+      - bug
+    dispensable: true
+    column: prepare
+    description: >-
+      PARADA humana: avalie a JORNADA + o CANVAS juntos no Inbox — aprove/comente POR ARTEFATO, troque o
+      primário e aprove o design; ou peça ajuste (o feedback estruturado do sidecar re-roda as Telas, ou a
+      Jornada quando o fluxo é questionado). Só entra aqui com wireframeChosen (gate hasWireframe). Avance
+      manualmente para Pronto p/ dev.
+  - id: ready
+    name: Pronto p/ dev
+    short: READY
+    color: '#22d3ee'
+    autorun: false
+    skipForTypes:
+      - technical
+      - chore
+      - spike
+      - bug
+    dispensable: true
+    column: construcao
+    description: >-
+      Aprovado e pronto para desenvolver — buffer humano (green-light) até um run pegar o card. Stories técnicas
+      pulam o Design e este buffer (o A fazer, na Descoberta, já é o go/no-go delas).
+  - id: plano-tecnico
+    name: Plano & Tarefas
+    short: TASKS
+    color: '#0ea5e9'
+    gate: hasPlacement
+    trigger: harness-plan
+    autorun: true
+    model: opus
+    effort: high
+    maxTurns: 60
+    costGuard: true
+    toolkit:
+      use: [codegraph]
+      expect:
+        - tool: codegraph
+          level: expected
+      guidance: >-
+        Consulte query_graph/get_neighbors do codegraph ANTES de propor a arquitetura; cite os nós e arquivos que o plano vai tocar.
+    column: construcao
+    description: >-
+      🤖 Automação: o harness-plan escreve o plano técnico (arquivos a tocar, abordagem, contratos, riscos) em
+      plans/<id>.md E decompõe as tasks[] no MESMO run — a mesma mente que investigou o código, sem recarga de
+      contexto nem drift de handoff — marca techPlanReady + tasks, e avança para Desenvolver. (A pipeline canônica
+      não tem mais o step Tarefas separado; nos boards de produto o harness-tasks segue até a Fase 5.)
+  - id: desenvolver
+    name: Desenvolver
+    short: DEV
+    color: '#f97316'
+    gate: hasTasks
+    trigger: harness-do
+    autorun: false
+    model: sonnet
+    effort: high
+    maxTurns: 120
+    costGuard: true
+    toolkit:
+      specialists: [copywriting, security]
+      guidance: >-
+        Se o board tiver guia de estilo (nota de contexto), ele rege a estética: tokens por papel; cheque debt.
+    column: construcao
+    description: >-
+      🤖 Automação: o harness-do implementa as tasks com TDD (harness-tests cobre a pirâmide); na Fase 3 fará fan-out de
+      sub-agentes de DB/backend/frontend dentro do mesmo run. Ao terminar, move para Revisão de código. Só entra aqui com
+      ≥1 task (gate hasTasks).
+  - id: revisar-codigo
+    name: Revisão de código
+    short: REV
+    color: '#0d9488'
+    gate: hasBuildEvidence
+    trigger: harness-review
+    autorun: false
+    model: opus
+    effort: high
+    maxTurns: 80
+    costGuard: true
+    toolkit:
+      use: [codegraph]
+      expect:
+        - tool: codegraph
+          level: expected
+      guidance: >-
+        Rode query_graph/get_neighbors do codegraph sobre os arquivos do diff (callers/dependências impactados) ANTES de revisar; cite os nós.
+      specialists: [security, performance]
+    column: construcao
+    description: >-
+      🤖 Automação: o harness-review roda lentes (Firestore/Next.js/perf mobile/segurança/testes) no diff, auto-corrige o
+      seguro (guardado por testes) e deixa só o que precisa de decisão como blocker; avança para QA / Testes se
+      não houver blocker aberto.
+  - id: qa-automatizado
+    name: QA / Testes
+    short: QA
+    color: '#0891b2'
+    gate: hasNoBlockers
+    trigger: harness-qa
+    autorun: false
+    model: sonnet
+    effort: medium
+    maxTurns: 80
+    costGuard: true
+    # Migrado do açúcar legado `mcpConfig` para o toolkit DECLARATIVO: é o que dá ao passo uma capacidade
+    # com provedor, probe e fallback (o `mcpConfig` montava um arquivo e pronto — sem `expect`, o audit de
+    # capacidade ficava estruturalmente cego justamente aqui: 396 de 397 registros com toolGap nulo).
+    toolkit:
+      use: [browser]
+      expect:
+        # `when: uiSurface` é load-bearing: só card COM tela precisa de navegador. Sem a condição, um host
+        # sem browser pararia também os technical/chore/spike (que o próprio harness-qa já resolve pela suíte),
+        # trocando um guard dirigido por uma parada geral do pipeline.
+        - tool: browser
+          level: required
+          when: uiSurface
+      guidance: >-
+        Se o board tiver guia de estilo (nota de contexto), ele rege a estética: tokens por papel; cheque debt.
+    column: construcao
+    description: >-
+      🤖 Automação: o harness-qa ramifica por storyType. `user` → sobe o stack dev seedado, executa os critérios de aceite
+      de ponta a ponta (E2E Playwright derivados do acceptance[]) + sweep visual headless via chrome-devtools MCP
+      (mobile + desktop, estados empty/erro/loading). technical/chore/spike/bug → o gate concreto é a SUÍTE do pacote
+      (`just test-<pkg>`, ex.: `just test-storymap`) verde + as lentes do harness-review — sem seed/E2E/visual; suíte
+      vermelha vira finding testing:blocker e NÃO destrava. Marca qaPassed e avança para Aprovar entrega só com tudo verde.
+      Entra aqui só com o código revisado sem blocker (gate hasNoBlockers).
+  - id: revisao
+    name: Aprovar entrega
+    color: '#14b8a6'
+    gate: hasQaPassed
+    autorun: false
+    column: entrega
+    laneStep: true
+    description: >-
+      Aprovação humana do que foi entregue — já com o QA automatizado (aceite E2E + visual) verde. Avance para
+      Integrar (a partir daí integrar e homologar são automáticos; o card descansa em Liberar pronto p/ publicar).
+  - id: merge
+    name: Integrar
+    color: '#34d399'
+    autorun: true
+    column: entrega
+    laneStep: true
+    description: >-
+      Integração concluída pelo merge train. Com `autorun.staging` ativa (Fase 4a) o run é DIVIDIDO — board data
+      → main (board vivo) e código → branch `stage`. Passagem automática (sem agente): o card avança para Homologar.
+  - id: stage
+    name: Homologar
+    color: '#10b981'
+    autorun: true
+    column: entrega
+    laneStep: true
+    description: >-
+      Código integrado na branch `stage`, rodável para validação antes da promoção à main. Passagem automática
+      (sem agente): o card avança para Liberar.
+  - id: release
+    name: Liberar
+    color: '#a855f7'
+    autorun: false
+    column: entrega
+    laneStep: true
+    description: >-
+      PARADA — pronto, mas ainda NÃO no ar: o código está integrado na branch `stage`, aguardando o Deploy. Ainda
+      NÃO foi promovido para `main` (o estado deliberado "pronto-mas-não-no-ar"). O clique de Deploy é que promove
+      stage → main E publica de uma vez. Avance para Publicar.
+  - id: deploy
+    name: Publicar
+    color: '#9333ea'
+    autorun: false
+    onEnter: promote-and-deploy
+    column: entrega
+    laneStep: true
+    description: >-
+      PARADA humana — DEPLOY. Ao publicar (mover o card para cá), a cadeia única promove o código de `stage` para
+      `main` (promoteStageToMain, path-scoped a packages/**, publicação GLOBAL) e DEPOIS dispara o deploy do board
+      (deployBoard): storymap → rebuild+restart DETACHED via systemd-run; boards de produto → `just orch-deploy`.
+      O card ESPERA aqui ("Publicando") até o deploy CONFIRMAR em todos os alvos: o settle mede por ancestralidade
+      que o código está no sha publicado, carimba a prova (deployProof) e só então avança para No ar. Settle que
+      falha reverte o card para Liberar; settle que não chega escala pelo aviso "deploy sem confirmação".
+  - id: concluida
+    name: No ar
+    color: '#22c55e'
+    gate: hasDeployProof
+    terminal: true
+    delivered: true
+    column: live
+    description: >-
+      Entregue, validado e EM PRODUÇÃO — com prova. Só entra aqui com a publicação confirmada (gate
+      hasDeployProof: o settle do deploy mediu e carimbou a prova; card sem código — sem stagedAt e sem
+      commitRange — passa sem prova, pois nada publica). Fim do pipeline.
+  - id: refinar
+    name: Refinar
+    color: '#f43f5e'
+    gate: hasRefineBrief
+    trigger: harness-refine
+    autorun: true
+    model: opus
+    effort: high
+    maxTurns: 50
+    costGuard: true
+    toolkit:
+      use: [codegraph]
+      expect:
+        - tool: codegraph
+          level: expected
+      guidance: >-
+        Use query_graph/get_neighbors do codegraph para mapear o que o refino toca (arquivos/rotas/callers) ANTES de reescrever o aceite.
+        Se o board tiver guia de estilo (nota de contexto), ele rege a estética: tokens por papel; cheque debt.
+    column: reentry
+    hidden: true
+    description: >-
+      🤖 Automação (modo melhoria): reabra uma story em Aprovar entrega ou No ar pelo botão “Refinar”. O harness-refine
+      diagnostica o que já existe (código + UX reais), reescreve os critérios como um DELTA sobre o comportamento atual
+      e ROTEIA — UI/UX gera novas opções e cai em UX; copy/funcionalidade cai em Build. Daí as
+      skills seguem cientes de mode:refine (melhoram in-place, sem recriar do zero) até a Aprovação.
+  - id: corrigir
+    name: Corrigir
+    color: '#dc2626'
+    gate: hasBugReport
+    trigger: harness-fix
+    autorun: true
+    model: opus
+    effort: high
+    maxTurns: 50
+    costGuard: true
+    toolkit:
+      use: [codegraph]
+      expect:
+        - tool: codegraph
+          level: expected
+      guidance: >-
+        Use query_graph/get_neighbors do codegraph para localizar a regressão (arquivos/callers afetados) ANTES de reproduzir o bug.
+        Se o board tiver guia de estilo (nota de contexto), ele rege a estética: tokens por papel; cheque debt.
+    column: reentry
+    hidden: true
+    description: >-
+      🤖 Automação (modo correção): reabra uma story em Aprovar entrega ou No ar pelo botão “Reportar bug”. O harness-fix
+      diagnostica e REPRODUZ a regressão (escreve um teste que falha), reescreve os critérios como esperado×atual e
+      ROTEIA — regressão visual cai em UX; comportamento cai em Build. Daí as skills seguem
+      cientes de mode:fix (corrigem in-place, com guard de regressão) até a Aprovação.
+  - id: descontinuar
+    name: Descontinuar
+    color: '#737373'
+    gate: hasRetireBrief
+    trigger: harness-retire
+    autorun: true
+    model: opus
+    effort: max
+    maxTurns: 40
+    costGuard: true
+    toolkit:
+      use: [codegraph]
+      expect:
+        - tool: codegraph
+          level: expected
+      guidance: >-
+        Use query_graph/get_neighbors do codegraph para achar todos os usos/referências ANTES de planejar a remoção segura.
+    column: reentry
+    hidden: true
+    description: >-
+      🤖 Automação (modo descontinuação): reabra qualquer card pelo botão “Descontinuar”. O harness-retire diagnostica
+      READ-ONLY o que a feature possui hoje (arquivos/rotas/flags/functions/dados), escreve um plano de remoção e
+      executa o nível pedido — desativar (flag), despublicar (tira da navegação), remover código (deleta, git reverte) —
+      pausando ANTES de apagar dados de produção, que exigem aprovação humana (“Aprovar exclusão de dados”). Manual:
+      dispare com “Rodar agora”. Ao terminar, arquiva o card.
+  - id: arquivados
+    name: Arquivados
+    color: '#52525b'
+    terminal: true
+    column: archive
+    description: >-
+      Cemitério dos itens que existiram e não existem mais — postergados (revivíveis), abandonados (nunca construídos) e
+      descontinuados (removidos do app). O chip de disposição distingue cada caso. Fim de linha, fora da visão “Em
+      aberto”.
+  - id: duplicado
+    name: Duplicado
+    color: '#a1a1aa'
+    gate: hasDuplicateOf
+    terminal: true
+    column: archive
+    description: >-
+      Reporte duplicado de outro card (o canônico fica em duplicateOf). Estado terminal VISÍVEL — preserva
+      auditoria/relatório, nunca apaga. Resultado da triagem “Marcar duplicado” (ADR-056).
+  - id: cancelado
+    name: Cancelado
+    color: '#71717a'
+    terminal: true
+    column: archive
+    description: >-
+      Reporte declinado na triagem (não será trabalhado), com o motivo registrado. Estado terminal VISÍVEL — preserva
+      auditoria, nunca apaga. Resultado da triagem “Declinar” (ADR-056).
+  - id: capturado
+    name: Capturado
+    color: '#8b5cf6'
+    terminal: true
+    column: archive
+    description: >-
+      Container de captura já consumido — a proposta foi aceita e os cards reais criados (ou a captura foi
+      descartada). Estado terminal, fora da visão “Em aberto”.
+
+# Link relationship vocabulary (shared across boards via _base inheritance; a board that
+# declares its own linkTypes wins outright — board vocabulary is board-specific, see
+# mergeRawConfig: "releases/personas/systems/linkTypes: board's own list wins").
+# Legados (sem from/to): sem restrição de ponta, backward-compatible com qualquer board.
+# Tipados (from/to): declaram os NodeKinds permitidos em cada ponta (NodeKind em types.ts).
+# A validação de pontas é feita por validateBoardLinks (link-graph.ts), não pelo schema Zod.
+linkTypes:
+  - id: depends-on
+    name: Depende de
+  - id: relates-to
+    name: Relacionado a
+  - id: blocks
+    name: Bloqueia
+  - id: duplicates
+    name: Duplica
+  # Edges estratégia↔entrega — pontas tipadas; os NodeKinds de artefato (desiredOutcome/inputMetric/
+  # idea/canvas) são seam para as stories de artefato (story-tihd9l/story-gk8zl3/story-emcit7).
+  - id: serves
+    name: Serve
+    from: [canvas, inputMetric]
+    to: [desiredOutcome]
+  - id: references
+    name: Referencia
+    from: [canvas]
+    to: [persona, release, idea, activity]
+  - id: moves
+    name: Move
+    from: [idea]
+    to: [inputMetric]
+  # ADR-066 §3: QUALQUER card de trabalho endereça a Ideia — user, technical, bug, chore, spike (todos
+  # são `type: story`, o storyType é que varia). O ADR-060 §5 mandava o ticket pendurar numa user story e
+  # herdar a origem transitivamente; aquilo fazia sentido quando a ponta de cima era "dor de usuário", e
+  # deixou de fazer quando virou exploração de qualquer natureza — o produto direto de uma ideia técnica é
+  # um chore, sem user story de fachada no meio só para ter onde pendurar.
+  - id: addresses
+    name: Endereça
+    from: [story]
+    to: [idea]
+  - id: targets
+    name: Mira
+    from: [story, idea]
+    to: [persona]

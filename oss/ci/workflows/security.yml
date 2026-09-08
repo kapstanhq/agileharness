@@ -1,0 +1,95 @@
+# SCA + SBOM + VEX do repositório OSS do AgileHarness.
+#
+# DUAS CÓPIAS, DE PROPÓSITO: a fonte revisada é `oss/ci/workflows/` e a extração instala a cópia
+# executável em `.github/workflows/` (o GitHub só roda o que está lá). Edite os DOIS lados no mesmo
+# commit — o extrator e a suíte comparam byte a byte e reprovam a divergência. No monorepo de origem
+# não existe `.github/workflows/`: lá o CI é local, por decisão registrada.
+#
+# O agendamento semanal NÃO é redundante com o gatilho de PR: advisory novo aparece sem ninguém tocar no
+# código. Sem o `schedule`, um repositório sem commits parece seguro por inércia — e é exatamente assim que
+# uma dependência vulnerável fica meses no ar sem ninguém saber.
+name: security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # Segunda, 06:17 UTC. Minuto quebrado de propósito: o topo da hora é o horário de maior contenção dos
+    # runners agendados do GitHub.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # O `github.event_name` entra na chave de propósito: sem ele o grupo de um push em `main` é o MESMO do
+  # `schedule` semanal (que também roda em `refs/heads/main`), e um commit qualquer na segunda de manhã
+  # CANCELAVA a única varredura que existe para achar advisory novo sem ninguém tocar no código. O gatilho
+  # que serve para descobrir o que mudou sozinho não pode ser cancelado por quem mexeu no código.
+  group: security-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  sca:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Mesma razão do ci.yml: o default grava o `GITHUB_TOKEN` no `.git/config` do runner, ao alcance
+          # de qualquer passo posterior. Aqui o risco é maior — este job INSTALA dependências e fala com a
+          # rede (OSV/EPSS/KEV) —, e nenhum passo precisa de credencial de git depois do clone.
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          # A MESMA versão do `packageManager` da raiz que o ci.yml pina, e pela mesma razão. Aqui ela é
+          # ainda mais load-bearing: o SBOM mede o fecho REAL instalado, e trocar de resolvedor debaixo do
+          # `--frozen-lockfile` mudaria o inventário sobre o qual o veredito de VEX é dado.
+          bun-version: 1.3.14
+
+      # Sem `--frozen-lockfile` o install poderia RESOLVER versões novas e o SBOM mediria uma árvore que não
+      # é a do commit — inventário de uma coisa, veredito sobre outra.
+      - name: instalar dependências
+        run: bun install --frozen-lockfile
+
+      # SBOM do fecho REAL instalado (não do lockfile): é o único escopo que vê o pacote que está no disco e
+      # não no lockfile. Nesta árvore são 28 — e todo SCA baseado em lockfile é cego a eles.
+      - name: SBOM (CycloneDX 1.6) do fecho instalado
+        run: >-
+          node scripts/security/generate-sbom.mjs
+          --pkg packages/storymap-ui
+          --out .artifacts/reports/sbom.cdx.json
+
+      - name: divergência árvore × lockfile
+        run: >-
+          node scripts/security/generate-sbom.mjs
+          --pkg packages/storymap-ui
+          --summary > .artifacts/reports/closure-summary.json
+
+      # Único passo que fala com a rede (OSV + EPSS + catálogo CISA KEV). Ele NÃO decide nada: separar
+      # consulta de veredito é o que impede o gate de morrer por oscilação de rede — e um gate que o time
+      # aprende a re-rodar até ficar verde já está desligado.
+      - name: consultar OSV + EPSS + KEV
+        run: >-
+          node scripts/security/osv-query.mjs
+          --pkg packages/storymap-ui
+          --out .artifacts/reports/osv.json
+
+      # O veredito. Aplica as disposições VEX versionadas E RE-VERIFICA a evidência de cada uma: disposição
+      # cuja justificativa deixou de ser verdadeira REPROVA, em vez de continuar calando o achado.
+      - name: gate de VEX + SCA
+        run: >-
+          node scripts/security/vex-gate.mjs
+          --report .artifacts/reports/osv.json
+          --emit-vex .artifacts/reports/openvex.json
+
+      - name: publicar SBOM e VEX
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-e-vex
+          path: .artifacts/reports/
+          retention-days: 30

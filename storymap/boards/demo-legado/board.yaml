@@ -1,0 +1,179 @@
+# BOARD DE DEMONSTRAÇÃO nº 2 — o que NÃO herda a pipeline canônica.
+#
+# Existe por uma razão só, e ela é uma PROVA: `inheritPipeline: false` é uma porta de saída real da
+# ferramenta (um board que chegou antes do Stage→Step, ou um produto cujo fluxo é outro), e um board
+# que a exercita tem de existir NO DISCO — senão a prova de que a porta funciona morre junto com os
+# boards privados que não viajam. Aqui ele também é o único board que declara `faceUrl`.
+#
+# `autorunDisabled: true` pelo mesmo motivo do board `demo`: dado de demonstração nunca dispara run.
+id: demo-legado
+name: Aurora Selo (demo, pipeline própria)
+autorunDisabled: true
+faceUrl: https://aurora.exemplo.dev/selo/
+# OPT-OUT da pipeline canônica (`_base`): este board declara os PRÓPRIOS passos e não recebe os do
+# `_base`. O vocabulário compartilhado (linkTypes, toolConfigs, specialists) segue herdado — só a
+# pipeline e o que a referencia (routeProfiles) ficam de fora. Ver repo.ts `mergeRawConfig`.
+inheritPipeline: false
+statuses:
+  - id: triage
+    name: Triagem
+    staging: true
+    color: '#eab308'
+    description: 📥 Caixa de entrada de pedidos e relatos em texto livre. Nada avança daqui sozinho.
+  - id: enriquecer
+    name: Enriquecer
+    autorun: true
+    color: '#3b82f6'
+    trigger: harness-enrich
+    maxTurns: 20
+    costGuard: true
+    description: 🤖 Escreve a narrativa e os critérios de aceite, e move para Priorizar.
+  - id: priorizar
+    name: Priorizar
+    autorun: true
+    color: '#ec4899'
+    trigger: harness-prioritize
+    maxTurns: 15
+    costGuard: true
+    gate: hasRefinement
+    description: 🤖 Pontua pela régua WSJF contra as âncoras do board e move para Pronta p/ build.
+  - id: pronta
+    name: Pronta p/ build
+    autorun: false
+    color: '#f59e0b'
+    gate: hasPrioritization
+    description: Priorizada — parada go/no-go. Avance manualmente para Design UI/UX ao aprovar.
+  - id: design-ux
+    name: Design UI/UX
+    autorun: false
+    color: '#d946ef'
+    trigger: harness-ux
+    maxTurns: 20
+    costGuard: true
+    description: Desenha a jornada e as telas da fatia.
+  - id: com-design
+    name: Com design
+    autorun: false
+    color: '#e879f9'
+    gate: hasWireframe
+    description: Parada humana — aprove o desenho antes do plano técnico.
+  - id: plano-tecnico
+    name: Plano técnico
+    autorun: false
+    color: '#0ea5e9'
+    trigger: harness-plan
+    maxTurns: 20
+    costGuard: true
+    description: Escreve o plano de implementação da fatia.
+  - id: quebrar-tasks
+    name: Quebrar em tasks
+    autorun: true
+    color: '#8b5cf6'
+    trigger: harness-tasks
+    maxTurns: 20
+    costGuard: true
+    gate: hasTechPlan
+    description: 🤖 Quebra o plano em tarefas verificáveis. Só entra com o plano técnico pronto.
+  - id: desenvolver
+    name: Em desenvolvimento
+    autorun: false
+    color: '#f97316'
+    trigger: harness-do
+    maxTurns: 60
+    gate: hasTasks
+    costGuard: true
+    description: Constrói a fatia contra as tarefas declaradas.
+  - id: revisar-codigo
+    name: Revisar código
+    autorun: false
+    color: '#0d9488'
+    trigger: harness-review
+    maxTurns: 40
+    costGuard: true
+    description: Revisão de código com evidência de build.
+  - id: qa-automatizado
+    name: QA automatizado
+    autorun: false
+    color: '#0891b2'
+    trigger: harness-qa
+    maxTurns: 40
+    gate: hasNoBlockers
+    costGuard: true
+    toolkit:
+      use:
+        - browser
+      expect:
+        - tool: browser
+          level: required
+          when: uiSurface
+    description: Roda o aceite automatizado e a varredura visual.
+  - id: revisao
+    name: Revisão
+    color: '#14b8a6'
+    gate: hasQaPassed
+    description: Parada humana — aprove a entrega.
+  - id: refinar
+    name: Refinar
+    autorun: true
+    color: '#f43f5e'
+    trigger: harness-refine
+    maxTurns: 50
+    gate: hasRefineBrief
+    costGuard: true
+    description: 🤖 Melhora uma fatia já entregue a partir de um brief.
+  - id: corrigir
+    name: Corrigir
+    autorun: true
+    color: '#dc2626'
+    trigger: harness-fix
+    maxTurns: 50
+    gate: hasBugReport
+    costGuard: true
+    description: 🤖 Corrige uma regressão a partir de um relato.
+  - id: descontinuar
+    name: Descontinuar
+    autorun: false
+    color: '#737373'
+    trigger: harness-retire
+    maxTurns: 40
+    gate: hasRetireBrief
+    description: Remove ou arquiva uma capacidade entregue.
+  - id: concluida
+    name: Concluída
+    terminal: true
+    delivered: true
+    gate: hasReleased
+    color: '#22c55e'
+    description: No ar.
+  - id: arquivados
+    name: Arquivados
+    terminal: true
+    color: '#52525b'
+    description: Fora do fluxo, preservado.
+  - id: duplicado
+    name: Duplicado
+    terminal: true
+    gate: hasDuplicateOf
+    color: '#a1a1aa'
+    description: Aponta para o card canônico.
+  - id: cancelado
+    name: Cancelado
+    terminal: true
+    color: '#71717a'
+    description: Decidimos não fazer.
+releases:
+  - id: r1
+    name: Selo mínimo
+    order: 10
+personas:
+  - id: editor
+    name: Editor do selo
+    color: '#7e9ac2'
+    kind: Interna
+    role: Decide o que o selo publica e em que ordem.
+systems:
+  - id: selo
+    name: Selo
+    color: '#6366f1'
+    kind: Serviço
+    prompt: O selo detém título, autor e cronograma de publicação.

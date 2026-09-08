@@ -1,0 +1,130 @@
+# A rede de proteção do PACOTE — ela precisa viver AQUI, não só na raiz do monorepo.
+#
+# O QUE ISTO IMPEDE: que o repositório público nasça carregando o segredo do operador.
+# A extração para OSS é CÓPIA do SHA congelado com UM commit inicial
+# (docs/plans/agileharness-oss/06-frente-release.md WS-H) — o `.gitignore` da raiz do umbrella não
+# viaja, e o commit único É o artefato publicado: não existe histórico onde o vazamento se esconda,
+# nem rebase que o tire depois. Sem as regras abaixo, o PRIMEIRO `git add -A` do repo novo publica
+# `.env.local` (token do operador, token MCP, chave VAPID privada, tokens de ingest de feedback) e
+# `storymap/.runner/auth-token` — cada um deles suficiente para um terceiro operar o board de quem
+# instalou, e o board spawna agentes com poder de execução.
+#
+# Vale igual para o DEV de quem clona: os mesmos arquivos nascem no primeiro boot dele.
+#
+# Os caminhos são relativos a ESTE diretório. No umbrella isso é `packages/storymap-ui/`; no repo
+# extraído o pacote é a RAIZ (ou `app/`), e é lá que `storymap/.runner/` passa a existir de fato.
+# Guardado por `src/lib/storymap/oss-secret-hygiene.test.ts`, que simula a extração e reprova se
+# um `.env*` voltar a ser stageável.
+
+# === SEGREDO DO OPERADOR (nunca versionado, em nenhum checkout) ===
+.env
+.env.local
+.env.*.local
+.env.production
+# Enumerar variante por variante DEIXA BURACO — e aqui o buraco é definitivo, porque ESTE é o
+# `.gitignore` que VIAJA e vira a raiz do repo público (o da raiz do umbrella não vai). MEDIDO:
+# `.env.development`, `.env.staging` e `.env.dev` eram stageados pelo primeiro `git add -A` do repo
+# extraído — o commit único que É o artefato publicado, com `STORYMAP_MCP_TOKEN` dentro. E não é
+# hipotético: `@next/env` (loadEnvConfig, src/server/main.ts) LÊ `.env.<ambiente>` — com
+# AGILEHARNESS_DEV=1 isso é `.env.development` —, então é um arquivo que o produto pede ao adotante.
+# Qualquer `.env.<algo>` é segredo por default; o que é DOCUMENTO (sem valores) volta por negação.
+.env.*
+# `.env.example` é o CONTRÁRIO disto: é o documento (sem valores) e tem de viajar.
+!.env.example
+!.env.*.example
+!.env.example.*
+# Estado do runner: `auth-token` (o token do operador, 0600) e `session-secret` (assina o cookie de
+# sessão) nascem aqui no 1º boot — ver src/lib/auth/token.ts.
+storymap/.runner/
+.keys/
+*.pem
+*.key
+*-key.json
+# MEDIDO no repositório EXTRAÍDO (2026-08-06): as seis classes abaixo escapavam do primeiro
+# `git add -A` do repo novo — `id_rsa`, `keystore.p12`, `certs/bundle.pfx`,
+# `config/service-account.json` e `sa/serviceAccount.json` eram todos stageáveis.
+#
+# É a MESMA assimetria que o .ossignore já documenta ter consertado nele, uma camada abaixo: lá a
+# régua era estritamente mais fraca que a cerca de dentro; aqui a cerca que VIAJA (esta, a única que
+# vira a raiz do repo público) era estritamente mais fraca que a régua. As três linhas acima cobriam
+# PEM e `.key` e paravam aí, enquanto o material de chave real chega em `.p12`/`.pfx` (keystore
+# Java/Windows) e o service account do Google chega como `serviceAccount.json` — que `*-key.json`
+# não pega, porque o hífen não está lá.
+#
+# Classe, não instância: no umbrella o `.gitignore` da raiz já cobria as seis e por isso ninguém
+# notou — o buraco só é visível do lado de lá do corte, onde esta é a única cerca que existe.
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+id_ecdsa*
+# As DUAS grafias, porque o Google emite as duas: o console baixa `serviceAccount.json` (camelCase) e
+# o gcloud CLI escreve `service-account.json`. Cobrir só a com hífen deixa passar justamente o arquivo
+# que o caminho mais comum produz — medido no repo extraído: `sa/serviceAccount.json` era stageável
+# depois de as outras cinco classes já terem sido fechadas.
+*service-account*.json
+*serviceAccount*.json
+# ...e a terceira grafia, que as duas de cima NÃO pegam: glob de gitignore é CASE-SENSITIVE, então
+# `*serviceAccount*` não casa `gcpServiceAccount.json` — o "S" ali é maiúsculo porque o nome vem
+# concatenado a um prefixo (`gcp`, `firebase`, `prod`). MEDIDO pelo teste-gêmeo desta cerca, no
+# primeiro caso que ele rodou: `infra/gcpServiceAccount.json` era stageável no commit único.
+# Duas grafias fechavam a instância e deixavam a classe viva — o padrão que a memória desta casa
+# registra, aqui uma camada abaixo dele mesmo.
+*ServiceAccount*.json
+
+# === ARTEFATOS DE BUILD (o repo novo builda o seu; artefato versionado = drift silencioso) ===
+node_modules
+node_modules/
+.next/
+# O self-deploy builda em `.next-staging` e guarda o anterior em `.next-prev` (runner/deploy.ts).
+.next-staging/
+.next-prev/
+dist/
+# `next-env.d.ts` é GERADO pelo Next a cada `build`/`dev`, e a doc oficial manda gitignorá-lo
+# (nextjs.org/docs/app/api-reference/config/typescript). Ele CONTINUA no `include` do tsconfig —
+# ignorar no git não é remover do TypeScript, e `tsc --noEmit` sai 0 sem ele (medido).
+#
+# A REGRA PRECISA ESTAR AQUI, e não só na raiz do umbrella: a extração TRANSPLANTA este arquivo
+# para a raiz do artefato (`extract.sh`, etapa 3) — o `.gitignore` da raiz do monorepo não viaja.
+# MEDIDO em 2026-08-27: com a regra só lá, o `bun run build` do destino criava o arquivo, o
+# `git add -A` o rastreava, e a suíte reprovava NO DESTINO. Duas cópias, e eu tinha editado uma.
+next-env.d.ts
+*.tsbuildinfo
+.eslintcache
+.swc/
+coverage/
+
+# === ARTEFATOS EFÊMEROS ===
+# `.artifacts/` é onde o PRODUTO grava: a captura de tela que o operador anexa no terminal e no
+# copiloto (`api/terminal/upload`, `api/copilot/upload`) e os spikes/relatórios que as skills mandam
+# escrever. Nada disso é código nem dado de board.
+#
+# POR QUE A REGRA PRECISA ESTAR AQUI (auditoria de extração, 2026-08-19). Esta cerca é a que VIAJA:
+# o extrator a transplanta para a RAIZ do repositório publicado (extract.sh: `cp packages/storymap-ui/
+# .gitignore -> .gitignore`), e a cerca da raiz do umbrella — que já tinha esta regra — fica para trás.
+# Sem ela, uma captura do operador salva durante um run é varrida pelo `git add -A` do commit de código
+# do run (`worktree.ts commitAllPending`) e vai para o branch, para o merge e para o remoto.
+#
+# O padrão preserva o ESQUELETO (README + os diretórios + os .gitkeep) e ignora o CONTEÚDO — é o mesmo
+# do `.gitignore` da raiz deste monorepo, copiado de propósito para as duas árvores concordarem.
+.artifacts/*
+!.artifacts/README.md
+!.artifacts/*/
+.artifacts/*/*
+!.artifacts/*/.gitkeep
+
+# === LOGS, TRAÇOS E DUMPS ===
+# Não é higiene de repositório: log e trace de run carregam corpo de card, prompt do agente e
+# caminho absoluto da máquina do dono — conteúdo do usuário, publicado por acidente.
+*.log
+.logs/
+.cli-traces/
+test-results/
+playwright-report/
+.playwright-mcp/
+
+# As árvores efêmeras que o provisionador de isolamento corta por run e por sessão. O código DEPENDE
+# desta regra (runner/worktree.ts a cita por nome: "Sibling of the repo working tree, gitignored at the
+# root"), e o umbrella a tinha enquanto o artefato publicado NÃO — latente até alguém apontar o alvo
+# para o próprio clone, e aí cada run sujaria o `git status` da árvore de onde o artefato é medido.
+.worktrees/

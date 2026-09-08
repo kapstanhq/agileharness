@@ -1,0 +1,72 @@
+# Donos de código do AgileHarness. Este arquivo é a ORIGEM; a extração monta a cópia em
+# `.github/CODEOWNERS`, byte a byte igual (o extrator recusa a divergência). Contexto e convenção
+# da montagem: `oss/ci/README.md`.
+#
+# Aqui o CODEOWNERS é gate de ENTRADA NO BRANCH, não cerimônia de deploy: combinado com proteção de branch
+# ("require review from Code Owners"), ele garante que um PR que mexe na SUPERFÍCIE DE SEGURANÇA não entre
+# sem leitura de quem responde por ela. Sem a proteção de branch ligada no repositório, este arquivo é só
+# uma sugestão de revisor — a configuração no GitHub é parte do controle, não um detalhe.
+#
+# O DONO É UM TIME, E ELE PRECISA EXISTIR NO DIA DO PUSH. `@kapstanhq/maintainers` é um time da org
+# `kapstanhq` (a empresa; o PRODUTO continua se chamando AgileHarness). Um dono que o GitHub não resolve não vira revisor obrigatório: a regra é IGNORADA em
+# silêncio, o PR fica verde sem ninguém ter lido, e a tela de proteção de branch continua anunciando
+# "require review from Code Owners" — ilusão de revisão é pior que revisão ausente, porque ninguém
+# procura o que acha que já tem. Criar o time exige TRÊS condições, e falhar em qualquer uma é
+# silenciosa: o time precisa (i) existir, (ii) ser visível na org e (iii) ter permissão `write`
+# EXPLÍCITA neste repositório. A prova é `gh api repos/<org>/<repo>/codeowners/errors` devolver
+# vazio — faça isso no mesmo dia em que criar o repositório. E
+# `oss-governance.test.ts` recusa qualquer dono fora da lista declarada nele.
+#
+# POR QUE EXISTEM REGRAS ALÉM DO `*`: com um dono único o `*` já cobre tudo, então as linhas abaixo não
+# apertam permissão — elas NOMEIAM a superfície. Cada uma marca um lugar onde um PR muda PRIVILÉGIO e não
+# comportamento, que é o que o revisor precisa saber ANTES de ler o diff. Elas são de CLASSE (o diretório),
+# nunca de instância: arquivo novo lá dentro já nasce coberto, e é assim que a régua não fica para trás do
+# repositório. A ordem importa só quando os donos divergem — vale a ÚLTIMA regra que casa.
+#
+# Todo caminho aqui é do repositório EXTRAÍDO e tem de existir nele: regra que aponta para caminho
+# inexistente é regra morta, e regra morta é a mesma ilusão de revisão que um time inexistente.
+
+# O piso: qualquer mudança precisa de um mantenedor.
+*                                                       @kapstanhq/maintainers
+
+# ── O CI e a própria governança ──────────────────────────────────────────────────────────────────────
+# O CI é o caminho mais curto para executar código de estranho com os segredos do repositório: workflow
+# alterado num PR é mudança de PRIVILÉGIO, não de código. Junto vêm o CODEOWNERS (quem edita a régua de
+# revisão desliga a revisão) e o dependabot.
+/.github/                                               @kapstanhq/maintainers
+# A política de segurança e o guia de contribuição: quem os edita muda o canal por onde uma falha chega
+# — e um canal trocado em silêncio manda o próximo relato para o lugar errado.
+/SECURITY.md                                            @kapstanhq/maintainers
+/CONTRIBUTING.md                                        @kapstanhq/maintainers
+# A régua do corte para OSS: ela decide o que é publicado. Um `!` a mais publica o que ficou de fora.
+/.ossignore                                             @kapstanhq/maintainers
+
+# ── PROMPT-AS-CODE: instrução que um agente autônomo EXECUTA na máquina de quem adotou ────────────────
+# Isto não é texto. Uma skill é o programa que o agente headless roda com a permissão do CLI desligada;
+# um PR que edita `.claude/skills/**` muda comportamento executável e passa parecendo edição de prosa —
+# é a classe de mudança mais fácil de aprovar no automático e a de maior alcance. São 23 diretórios de
+# skill (21 `usm-*` + `usm-triage-shared` + `storymap-orchestrator`), mais o comando e o guia de estilo
+# dos assistentes: a regra é do diretório inteiro para que a skill nº 24 nasça coberta.
+/.claude/                                               @kapstanhq/maintainers
+# O pipeline declarado e os interruptores da autonomia: `boards/_base/board.yaml` diz QUAIS colunas
+# disparam agente, com qual gate, modelo e teto de turnos; `settings.yaml` traz o mestre do autorun, as
+# lanes do scheduler e o gate do merge. Trocar `autorun: false` por `true` numa linha de YAML arma a
+# máquina inteira — é a mudança de privilégio com o menor diff possível.
+/storymap/                                              @kapstanhq/maintainers
+# Tudo aqui é executado pela ferramenta na máquina de quem adotou — e os gates de segurança do CI moram
+# neste diretório. Quem edita o gate pode desligá-lo: alterar o scanner de segredo, as disposições VEX
+# ou a régua de licença precisa da mesma revisão que a superfície que eles protegem.
+/scripts/                                               @kapstanhq/maintainers
+
+# ── O perímetro do servidor ───────────────────────────────────────────────────────────────────────────
+# Sessão, gateway do terminal, posse do evento `upgrade` e auditoria de bind.
+/packages/storymap-ui/src/server/                       @kapstanhq/maintainers
+# O portão de rota: é ele que separa o que exige sessão do que é público.
+/packages/storymap-ui/src/middleware.ts                 @kapstanhq/maintainers
+# A identidade: assinatura do cookie (o material de chave que faz a rotação revogar tudo), handles do
+# MCP e o guarda que decide quando um chamador sem cookie mesmo assim é ator legítimo.
+/packages/storymap-ui/src/lib/auth/                     @kapstanhq/maintainers
+# O motor que spawna: postura de autonomia, flags do spawn, jaula do run, merge train e deploy.
+/packages/storymap-ui/src/lib/storymap/runner/          @kapstanhq/maintainers
+# O parser do frontmatter — a porta por onde conteúdo de terceiro (card, sidecar) entra no processo.
+/packages/storymap-ui/src/lib/storymap/frontmatter.ts   @kapstanhq/maintainers

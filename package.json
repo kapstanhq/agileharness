@@ -1,0 +1,29 @@
+{
+  "name": "agileharness",
+  "version": "0.2.0",
+  "private": true,
+  "description": "AgileHarness — board agêntico de User Story Mapping com autorun.",
+  "license": "Apache-2.0",
+  "workspaces": [
+    "packages/storymap-ui"
+  ],
+  "scripts": {
+    "typecheck": "cd packages/storymap-ui && tsc --noEmit",
+    "test": "cd packages/storymap-ui && vitest run"
+  },
+  "devDependencies": {
+    "js-yaml": "^4.3.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "bun": ">=1.0.0"
+  },
+  "packageManager": "bun@1.3.14",
+  "overrides": {
+    "lucide-react": "0.555.0",
+    "firebase": "12.7.0",
+    "postcss": "8.5.26",
+    "glob": "10.5.0",
+    "sharp": "npm:@favware/skip-dependency@1.2.2"
+  }
+}

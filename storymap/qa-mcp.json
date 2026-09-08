@@ -1,0 +1,24 @@
+{
+  "_comment": [
+    "Mount do provedor PRIMÁRIO da capacidade `browser` (board.yaml → toolConfigs.browser).",
+    "Pin 1.6.0: a 1.1.1 anterior não expõe --chromeArg, e sem --no-sandbox o Chrome recusa a subir",
+    "como root — o servidor fazia handshake e TODA chamada de tool falhava, que é exatamente o modo",
+    "de falha que o probe (scripts/capability-probe/browser-mcp.mjs) agora detecta antes do spawn.",
+    "--headless: não há display nesta VPS. --isolated: perfil temporário, limpo a cada run."
+  ],
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "chrome-devtools-mcp@1.6.0",
+        "--isolated",
+        "--headless",
+        "--chromeArg=--no-sandbox",
+        "--chromeArg=--disable-setuid-sandbox",
+        "--chromeArg=--disable-dev-shm-usage",
+        "--no-usage-statistics"
+      ]
+    }
+  }
+}

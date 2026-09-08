@@ -1,0 +1,107 @@
+# Robô de dependências do AgileHarness. Este arquivo é a ORIGEM; a extração monta a cópia em
+# `.github/dependabot.yml`, byte a byte igual (o extrator recusa a divergência). Contexto e convenção
+# da montagem: `oss/ci/README.md`.
+#
+# O ecossistema `github-actions` é o mais importante aqui, e é o mais esquecido: os workflows pinam action
+# por SHA (tag é mutável, logo pinar é obrigatório), mas SHA pinado NÃO recebe correção sozinho. Sem alguém
+# bumpando, a pinagem que protege contra tag repontada vira ABANDONO — uma action com falha conhecida,
+# congelada por decisão de segurança. O Dependabot é o que fecha esse ciclo: ele reescreve o SHA e mantém o
+# comentário da tag em sincronia.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # O TETO AQUI NÃO PODE SER 0, e já foi por engano (2026-08-26 → 2026-08-27). A justificativa do
+    # teto 0 — "o lockfile é regenerado na extração, o PR não muda nada" — é sobre `bun.lock` e vale
+    # para o ecossistema `bun`, logo abaixo; ela foi aplicada NESTE bloco por engano de edição. O
+    # efeito foi o inverso exato do cabeçalho deste arquivo: `github-actions` parou de abrir PR, e é
+    # ele que reescreve o SHA pinado. SHA pinado que ninguém bumpa é a pinagem virando ABANDONO —
+    # precisamente o ciclo que este robô existe para fechar. `toolchain-pin.test.ts` passou a cobrar
+    # que este bloco não só exista mas ABRA PR, porque "declarado e mudo" satisfazia o guarda antigo.
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci)"
+    labels:
+      - "dependencies"
+      - "security"
+
+  # ── O ecossistema é `bun`, e a escolha é LOAD-BEARING ────────────────────────────────────────────────
+  #
+  # Esta árvore não tem `package-lock.json` nem `yarn.lock`: tem `bun.lock`. Declarar `npm` aqui produzia um
+  # robô cujo PR nascia SEMPRE vermelho — o Dependabot bumpava o `package.json` e não tinha como reescrever
+  # um lockfile que não sabe ler, e o `bun install --frozen-lockfile` do `ci.yml` reprova por DEFINIÇÃO
+  # quando manifesto e lock discordam. Robô que abre PR sempre vermelho é robô que alguém desliga na segunda
+  # semana — e junto com ele some o bump de `github-actions` acima, que é o que sustenta a pinagem por SHA.
+  #
+  # MEDIDO na documentação oficial do GitHub (Supported ecosystems and repositories, consultado 2026-08-19):
+  #   · o identificador exato é `bun`;
+  #   · a versão mínima suportada é bun >= 1.1.39 — a que trocou o lockfile BINÁRIO (`bun.lockb`) pelo
+  #     texto (`bun.lock`). Um repositório que ainda carregue `bun.lockb` NÃO é atendido: a extração
+  #     publica `bun.lock`, e trocar de volta reabriria o mesmo buraco;
+  #   · a coluna "Dependabot security updates" NÃO está marcada para `bun` — só "version updates". Ou seja,
+  #     o robô abre PR de VERSÃO no ritmo semanal, mas NÃO abre o PR automático quando sai um advisory. É
+  #     exatamente por isso que `security.yml` roda a varredura SCA por `schedule` e o gate de VEX decide:
+  #     as duas peças não são redundantes, uma cobre o que a outra não faz.
+  #
+  # `directories` (plural) e não `directory`: a raiz é um WORKSPACE (`workspaces: ["packages/storymap-ui"]`)
+  # e quase toda dependência vive no manifesto do membro. O suporte a workspace do ecossistema `bun` tem
+  # defeito ABERTO (dependabot-core#14223 — o lock não é reescrito quando o manifesto atualizado é o de um
+  # membro), então declarar o membro EXPLICITAMENTE é o que impede o modo de falha silencioso "o robô roda
+  # toda semana e nunca toca nas dependências que existem".
+  - package-ecosystem: "bun"
+    directories:
+      - "/"
+      - "/packages/storymap-ui"
+    schedule:
+      interval: "weekly"
+    # ALARME, NÃO ATUALIZADOR — e o motivo NÃO é o que estava escrito aqui. A justificativa anterior
+    # dizia que "o lockfile é regenerado na extração, então o PR não muda nada e termina em
+    # NoChangeError". MEDIDO em 2026-08-27 e FALSO: o PR #1 do repositório bumpava oito dependências
+    # de verdade (`@blocknote` 0.52→0.54, `@mantine` 8.3.12→8.3.18, `@modelcontextprotocol/sdk`
+    # 1.26→1.30, `next` 15.5.21→15.5.23). Regenerar o lock não atualiza nada: ele é regenerado A
+    # PARTIR do `package.json`, e esse manifesto carrega PINOS EXATOS.
+    #
+    # O motivo real é a DIREÇÃO do fluxo. Este repositório é uma CÓPIA downstream: cada publicação
+    # reescreve a árvore inteira a partir da extração do monorepo de origem, e o `package.json`
+    # publicado é o de lá, verbatim (conferido: os pinos batem byte a byte). Um PR mesclado AQUI
+    # sobrevive até a próxima publicação e é apagado por ela — sem conflito, sem aviso, sem nada que
+    # denuncie que o trabalho foi desfeito. Robô cujo PR é revertido por construção é pior que robô
+    # ruidoso: ele produz a sensação de manutenção sem a manutenção.
+    #
+    # O que o teto 0 NÃO desliga: os ALERTAS de vulnerabilidade continuam chegando, e o `security.yml`
+    # varre por `schedule` (necessário, porque este ecossistema não tem "Dependabot security updates").
+    # Segurança está coberta.
+    #
+    # O QUE FICA DESCOBERTO, e é honesto dizer: defasagem SIMPLES. Com o robô mudo aqui e nada
+    # equivalente vigiando o monorepo de origem, ninguém é avisado de que uma dependência ficou seis
+    # patches para trás. O conserto certo é bumpar LÁ, onde a mudança sobrevive — não reabrir PR aqui,
+    # onde ela não sobrevive. O `groups`/`ignore` abaixo ficam prontos, não mortos, para o dia em que
+    # o artefato deixar de ser cópia.
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - "dependencies"
+    # ── MAJOR NÃO ENTRA POR ROBÔ, E ISTO FOI MEDIDO NO PRIMEIRO DIA ──────────────────────────────────
+    # Nas primeiras horas do repositório o robô abriu DOZE PRs, e eram todos major contra pinagens
+    # DELIBERADAS: `next 14 → 16` (o 15 está barrado por licença — `sharp` arrasta LGPL, e o gate de
+    # licença do ci.yml reprova), `typescript 5 → 7`, `tailwind 3 → 4`, `@mantine/core 8 → 9`,
+    # `@types/node 20 → 26`. Cada um dispara ci + security; nenhum podia ser mesclado.
+    #
+    # Um robô que abre PR que nunca entra é um robô que alguém desliga na segunda semana — e junto com
+    # ele some o bump de `github-actions` acima, que é o que sustenta a pinagem por SHA. Ignorar major
+    # AQUI é o que mantém o robô útil. Note que o ignore é só deste ecossistema: em `github-actions` o
+    # major continua chegando, porque lá ele é justamente o que se quer ver.
+    #
+    # Major continua sendo trabalho humano: `@dependabot unignore <dep>` num PR reabre caso a caso, e
+    # tirar as duas linhas abaixo devolve o comportamento antigo no dia em que as pinagens caírem.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      # Agrupa o barulho de patch para que o PR que sobra seja o que merece leitura humana.
+      patch-e-minor:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

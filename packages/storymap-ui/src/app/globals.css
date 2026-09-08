@@ -1,0 +1,612 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Semantic design tokens — ONE source of truth for every surface, border and
+ * text colour across ALL views (mapa / kanban / priorização / personas / config).
+ * A view sets `bg-canvas`, a card `bg-surface`, a divider `border-line` — never an
+ * ad-hoc `dark:bg-slate-800/40` here and `dark:bg-slate-950` there.
+ *
+ * Identity (AgileHarness redesign): WARM-NEUTRAL, quase P&B, no espírito do Notion —
+ * canvas de papel quente, tinta grafite morna (#37352F) e UM único acento: âmbar
+ * (#E8A13C). Hierarquia por tamanho/peso/espaço, não por cor. O tema escuro é um
+ * espelho warm-dark do mesmo sistema (mesmo âmbar), para o toggle não destoar.
+ *
+ * Values are space-separated RGB triplets so Tailwind's `<alpha-value>` keeps
+ * working (e.g. `bg-surface/60`, `bg-accent/10`).
+ */
+:root {
+  color-scheme: light;
+
+  /* Surfaces — the board plane is WHITE (Notion-style): canvas = surface = #fff, cards stand out by
+     their hairline border, not by a darker plane. (The design's #E7E5DF was the design-tool backdrop
+     AROUND the mockup, not the app's own background.) inset/hover are faint warm grays for wells/hovers. */
+  --canvas: 255 255 255; /* #ffffff — page / scroll area (white board) */
+  --inset: 244 242 238; /* #F4F2EE — recessed wells (inputs, code, chart bg) */
+  --surface: 255 255 255; /* #ffffff — cards, header, popovers, modals */
+  --surface-hover: 240 239 236; /* #F0EFEC — hover/active on a surface */
+
+  /* Borders — warm graphite at low alpha; muted for faint dividers; emphasis on focus/active. */
+  --line: 218 216 210; /* #DAD8D2 — ~rgba(55,53,47,.10) sobre papel */
+  --line-muted: 229 227 222; /* #E5E3DE */
+  --line-emphasis: 194 191 184; /* #C2BFB8 */
+
+  /* Foreground — graphite body text; muted secondary; subtle for icons/placeholders.
+   *
+   * A RAMPA INTEIRA foi deslocada (2026-08-01) porque o degrau de baixo REPROVAVA AA nos dois temas,
+   * e ele não pinta só ícone: medidas do repo mostram ~600 usos de `text-fg-subtle`, muitos em
+   * rótulos de 10–11.5px (eyebrow de cartão, chip de id, contador) — texto normal, piso 4.5:1.
+   *   antes  #9B9A93 → 2.82:1 sobre papel branco e 2.53:1 sobre o inset.
+   *   agora  #706F68 → 5.04:1 / 4.51:1.
+   * `--fg-muted` teve de descer junto: parado em 4.88:1 ele ficaria MAIS CLARO que o subtle novo e a
+   * rampa se inverteria. Em 7.37:1 o degrau muted/subtle é de 1.46x — perceptível sem pesar a página.
+   * Nenhum call-site muda; a correção é aqui e vale para as ~600 ocorrências de uma vez. */
+  --fg: 55 53 47; /* #37352F — 12.26:1 sobre papel */
+  --fg-muted: 87 86 79; /* #57564F — 7.37:1 / inset 6.59:1 */
+  --fg-subtle: 112 111 104; /* #706F68 — 5.04:1 / inset 4.51:1 */
+
+  /* Accent — the single mnemonic: âmbar. Links, active nav, selected, focus rings. */
+  --accent: 232 161 60; /* #E8A13C */
+
+  /* Brand orange — o LARANJA AVIAÇÃO do logo/ícone/splash (#FF4F00). É a cor da MARCA (o ponto do
+     lockup Agile·HARNESS), distinta do acento funcional âmbar acima: fixa nos dois temas, viva sobre
+     papel branco e sobre o quase-preto. Só o <AgileHarnessLogo> a usa. */
+  --brand-orange: 255 79 0; /* #FF4F00 */
+
+  /* Primary — the single "create / save" call-to-action (warm calm green, = o "done" do mapa). */
+  --primary: 79 168 115; /* #4FA873 */
+  --primary-hover: 65 143 97; /* #418F61 */
+  --primary-fg: 255 255 255;
+
+  /* Danger — a tinta do que deu ERRADO (ícone/filete de um aviso de erro, texto de falha). Terracota
+     quente, não o vermelho-alarme frio do Tailwind: é a mesma família do papel e do âmbar. Existe como
+     token justamente para o erro não voltar a ser um `red-500` cru cravado em cada componente. */
+  --danger: 191 79 56; /* #BF4F38 — 4.7:1 sobre papel branco (AA) */
+
+  /* O que o RODAPÉ desta aplicação ocupa, para um overlay flutuante não aterrissar em cima dele.
+     Lido por `.ah-bar` (public/ah-overlay.js), que roda em qualquer app e por isso não pode adivinhar.
+     Zero no desktop; abaixo de `md` a barra de navegação inferior existe e mede 56px (`h-14`). */
+  --ah-bottom-reserve: 0px;
+
+  /* (A "espinha dorsal" do Story Map tinha tokens PRÓPRIOS — `--spine-*`, o creme-âmbar da faixa-seta
+     "Ações" e do nó do passo. Saíram com a grade: o mapa virou OUTLINE, onde a hierarquia se lê por
+     tamanho/peso/recuo — a regra da identidade — e nenhuma superfície precisa de cor própria.) */
+
+  /* A PAUTA e a MARGEM do cartão do Inbox (ver `.paper-rules`). Cores COMPLETAS, não triplets: a
+     alfa delas muda por tema e só aquela classe as consome — o resto do arquivo é triplet, para o
+     alpha do Tailwind. */
+  --paper-rule: rgba(94, 150, 166, 0.18); /* a pauta */
+  --paper-margin: rgba(198, 70, 56, 0.22); /* a margem vermelha */
+}
+
+.dark {
+  color-scheme: dark;
+
+  /* Warm-dark mirror: near-black quente em vez do azul-grafite frio do GitHub. */
+  --canvas: 26 25 22; /* #1A1916 */
+  --inset: 19 18 15; /* #13120F — recessed wells */
+  --surface: 36 34 32; /* #242220 — cards, header, popovers, modals */
+  --surface-hover: 48 46 42; /* #302E2A */
+
+  --line: 58 56 51; /* #3A3833 */
+  --line-muted: 46 44 40; /* #2E2C28 */
+  --line-emphasis: 78 75 69; /* #4E4B45 */
+
+  /* Mesma correção de AA do tema claro (ver a nota lá em cima). No escuro o `muted` já estava quase
+   * certo — move 1 ponto —, mas o `subtle` reprovava contra as três superfícies: #7A7770 dava 3.55:1
+   * sobre `surface`.
+   *
+   * O alvo NÃO é a superfície lisa: o contador de coluna do Kanban e o da Priorização pintam
+   * `text-fg-subtle` sobre um chip `bg-fg/[0.05]`, que compõe para ~#2E2C2A e come um pouco do
+   * contraste. Mirar só `surface` deixava o chip em 4.48:1 — reprovado por 0.02, medido na varredura.
+   * #96938C passa nos QUATRO fundos (surface, canvas, inset e o chip). */
+  --fg: 236 234 227; /* #ECEAE3 — 13.17:1 sobre surface */
+  --fg-muted: 169 166 159; /* #A9A69F — 6.52:1 / canvas 7.23:1 */
+  --fg-subtle: 150 147 140; /* #96938C — 5.17:1 / canvas 5.73:1 / chip 4.54:1 */
+
+  --accent: 233 168 76; /* #E9A84C — âmbar levemente mais claro p/ contraste no escuro */
+
+  --primary: 79 168 115; /* #4FA873 */
+  --primary-hover: 91 186 130; /* #5BBA82 */
+  --primary-fg: 255 255 255;
+
+  --danger: 230 130 106; /* #E6826A — terracota clareada p/ contraste sobre o quase-preto quente */
+
+  /* No escuro a pauta e a margem ganham alfa para sobreviver ao fundo. */
+  --paper-rule: rgba(94, 150, 166, 0.2);
+  --paper-margin: rgba(198, 70, 56, 0.34);
+}
+
+/* A barra de navegação inferior só existe abaixo de `md` (BoardHeader: `fixed inset-x-0 bottom-0`,
+   `h-14`). É onde o overlay flutuante precisa subir para não pousar em cima dela — e para não roubar
+   o toque das abas, já que ele carrega o maior z-index que existe. */
+@media (max-width: 767px) {
+  :root {
+    --ah-bottom-reserve: 56px;
+  }
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: rgb(var(--canvas));
+  color: rgb(var(--fg));
+}
+
+::selection {
+  background: rgb(var(--accent) / 0.28);
+}
+
+/* Thin, unobtrusive scrollbars for the (wide) board canvas — driven by tokens.
+   `.chat-scroll` compartilha SÓ a barra de rolagem: ele é o transcript de um painel de conversa, e a
+   reserva de nav inferior logo abaixo não vale para ele (ver o comentário daquela regra). */
+.board-scroll,
+.chat-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--line)) transparent;
+}
+.board-scroll::-webkit-scrollbar,
+.chat-scroll::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+.board-scroll::-webkit-scrollbar-thumb,
+.chat-scroll::-webkit-scrollbar-thumb {
+  background: rgb(var(--line));
+  border-radius: 9999px;
+}
+.board-scroll::-webkit-scrollbar-thumb:hover,
+.chat-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--line-emphasis));
+}
+.board-scroll::-webkit-scrollbar-track,
+.chat-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* On mobile the fixed bottom nav (~3.5rem) overlays the viewport; reserve room at the
+   bottom of every board scroll area so the last cards/rows aren't hidden behind it.
+   NÃO vale para `.chat-scroll`, e é por isso que ele existe: o transcript do chat vive dentro de um
+   painel que já tem o COMPOSER embaixo dele — nada da nav inferior o cobre. Herdando esta reserva, o
+   transcript ganhava 64px de vão morto no fim da conversa no celular (a última mensagem parava acima do
+   fim visível, e a rolagem automática nunca alcançava o fundo de verdade). Ficou invisível enquanto a
+   conversa nascia colada no topo; virou um buraco na tela assim que ela passou a descansar no fundo. */
+@media (max-width: 767px) {
+  .board-scroll {
+    padding-bottom: calc(4rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* Per-column vertical scroll — the gutter is always reserved (no content shift) but the THUMB is
+   invisible until the column (`.group`) is hovered, so a resting board reads clean. */
+.col-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.col-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.col-scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 9999px;
+}
+.group:hover .col-scroll {
+  scrollbar-color: rgb(var(--line)) transparent;
+}
+.group:hover .col-scroll::-webkit-scrollbar-thumb {
+  background: rgb(var(--line));
+}
+.col-scroll:hover::-webkit-scrollbar-thumb {
+  background: rgb(var(--line-emphasis));
+}
+
+/* A barra de rolagem que só existe enquanto você ROLA — para uma área que divide a tela com outra
+   coisa (a home e o rail do Jido), onde a barra nativa do Chrome/Linux, com pista escura e os dois
+   botões de seta, virava uma segunda régua vertical ao lado do filete que de fato separa os dois.
+   A pista fica SEMPRE reservada (o polegar acender não pode reflowar o conteúdo), o polegar nasce
+   transparente e ganha cor enquanto o elemento carrega `data-scrolling` — que o dono acende no
+   evento de scroll e apaga um tempo depois de a rolagem parar — ou sob o cursor. Os botões de seta
+   somem: são metade da altura visual da barra e ninguém os usa. */
+.quiet-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 220ms ease;
+}
+.quiet-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.quiet-scroll::-webkit-scrollbar-button {
+  display: none;
+}
+.quiet-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.quiet-scroll::-webkit-scrollbar-thumb {
+  /* Borda transparente + clip no conteúdo = um filete de 4px dentro de uma pista de 10px: alvo de
+     mouse honesto, risco visual mínimo. `background-clip` DEPOIS do `background` — o atalho o reseta. */
+  background: transparent;
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 9999px;
+  transition: background-color 220ms ease;
+}
+.quiet-scroll[data-scrolling],
+.quiet-scroll:hover {
+  scrollbar-color: rgb(var(--line-emphasis)) transparent;
+}
+.quiet-scroll[data-scrolling]::-webkit-scrollbar-thumb,
+.quiet-scroll:hover::-webkit-scrollbar-thumb {
+  background-color: rgb(var(--line-emphasis));
+}
+
+/* ── A PAUTA do cartão do Inbox ───────────────────────────────────────────────────────────────
+   Só as LINHAS: a pauta horizontal e a margem vertical, em background-image (zero pseudo-elemento,
+   então o cartão aceita qualquer conteúdo dentro sem briga de z-index).
+
+   O que esta classe deliberadamente NÃO faz é pintar o fundo. O cartão de papel de antes trazia
+   junto uma cor de papel (creme no claro, pardo quente no escuro) que era a terceira ideia de
+   superfície da mesma tela — foi ela que saiu, e é `bg-surface` (via `cardSurface`) que fica. Aqui
+   mora o DESENHO, não a superfície: por isso só há `background-image`, e a cor vem de baixo.
+
+   As três variáveis são a MÉTRICA, e ela é um acordo com o TEXTO, não um gosto:
+     • `--paper-rule-gap` é o passo da pauta E o `line-height` do texto (SHEET_LEADING, 20px) —
+       é isso que faz a escrita SENTAR na linha em vez de flutuar sobre ela;
+     • `--paper-rule-offset` é o recuo do topo do cartão (py-3, 12px), senão a primeira linha cai
+       no meio da primeira frase;
+     • `--paper-margin-x` é onde a vertical cai, e o conteúdo é recuado para a DIREITA dela
+       (pl-9 = 36px, dez a mais) — uma margem com texto por cima é um risco no título, não uma
+       margem.
+   Mexer numa sem a outra mata a ilusão no primeiro ajuste de padding. */
+.paper-rules {
+  --paper-rule-gap: 20px;
+  --paper-rule-offset: 12px;
+  --paper-margin-x: 26px;
+  background-image:
+    linear-gradient(
+      90deg,
+      transparent 0 var(--paper-margin-x),
+      var(--paper-margin) var(--paper-margin-x),
+      var(--paper-margin) calc(var(--paper-margin-x) + 1px),
+      transparent calc(var(--paper-margin-x) + 1px)
+    ),
+    repeating-linear-gradient(
+      180deg,
+      transparent 0 calc(var(--paper-rule-gap) - 1px),
+      var(--paper-rule) calc(var(--paper-rule-gap) - 1px) var(--paper-rule-gap)
+    );
+  /* A pauta é ANCORADA no recuo e desenhada só dali para baixo (`no-repeat` + uma área que começa em
+     `--paper-rule-offset`), em vez de um ladrilho repetido pela caixa toda. Repetindo, o ladrilho tem
+     a altura do CARTÃO (150px), que não é múltiplo do passo (20px): a cópia de cima entra fora de
+     fase e sobra um risco solto a 1px do topo, colado na borda. Ancorada, as seis linhas caem em
+     31·51·71·91·111·131 — uma sob o carimbo e uma sob cada uma das cinco linhas do pedido — e a
+     sétima cai fora da área, que é como deve ser: abaixo da última linha o papel acaba. */
+  background-repeat: no-repeat, no-repeat;
+  background-size:
+    auto auto,
+    100% calc(100% - var(--paper-rule-offset));
+  background-position:
+    0 0,
+    0 var(--paper-rule-offset);
+}
+
+/* While dragging a card, suppress text selection across the board. */
+.dnd-dragging,
+.dnd-dragging * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+/* A TINTA de uma tag do Lean Canvas: a cor da tag — mas legível.
+   O hex cru da tag (âmbar #E8A13C, verde #4FA873) como texto de 9,5px sobre papel branco não passa em
+   contraste (WCAG AA); e o mesmo hex sobre a superfície escura fica apagado. `color-mix` resolve os dois
+   lados sem inventar uma segunda paleta: escurece no claro, clareia no escuro, preservando a IDENTIDADE
+   da cor. A cor entra por `--tag` (inline, vinda do vocabulário do board). */
+.canvas-tag-ink {
+  color: color-mix(in srgb, var(--tag, currentColor) 72%, #1c1b18);
+}
+.dark .canvas-tag-ink {
+  color: color-mix(in srgb, var(--tag, currentColor) 80%, #ffffff);
+}
+
+/* A entrada do item aberto (overlay): sobe um fio e assenta. Puro transform/opacity. Congela sob
+   prefers-reduced-motion (ver bloco no fim do arquivo). */
+@keyframes stack-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.stack-rise {
+  animation: stack-rise 0.22s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+
+/* ── Mascote Jido (pixel-art) ─────────────────────────────────────────────────────────────────────
+   Micro-animações do mascote (components/copilot/CopilotFace.tsx). Só transform/opacity → GPU, custo
+   ~zero. A ARTE decide QUAIS classes cada humor recebe; aqui mora só o "como se move". Tudo congela sob
+   `prefers-reduced-motion` (um mascote piscando no canto é o movimento periférico que dispara enxaqueca). */
+
+/* ⚠️ A REGRA QUE VALE PARA TODAS ELAS: o mascote é pixel-art numa grade de células inteiras, e uma
+   animação que desloca ou escala por FRAÇÃO de célula desfaz exatamente a nitidez que a grade existe
+   para garantir — o desenho borra enquanto se mexe, que era o defeito relatado em 2026-08-03 ("some
+   a qualidade quando anima"). Daí duas regras, cobradas aqui e não na arte:
+
+   1. Todo deslocamento é de CÉLULA INTEIRA (`translate` em unidades da viewBox, ver a nota abaixo), e
+      toda escala cai num número inteiro de células do retângulo animado.
+   2. A interpolação é DISCRETA (`steps(1, end)`): entre um quadro e outro o navegador seguraria valores
+      fracionários no meio do caminho, e é no meio do caminho que o olho está olhando. Pixel-art pisca em
+      quadros, não em rampa — e de quebra o custo cai (menos quadros compostos). */
+
+/* Pálpebra/lábio: em repouso escondidos (scaleY 0), crescem do TOPO para "fechar" o recorte por baixo. */
+.jido-eyelid,
+.jido-lip {
+  transform: scaleY(0);
+  transform-box: fill-box;
+  transform-origin: center top;
+}
+/* Piscada em 2 quadros (aberto/fechado). A pálpebra cobre o olho inteiro, então só 0 e 1 são inteiros. */
+.jido-blink {
+  animation: jido-blink 5.2s steps(1, end) infinite;
+}
+/* Fala em 3 quadros. O lábio cobre uma boca de 4 células ⇒ 0, 0.5 e 1 valem 0, 2 e 4 células cheias. */
+.jido-talk {
+  animation: jido-talk 0.36s steps(1, end) infinite;
+}
+/* A TROCA DE HUMOR — o quadro que faltava.
+   O rosto trocava de pose num salto: um quadro ele está pensando, no seguinte já está falando, sem
+   nada no meio. Num desenho de contorno duro isso não lê como "mudou de ideia", lê como GLITCH — é o
+   mesmo pop que faz sprite trocado em jogo antigo parecer bug. O componente remonta o grupo quando o
+   humor muda (`key={mood}`), e esta animação dá à troca UM quadro de assentamento: o rosto entra
+   apagado e acende. Opacidade, e só opacidade: ela é a única propriedade sem grade — não desloca nem
+   escala geometria nenhuma, então não tem como borrar o pixel (o mesmo argumento do `jido-pulse`).
+   Discreta como o resto (`steps`), curta o bastante (180ms) para não virar pisca-pisca quando o humor
+   alterna rápido durante o streaming. */
+.jido-swap {
+  animation: jido-swap 0.18s steps(1, end) both;
+}
+/* Glifos externos (pontos de pensar, ondas, ✦): pulsam de OPACIDADE. Opacidade não tem grade — é a única
+   das cinco que pode interpolar suave sem borrar geometria nenhuma. */
+.jido-anim-pulse > * {
+  animation: jido-pulse 1.6s ease-in-out infinite;
+}
+/* O `z` do sono sobe de célula em célula e some. */
+.jido-anim-float > * {
+  animation: jido-float 2.4s steps(1, end) infinite;
+}
+/* Instável / pânico: o corpo inteiro treme. A amplitude NÃO é escolha estética — é 1 célula, o menor
+   tremor que a grade permite sem devolver meio pixel ao desenho. */
+.jido-anim-shake {
+  animation: jido-shake 0.4s steps(1, end) infinite;
+  transform-box: fill-box;
+  transform-origin: center center;
+}
+
+/* A PISCADA, redesenhada como uma piscada de verdade.
+   A anterior fechava o olho por 8% de um ciclo de 4,6s — 370ms de olho fechado. Uma piscada humana
+   dura 100–150ms; 370ms não é piscar, é cochilar, e a cada 4,6s o rosto dava a impressão de estar
+   lutando contra o sono. Aqui o ciclo é de 5,2s (1% = 52ms) e o gesto é o DUPLO: fecha ~150ms, abre
+   ~150ms, fecha de novo ~100ms. A dupla é o que separa "vivo" de "temporizado" — piscada única em
+   intervalo fixo é a assinatura de um relógio, e o olho percebe o padrão em poucos ciclos. */
+@keyframes jido-blink {
+  0%,
+  89% {
+    transform: scaleY(0); /* aberto — a esmagadora maioria do ciclo */
+  }
+  90%,
+  92.5% {
+    transform: scaleY(1); /* fecha (≈150ms) */
+  }
+  93%,
+  95.5% {
+    transform: scaleY(0); /* reabre (≈150ms) */
+  }
+  96%,
+  97.5% {
+    transform: scaleY(1); /* e fecha de novo, mais rápido (≈100ms) */
+  }
+  98%,
+  100% {
+    transform: scaleY(0);
+  }
+}
+@keyframes jido-talk {
+  0% {
+    transform: scaleY(0); /* boca aberta — o lábio recolhido */
+  }
+  40% {
+    transform: scaleY(0.5); /* meio: 2 células das 4 */
+  }
+  70%,
+  100% {
+    transform: scaleY(1); /* fechada */
+  }
+}
+/* O piso é 0.72 — o MESMO do `jido-cursor-breathe` lá embaixo, de propósito: o mascote tem UM
+   vocabulário de recuo, e dois pisos diferentes fariam a troca de humor parecer um evento maior do
+   que o "estou escrevendo". Mais fundo que isso vira flash quando o humor alterna rápido no
+   streaming (falando ↔ pensativo), que é exatamente quando ele alterna. */
+@keyframes jido-swap {
+  0% {
+    opacity: 0.72;
+  }
+  50% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+@keyframes jido-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+/* ⚠️ As distâncias abaixo estão em UNIDADES DA VIEWBOX (num elemento SVG, `px` num `transform` é
+   unidade de usuário, não pixel de tela) — ou seja, **1px aqui = 1 CÉLULA** da grade do mascote
+   (`GRID`, hoje **50**). Por isso todos os valores são INTEIROS: uma fração não é "um tremor
+   discreto", é MEIA CÉLULA, e o navegador tem de inventar a aresta. Foi essa fração que fazia o
+   desenho borrar justamente enquanto se mexia.
+
+   E o passo é de **2 células**, não de 1: 2 células é a menor peça que a arte tem (`MIN_FEATURE`, as
+   4 unidades da prancha), então é o menor deslocamento que ainda se LÊ como deslocamento. Quando a
+   grade passou de 20 para 50 células, o passo de 1 célula que estava aqui encolheu para 40% do que
+   era e o tremor virou um borrão parado. Mexeu na grade? Os números continuam sendo CÉLULAS — não
+   reescale para frações, recalcule de quantas células é o passo. */
+@keyframes jido-float {
+  0% {
+    transform: translateY(0); /* nasce ao lado da cabeça */
+    opacity: 1;
+  }
+  33% {
+    transform: translateY(-2px); /* sobe UMA peça (2 células) */
+    opacity: 0.6;
+  }
+  66%,
+  100% {
+    transform: translateY(-4px); /* mais uma, e some */
+    opacity: 0;
+  }
+}
+@keyframes jido-shake {
+  0% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-2px); /* 2 células — o menor tremor que ainda é nítido */
+  }
+  50% {
+    transform: translateX(0);
+  }
+  75% {
+    transform: translateX(2px);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+/* ── A resposta CHEGANDO (chat do Jido) ───────────────────────────────────────────────────────────
+   Duas peças, e nada além disso:
+
+   1. `.jido-stream` — o texto ENTRA em vez de aparecer. A animação vale por BLOCO (parágrafo, item,
+      título), não por token: um bloco recém-montado desliza 3px e acende em 260ms, e os que já estão na
+      tela não são tocados (uma animação CSS só corre no mount). É o que separa "elegante" de "epilético" —
+      animar por token faria a resposta inteira tremer a cada letra. A última linha, essa, só cresce.
+   2. `.jido-cursor` — o mascote LOGO ABAIXO do último bloco de texto, no tamanho do rosto do topnav (o
+      HitlConversation o posiciona). Ele PULSA de leve para dizer "ainda estou escrevendo": sem isso ele lê
+      como um desenho parado que alguém esqueceu na conversa. A amplitude é menor do que era: em 15px, dentro
+      do parágrafo, ele precisava sumir quase à metade para ser notado; em 38px, numa linha própria, o mesmo
+      mergulho vira um pisca-pisca no canto do olho. */
+.jido-stream :is(p, li, h1, h2, h3, h4, blockquote, pre, table, hr, img) {
+  animation: jido-text-in 0.26s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+}
+@keyframes jido-text-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.jido-cursor {
+  animation: jido-cursor-breathe 1.5s ease-in-out infinite;
+}
+@keyframes jido-cursor-breathe {
+  0%,
+  100% {
+    opacity: 0.72;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ── Terminal ─────────────────────────────────────────────────────────────────────────────────────
+   As reticências de "escrevendo agora" (components/terminal/parts.tsx). São o sinal de que um agente está
+   PRODUZINDO — a distinção que o ponto verde de `status === "running"` nunca fez. Só aparecem no estado
+   `working`, e UMA VEZ por cartão; parado é ausência de movimento, não outra cor. Duas animações
+   anteriores foram removidas por dizerem o mesmo: o cursor piscante (lia-se como erro de digitação no fim
+   da frase) e as três barrinhas no cabeçalho (repetiam, ao lado, o que os pontos já diziam). */
+@keyframes term-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.22;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+.term-dot {
+  animation: term-dot 1.4s ease-in-out infinite;
+}
+
+/* ── Esqueleto de carregamento ────────────────────────────────────────────────────────────────────
+   O desenho do `components/Skeleton.tsx`. Duas decisões, e o porquê de cada uma:
+
+   • a ONDA é `transform` num pseudo-elemento — não `background-position`, não `opacity` no bloco.
+     Assim ela vive só no compositor: zero layout e zero paint por quadro, o que importa porque uma
+     tela de carregamento acende dezenas destes blocos de uma vez. Sem `will-change` de propósito:
+     ele criaria uma CAMADA por bloco, exatamente o custo que se está evitando.
+   • a onda é MAIS TINTA sobre a mesma base, nunca um brilho claro. Brilho branco some no tema
+     escuro e brilho escuro suja o claro; "um pouco mais de tinta" se comporta igual nos dois — a
+     mesma disciplina de token do resto do app, e é o que faz o esqueleto não precisar de variante
+     por tema.
+
+   A base (5,5% de tinta) é a MESMA família das pílulas recuadas (`idChip`, `countChipCls`): o
+   esqueleto é um lugar vazio na página, não um objeto novo — ele não pode pesar mais que o conteúdo
+   que vem substituí-lo. */
+.ah-skeleton {
+  position: relative;
+  overflow: hidden;
+  background-color: rgb(var(--fg) / 0.055);
+}
+.ah-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgb(var(--fg) / 0.045), transparent);
+  animation: ah-skeleton-wave 1.5s ease-in-out infinite;
+}
+@keyframes ah-skeleton-wave {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jido-mascot,
+  .jido-mascot *,
+  .stack-rise,
+  .term-dot,
+  .ah-skeleton::after,
+  .jido-cursor,
+  .jido-stream :is(p, li, h1, h2, h3, h4, blockquote, pre, table, hr, img) {
+    animation: none !important;
+  }
+  /* O texto que chega não pode ficar preso no quadro inicial da animação cancelada (opacity 0). */
+  .jido-stream :is(p, li, h1, h2, h3, h4, blockquote, pre, table, hr, img) {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  /* Pálpebra/lábio congelam ABERTOS (scaleY 0) — o rosto fica no seu quadro de repouso, sem piscar. */
+  .jido-eyelid,
+  .jido-lip {
+    transform: scaleY(0) !important;
+  }
+}

@@ -1,0 +1,206 @@
+version: 1
+economyMode: false
+autorun:
+  enabled: true
+  resumeOnBoot: true
+  maxConcurrent: 6
+  noProgressMax: 3
+  timeouts:
+    fastMs: 1800000
+    doMs: 7200000
+    universalMs: 10800000
+  claudeBin: claude
+  extraArgs: []
+  worktreeIsolation: true
+  mergeGate:
+    enabled: true
+    checkCommand: vitest run
+    timeoutMs: 300000
+    retryOnNewFailure: true
+    # Affected-only selection (perf): the MERGED gate run tests only what the entry's diff touches
+    # (`--changed {base}`, {base} = pre-merge main HEAD) instead of the full ~40s/272-file suite — a leaf
+    # entry drops to ~6s and, crucially, skips the heavy real-git tests that amplify worst under load. The
+    # BASE attribution re-run stays full (it only fires on an already-failing entry). Any changed file in
+    # `fullSuitePaths` forces the full suite. See runner/affected-gate.ts. Absent ⇒ full suite (legacy).
+    # ⚠️ O TRADE DESTA OTIMIZAÇÃO, ESCRITO (I-4). O gate serial existia também para pegar quebras
+    # SEMÂNTICAS *entre* entradas — a entrada B rodando a suíte inteira sobre o código que A acabou de
+    # aterrissar. Com `affected` ligado, B roda só o que o diff de B seleciona, então uma quebra que B
+    # introduz no código de A só é vista se a seleção calhar de incluí-la. A literatura de conflito
+    # semântico é explícita em que compilação e teste frequentemente NÃO pegam conflitos de ordem
+    # superior; reduzir a seleção de teste reduz exatamente essa cobertura.
+    # POR QUE MESMO ASSIM: o p90 do gate caiu de minutos para ~2 min, e um gate lento é uma fila serial
+    # mais longa — que é a própria janela em que duas entradas se cruzam. A mitigação escolhida é
+    # `fullSuitePaths` (abaixo): todo kernel amplamente importado e toda ENTRADA de teste que o grafo de
+    # imports não enxerga força a suíte completa. Um arquivo que não está nessa lista e quebra alguém
+    # remoto é o residual ACEITO — e a saída dele é a suíte completa periódica sobre `stage`, não voltar
+    # a gatear tudo por entrada.
+    affected:
+      enabled: true
+      command: bunx vitest run --changed {base} --passWithNoTests
+      fullSuitePaths:
+        # Widely-imported kernels — each pulls ≥30% of the suite (measured), and the import graph is
+        # least trustworthy here, so run everything.
+        - packages/storymap-ui/src/lib/storymap/types.ts
+        - packages/storymap-ui/src/lib/storymap/contracts.ts
+        - packages/storymap-ui/src/lib/storymap/gate-core.js
+        - packages/storymap-ui/src/lib/storymap/runner/config.ts
+        - packages/storymap-ui/src/lib/storymap/runner/merge-queue.ts
+        # Test INPUTS the module graph can't see (read as files at runtime): a change here can break a
+        # golden/consistency test that `--changed` would never select. (Pure data-only entries skip the
+        # gate entirely; these patterns only matter for MIXED code+data entries.)
+        - storymap/boards/
+        - .claude/skills/
+        - packages/storymap-ui/src/lib/storymap/__snapshots__/
+        # Test harness / toolchain — a change reshapes the whole run.
+        - packages/storymap-ui/vitest.config.ts
+        - packages/storymap-ui/vitest.setup.ts
+        - packages/storymap-ui/package.json
+        - "**/tsconfig*.json"
+    # QUAL suíte o gate roda (P-7). Antes isto era `packages/storymap-ui` LITERAL no código, em três
+    # lugares — então uma sessão que mexia num pacote de produto era validada pela suíte do harness:
+    # testes errados, confiança falsa. Agora é declarativo, e conservador: só um pacote listado aqui
+    # ganha unidade própria; qualquer outra coisa (e todo arquivo fora do mapa) cai no fallback, que é o
+    # pacote do harness — exatamente o comportamento anterior. Adicionar um pacote é UMA linha.
+    # ⚠️ Só declare um pacote cuja suíte você sabe que roda verde e rápido: cada unidade custa uma suíte
+    # DENTRO do slot serial do train (por isso o `maxUnits`, que colapsa no fallback ao ser estourado).
+    scope:
+      packages:
+        packages/storymap-ui: vitest run
+      maxUnits: 3
+  mergeTrain:
+    maxRedrives: 2
+    semanticResolution: true
+  staging:
+    enabled: true
+    branch: stage
+    codePrefixes:
+      - packages/
+      # story-zr1cmf — o terminal web estático (tools/web-terminal/, servido pelo Caddy) é CÓDIGO
+      # deployável que vive FORA de packages/. Sem esta linha o split classifica-o como board-data
+      # (→ main direto, sem gate, incoerente com a rota-API dele em packages/). Declarado também em
+      # boards/storymap/board.yaml (deploy.surfaces) — o lint board-integrity mantém os dois em sincronia.
+      # Boot-fixed: exige rebuild+restart do serviço para ativar.
+      - tools/web-terminal/
+    dataDerived:
+      - artifact: packages/storymap-ui/src/lib/storymap/__snapshots__/board-base-pipeline.test.ts.snap
+        sources:
+          - storymap/boards/
+        cwd: packages/storymap-ui
+        regen: bunx vitest run src/lib/storymap/board-base-pipeline.test.ts --update
+  # Fila de publicação diferida (runner/publish-queue): "publique este sha quando o pipeline ficar
+  # ocioso". É o caminho SEM card de `stage` até produção — o merge train já integra trabalho de
+  # sessão, mas o promote+deploy era onEnter de um passo, e passo quem atravessa é card.
+  #
+  # Isto aqui é só o KILL-SWITCH GLOBAL do mecanismo. A política POR BOARD — quem publica e se publica
+  # sozinho — mora em `release.mode` no board.yaml (default `manual`; ver lib/storymap/release-policy.ts).
+  # A lista `boards:` respondia DUAS perguntas ao mesmo tempo, e tirar um board dela tirava tanto o
+  # "publica sozinho" quanto o "PODE publicar" — foi o que deixou trabalho de sessão de um board 6 dias em
+  # `stage` sem nada capaz de movê-lo.
+  #
+  # ⚠️ TRANSITÓRIA — a chave abaixo já está MORTA para o código novo (que a ignora), mas continua aqui de
+  # propósito por uma janela: este arquivo é board-data e aterrissa em `main` IMEDIATAMENTE, enquanto o
+  # código vai para `stage` e só entra no ar na publicação seguinte. Removê-la no mesmo commit faria o
+  # serviço AINDA ANTIGO ler uma lista vazia e recusar publicar até para o `storymap` — inclusive a
+  # publicação que traria o código novo. Apagar num commit de limpeza DEPOIS do deploy.
+  publishQueue:
+    enabled: true
+    boards:
+      - storymap
+  scheduler:
+    lanes:
+      light:
+        maxConcurrent: 3
+        memoryMax: 2G
+        cpuQuota: 100
+      heavy:
+        maxConcurrent: 2
+        memoryMax: 8G
+        cpuQuota: 300
+    thresholds:
+      ramFreeMb: 1500
+      # PORTÁVEL: 1.0 × nº de cores (convenção Linux — load == cores é "CPU cheia", não "sobrecarregada").
+      # Substitui o absoluto: o 3.5 ficava ABAIXO do baseline real deste host (6 cores, load 5–9), então a
+      # lane pesada e o worktree_open recusavam SEMPRE — o board parava por admission control, sem sinal ao
+      # operador, indistinguível de pipeline ocioso. Um absoluto não viaja entre máquinas; este viaja.
+      loadAvg1PerCore: 1.0
+      # Mantido só como piso para um host onde o per-core não se aplique; o per-core tem precedência.
+      loadAvg1: 6.0
+  sessions:
+    # Teto de ÁRVORES de sessão vivas (ADR-065), não de agentes: o custo de um slot é disco +
+    # node_modules linkado, e quem gasta CPU/RAM é o processo do agente — que já existe antes de
+    # pedir a árvore. Com 4 o cap virava fila: 4 sessões interativas normais já o esgotavam e a 5ª
+    # ficava sem onde editar (o remédio da própria recusa é subir isto). 8 é o teto do host de 6
+    # cores; quem protege a máquina de verdade é `scheduler.thresholds` (RAM/load), que continua
+    # recusando admissão sob pressão mesmo com slot livre.
+    maxWorktrees: 8
+columnDefaults:
+  model: sonnet
+  effort: medium
+orchestrator:
+  enabled: true
+  tickMinutes: 20
+  budget:
+    maxTicksPerDay: 50
+    maxCostPerDay: 100
+  notifyBudget:
+    maxPushesPerDay: 12
+  chat:
+    model: opus[1m]
+    effort: high
+  riskMatrix:
+    merge-resolve: auto
+  wake:
+    debounceSeconds: 45
+    cooldownMinutes: 5
+    enabled: true
+mcpTokens:
+  - tokenEnv: STORYMAP_MCP_TOKEN_ORCH
+    level: orch
+  - tokenEnv: STORYMAP_MCP_TOKEN_RO
+    level: ro
+
+# Publicação — o canário de FIDELIDADE que roda depois de um deploy de rosto bem-sucedido:
+# "a superfície serve exatamente o que publicamos?" (compara o artefato publicado com o servido,
+# por superfície). Um board pode declarar o seu em board.yaml (deploy.canaryCommand); este é o
+# DEFAULT do deployment, porque aqui todos os boards publicam a MESMA face mesclada (ADR-061).
+# Ausente aqui e no board => fidelidade não é checada (o harness nunca adivinha uma URL).
+deploy:
+  # canaryCommand: <o SEU comando de canário>
+  # Comentado na extração: o valor do umbrella apontava para scripts/deploy/, que não viaja
+  # (publica os produtos do dono). Descomente com um comando que exista NESTE repositório —
+  # uma chave apontando para script inexistente ensina o formato errado a quem copia.
+  # OS APPS QUE ESTE DEPLOYMENT PUBLICA pelo caminho diff-aware (`just orch-deploy <alvo>`).
+  #
+  # Esta lista MORAVA NO FONTE do motor (runner/product-deploy.ts, `DEPLOY_PKGS`). De lá ela alimentava
+  # `z.enum()` em três tools MCP — e um enum viaja LITERALMENTE dentro do `tools/list`, então os nomes
+  # dos apps deste monorepo eram parte do contrato publicado de uma ferramenta que vai virar produto
+  # usado por outros repositórios. Os valores aqui são os MESMOS de antes, byte a byte: a mudança é de
+  # ENDEREÇO, não de comportamento.
+  #
+  # O motor resolve `BoardConfig.package` para o basename e só dispara se o basename estiver aqui. Note
+  # que quatro destes NÃO têm board — eles só são alcançáveis pelas tools MCP cruas, e é exatamente por
+  # isso que a lista não pode ser derivada dos boards.
+  #
+  # ⚠️ Só SLUG entra (`^[A-Za-z][A-Za-z0-9_-]{0,40}$`). O que não casar é DESCARTADO com aviso no log do
+  # serviço: um alvo daqui atravessa a superfície de instrução do MCP e um argv, e uma frase nesta lista
+  # chegaria ao modelo do outro lado com autoridade de prompt.
+  # targets: []   <- OS SEUS apps deployáveis pelo caminho diff-aware
+  #   Esvaziado na extração: os valores eram o catálogo de apps do repositório de origem.
+  #   Cada item é o basename de `package` de um board, em forma de slug. AUSENTE ou VAZIA
+  #   é um estado válido — declare `deploy:` nos seus board.yaml (kind: command|agent),
+  #   que é o caminho por descritor e não depende desta lista.
+  # A SUPERFÍCIE COMPOSTA (ADR-061): um artefato único construído a partir das árvores web dos apps + o
+  # SDK compartilhado, publicado FORA de qualquer manifesto de pacote (nenhum tem unidade de hosting, de
+  # propósito). `orch-deploy` publica o backend e NÃO publica a face — por isso um release cujo diff toca
+  # um caminho da face encadeia a receita abaixo depois de o backend assentar OK.
+  #
+  # `target` é a chave do job no registry, e ela JÁ ESTÁ GRAVADA em `deployTargets` de cards existentes —
+  # trocar o valor órfãos essa evidência. Ausente ⇒ este deployment não tem face composta (estado
+  # `absent`), que é diferente de "declarada e ilegível" (`unreadable`, tratado conservador).
+  # composedFace:   <- só se você publica UMA superfície montada de VÁRIOS apps
+  #   target: <a chave do job no registry>
+  #   recipe: <o alvo de `just` que publica a face>
+  #   manifest: <JSON, relativo à raiz, que declara os caminhos que COMPÕEM a face>
+  #   Removido na extração: apontava para scripts/deploy/, que não viaja. Declarar uma
+  #   face cujo manifesto não existe é pior que não declarar — o motor não saberia se o
+  #   diff a toca e republicaria a face a cada promote.

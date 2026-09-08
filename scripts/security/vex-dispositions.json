@@ -1,0 +1,362 @@
+{
+  "author": "AgileHarness maintainers",
+  "_leia_me": [
+    "Disposições VEX do fecho do AgileHarness. Cada entrada é revisada UMA A UMA e vale só para o par",
+    "(advisory, purl COM versão) — nunca para um pacote inteiro. Advisory novo do mesmo pacote, ou versão",
+    "nova, NÃO nascem suprimidos: é a diferença entre disposição e mute.",
+    "",
+    "Toda entrada carrega `evidence[]` que o `vex-gate.mjs` RE-EXECUTA a cada rodada. Evidência que não",
+    "confere não vira aviso: invalida a disposição e REPROVA o gate (fail-closed). É isso que impede um VEX",
+    "de envelhecer em silêncio — o cenário em que a justificativa era verdadeira no dia em que foi escrita,",
+    "o código mudou, e a linha de JSON continua calando o achado.",
+    "",
+    "Medido em 2026-07-30 sobre o fecho instalado de packages/storymap-ui: 651 componentes (312 runtime),",
+    "13 componentes vulneráveis, 44 advisories (20 HIGH / 21 MODERATE / 3 LOW), 0 no catálogo CISA KEV,",
+    "0 advisories MAL-, 0 lotes de consulta OSV falhados. Dez dos 44 advisories são RUÍDO DE SBOM — pacote",
+    "instalado e não executado —, e é para eles que este arquivo existe: sem disposição, quem clonar o repo",
+    "roda `npm audit`, vê a lista inteira e conclui que o projeto é abandonado.",
+    "",
+    "── O BLOCO DO next@14.2.35 — RESOLVIDO em 2026-08-24, e por isso REMOVIDO daqui ────────────────────",
+    "",
+    "Este arquivo carregou 21 disposições de `next@14.2.35` (8 HIGH), doze delas `affected` com prazo em",
+    "2026-11-30. Elas existiam porque toda correção exigia o Next 15, e o 15 traz `sharp` como",
+    "optionalDependency nova, cujos binários `@img/sharp-libvips-*` são LGPL-3.0-or-later — o único copyleft",
+    "que o gate de licença recusa num repositório que publica sob Apache-2.0. Dizer a verdade sobre cada um",
+    "dos 21 era o plano B.",
+    "",
+    "O plano A aconteceu: `packages/storymap-ui` roda `next@15.5.21` desde 2026-08-24. O impasse de licença",
+    "saiu por um override DIRIGIDO — `sharp` apontado para um stub `npm:@favware/skip-dependency` no",
+    "package.json do ARTEFATO —, viável porque o otimizador de imagem é a única coisa que ele serve e este",
+    "produto não usa `next/image` em lugar nenhum. As 21 viraram OBSOLETAS, o próprio `vex-gate.mjs` as",
+    "listou sob \"disposições OBSOLETAS (remover)\", e elas saíram daqui em 2026-08-25 levando o prazo junto.",
+    "",
+    "FICA A LIÇÃO, e ela não é sobre o next: uma disposição vale para o par (advisory, purl COM VERSÃO).",
+    "Subir a versão do pacote não RESOLVE as disposições dele — torna-as MUDAS. Elas deixam de casar,",
+    "deixam de calar coisa alguma, e seguem no arquivo dando aparência de cobertura que não existe. O gate",
+    "as reporta a cada rodada justamente para que alguém as remova; ignorar esse bloco é como o arquivo",
+    "vira sedimento.",
+    "",
+    "NÃO disposto de propósito: js-yaml@4.1.1 (GHSA-52cp-r559-cp3m, GHSA-h67p-54hq-rp68). A dependência",
+    "direta já declara `js-yaml: ^4.3.0` — faixa que INCLUI a correção (4.3.0) —, então a árvore instalada",
+    "está apenas atrás do manifesto e um install resolve. Suprimir isso esconderia um item que se fecha com",
+    "trabalho, não com análise. Ele aparece como não-disposto no relatório até o install acontecer."
+  ],
+  "statements": [
+    {
+      "vulnerability": "GHSA-frvp-7c67-39w9",
+      "products": [
+        "pkg:npm/@hono/node-server@1.19.14"
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Path traversal no `serve-static` do adaptador, explorável apenas em hosts Windows (uma barra invertida codificada, `%5C`, que só o resolvedor de caminho do Windows trata como separador). Duas razões independentes: (1) o pacote não está no caminho de execução — dentro do SDK do MCP quem o importa é `server/streamableHttp.js`, e o `mcp-handler` (o único consumidor do SDK aqui) usa `server/webStandardStreamableHttp.js`, que importa apenas `../types.js`; (2) o alvo de deploy é Linux, e o AgileHarness não monta `serve-static` em lugar nenhum.",
+      "reviewedAt": "2026-07-30",
+      "evidence": [
+        {
+          "kind": "importers_confined_to",
+          "scanDir": "node_modules/mcp-handler/dist",
+          "specifier": "@modelcontextprotocol/sdk/server/streamableHttp.js",
+          "allow": []
+        },
+        {
+          "kind": "platform_not_applicable",
+          "advisoryMustMention": "Windows",
+          "deploymentPlatform": "linux"
+        }
+      ]
+    },
+    {
+      "vulnerability": "GHSA-v422-hmwv-36x6",
+      "products": [
+        "pkg:npm/body-parser@2.2.2"
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "`body-parser` entra no fecho puxado por `express`, que é dependência DECLARADA do SDK do MCP mas não é carregada por este app. No dist do SDK os importadores de `express` são `server/express.js`, `server/auth/router.js`, `server/auth/handlers/*` e `examples/**` — nenhum deles alcançado: o `mcp-handler` importa do SDK apenas `server/{index,mcp,sse,webStandardStreamableHttp}.js`, `server/auth/{errors,types}.js` e `shared/auth.js`, e nem `auth/errors.js` nem `auth/types.js` importam express (verificado no dist instalado). O app não importa express nem o SDK em runtime — as referências ao SDK no código são `import type`, apagadas na compilação.",
+      "reviewedAt": "2026-07-30",
+      "evidence": [
+        {
+          "kind": "importers_confined_to",
+          "scanDir": "node_modules/mcp-handler/dist",
+          "specifier": "express",
+          "allow": []
+        },
+        {
+          "kind": "importers_confined_to",
+          "scanDir": "packages/storymap-ui/src",
+          "specifier": "express",
+          "allow": []
+        },
+        {
+          "kind": "importers_confined_to",
+          "scanDir": "node_modules/@modelcontextprotocol/sdk/dist",
+          "specifier": "express",
+          "allow": [
+            "esm/server/express.js",
+            "cjs/server/express.js",
+            "esm/server/auth/router.js",
+            "cjs/server/auth/router.js",
+            "esm/server/auth/handlers/",
+            "cjs/server/auth/handlers/",
+            "esm/examples/",
+            "cjs/examples/"
+          ]
+        }
+      ]
+    },
+    {
+      "vulnerability": "GHSA-52cp-r559-cp3m",
+      "products": [
+        "pkg:npm/js-yaml@3.14.2"
+      ],
+      "status": "affected",
+      "justification": "inline_mitigations_already_exist",
+      "impact_statement": "CPU quadrática no parse de cadeias de merge-key (`<<`) do YAML. Esta é a cópia que o `gray-matter` pina (`^3.13.1`) e usa para parsear o frontmatter dos cards; a correção está em 3.15.0, fora da faixa que o gray-matter declara. Honestamente: o orçamento de nós/profundidade do chokepoint NÃO cobre esta classe, porque ele percorre o objeto DEPOIS do parse, e aqui a CPU é queimada DENTRO do loader. O que limita é o teto de bytes aplicado ANTES do parse (2 MiB) — que reduz a magnitude, não a elimina. A razão real de ser tolerável hoje é que os bytes de board não são controlados por atacante: são arquivos do repositório escritos por mantenedores e agentes.",
+      "mitigation": "Teto de bytes ANTES do parse no chokepoint de frontmatter (`FRONTMATTER_MAX_BYTES_DEFAULT`, 2 MiB) e, onde o chamador tem `stat`, recusa antes mesmo do read. Todo parse de bytes de `storymap/boards/**` passa obrigatoriamente por `frontmatter.ts`.",
+      "caveat": "O prazo NÃO é burocracia: no dia da extração OSS nasce uma fronteira que hoje não existe (um contribuidor externo manda bytes num PR), e aí `bytes não controlados por atacante` deixa de ser verdade. Antes de vencer, a saída é forçar js-yaml >= 3.15.0 na resolução ou trocar o engine de frontmatter.",
+      "reviewedAt": "2026-07-30",
+      "expiresAt": "2026-10-31",
+      "evidence": [
+        {
+          "kind": "code_invariant",
+          "file": "packages/storymap-ui/src/lib/storymap/frontmatter.ts",
+          "mustContain": "FRONTMATTER_MAX_BYTES_DEFAULT = 2 * 1024 * 1024"
+        }
+      ]
+    },
+    {
+      "vulnerability": "GHSA-h67p-54hq-rp68",
+      "products": [
+        "pkg:npm/js-yaml@3.14.2"
+      ],
+      "status": "affected",
+      "justification": "inline_mitigations_already_exist",
+      "impact_statement": "Mesma classe do GHSA-52cp-r559-cp3m (complexidade quadrática no tratamento de merge-key, por alias repetido) na cópia de js-yaml que o `gray-matter` pina. Mesma mitigação, mesma fronteira e mesmo prazo: o teto de bytes antes do parse limita a magnitude, e os bytes de board não são controlados por atacante enquanto o repositório não recebe PR externo.",
+      "mitigation": "Teto de bytes ANTES do parse no chokepoint de frontmatter (`FRONTMATTER_MAX_BYTES_DEFAULT`, 2 MiB), obrigatório para todo parse de bytes de `storymap/boards/**`.",
+      "reviewedAt": "2026-07-30",
+      "expiresAt": "2026-10-31",
+      "evidence": [
+        {
+          "kind": "code_invariant",
+          "file": "packages/storymap-ui/src/lib/storymap/frontmatter.ts",
+          "mustContain": "FRONTMATTER_MAX_BYTES_DEFAULT = 2 * 1024 * 1024"
+        }
+      ]
+    },
+    {
+      "vulnerability": "GHSA-88fw-hqm2-52qc",
+      "products": [
+        "pkg:npm/hono@4.12.23"
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "`hono` é dependência DECLARADA do SDK do MCP, e por isso entra no SBOM — mas no dist instalado os únicos arquivos que o importam são `examples/server/honoWebStandardStreamableHttp.js`. O transporte que o `mcp-handler` usa (`server/webStandardStreamableHttp.js`) importa apenas `../types.js`. O AgileHarness não serve rota nenhuma por hono. Este é o pacote que sozinho responde por 8 dos 44 advisories do fecho — inclusive um de CORS que qualquer `npm audit` vai gritar.",
+      "reviewedAt": "2026-07-30",
+      "evidence": [
+        {
+          "kind": "importers_confined_to",
+          "scanDir": "node_modules/@modelcontextprotocol/sdk/dist",
+          "specifier": "hono",
+          "allow": [
+            "esm/examples/",
+            "cjs/examples/"
+          ]
+        },
+        {
+          "kind": "importers_confined_to",
+          "scanDir": "packages/storymap-ui/src",
+          "specifier": "hono",
+          "allow": []
+        }
+      ]
+    },
+    {
+      "vulnerability": "GHSA-hvrm-45r6-mjfj",
+      "products": [
+        "pkg:npm/hono@4.12.23"
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "`hono` só é importado por `examples/**` do dist do SDK do MCP; o transporte em uso (`webStandardStreamableHttp.js`) não o carrega, e o app não serve rota por hono.",
+      "reviewedAt": "2026-07-30",
+      "evidence": [
+        {
+          "kind": "importers_confined_to",
+          "scanDir": "node_modules/@modelcontextprotocol/sdk/dist",
+          "specifier": "hono",
+          "allow": [
+            "esm/examples/",
+            "cjs/examples/"
+          ]
+        },
+        {
+          "kind": "importers_confined_to",
+          "scanDir": "packages/storymap-ui/src",
+          "specifier": "hono",
+          "allow": []
+        }
+      ]
+    },
+    {
+      "vulnerability": "GHSA-j6c9-x7qj-28xf",
+      "products": [
+        "pkg:npm/hono@4.12.23"
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "`hono` só é importado por `examples/**` do dist do SDK do MCP; o transporte em uso (`webStandardStreamableHttp.js`) não o carrega, e o app não serve rota por hono.",
+      "reviewedAt": "2026-07-30",
+      "evidence": [
+        {
+          "kind": "importers_confined_to",
+          "scanDir": "node_modules/@modelcontextprotocol/sdk/dist",
+          "specifier": "hono",
+          "allow": [
+            "esm/examples/",
+            "cjs/examples/"
+          ]
+        },
+        {
+          "kind": "importers_confined_to",
+          "scanDir": "packages/storymap-ui/src",
+          "specifier": "hono",
+          "allow": []
+        }
+      ]
+    },
+    {
+      "vulnerability": "GHSA-rv63-4mwf-qqc2",
+      "products": [
+        "pkg:npm/hono@4.12.23"
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "`hono` só é importado por `examples/**` do dist do SDK do MCP; o transporte em uso (`webStandardStreamableHttp.js`) não o carrega, e o app não serve rota por hono.",
+      "reviewedAt": "2026-07-30",
+      "evidence": [
+        {
+          "kind": "importers_confined_to",
+          "scanDir": "node_modules/@modelcontextprotocol/sdk/dist",
+          "specifier": "hono",
+          "allow": [
+            "esm/examples/",
+            "cjs/examples/"
+          ]
+        },
+        {
+          "kind": "importers_confined_to",
+          "scanDir": "packages/storymap-ui/src",
+          "specifier": "hono",
+          "allow": []
+        }
+      ]
+    },
+    {
+      "vulnerability": "GHSA-w62v-xxxg-mg59",
+      "products": [
+        "pkg:npm/hono@4.12.23"
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "`hono` só é importado por `examples/**` do dist do SDK do MCP; o transporte em uso (`webStandardStreamableHttp.js`) não o carrega, e o app não serve rota por hono.",
+      "reviewedAt": "2026-07-30",
+      "evidence": [
+        {
+          "kind": "importers_confined_to",
+          "scanDir": "node_modules/@modelcontextprotocol/sdk/dist",
+          "specifier": "hono",
+          "allow": [
+            "esm/examples/",
+            "cjs/examples/"
+          ]
+        },
+        {
+          "kind": "importers_confined_to",
+          "scanDir": "packages/storymap-ui/src",
+          "specifier": "hono",
+          "allow": []
+        }
+      ]
+    },
+    {
+      "vulnerability": "GHSA-wgpf-jwqj-8h8p",
+      "products": [
+        "pkg:npm/hono@4.12.23"
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "`hono` só é importado por `examples/**` do dist do SDK do MCP; o transporte em uso (`webStandardStreamableHttp.js`) não o carrega, e o app não serve rota por hono.",
+      "reviewedAt": "2026-07-30",
+      "evidence": [
+        {
+          "kind": "importers_confined_to",
+          "scanDir": "node_modules/@modelcontextprotocol/sdk/dist",
+          "specifier": "hono",
+          "allow": [
+            "esm/examples/",
+            "cjs/examples/"
+          ]
+        },
+        {
+          "kind": "importers_confined_to",
+          "scanDir": "packages/storymap-ui/src",
+          "specifier": "hono",
+          "allow": []
+        }
+      ]
+    },
+    {
+      "vulnerability": "GHSA-wwfh-h76j-fc44",
+      "products": [
+        "pkg:npm/hono@4.12.23"
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "Path traversal no `serve-static` do hono em hosts Windows. Além de o alvo de deploy ser Linux, `hono` só é importado por `examples/**` do dist do SDK do MCP e o AgileHarness não monta `serve-static`.",
+      "reviewedAt": "2026-07-30",
+      "evidence": [
+        {
+          "kind": "importers_confined_to",
+          "scanDir": "node_modules/@modelcontextprotocol/sdk/dist",
+          "specifier": "hono",
+          "allow": [
+            "esm/examples/",
+            "cjs/examples/"
+          ]
+        },
+        {
+          "kind": "platform_not_applicable",
+          "advisoryMustMention": "Windows",
+          "deploymentPlatform": "linux"
+        }
+      ]
+    },
+    {
+      "vulnerability": "GHSA-xgm2-5f3f-mvvc",
+      "products": [
+        "pkg:npm/hono@4.12.23"
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_in_execute_path",
+      "impact_statement": "`hono` só é importado por `examples/**` do dist do SDK do MCP; o transporte em uso (`webStandardStreamableHttp.js`) não o carrega, e o app não serve rota por hono.",
+      "reviewedAt": "2026-07-30",
+      "evidence": [
+        {
+          "kind": "importers_confined_to",
+          "scanDir": "node_modules/@modelcontextprotocol/sdk/dist",
+          "specifier": "hono",
+          "allow": [
+            "esm/examples/",
+            "cjs/examples/"
+          ]
+        },
+        {
+          "kind": "importers_confined_to",
+          "scanDir": "packages/storymap-ui/src",
+          "specifier": "hono",
+          "allow": []
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,78 @@
+# Mantém o gatilho AGENDADO do `security.yml` vivo durante períodos longos de ociosidade.
+#
+# DUAS CÓPIAS, DE PROPÓSITO: a fonte revisada é `oss/ci/workflows/` e a extração instala a cópia
+# executável em `.github/workflows/`. Edite os DOIS lados no mesmo commit — o extrator monta o
+# diretório inteiro e a suíte compara byte a byte.
+#
+# O PROBLEMA, e o seu escopo REAL. A documentação do GitHub escopa a regra a repositório PÚBLICO:
+# um workflow com `schedule` é DESATIVADO após 60 dias sem atividade, e a atividade que
+# reconhecidamente reinicia o relógio é COMMIT. Fontes de terceiros afirmam que a regra vale também
+# em repositório privado; a documentação oficial não diz isso. Este workflow existe para o caso
+# público — que é o destino deste artefato — e é inofensivo no privado.
+#
+# Por que isso importa AQUI e não é firula: o único gatilho que descobre advisory novo SEM ninguém
+# tocar no código é o `schedule` semanal do `security.yml`. Ele é exatamente o que morre primeiro num
+# projeto que ficou dois meses parado — a proteção desaparece justamente no cenário em que ela é a
+# ÚNICA que resta. Pior: há relato de que a desativação alcança os outros gatilhos do MESMO arquivo.
+#
+# POR QUE NÃO UMA ACTION DE TERCEIRO. As conhecidas (gautamkrishnar/keepalive-workflow,
+# efrecon/gh-action-keepalive) fazem o que está abaixo. Trazer qualquer uma delas significaria
+# adicionar código de terceiro — com escrita no repositório — a uma base cuja postura de workflow é
+# "pine tudo, permissão mínima, nada de interpolar contexto hostil". São ~12 linhas.
+#
+# POR QUE NÃO HÁ `checkout` AQUI, e isso é o ponto de segurança do arquivo. Um checkout com
+# credencial persistida deixa o token no `.git/config`, onde TODO passo seguinte o lê; um checkout
+# com `persist-credentials: false` obrigaria o push a carregar o token na LINHA DE COMANDO, visível
+# em `ps`. As duas saídas custam algo. A terceira não custa: a API de Git Data cria o commit vazio
+# sem árvore local nenhuma, e o `gh` lê a credencial do AMBIENTE — ela não aparece em argv, não entra
+# no `.git/config` e não sobrevive ao passo. Nenhuma linha desta árvore é baixada, então também não
+# há `postinstall` de dependência para ler nada.
+name: keepalive
+
+on:
+  schedule:
+    # Dia 9 de cada mês, 04:23 UTC. Mensal basta: a janela é de 60 dias e o gatilho dispara com 50.
+    # Minuto e hora quebrados de propósito — o topo da hora é onde os runners agendados congestionam.
+    - cron: "23 4 9 * *"
+  workflow_dispatch:
+
+# Este é o ÚNICO workflow do repositório com escrita, e ela é o ponto dele. Os outros dois seguem
+# `contents: read` — é por isso que este mora num arquivo SEPARADO: a permissão de escrita não pode
+# viajar de carona no job que roda a suíte.
+permissions:
+  contents: write
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+jobs:
+  tocar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Um commit VAZIO por ~50 dias de ociosidade real, e zero commits num repositório ativo. A
+      # guarda de idade é o que impede isto de virar ruído mensal no histórico.
+      #
+      # Um commit criado com o `GITHUB_TOKEN` NÃO dispara outros workflows (o GitHub corta o laço por
+      # desenho), então isto não roda CI nem gasta minuto de ninguém.
+      - name: renovar o relógio de atividade se o repositório estiver parado
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ULTIMO=$(gh api "repos/$GITHUB_REPOSITORY/commits?per_page=1" --jq '.[0].commit.committer.date')
+          IDADE=$(( ( $(date -u +%s) - $(date -u -d "$ULTIMO" +%s) ) / 86400 ))
+          echo "último commit há $IDADE dia(s); dispara a partir de 50"
+          if [ "$IDADE" -lt 50 ]; then
+            echo "repositório ativo — nada a fazer"
+            exit 0
+          fi
+          BRANCH=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.default_branch')
+          PAI=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" --jq '.object.sha')
+          ARVORE=$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$PAI" --jq '.tree.sha')
+          NOVO=$(gh api --method POST "repos/$GITHUB_REPOSITORY/git/commits" \
+            -f "message=chore(ci): keepalive — renova o relógio de atividade de 60 dias" \
+            -f "tree=$ARVORE" -f "parents[]=$PAI" --jq '.sha')
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH" -f "sha=$NOVO"
+          echo "commit vazio $NOVO em $BRANCH — relógio renovado"
