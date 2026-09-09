@@ -189,7 +189,7 @@ function handlerFor(secret: string, level: McpLevel): (req: Request) => Promise<
     },
     // `instructions` ride in the MCP initialize response → every client sees the mental
     // model + rules before the first tool call (the canonical fix for "the agent feels lost").
-    { serverInfo: { name: "storymap", version: "0.2.1" }, instructions: STORYMAP_MCP_INSTRUCTIONS },
+    { serverInfo: { name: "storymap", version: "0.2.2" }, instructions: STORYMAP_MCP_INSTRUCTIONS },
     // Stateless Streamable HTTP (no sessionIdGenerator) → no Redis needed; SSE is
     // disabled (removed from the MCP spec since 2025-03-26 and the source of the
     // Redis requirement we deliberately avoid).
