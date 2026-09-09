@@ -164,16 +164,28 @@ describe("F5 embed lane — allowlisted origin + board nonce, or nothing", () =>
 
   it("the same-origin lane is untouched by the allowlist (no CORS header leaks onto it)", async () => {
     process.env.STORYMAP_FEEDBACK_EMBED_ORIGINS = ALLOWED;
+    // Since story-14xvpa step 2 the same-origin lane proves itself by the operator's SESSION (the route
+    // is public/self-auth) — so this request carries one; the no-cookie case is pinned in
+    // intake-lanes.test.ts.
+    process.env.AGILEHARNESS_SESSION_SECRET = "segredo-de-sessao-de-teste-000000000001";
+    process.env.AGILEHARNESS_AUTH_TOKEN = "token-do-operador-de-teste-0000000000001";
+    const { signSession, SESSION_COOKIE } = await import("@/lib/auth/session");
+    const cookie = `${SESSION_COOKIE}=${await signSession({
+      sessionSecret: process.env.AGILEHARNESS_SESSION_SECRET,
+      operatorToken: process.env.AGILEHARNESS_AUTH_TOKEN,
+    })}`;
     const { POST } = await import("@/app/api/feedback/intake/route");
     const res = await POST(
       new Request("http://board.local/api/feedback/intake", {
         method: "POST",
-        headers: { "content-type": "application/json", origin: "http://board.local", host: "board.local" },
+        headers: { "content-type": "application/json", origin: "http://board.local", host: "board.local", cookie },
         body: invalidBatch,
       }),
     );
     expect(res.status).toBe(400); // same-origin reaches validation as always
     expect(res.headers.get("access-control-allow-origin")).toBeNull();
     delete process.env.STORYMAP_FEEDBACK_EMBED_ORIGINS;
+    delete process.env.AGILEHARNESS_SESSION_SECRET;
+    delete process.env.AGILEHARNESS_AUTH_TOKEN;
   });
 });

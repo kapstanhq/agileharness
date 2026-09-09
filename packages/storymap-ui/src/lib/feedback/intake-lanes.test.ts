@@ -18,6 +18,14 @@ vi.mock("@/lib/vps/tmux", () => ({ sendToClaudeSession: vi.fn(async () => ({ ok:
 vi.mock("@/lib/vps/kill-guard", () => ({ isMasterSession: vi.fn(() => false) }));
 
 const APP_TOKEN = "token-de-repasse-do-app-0001";
+// Segredos de sessão do serviço (>= 32 chars) — a lane same-origin exige a sessão do OPERADOR desde
+// que a rota saiu do portão (story-14xvpa passo 2 / issue #2).
+const SESSION_SECRET = "segredo-de-sessao-de-teste-000000000001";
+const OPERATOR_TOKEN = "token-do-operador-de-teste-0000000000001";
+async function sessionCookie(): Promise<string> {
+  const { signSession, SESSION_COOKIE } = await import("@/lib/auth/session");
+  return `${SESSION_COOKIE}=${await signSession({ sessionSecret: SESSION_SECRET, operatorToken: OPERATOR_TOKEN })}`;
+}
 const OTHER_TOKEN = "token-de-repasse-de-outro-app-2";
 
 /** A batch that ASKS for the paste-into-a-session route and names a board of its choosing — i.e. the
@@ -45,9 +53,13 @@ async function post(headers: Record<string, string>, body: string = greedyBatch(
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.STORYMAP_FEEDBACK_INGEST_TOKENS = `acme:${APP_TOKEN},storymap:${OTHER_TOKEN}`;
+  process.env.AGILEHARNESS_SESSION_SECRET = SESSION_SECRET;
+  process.env.AGILEHARNESS_AUTH_TOKEN = OPERATOR_TOKEN;
 });
 afterEach(() => {
   delete process.env.STORYMAP_FEEDBACK_INGEST_TOKENS;
+  delete process.env.AGILEHARNESS_SESSION_SECRET;
+  delete process.env.AGILEHARNESS_AUTH_TOKEN;
 });
 
 describe("ingest lane — a relayed batch is TRIAGE-ONLY, in the token's board", () => {
@@ -121,13 +133,55 @@ describe("ingest lane — a relayed batch is TRIAGE-ONLY, in the token's board",
   it("contrast: the same batch from the board's own UI keeps full capability, paste included", async () => {
     process.env.STORYMAP_FEEDBACK_TERMINAL = "1"; // the paste path's own opt-in, off by default
     try {
-      const res = await post({ origin: "http://board.local", host: "board.local", "sec-fetch-site": "same-origin" });
+      const res = await post({
+        origin: "http://board.local",
+        host: "board.local",
+        "sec-fetch-site": "same-origin",
+        cookie: await sessionCookie(),
+      });
       expect(res.status).toBe(200);
       const { sendToClaudeSession } = await import("@/lib/vps/tmux");
       expect(sendToClaudeSession).toHaveBeenCalledTimes(1);
     } finally {
       delete process.env.STORYMAP_FEEDBACK_TERMINAL;
     }
+  });
+  // The route is PUBLIC (self-auth) since story-14xvpa step 2: without this check, the same-origin
+  // signal alone — two headers any curl can write — would be the full-capability lane. The 401 must
+  // come BEFORE any sink, and must not depend on the terminal knob.
+  it("a same-origin-looking POST WITHOUT the operator's session gets 401 and reaches no sink", async () => {
+    process.env.STORYMAP_FEEDBACK_TERMINAL = "1";
+    try {
+      const res = await post({ origin: "http://board.local", host: "board.local", "sec-fetch-site": "same-origin" });
+      expect(res.status).toBe(401);
+      expect(((await res.json()) as { error: string }).error).toMatch(/não autenticado/);
+      const { sendToClaudeSession } = await import("@/lib/vps/tmux");
+      const { reportIssueAction, refineCardAction } = await import("@/app/actions");
+      expect(sendToClaudeSession).not.toHaveBeenCalled();
+      expect(reportIssueAction).not.toHaveBeenCalled();
+      expect(refineCardAction).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.STORYMAP_FEEDBACK_TERMINAL;
+    }
+  });
+  it("a forged or expired session cookie is worth nothing — 401, no sink", async () => {
+    const res = await post({
+      origin: "http://board.local",
+      host: "board.local",
+      cookie: "ah_session=eyJleHAiOjk5OTk5OTk5OTk5OTl9.assinatura-forjada",
+    });
+    expect(res.status).toBe(401);
+    const { reportIssueAction } = await import("@/app/actions");
+    expect(reportIssueAction).not.toHaveBeenCalled();
+  });
+  // The relay never had a cookie and never will — the whole point of the lane. It must keep working
+  // with NO session secret in the env at all (a relay-only deployment), which is also what proves the
+  // session check is scoped to the same-origin lane and not bolted onto the front of the handler.
+  it("the ingest lane needs no session — not even a session secret in the env", async () => {
+    delete process.env.AGILEHARNESS_SESSION_SECRET;
+    delete process.env.AGILEHARNESS_AUTH_TOKEN;
+    const res = await post({ "x-ah-ingest": APP_TOKEN });
+    expect(res.status).toBe(200);
   });
 });
 

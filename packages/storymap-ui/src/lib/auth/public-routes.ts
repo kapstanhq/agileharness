@@ -68,7 +68,26 @@ export const PUBLIC_ROUTES: readonly PublicRoute[] = [
       "shared secret e devolvem 401 sem ele. Quem chama é o próprio serviço em 127.0.0.1 e os runs",
   },
 
-  // ── PWA: o navegador busca estes ANTES de qualquer sessão (instalação + push) ──────────────
+    {
+    prefix: "/api/feedback/intake",
+    reason: "self-auth",
+    why:
+      "broker do overlay de feedback, com TRÊS lanes que se autenticam na própria rota: same-origin " +
+      "pela sessão do operador (a MESMA verifySession do middleware, em lib/feedback/session-gate.ts), " +
+      "INGEST pelo token de repasse timing-safe (x-ah-ingest, board vem do token, triage-only) e EMBED " +
+      "por origem allowlistada + nonce cunhado pelo board (triage-only). Fora do portão porque um relay " +
+      "servidor-a-servidor não tem cookie e um navegador de outra origem nunca manda o do board — " +
+      "story-14xvpa passo 2 / issue #2. Sem token nem allowlist declarados, as duas lanes não existem",
+  },
+  {
+    prefix: "/api/feedback/shot",
+    reason: "self-auth",
+    why:
+      "a imagem de uma anotação: o POST aceita o relay pelo token de repasse (mesma lane do intake) ou " +
+      "same-origin + sessão do operador; o GET é same-origin + sessão, sempre — nunca CORS, para nenhuma " +
+      "página poder hotlinkar um screenshot da tela do operador. Verificação em lib/feedback/session-gate.ts",
+  },
+// ── PWA: o navegador busca estes ANTES de qualquer sessão (instalação + push) ──────────────
   {
     prefix: "/sw.js",
     reason: "pre-session",

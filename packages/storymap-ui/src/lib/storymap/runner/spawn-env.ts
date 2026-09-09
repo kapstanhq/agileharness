@@ -82,6 +82,11 @@ export const MCP_TOKEN_ENV_PREFIX = "STORYMAP_MCP_TOKEN";
 export const SEGREDOS_DO_SERVICO = [
   // Assina as sessões do painel: um filho com este valor forja sessão de operador.
   "AGILEHARNESS_SESSION_SECRET",
+  // O token de LOGIN do operador (lib/auth/env.ts, TOKEN_ENV): com ele um filho não precisa forjar
+  // nada — troca o token por uma sessão real em /api/auth/login. Ficou fora desta lista até
+  // 2026-09-09 porque env.ts o lê por constante, e o scanner de exaustividade só enxerga
+  // `process.env.NOME` literal; foi um teste novo com o literal que o expôs (issue #2 do repo).
+  "AGILEHARNESS_AUTH_TOKEN",
   // Chave privada de Web Push.
   "STORYMAP_VAPID_PRIVATE_KEY",
   // Tokens de ingestão de feedback (escrita em board-data por integração externa).

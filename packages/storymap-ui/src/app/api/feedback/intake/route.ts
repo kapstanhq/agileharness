@@ -8,14 +8,17 @@
 //
 // THREE LANES:
 //  • SAME-ORIGIN (the board itself) — full capability: triage / refine a card / paste into a session.
-//    Authorised by the APP's own gate: `src/middleware.ts` denies by default and this route is NOT in
-//    `PUBLIC_ROUTES`, so a caller without a board session never reaches this handler. (Until 2026-07-27
-//    the claim here was "it sits behind the Caddy basic_auth catch-all" — that basic_auth is GONE, and
-//    believing the outdated version is exactly how someone would justify adding this route to
-//    `PUBLIC_ROUTES` "since Caddy covers it". See story-8oy5q8.) Second floor, independent of the gate:
-//    `classifyIntake` grants this lane only on a POSITIVE same-origin signal — a request with no
-//    `Origin` is refused rather than assumed to be the board's own UI (story-14xvpa), so opening the
-//    route to the internet would not hand full capability to an anonymous `curl`.
+//    Authorised HERE, by the operator's session cookie (`hasBoardSession`, the SAME `verifySession`
+//    the middleware and the terminal gateway use). This route IS in `PUBLIC_ROUTES` (self-auth) since
+//    story-14xvpa step 2: it left the middleware's default-deny so the two lanes below can exist —
+//    a relay has no cookie, and a cross-origin browser never sends the board's. (Until 2026-07-27 the
+//    claim here was "it sits behind the Caddy basic_auth catch-all"; that basic_auth is GONE, and from
+//    2026-07-27 to 2026-09-09 the route sat behind the middleware instead, which made INGEST and EMBED
+//    unreachable — the relay in the reference deployment logged zero executions. See story-8oy5q8 and
+//    the repo's issue #2.) Two floors, both in this file: `classifyIntake` grants this lane only on a
+//    POSITIVE same-origin signal (no `Origin` ⇒ refused, never assumed to be the board's own UI), and
+//    then the session check — because `Origin` is a header a non-browser client writes at will, the
+//    signal alone would hand full capability to a two-header `curl`.
 //  • INGEST (F6, the DEFAULT path for a product app) — a relay running in the app's OWN backend posts
 //    here with a board-scoped token (`x-ah-ingest`). The browser never holds a board credential and
 //    the board never has to be reachable from the public internet. Collapsed to TRIAGE-ONLY, with the
@@ -42,6 +45,7 @@ import {
   parseEmbedOrigins,
 } from "@/lib/feedback/embed";
 import { forceIngestLink, makeIngestResolver, parseIngestTokens } from "@/lib/feedback/ingest";
+import { hasBoardSession, SESSION_REQUIRED_ERROR } from "@/lib/feedback/session-gate";
 import { createRateLimiter } from "@/lib/feedback/rate-limit";
 import { verifyNonce } from "@/lib/feedback/nonce-store";
 import { deriveLink } from "@/lib/feedback/link";
@@ -127,6 +131,12 @@ export async function POST(request: Request): Promise<Response> {
   });
   if (access.kind === "reject") {
     return Response.json({ ok: false, error: access.error }, { status: access.status });
+  }
+  // The same-origin lane's proof is the operator's SESSION — checked here since the route left the
+  // middleware's gate (story-14xvpa step 2). Before the body is read, before any sink: a forged
+  // `Origin` without a cookie gets the middleware's own 401, not a look at the handler.
+  if (access.kind === "same-origin" && !(await hasBoardSession(request.headers))) {
+    return Response.json({ ok: false, error: SESSION_REQUIRED_ERROR }, { status: 401 });
   }
 
   // Every response on the embed lane must carry the allow-header, errors included — otherwise the

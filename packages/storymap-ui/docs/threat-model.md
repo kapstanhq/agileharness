@@ -307,13 +307,22 @@ loga** — e a decisão do `Secure` do cookie perde a única fonte que não é h
 recomendação de estilo: é configuração sem a qual o perímetro se comporta como se estivesse em
 loopback.
 
-### R9 — lanes INERTES por *fail-closed* (declarado, não escondido)
+### R9 — as lanes de feedback estão ABERTAS, com o portão DENTRO da rota
 
-**Medido:** a lane de **INGEST** (header `x-ah-ingest`) e a lane **EMBED** estão hoje inertes —
-`/api/feedback/intake` **não** está nas rotas públicas, então o portão devolve 401 ao relay **antes**
-de qualquer token ser lido. Em segurança isso joga a favor (nenhuma superfície de ingestão aberta),
-mas **pode ser regressão funcional** dessas lanes e é decisão do dono: reabrir exige classificar a
-rota explicitamente, com o motivo, na lista única de rotas públicas.
+**Medido (2026-09-09, issue #2):** de 2026-07-27 até essa data a lane de **INGEST** (header
+`x-ah-ingest`) e a lane **EMBED** ficaram inertes — `/api/feedback/intake` estava atrás do portão de
+sessão, que devolvia 401 ao relay **antes** de qualquer token ser lido; o relay da instalação de
+referência registrou zero execuções em 30 dias. As duas rotas (`/api/feedback/intake` e
+`/api/feedback/shot`) saíram do portão pela via declarada: classificadas como `self-auth` na lista
+única de rotas públicas, com o motivo escrito.
+
+O que substitui o portão, **na própria rota**: (1) `classifyIntake` só concede a lane same-origin
+com sinal POSITIVO — sem `Origin`, recusa; (2) a lane same-origin exige a **sessão do operador**,
+verificada por `lib/feedback/session-gate.ts` com a MESMA `verifySession` do middleware e do gateway
+do terminal — porque `Origin` é um header que um cliente não-navegador escreve à vontade; (3) INGEST
+prova-se pelo token timing-safe e EMBED por origem allowlistada + nonce, ambas colapsadas a
+triage-only e limitadas por taxa. Sem token nem allowlist declarados na env, as duas lanes **não
+existem** (fail-closed permanece). O catálogo (`/destinations`) e o nonce seguem atrás do portão.
 
 ## Suposições — se uma cair, o modelo cai
 

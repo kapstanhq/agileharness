@@ -392,11 +392,18 @@ describe("(5) o threat model não pode apodrecer em silêncio", () => {
     expect(usm?.reason).toBe("self-auth");
   });
 
-  it("`/api/feedback` continua ATRÁS do portão — é o que torna a lane de ingest inerte", () => {
-    // O threat model declara a lane INGEST inerte por fail-closed. Se um dia `/api/feedback` entrar
-    // na lista de rotas públicas, a declaração vira falsa NO MESMO COMMIT — e é aqui que se percebe.
+  it("`/api/feedback/{intake,shot}` estão FORA do portão por self-auth — e o R9 diz isso", () => {
+    // Até 2026-09-09 o R9 declarava as lanes INGEST/EMBED inertes porque a rota ficava atrás do
+    // portão. Elas foram abertas (story-14xvpa passo 2 / issue #2) com a sessão verificada NA ROTA
+    // para a lane same-origin. Se a lista pública e o texto discordarem, é aqui que se percebe.
     const publicos = PUBLIC_ROUTES.filter((r) => r.prefix.startsWith("/api/feedback"));
-    expect(publicos.map((r) => r.prefix).join(", ")).toBe("");
+    expect(publicos.map((r) => r.prefix).sort()).toEqual(["/api/feedback/intake", "/api/feedback/shot"]);
+    expect(publicos.every((r) => r.reason === "self-auth")).toBe(true);
+    // O catálogo e o nonce seguem atrás do portão: o catálogo lista sessões tmux vivas.
+    expect(publicos.some((r) => r.prefix.startsWith("/api/feedback/destinations"))).toBe(false);
+    const r9 = ler("docs/threat-model.md");
+    expect(r9).toMatch(/### R9[^\n]*\n[\s\S]*?session-gate/);
+    expect(r9).not.toMatch(/estão hoje inertes/);
   });
 
   it("a CSP continua em report-only (se virar enforce, o capítulo de XSS está desatualizado)", () => {

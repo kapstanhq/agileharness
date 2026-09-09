@@ -12,9 +12,10 @@
 // only — the same gap `/api/design/ref` fills for style-guide refs, whose guards this mirrors.
 //
 // NEVER CORS, on either method: the read would otherwise let any page hotlink a screenshot of the
-// operator's screen. The WRITE has exactly two callers — the board's own UI (same-origin; platform
-// authN is the Caddy basic_auth catch-all, proven: /api/feedback/* → 401) and a product app's server
-// RELAY presenting a board-scoped ingest token (F6). A relay is server-to-server, so it needs no CORS
+// operator's screen. The WRITE has exactly two callers — the board's own UI (same-origin, proven by
+// the operator's SESSION cookie checked in this file: the route is public/self-auth since story-14xvpa
+// step 2, so the middleware no longer stands in front of it) and a product app's server RELAY
+// presenting a board-scoped ingest token (F6). The READ is same-origin + session only. A relay is server-to-server, so it needs no CORS
 // header to work — which is why the same-origin invariant for BROWSERS survives this lane intact.
 //
 // The relay lane exists so a region capture keeps its image end-to-end: without it, feedback coming
@@ -28,6 +29,7 @@ import { randomBytes } from "node:crypto";
 import { checkSameOrigin, checkSameOriginJson } from "@/lib/feedback/guard";
 import { INGEST_HEADER, makeIngestResolver, parseIngestTokens } from "@/lib/feedback/ingest";
 import { createRateLimiter } from "@/lib/feedback/rate-limit";
+import { hasBoardSession, SESSION_REQUIRED_ERROR } from "@/lib/feedback/session-gate";
 import { decodeImageDataUrl, isShotSizeOk, isValidShotFilename, shotUrl } from "@/lib/feedback/shots";
 import { isValidSlugId, refContentType, sniffImageExt } from "@/lib/storymap/design-upload-guard";
 import { feedbackShotsDir } from "@/lib/storymap/paths";
@@ -67,6 +69,11 @@ export async function POST(request: Request): Promise<Response> {
   } else {
     const guard = checkSameOriginJson(request.headers);
     if (!guard.ok) return Response.json({ ok: false, error: guard.error }, { status: guard.status });
+    // Same-origin proves the CALLER is a browser on the board's origin; the SESSION proves it is the
+    // operator's. Both, before a byte of image is decoded.
+    if (!(await hasBoardSession(request.headers))) {
+      return Response.json({ ok: false, error: SESSION_REQUIRED_ERROR }, { status: 401 });
+    }
   }
 
   let raw: unknown;
@@ -110,6 +117,10 @@ export async function POST(request: Request): Promise<Response> {
 export async function GET(request: Request): Promise<Response> {
   const guard = checkSameOrigin(request.headers);
   if (!guard.ok) return Response.json({ ok: false, error: guard.error }, { status: guard.status });
+  // A screenshot of the operator's screen: same-origin AND the operator's session, always.
+  if (!(await hasBoardSession(request.headers))) {
+    return Response.json({ ok: false, error: SESSION_REQUIRED_ERROR }, { status: 401 });
+  }
 
   const { searchParams } = new URL(request.url);
   const boardId = searchParams.get("board") ?? "";

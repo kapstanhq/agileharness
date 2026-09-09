@@ -45,6 +45,8 @@ const ROUTES = collectRoutes(appDir).sort();
 const EXPECTED_PUBLIC = [
   "/api/auth/login",
   "/api/auth/logout",
+  "/api/feedback/intake",
+  "/api/feedback/shot",
   "/api/health",
   "/api/notifications/vapid",
   "/api/runner/deploy-webhook",
@@ -93,7 +95,8 @@ describe("isenções do portão de autenticação", () => {
       "/api/terminal/sessions",
       "/api/processes",
       "/api/vps/metrics",
-      "/api/feedback/intake",
+      "/api/feedback/destinations", // o catálogo lista sessões tmux vivas — same-origin + sessão, sempre
+      "/api/feedback/nonce",
       "/api/design/upload",
       "/api/inbox/seen",
     ]) {
@@ -101,6 +104,17 @@ describe("isenções do portão de autenticação", () => {
     }
   });
 
+  it("as rotas de feedback que saíram do portão se autenticam SOZINHAS (issue #2)", () => {
+    // Da inversão de story-14xvpa: o classificador nega same-origin sem sinal positivo, e a rota
+    // verifica a SESSÃO nessa lane. Isenção sem esse par é a regressão que este teste nomeia —
+    // o comportamento em si está em lib/feedback/session-gate.test.ts e intake-lanes.test.ts.
+    for (const prefix of ["/api/feedback/intake", "/api/feedback/shot"]) {
+      const r = PUBLIC_ROUTES.find((x) => x.prefix === prefix);
+      expect(r, `${prefix} precisa estar classificada`).toBeDefined();
+      expect(r?.reason).toBe("self-auth");
+      expect(r?.why).toContain("session-gate");
+    }
+  });
   it("nenhuma isenção está MORTA — todo prefixo aponta para algo que existe", () => {
     for (const { prefix, why } of PUBLIC_ROUTES) {
       const servedByApp = ROUTES.some((r) => r === prefix || r.startsWith(`${prefix}/`));
