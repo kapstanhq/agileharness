@@ -303,12 +303,12 @@ describe("(4) o threat model registra o que foi MEDIDO — inclusive o que joga 
         porque: "a defesa é o portão fail-closed, e ela cai no dia em que a rota entrar em PUBLIC_ROUTES",
       },
       {
-        oQue: "GHSA-52cp no js-yaml 3.14.2 interno do gray-matter",
+        oQue: "GHSA-52cp no js-yaml interno do gray-matter — a história de como foi fechado",
         padrao: /GHSA-52cp[\s\S]{0,600}?gray-matter/,
-        porque: "não sai por bump da nossa dependência declarada — é aceito COM mitigação, e isso precisa estar escrito",
+        porque: "foi aceito COM mitigação e prazo até a resolução transitiva trazer o 3.15.x; o doc precisa contar as duas fases",
       },
       {
-        oQue: "a mitigação do GHSA-52cp: o teto do chokepoint LIMITA, não elimina",
+        oQue: "o chokepoint LIMITA, não elimina — continua verdadeiro depois de o advisory sair",
         padrao: /limita|n[ãa]o elimina/i,
         porque: "declarar 'mitigado' sem dizer o que sobra é o mesmo que declarar 'resolvido'",
       },

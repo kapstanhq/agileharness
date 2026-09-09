@@ -117,19 +117,23 @@ pelos chunks de `/_next/static`, fora do matcher do middleware).
 `postcss@8.4.31` (3 advisories) está pinado **exato** dentro do `next@14.2.35`: não sai por bump de
 topo, só com o major.
 
-### R4 — `js-yaml@3.14.2` interno do `gray-matter` (`GHSA-52cp`)
+### R4 — o `js-yaml` interno do `gray-matter` (`GHSA-52cp`), fechado pela resolução
 
-**Medido:** o parser de frontmatter é o `gray-matter@4.0.3`, que declara `js-yaml@^3.13.1` e resolve
-para **3.14.2**. O advisory **`GHSA-52cp`** (A:H — DoS por CPU **quadrática** em cadeia de
-*merge-keys*) é **alcançável**: todo card e todo `board.yaml` passa por ali. Não sai por bump da
-**nossa** dependência declarada — quem prende a versão é o intervalo transitivo do `gray-matter`;
-mover exige refresh de lockfile ou override, que é outro card, não este documento.
+**Medido (2026-07-30):** o parser de frontmatter é o `gray-matter@4.0.3`, que declara `js-yaml@^3.13.1`
+e resolvia então para **3.14.2**, alcançada pelo advisory **`GHSA-52cp`** (A:H — DoS por CPU
+**quadrática** em cadeia de *merge-keys*): todo card e todo `board.yaml` passa por ali. Não saía por
+bump da **nossa** dependência declarada — quem prendia a versão era o intervalo transitivo do
+`gray-matter` — e foi aceito COM mitigação e prazo (2026-10-31), com disposição VEX `affected`.
 
-**Aceito COM mitigação, e a mitigação é parcial por natureza:** o chokepoint recusa antes do parser o
-que excede os tetos de bytes/profundidade/nós, o que **limita** o custo de um documento hostil —
-**não elimina** a classe. Um documento dentro dos tetos ainda pode custar CPU desproporcional. O teto
-é ajustável pelo operador (`STORYMAP_FRONTMATTER_MAX_*`); apertá-lo reduz a janela e aumenta o risco
-de recusar dado legítimo.
+**Re-medido (2026-09-10, v0.2.2):** o mesmo intervalo resolve hoje para **`js-yaml@3.15.2`**, que
+carrega a correção (3.15.0). O advisory saiu do relatório de SCA; as duas disposições `affected`
+seguem no `vex-dispositions.json`, que o gate lista como obsoletas a cada rodada — a suíte de
+supply-chain usa o arquivo real como teste de produtor e recusa um arquivo vazio, então limpá-las
+pede antes um refactor dessa suíte para fixtures. O que **permanece**, e é regra deste documento, é o
+chokepoint: o teto de bytes/profundidade/nós antes do parser **limita** o custo de um documento
+hostil e **não elimina** a classe de CPU desproporcional em YAML — um documento dentro dos tetos ainda
+pode custar mais do que parece. O teto é ajustável pelo operador (`STORYMAP_FRONTMATTER_MAX_*`);
+apertá-lo reduz a janela e aumenta o risco de recusar dado legítimo.
 
 ### R5 — o token MCP **já vazou** em claro nos logs do sistema
 
