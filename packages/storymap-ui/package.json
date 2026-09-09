@@ -34,7 +34,7 @@
     "js-yaml": "^4.3.0",
     "lucide-react": "^0.460.0",
     "mcp-handler": "^1.1.0",
-    "next": "15.5.21",
+    "next": "15.5.24",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^9",
