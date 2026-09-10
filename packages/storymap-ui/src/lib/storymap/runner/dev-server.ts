@@ -24,7 +24,7 @@ import { createRequire } from "node:module";
  * dispatcher bind. Named once so the guard below is the single source of "the port we must never
  * touch". An ephemeral QA dev server binding this would collide with the live board (the koieb3 bug).
  */
-export const STORYMAP_PROD_PORT = 3008;
+export const PROD_PORT = 3008;
 
 /**
  * The ephemeral range the QA dev server picks from: [3100, 3899]. Chosen to sit ABOVE every dev-all
@@ -53,8 +53,8 @@ export function ephemeralPortForRun(sessionId: string, base = EPHEMERAL_PORT_BAS
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
   const port = base + (hash % span);
-  // Cannot trigger while base > STORYMAP_PROD_PORT, but assert the invariant rather than assume it.
-  return port === STORYMAP_PROD_PORT ? port + 1 : port;
+  // Cannot trigger while base > PROD_PORT, but assert the invariant rather than assume it.
+  return port === PROD_PORT ? port + 1 : port;
 }
 
 /**
@@ -63,9 +63,9 @@ export function ephemeralPortForRun(sessionId: string, base = EPHEMERAL_PORT_BAS
  * (and the agent can never be told to kill) the live storymap.service port. Pure — exported for tests.
  */
 export function assertNotProdPort(port: number): void {
-  if (port === STORYMAP_PROD_PORT) {
+  if (port === PROD_PORT) {
     throw new Error(
-      `guard: recusando porta ${STORYMAP_PROD_PORT} (serviço prod storymap.service + dispatcher de autorun)`,
+      `guard: recusando porta ${PROD_PORT} (serviço prod storymap.service + dispatcher de autorun)`,
     );
   }
 }
@@ -123,7 +123,7 @@ export async function resolveDevServerPort(
     // Wrap with the span so a candidate near the top of the range walks back to `base` instead of
     // marching into emulator/system ports above 3899.
     let candidate = base + ((start - base + i) % span);
-    if (candidate === STORYMAP_PROD_PORT) candidate += 1; // structurally unreachable in-range, but never bind 3008
+    if (candidate === PROD_PORT) candidate += 1; // structurally unreachable in-range, but never bind 3008
     assertNotProdPort(candidate); // hard guard: a free 3008 is STILL refused (it's the prod service)
     if (await probe(candidate)) return candidate;
   }

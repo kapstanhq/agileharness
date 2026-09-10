@@ -45,14 +45,14 @@ interface PushPayload {
  * das duas chaves). O RFC 8292 exige o campo, então inventá-lo seria a única alternativa.
  */
 function vapidSubject(): string | null {
-  const declared = (process.env.STORYMAP_VAPID_SUBJECT ?? "").trim();
+  const declared = (process.env.AGILEHARNESS_VAPID_SUBJECT ?? "").trim();
   if (!declared) return null;
   return /^(mailto:|https:\/\/)/i.test(declared) ? declared : null;
 }
 
 /** Push is live only when both VAPID keys AND the declared contact are present (opt-in, like Slack). */
 export function isPushConfigured(): boolean {
-  return !!(process.env.STORYMAP_VAPID_PUBLIC_KEY && process.env.STORYMAP_VAPID_PRIVATE_KEY && vapidSubject());
+  return !!(process.env.AGILEHARNESS_VAPID_PUBLIC_KEY && process.env.AGILEHARNESS_VAPID_PRIVATE_KEY && vapidSubject());
 }
 
 // web-push is imported LAZILY (dynamic import), never statically. A static
@@ -77,8 +77,8 @@ async function ensureVapid(): Promise<WebPush | null> {
   if (!vapidReady) {
     webpush.setVapidDetails(
       vapidSubject()!,
-      process.env.STORYMAP_VAPID_PUBLIC_KEY!,
-      process.env.STORYMAP_VAPID_PRIVATE_KEY!,
+      process.env.AGILEHARNESS_VAPID_PUBLIC_KEY!,
+      process.env.AGILEHARNESS_VAPID_PRIVATE_KEY!,
     );
     vapidReady = true;
   }

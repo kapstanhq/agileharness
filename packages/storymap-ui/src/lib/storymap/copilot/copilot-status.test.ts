@@ -41,7 +41,7 @@ describe("copilotStatus", () => {
     const s = copilotStatus({ ...base, mode: "autonomous", orchTokenPresent: false });
     expect(s.level).toBe("auto-inert");
     expect(s.inert).toBe(true);
-    expect(s.detail).toMatch(/STORYMAP_MCP_TOKEN_ORCH/);
+    expect(s.detail).toMatch(/AGILEHARNESS_MCP_TOKEN_ORCH/);
   });
 
   it("autônomo mas com write-board em `ask` ⇒ SÓ LEITURA (não é inerte: ele lê e pede aprovação)", () => {

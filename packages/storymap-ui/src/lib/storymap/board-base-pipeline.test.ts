@@ -82,12 +82,12 @@ describe("board resolved config — golden snapshot (byte-identical across the _
     // A comparação acima (`toEqual(expectedBoardIds())`) NÃO cobre isto, e é importante dizer por quê:
     // os dois lados dela leem o MESMO disco — `listBoards()` e `expectedBoardIds()` descem ambos para
     // `boardsDir()` → `findRepoRoot()`. Ela pega `listBoards` PULANDO ou INVENTANDO um board; é cega
-    // para a árvore inteira estar errada. Sob `STORYMAP_TARGET` ela fica verde fotografando os boards
+    // para a árvore inteira estar errada. Sob `AGILEHARNESS_TARGET` ela fica verde fotografando os boards
     // de outro repositório — que foi como, em 2026-08-19, quatro retratos de boards privados viajaram
     // para o artefato público com a suíte verde.
     //
     // `OSS_TREE_ROOT` é derivado da localização DESTE módulo, então é a única raiz aqui que
-    // `STORYMAP_TARGET` não consegue mover. `vitest.setup.ts` já apaga o env; este invariante cobre o
+    // `AGILEHARNESS_TARGET` não consegue mover. `vitest.setup.ts` já apaga o env; este invariante cobre o
     // que o saneamento não alcança — a prova que reatribui o alvo em `beforeAll` (sete arquivos
     // fazem isso, legitimamente) e que, por engano, deixasse o golden rodar debaixo dele.
     const nativos = new Set(
@@ -100,7 +100,7 @@ describe("board resolved config — golden snapshot (byte-identical across the _
       expect(
         nativos.has(b.id),
         `o board "${b.id}" NÃO é deste repositório. A suíte está lendo outra árvore — quase sempre ` +
-          `um \`STORYMAP_TARGET\` reatribuído em prova. Um \`vitest -u\` aqui gravaria o retrato de ` +
+          `um \`AGILEHARNESS_TARGET\` reatribuído em prova. Um \`vitest -u\` aqui gravaria o retrato de ` +
           `board alheio NESTE repositório.`,
       ).toBe(true);
     }

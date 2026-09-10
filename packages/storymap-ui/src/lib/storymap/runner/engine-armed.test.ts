@@ -48,7 +48,7 @@ describe("engineArmedDecision — flags explícitas", () => {
     expect(engineArmedDecision({ flag, gitIsDirectory: false }).armed).toBe(expected);
   });
 
-  // A trava contra o typo: `STORYMAP_ENGINE=true` NÃO pode armar um worktree. Só o literal exato
+  // A trava contra o typo: `AGILEHARNESS_ENGINE=true` NÃO pode armar um worktree. Só o literal exato
   // `on` arma onde o default diz que não — armar tem de ser um ato deliberado, nunca um erro de digitação.
   it.each(["true", "1", "yes", "sim", "onn", "enabled", ""])(
     "%j NÃO arma um worktree — cai no default estrutural",
@@ -96,6 +96,6 @@ describe("engineInertWarning", () => {
   });
 
   it("diz como armar mesmo assim", () => {
-    expect(engineInertWarning("qualquer")).toContain("STORYMAP_ENGINE=on");
+    expect(engineInertWarning("qualquer")).toContain("AGILEHARNESS_ENGINE=on");
   });
 });

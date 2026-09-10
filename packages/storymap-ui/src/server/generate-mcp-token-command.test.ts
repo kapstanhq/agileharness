@@ -9,7 +9,7 @@
 //
 // O ATAQUE que ele NÃO reabre: gerar no BOOT — o que a onda 1 fazia — armava a superfície MCP em toda
 // instalação, inclusive nas que nunca pediram o endpoint, contradizendo a garantia do header da route
-// ("refused outright unless STORYMAP_MCP_TOKEN is set"). Aqui a geração é um ato declarado do
+// ("refused outright unless AGILEHARNESS_MCP_TOKEN is set"). Aqui a geração é um ato declarado do
 // operador, e mesmo assim ela NÃO arma nada: quem arma é a env que ele decide escrever.
 //
 // Este arquivo prova a FIAÇÃO do comando (o entrypoint de produção reconhece a flag, produz o
@@ -37,7 +37,7 @@ const ENVS_TOCADAS = [
   "AGILEHARNESS_DEV",
   "NODE_ENV",
   "PORT",
-  "STORYMAP_MCP_TOKEN",
+  "AGILEHARNESS_MCP_TOKEN",
   "__NEXT_PROCESSED_ENV",
   SESSION_SECRET_ENV,
   TOKEN_ENV,
@@ -64,7 +64,7 @@ beforeAll(async () => {
 
   delete process.env.AGILEHARNESS_HOST;
   delete process.env.AGILEHARNESS_DEV;
-  delete process.env.STORYMAP_MCP_TOKEN;
+  delete process.env.AGILEHARNESS_MCP_TOKEN;
   delete process.env.__NEXT_PROCESSED_ENV;
   process.env.AGILEHARNESS_PORT = "39121";
 
@@ -96,7 +96,7 @@ afterAll(() => {
 
 /** O registro a 0600 — no diretório de estado que a suíte redireciona para um temp (vitest.setup.ts). */
 function arquivoDoToken(): string {
-  return path.join(process.env.STORYMAP_RUNNER_STATE_DIR!, "mcp-token");
+  return path.join(process.env.AGILEHARNESS_RUNNER_STATE_DIR!, "mcp-token");
 }
 
 describe("node dist/ah-server.mjs --generate-mcp-token", () => {
@@ -114,7 +114,7 @@ describe("node dist/ah-server.mjs --generate-mcp-token", () => {
   it("imprime a linha pronta do .env.local e diz que é a ENV que arma a porta", () => {
     const token = readFileSync(arquivoDoToken(), "utf8").trim();
     const saida = saidaDe(info);
-    expect(saida).toContain(`STORYMAP_MCP_TOKEN=${token}`);
+    expect(saida).toContain(`AGILEHARNESS_MCP_TOKEN=${token}`);
     expect(saida).toContain("FECHADA");
     expect(saida).toContain("NUNCA o comite");
   });
@@ -136,6 +136,6 @@ describe("node dist/ah-server.mjs --generate-mcp-token", () => {
     // instalação limpa a env está vazia e difere; numa armada ela tem o segredo ANTIGO do operador
     // e também difere. Só fica igual se a geração passar a armar a porta — que é o defeito.
     const gerado = readFileSync(arquivoDoToken(), "utf8").trim();
-    expect(process.env.STORYMAP_MCP_TOKEN).not.toBe(gerado);
+    expect(process.env.AGILEHARNESS_MCP_TOKEN).not.toBe(gerado);
   });
 });

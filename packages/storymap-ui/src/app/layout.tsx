@@ -93,7 +93,7 @@ const AH_FEEDBACK_CONFIG = {
   endpoint: "/api/feedback/intake",
   // Turns on the send-step picker: [Novo item · Card · Sessão]. The card/session lists load from this
   // same-origin endpoint (board pinned server-side; the Sessão option appears only when the terminal
-  // round-trip is enabled — STORYMAP_FEEDBACK_TERMINAL=1). A cross-origin embed would omit this.
+  // round-trip is enabled — AGILEHARNESS_FEEDBACK_TERMINAL=1). A cross-origin embed would omit this.
   destinationsEndpoint: "/api/feedback/destinations",
   // Where a captured image is stored. The SOURCE of the image is the browser itself — a real frame of
   // the shared tab (one permission per session) or a pasted system screenshot — so this is the only

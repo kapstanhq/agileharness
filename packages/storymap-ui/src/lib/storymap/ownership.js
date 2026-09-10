@@ -81,7 +81,7 @@ function isCardPath(filePath) {
  * @param {string|null} params.board - board id (informational, for the message)
  * @param {object|null} params.beforeYaml - js-yaml parsed board.yaml BEFORE the write (null = new file)
  * @param {object|null} params.afterYaml  - js-yaml parsed board.yaml AFTER  the write
- * @param {string|null} params.runId      - STORYMAP_AUTORUN_RUN_ID from env
+ * @param {string|null} params.runId      - AGILEHARNESS_AUTORUN_RUN_ID from env
  * @returns {null | { owner: string, fields: string[], message: string, fix: string }}
  *   null  → write is allowed.
  *   object → write is blocked (owner:human violated).

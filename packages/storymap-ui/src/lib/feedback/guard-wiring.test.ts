@@ -73,24 +73,24 @@ describe("F6 relay lane on the shot store — token or nothing, and never a brow
   }
 
   it("an invalid token is refused 401 (nothing decoded, nothing written)", async () => {
-    process.env.STORYMAP_FEEDBACK_INGEST_TOKENS = `acme:${TOKEN}`;
+    process.env.AGILEHARNESS_FEEDBACK_INGEST_TOKENS = `acme:${TOKEN}`;
     const res = await postShot({ "x-ah-ingest": "token-errado-porem-longo-o-bastante" }, "data:image/png;base64,iVBORw0KGgo=");
     expect(res.status).toBe(401);
-    delete process.env.STORYMAP_FEEDBACK_INGEST_TOKENS;
+    delete process.env.AGILEHARNESS_FEEDBACK_INGEST_TOKENS;
   });
 
   it("with the lane OFF the token is refused too (never falls through to same-origin)", async () => {
-    delete process.env.STORYMAP_FEEDBACK_INGEST_TOKENS;
+    delete process.env.AGILEHARNESS_FEEDBACK_INGEST_TOKENS;
     const res = await postShot({ "x-ah-ingest": TOKEN }, "data:image/png;base64,iVBORw0KGgo=");
     expect(res.status).toBe(401);
   });
 
   it("a valid token clears the gate (400 on a bogus image = reached validation, not 401)", async () => {
-    process.env.STORYMAP_FEEDBACK_INGEST_TOKENS = `acme:${TOKEN}`;
+    process.env.AGILEHARNESS_FEEDBACK_INGEST_TOKENS = `acme:${TOKEN}`;
     const res = await postShot({ "x-ah-ingest": TOKEN }, "data:text/html;base64,PHNjcmlwdD4=");
     expect(res.status).toBe(400);
     expect(res.headers.get("access-control-allow-origin")).toBeNull(); // server-to-server: never CORS
-    delete process.env.STORYMAP_FEEDBACK_INGEST_TOKENS;
+    delete process.env.AGILEHARNESS_FEEDBACK_INGEST_TOKENS;
   });
 });
 
@@ -114,31 +114,31 @@ describe("F5 embed lane — allowlisted origin + board nonce, or nothing", () =>
   }
 
   it("with the lane OFF (no allowlist) an allowlisted-looking origin is still refused", async () => {
-    delete process.env.STORYMAP_FEEDBACK_EMBED_ORIGINS;
+    delete process.env.AGILEHARNESS_FEEDBACK_EMBED_ORIGINS;
     const res = await postFrom(ALLOWED);
     expect(res.status).toBe(403);
     expect(res.headers.get("access-control-allow-origin")).toBeNull();
   });
 
   it("a NON-allowlisted origin is refused and gets NO allow-header", async () => {
-    process.env.STORYMAP_FEEDBACK_EMBED_ORIGINS = ALLOWED;
+    process.env.AGILEHARNESS_FEEDBACK_EMBED_ORIGINS = ALLOWED;
     const res = await postFrom("https://evil.example");
     expect(res.status).toBe(403);
     expect(res.headers.get("access-control-allow-origin")).toBeNull();
-    delete process.env.STORYMAP_FEEDBACK_EMBED_ORIGINS;
+    delete process.env.AGILEHARNESS_FEEDBACK_EMBED_ORIGINS;
   });
 
   it("an allowlisted origin WITHOUT a nonce is refused (origin alone is not authorisation)", async () => {
-    process.env.STORYMAP_FEEDBACK_EMBED_ORIGINS = ALLOWED;
+    process.env.AGILEHARNESS_FEEDBACK_EMBED_ORIGINS = ALLOWED;
     const res = await postFrom(ALLOWED);
     expect(res.status).toBe(401);
     // the error IS readable cross-origin, so the operator can see why
     expect(res.headers.get("access-control-allow-origin")).toBe(ALLOWED);
-    delete process.env.STORYMAP_FEEDBACK_EMBED_ORIGINS;
+    delete process.env.AGILEHARNESS_FEEDBACK_EMBED_ORIGINS;
   });
 
   it("an allowlisted origin WITH a valid nonce clears the gate (400 = reached validation, not 401)", async () => {
-    process.env.STORYMAP_FEEDBACK_EMBED_ORIGINS = ALLOWED;
+    process.env.AGILEHARNESS_FEEDBACK_EMBED_ORIGINS = ALLOWED;
     const { mintNonce } = await import("./nonce-store");
     const { token } = await mintNonce(Date.now());
     const res = await postFrom(ALLOWED, { "x-ah-nonce": token });
@@ -146,11 +146,11 @@ describe("F5 embed lane — allowlisted origin + board nonce, or nothing", () =>
     expect(res.headers.get("access-control-allow-origin")).toBe(ALLOWED);
     expect(res.headers.get("vary")).toBe("Origin");
     expect(res.headers.get("access-control-allow-credentials")).toBeNull();
-    delete process.env.STORYMAP_FEEDBACK_EMBED_ORIGINS;
+    delete process.env.AGILEHARNESS_FEEDBACK_EMBED_ORIGINS;
   });
 
   it("preflight: 204 + allow-headers for an allowlisted origin, bare 403 otherwise", async () => {
-    process.env.STORYMAP_FEEDBACK_EMBED_ORIGINS = ALLOWED;
+    process.env.AGILEHARNESS_FEEDBACK_EMBED_ORIGINS = ALLOWED;
     const { OPTIONS } = await import("@/app/api/feedback/intake/route");
     const ok = await OPTIONS(new Request("http://board.local/api/feedback/intake", { method: "OPTIONS", headers: { origin: ALLOWED } }));
     expect(ok.status).toBe(204);
@@ -159,11 +159,11 @@ describe("F5 embed lane — allowlisted origin + board nonce, or nothing", () =>
     const nope = await OPTIONS(new Request("http://board.local/api/feedback/intake", { method: "OPTIONS", headers: { origin: "https://evil.example" } }));
     expect(nope.status).toBe(403);
     expect(nope.headers.get("access-control-allow-origin")).toBeNull();
-    delete process.env.STORYMAP_FEEDBACK_EMBED_ORIGINS;
+    delete process.env.AGILEHARNESS_FEEDBACK_EMBED_ORIGINS;
   });
 
   it("the same-origin lane is untouched by the allowlist (no CORS header leaks onto it)", async () => {
-    process.env.STORYMAP_FEEDBACK_EMBED_ORIGINS = ALLOWED;
+    process.env.AGILEHARNESS_FEEDBACK_EMBED_ORIGINS = ALLOWED;
     // Since story-14xvpa step 2 the same-origin lane proves itself by the operator's SESSION (the route
     // is public/self-auth) — so this request carries one; the no-cookie case is pinned in
     // intake-lanes.test.ts.
@@ -184,7 +184,7 @@ describe("F5 embed lane — allowlisted origin + board nonce, or nothing", () =>
     );
     expect(res.status).toBe(400); // same-origin reaches validation as always
     expect(res.headers.get("access-control-allow-origin")).toBeNull();
-    delete process.env.STORYMAP_FEEDBACK_EMBED_ORIGINS;
+    delete process.env.AGILEHARNESS_FEEDBACK_EMBED_ORIGINS;
     delete process.env.AGILEHARNESS_SESSION_SECRET;
     delete process.env.AGILEHARNESS_AUTH_TOKEN;
   });

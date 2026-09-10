@@ -115,14 +115,14 @@ verificação no [SECURITY.md](SECURITY.md), item 7.
 `src/lib/storymap/runner/config.ts`; era `false`). O motivo é que sem worktree o `writeRoot` de um run de
 código é o `cwd` — a **raiz do repositório inteiro** —, então a promessa de perímetro que o bloco acima faz
 seria falsa: a cerca existiria e conteria tudo o que você tem. Quem já roda e dependia do comportamento
-antigo declara `USM_AUTORUN_WORKTREE=0` e volta ao anterior, **abrindo mão do perímetro de escrita**; o
+antigo declara `AGILEHARNESS_AUTORUN_WORKTREE=0` e volta ao anterior, **abrindo mão do perímetro de escrita**; o
 efeito visível de ligado é um checkout por run e a integração passando pelo merge train.
 
 O primeiro boot cria o token do operador em `storymap/.runner/auth-token` (ou use
 `AGILEHARNESS_AUTH_TOKEN`) — é ele que a tela `/login` pede. Para desenvolvimento com hot-reload,
 `bun run dev` (`AGILEHARNESS_DEV=1`); leia no `SECURITY.md` o que esse modo desliga.
 
-`.env.example` documenta todos os knobs de operador (`AGILEHARNESS_*`, `STORYMAP_*`, `USM_AUTORUN_*`)
+`.env.example` documenta todos os knobs de operador (`AGILEHARNESS_*`; as grafias antigas `STORYMAP_*`/`USM_*` seguem aceitas com aviso até a próxima minor)
 com o porquê de cada default.
 
 ## O perímetro em uma tela

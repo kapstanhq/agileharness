@@ -45,11 +45,11 @@ let dirDoTeste = "";
 let tokenAnterior: string | undefined;
 
 beforeEach(() => {
-  dirAnterior = process.env.STORYMAP_RUNNER_STATE_DIR;
+  dirAnterior = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
   tokenAnterior = process.env[MCP_TOKEN_ENV];
   // Estado do runner PRÓPRIO por teste: nenhum caso lê o rastro do vizinho nem escreve no do serviço.
   dirDoTeste = mkdtempSync(path.join(tmpdir(), "runner-perimeter-"));
-  process.env.STORYMAP_RUNNER_STATE_DIR = dirDoTeste;
+  process.env.AGILEHARNESS_RUNNER_STATE_DIR = dirDoTeste;
   process.env[MCP_TOKEN_ENV] = TOKEN;
   resetPerimeterState();
   resetQueryDeprecationNotice();
@@ -60,8 +60,8 @@ afterEach(async () => {
   // com escrita pendente jogaria a linha no estado do teste seguinte.
   await flushAuthFailures();
   await flushHandleTouches();
-  if (dirAnterior === undefined) delete process.env.STORYMAP_RUNNER_STATE_DIR;
-  else process.env.STORYMAP_RUNNER_STATE_DIR = dirAnterior;
+  if (dirAnterior === undefined) delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+  else process.env.AGILEHARNESS_RUNNER_STATE_DIR = dirAnterior;
   if (tokenAnterior === undefined) delete process.env[MCP_TOKEN_ENV];
   else process.env[MCP_TOKEN_ENV] = tokenAnterior;
   // Só DEPOIS da drenagem acima: apagar antes trocaria o diretório órfão por um erro de escrita.

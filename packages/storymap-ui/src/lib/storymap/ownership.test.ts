@@ -3,7 +3,7 @@
 //
 // AC1: run writes board.yaml human field without proposal flag → BLOCKED
 // AC2: run writes in proposals/ zone → ALLOWED (draft)
-// AC3: human (no STORYMAP_AUTORUN_RUN_ID) → NEVER blocked (tested in hook)
+// AC3: human (no AGILEHARNESS_AUTORUN_RUN_ID) → NEVER blocked (tested in hook)
 // AC4: run writes card.md / code → ALLOWED (agent territory)
 
 import { describe, it, expect } from "vitest";

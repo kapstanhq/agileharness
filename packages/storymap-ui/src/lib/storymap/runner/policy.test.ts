@@ -329,7 +329,7 @@ describe("resolveCardArgs — card complexity routes within the column ceiling",
 });
 
 describe("loadRunnerConfig — ENV always wins over the file", () => {
-  const ENV_KEYS = ["USM_AUTORUN", "USM_AUTORUN_MAX"] as const;
+  const ENV_KEYS = ["AGILEHARNESS_AUTORUN", "AGILEHARNESS_AUTORUN_MAX"] as const;
   const saved: Record<string, string | undefined> = {};
 
   beforeEach(() => {
@@ -342,13 +342,13 @@ describe("loadRunnerConfig — ENV always wins over the file", () => {
     }
   });
 
-  it("USM_AUTORUN=0 forces enabled false", () => {
-    process.env.USM_AUTORUN = "0";
+  it("AGILEHARNESS_AUTORUN=0 forces enabled false", () => {
+    process.env.AGILEHARNESS_AUTORUN = "0";
     expect(loadRunnerConfig().autorun.enabled).toBe(false);
   });
 
-  it("USM_AUTORUN_MAX overrides the file/default concurrency", () => {
-    process.env.USM_AUTORUN_MAX = "7";
+  it("AGILEHARNESS_AUTORUN_MAX overrides the file/default concurrency", () => {
+    process.env.AGILEHARNESS_AUTORUN_MAX = "7";
     expect(loadRunnerConfig().autorun.maxConcurrent).toBe(7);
   });
 });

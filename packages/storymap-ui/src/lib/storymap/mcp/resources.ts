@@ -156,7 +156,7 @@ export function registerResources(server: McpServer): void {
       return {
         mestre: {
           ligado: cfg.autorun.enabled,
-          fonte: "storymap/settings.yaml → autorun.enabled (env USM_AUTORUN tem precedência)",
+          fonte: "storymap/settings.yaml → autorun.enabled (env AGILEHARNESS_AUTORUN tem precedência)",
         },
         boards: estados,
         modoEconomia: cfg.economyMode === true,
@@ -195,19 +195,19 @@ export function registerResources(server: McpServer): void {
       mimeType: "application/json",
     },
     async () => {
-      const declarado = process.env.STORYMAP_TARGET?.trim();
+      const declarado = process.env.AGILEHARNESS_TARGET?.trim();
       const raiz = findRepoRoot();
       const boards = await listBoards().catch(() => []);
       return {
         raiz,
         origem: declarado
-          ? "STORYMAP_TARGET (declarado no ambiente do serviço)"
+          ? "AGILEHARNESS_TARGET (declarado no ambiente do serviço)"
           : "descoberta subindo até .git / turbo.json / storymap/boards",
         ehRepoGit: existsSync(path.join(raiz, ".git")),
         boards: boards.length,
         confira:
           "Se esta raiz não é o SEU projeto, PARE: você está falando com outra instalação. Não escreva — " +
-          "suba a sua própria instância com STORYMAP_TARGET apontando para o seu repositório.",
+          "suba a sua própria instância com AGILEHARNESS_TARGET apontando para o seu repositório.",
       };
     },
   );

@@ -54,7 +54,7 @@ export async function POST(request: Request): Promise<Response> {
   const ingestToken = request.headers.get(INGEST_HEADER);
   let board = FEEDBACK_BOARD;
   if (ingestToken) {
-    const resolved = makeIngestResolver(parseIngestTokens(process.env.STORYMAP_FEEDBACK_INGEST_TOKENS))(ingestToken);
+    const resolved = makeIngestResolver(parseIngestTokens(process.env.AGILEHARNESS_FEEDBACK_INGEST_TOKENS))(ingestToken);
     if (!resolved) {
       return Response.json({ ok: false, error: "token de repasse inválido ou lane desligada" }, { status: 401 });
     }

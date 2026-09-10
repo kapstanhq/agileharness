@@ -31,7 +31,7 @@ import { INGEST_HEADER } from "./ingest";
 export const NONCE_HEADER = "x-ah-nonce";
 
 /**
- * Parse the operator's embed allowlist (env `STORYMAP_FEEDBACK_EMBED_ORIGINS`, comma-separated).
+ * Parse the operator's embed allowlist (env `AGILEHARNESS_FEEDBACK_EMBED_ORIGINS`, comma-separated).
  * Each entry must be a bare ORIGIN (scheme://host[:port]) — a value with a path/query is a config
  * mistake and is dropped rather than half-honoured. Empty ⇒ the embed lane is OFF.
  */

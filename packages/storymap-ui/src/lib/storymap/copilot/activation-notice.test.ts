@@ -23,7 +23,7 @@ describe("activationNotice — confirmação honesta da ativação", () => {
     const n = activationNotice({ ...base, mode: "autonomous", orchTokenPresent: false });
     expect(n.level).toBe("warn");
     expect(n.text).toContain("INERTE");
-    expect(n.text).toContain("STORYMAP_MCP_TOKEN_ORCH");
+    expect(n.text).toContain("AGILEHARNESS_MCP_TOKEN_ORCH");
   });
 
   it("autonomous com tick global desarmado → WARN (precede o aviso de token)", () => {

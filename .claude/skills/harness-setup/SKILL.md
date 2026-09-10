@@ -222,7 +222,7 @@ There are only two shapes, and you can tell them apart by where you were started
   confirm it carries one of the three markers, and declare it:
 
   ```bash
-  echo 'STORYMAP_TARGET=/absolute/path/to/their/repo' >> packages/storymap-ui/.env.local
+  echo 'AGILEHARNESS_TARGET=/absolute/path/to/their/repo' >> packages/storymap-ui/.env.local
   ```
 
   A subdirectory is refused on purpose — git operations resolve upward and would reach the
@@ -232,7 +232,7 @@ There are only two shapes, and you can tell them apart by where you were started
 1. **Read the identity from the target, not from here.** The package name, the directory name and
    the git remote all come from the tree you just settled on.
 2. **Seed the inheritable pipeline first — in the TARGET.** Copy `storymap/boards/_base/board.yaml`
-   into the target tree, because under `STORYMAP_TARGET` that path resolves over there, where it
+   into the target tree, because under `AGILEHARNESS_TARGET` that path resolves over there, where it
    does not exist yet. Board registration refuses without it — correctly, because the alternative
    is a board with no columns that lists as if it were ready. Say why you are copying it.
 3. **Propose the board identity, with a preview.** Show the id, the human name and the package

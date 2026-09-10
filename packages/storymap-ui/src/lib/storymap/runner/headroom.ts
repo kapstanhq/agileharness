@@ -9,7 +9,7 @@
 // direto com a API. A cobertura medida era ZERO: o `/stats` do proxy acusava `api_requests: 0`.
 // Hoje o default é LIGADO (o proxy é infra do host, não um opcional por board) e o desligamento é
 // explícito, em duas portas:
-//   1. ENV `STORYMAP_HEADROOM_URL` — vence tudo. Uma URL roteia para ela; `off/0/false/none/
+//   1. ENV `AGILEHARNESS_HEADROOM_URL` — vence tudo. Uma URL roteia para ela; `off/0/false/none/
 //      disabled` desliga (kill switch de operação, sem deploy).
 //   2. `board.yaml` `headroom: { enabled: true, proxyUrl: … }` — a declaração por board.
 // Sem nenhuma das duas → tráfego DIRETO (`null`).
@@ -51,7 +51,7 @@ export const HEADROOM_SUGGESTED_URL = "http://127.0.0.1:8787";
 /** Janela de memoização da sonda — curta o bastante para um proxy que morre ser notado no minuto. */
 export const PROBE_CACHE_TTL_MS = 30_000;
 
-/** Valores de `STORYMAP_HEADROOM_URL` que significam "desligado". */
+/** Valores de `AGILEHARNESS_HEADROOM_URL` que significam "desligado". */
 const OFF_VALUES = /^(0|off|false|none|disabled)$/i;
 
 /**
@@ -88,7 +88,7 @@ export function resolveHeadroomUrl(
   boardConfig: Pick<BoardConfig, "headroom"> | null | undefined,
   env: Record<string, string | undefined> = process.env,
 ): string | null {
-  const envUrl = env.STORYMAP_HEADROOM_URL?.trim();
+  const envUrl = env.AGILEHARNESS_HEADROOM_URL?.trim();
   if (envUrl) return OFF_VALUES.test(envUrl) ? null : envUrl;
 
   const cfg = boardConfig?.headroom;

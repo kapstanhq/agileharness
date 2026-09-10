@@ -10,7 +10,7 @@
 // intermediário (174 gravações do token medidas no journal do Caddy, story-u4yf1i). A query segue aceita e
 // DEPRECADA: quebrá-la pararia o settle que está no ar. Como esta rota MUTA (reverte card, avança para
 // terminal), ela exige nível `orch` — um handle de leitura vazado não dirige o deploy. Fail-closed em
-// STORYMAP_MCP_TOKEN ausente/fraco, trava + rastro em `../perimeter`. SERVER-ONLY (Node runtime — touches
+// AGILEHARNESS_MCP_TOKEN ausente/fraco, trava + rastro em `../perimeter`. SERVER-ONLY (Node runtime — touches
 // the card on disk + re-evaluates the cascade).
 
 import { revertCardOnDeployFailure } from "@/lib/storymap/runner/deploy-revert";

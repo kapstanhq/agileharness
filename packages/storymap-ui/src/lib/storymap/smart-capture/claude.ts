@@ -19,7 +19,7 @@ import { loadRunnerConfig } from "../runner/config";
 // fast --model/--effort pin below (a bare `claude -p` runs the install default, often
 // opus with a large thinking budget, which can blow past two minutes); this is just a
 // generous safety net. Env-overridable.
-const DEFAULT_TIMEOUT_MS = Number(process.env.USM_SMART_CAPTURE_TIMEOUT_MS) || 180_000;
+const DEFAULT_TIMEOUT_MS = Number(process.env.AGILEHARNESS_SMART_CAPTURE_TIMEOUT_MS) || 180_000;
 
 function killTree(child: ChildProcess): void {
   if (!child.pid) return;
@@ -81,8 +81,8 @@ export function runClaudeJson(
   // knobs are env-overridable; values match the runner's own --model/--effort vocabulary.
   // Callers (e.g. the bench "sincronizar" mode) may override model/effort and opt into tool
   // use (--dangerously-skip-permissions) so the agent can READ the real code to derive an artifact.
-  const model = opts.model || process.env.USM_SMART_CAPTURE_MODEL || "sonnet";
-  const effort = opts.effort || process.env.USM_SMART_CAPTURE_EFFORT || "medium";
+  const model = opts.model || process.env.AGILEHARNESS_SMART_CAPTURE_MODEL || "sonnet";
+  const effort = opts.effort || process.env.AGILEHARNESS_SMART_CAPTURE_EFFORT || "medium";
   // ── O MODO DE PERMISSÃO É EXPLÍCITO, SEMPRE (achado de revisão, medido) ─────────────────────────
   // Este comando NÃO passava `--permission-mode`, e a leitura ingênua disso é "então ele roda no modo
   // padrão, que é seguro". Uma avaliação independente mediu o contrário: sem a flag, o modo efetivo vem

@@ -25,13 +25,13 @@
 //    dos runs) roda SEM worktree e edita o checkout runtime POR DESIGN (o settle commita via
 //    `commitBoardDataScoped`, worktree.ts:372-399). Um hook que bloqueasse todo processo
 //    não-serviço QUEBRARIA o autorun light inteiro. O marcador de isenção é
-//    `STORYMAP_AUTORUN_RUN_ID`, que o engine já injeta no env de TODO spawn de run
-//    (engine.ts, junto de STORYMAP_AUTORUN_TRIGGER) — o mesmo vetor que o
+//    `AGILEHARNESS_AUTORUN_RUN_ID`, que o engine já injeta no env de TODO spawn de run
+//    (engine.ts, junto de AGILEHARNESS_AUTORUN_TRIGGER) — o mesmo vetor que o
 //    guard-business-intent usa para discriminar run de humano. Uma sessão de agente (tmux,
 //    copiloto, spawn interativo) NÃO tem o marcador ⇒ é bloqueada ⇒ usa MCP.
 //    Verificado (2026-07-16): engine.ts tem UM ÚNICO spawn de run e o marcador é setado nele
 //    INCONDICIONALMENTE — o `isCode` decide só o cwd (worktree ou não), nunca o env. As duas lanes
-//    carregam o marcador. engine.test.ts ("injects STORYMAP_AUTORUN_RUN_ID…", story-ns8x0o) já é a
+//    carregam o marcador. engine.test.ts ("injects AGILEHARNESS_AUTORUN_RUN_ID…", story-ns8x0o) já é a
 //    guarda de regressão desse vetor.
 //    ⚠️ Renomear/remover esse env em engine.ts DESLIGA a isenção e quebra a lane light.
 //
@@ -73,7 +73,7 @@ const fs = require('fs');
 const path = require('path');
 
 /** Env que o engine injeta em TODO spawn de run (engine.ts) — a isenção da lane light (G3). */
-const RUN_MARKER_ENV = 'STORYMAP_AUTORUN_RUN_ID';
+const RUN_MARKER_ENV = 'AGILEHARNESS_AUTORUN_RUN_ID';
 /** Flag file (ao lado do service.lock, no checkout do serviço) que LIGA o lacre do `<repo>-stage`. */
 const STAGE_SEAL_FLAG = ['storymap', '.runner', 'stage-seal.on'];
 /** O lock que o serviço escreve no boot: {pid, port, startedAt}. Presença + pid vivo = "aqui roda o serviço". */

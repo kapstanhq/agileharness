@@ -49,16 +49,16 @@ let prevStateDir: string | undefined;
 let scriptDir: string;
 
 beforeEach(() => {
-  prevStateDir = process.env.STORYMAP_RUNNER_STATE_DIR;
+  prevStateDir = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
   stateDir = mkdtempSync(path.join(tmpdir(), "mcp-handle-xp-"));
   scriptDir = mkdtempSync(path.join(tmpdir(), "mcp-handle-xp-bin-"));
-  process.env.STORYMAP_RUNNER_STATE_DIR = stateDir;
+  process.env.AGILEHARNESS_RUNNER_STATE_DIR = stateDir;
 });
 
 afterEach(async () => {
   await flushHandleTouches();
-  if (prevStateDir === undefined) delete process.env.STORYMAP_RUNNER_STATE_DIR;
-  else process.env.STORYMAP_RUNNER_STATE_DIR = prevStateDir;
+  if (prevStateDir === undefined) delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+  else process.env.AGILEHARNESS_RUNNER_STATE_DIR = prevStateDir;
   // Dois diretórios por TESTE (registro + scripts do processo filho), nenhum removido até aqui — o mesmo
   // defeito de `mcp-handle.test.ts`, com o dobro do rastro. Depois do flush, pela mesma razão.
   rmSync(stateDir, { recursive: true, force: true });
@@ -97,7 +97,7 @@ function revogarEmOutroProcesso(id: string): Filho {
   // do runtime mexeria em produção.
   const filho = spawn("bun", ["--no-install", script, id], {
     cwd: PACOTE,
-    env: { ...process.env, STORYMAP_RUNNER_STATE_DIR: stateDir },
+    env: { ...process.env, AGILEHARNESS_RUNNER_STATE_DIR: stateDir },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stdout = "";

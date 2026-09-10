@@ -1,7 +1,7 @@
 // Slack channel — example of a future server-side sink. Disabled unless a
 // webhook URL is configured, so it is zero-cost until you opt in:
 //
-//   STORYMAP_SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+//   AGILEHARNESS_SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
 //
 // To add another channel (Discord, email, a DB audit log, …) copy this shape:
 // implement NotificationChannel and register it in dispatcher.ts. Nothing else
@@ -11,7 +11,7 @@ import type { NotificationChannel, AgileHarnessEvent } from "../../event";
 import { describeEvent } from "../../event";
 
 export function createSlackChannel(): NotificationChannel | null {
-  const url = process.env.STORYMAP_SLACK_WEBHOOK_URL;
+  const url = process.env.AGILEHARNESS_SLACK_WEBHOOK_URL;
   if (!url) return null;
 
   return {

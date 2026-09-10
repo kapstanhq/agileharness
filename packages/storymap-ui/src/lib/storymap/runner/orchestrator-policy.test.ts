@@ -78,7 +78,7 @@ describe("orchestrator-policy (WS8) — declarative risk kernel", () => {
     // F5.9 (2026-07-11, operator-approved): riskMatrixEnforced is now TRUE — the F5 per-call guard
     // (mcp/guard.ts) + move_card/accept_triage dynamic gate + run-escalation + approvals close the pre-flip
     // gap ("a scoped move could deploy via the pipeline"). The CAPABILITY is on; no board auto-becomes
-    // autonomous (mode defaults off, per-board opt-in required, and the tick also needs STORYMAP_MCP_TOKEN_ORCH).
+    // autonomous (mode defaults off, per-board opt-in required, and the tick also needs AGILEHARNESS_MCP_TOKEN_ORCH).
     expect(ORCHESTRATOR_ENFORCEMENT.riskMatrixEnforced).toBe(true);
     expect(ORCHESTRATOR_ENFORCEMENT.mcpTokenLevelsEnforced).toBe(true);
   });

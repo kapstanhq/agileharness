@@ -84,7 +84,7 @@ describe("scan de segredo — precisão sobre PROSA (o que reprovou 26 releases)
     const saida = escanear({
       "route.test.ts":
         'it("COMPATIBILIDADE: `?secret=` continua funcionando e ANUNCIA a depreciação uma vez, sem o valor", () => {});\n',
-      "t.js": `const t = { STORYMAP_MCP_TOKEN: "${CRED_TOKEN}" };\n`,
+      "t.js": `const t = { AGILEHARNESS_MCP_TOKEN: "${CRED_TOKEN}" };\n`,
     });
     expect(saida, "o controle positivo não disparou").toContain("t.js");
     expect(saida).not.toContain("route.test.ts");
@@ -95,7 +95,7 @@ describe("scan de segredo — precisão sobre PROSA (o que reprovou 26 releases)
   });
 
   it("[ATAQUE] o token do PRÓPRIO produto segue sendo pego", () => {
-    expect(escanear({ "t.js": `const t = { STORYMAP_MCP_TOKEN: "${CRED_TOKEN}" };\n` })).toContain("env-credential");
+    expect(escanear({ "t.js": `const t = { AGILEHARNESS_MCP_TOKEN: "${CRED_TOKEN}" };\n` })).toContain("env-credential");
   });
 
   it("[ATAQUE] a régua é a SIMETRIA, não a crase: abrir e fechar na mesma crase segue sendo credencial", () => {

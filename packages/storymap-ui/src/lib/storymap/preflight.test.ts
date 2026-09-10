@@ -35,7 +35,7 @@ const saudavel = (over: Partial<PreflightProbes> = {}): PreflightProbes => ({
     PATH: "/usr/bin",
     AGILEHARNESS_CLAUDE: "/root/.local/bin/claude",
     AGILEHARNESS_HOST: "127.0.0.1",
-    ...Object.fromEntries(CONTRATO_DE_ENV.map((c) => [c.chave, c.chave === "STORYMAP_BOARD_AUTOPUSH" ? "1" : "x"])),
+    ...Object.fromEntries(CONTRATO_DE_ENV.map((c) => [c.chave, c.chave === "AGILEHARNESS_BOARD_AUTOPUSH" ? "1" : "x"])),
   },
   exists: (p) => NO_DISCO.includes(p),
   statMode: () => 0o600,
@@ -174,11 +174,11 @@ describe("cada modo de falha, com o conserto NOMEADO", () => {
     // O token é declarado ausente AQUI, e não herdado da fixture: este caso mede a postura FECHADA, e
     // uma fixture que traz credencial mediria a aberta com o nome da fechada.
     const fechada = saudavel();
-    const semToken = { ...fechada.env, STORYMAP_MCP_TOKEN: undefined } as Record<string, string | undefined>;
+    const semToken = { ...fechada.env, AGILEHARNESS_MCP_TOKEN: undefined } as Record<string, string | undefined>;
     const c = acha(runPreflight({ ...fechada, env: semToken }).checks, "mcp.surface");
     expect(c.status).toBe("ok");
     expect(c.observed).toContain("FECHADA");
-    const armada = acha(runPreflight(saudavel({ env: { PATH: "/usr/bin", STORYMAP_MCP_TOKEN: "x".repeat(43) } })).checks, "mcp.surface");
+    const armada = acha(runPreflight(saudavel({ env: { PATH: "/usr/bin", AGILEHARNESS_MCP_TOKEN: "x".repeat(43) } })).checks, "mcp.surface");
     expect(armada.observed).toContain("ARMADA");
   });
 
@@ -425,14 +425,14 @@ describe("repo.root: o clone da ferramenta sem alvo declarado NAO e verde", () =
     });
     const c = r.checks.find((x) => x.id === "repo.root")!;
     expect(c.status).toBe("degraded");
-    expect(c.remedy ?? "").toContain("STORYMAP_TARGET");
+    expect(c.remedy ?? "").toContain("AGILEHARNESS_TARGET");
     expect(c.remedy ?? "", "nao nomeou o risco real").toContain("PARA O AGILEHARNESS");
   });
 
   it("com alvo DECLARADO volta a ser ok — declarar e a resposta, e ela tem de funcionar", () => {
     const r = runPreflight({
       ...base,
-      env: { PATH: "/usr/bin", STORYMAP_TARGET: "/root/meu-produto" },
+      env: { PATH: "/usr/bin", AGILEHARNESS_TARGET: "/root/meu-produto" },
       repoRoot: "/root/meu-produto",
       boardsNaRaiz: ["_base", "demo"],
     });
@@ -458,7 +458,7 @@ describe("repo.root: o clone da ferramenta sem alvo declarado NAO e verde", () =
 // -- env.source: a armadilha CIRCULAR ------------------------------------------------------------
 //
 // O item mandava "suba o servico e meca de novo". O adotante subia — na UNICA postura segura para
-// uma instancia nova, STORYMAP_ENGINE=off — e continuava degradado, porque a deteccao le o
+// uma instancia nova, AGILEHARNESS_ENGINE=off — e continuava degradado, porque a deteccao le o
 // service.lock e o motor inerte declara que NAO o escreve. O proprio servico de producao imprime a
 // mesma queixa no boot. Item que ninguem consegue satisfazer nao e rigor, e ruido.
 describe("env.source: motor inerte e uma TERCEIRA categoria, nao uma pendencia", () => {

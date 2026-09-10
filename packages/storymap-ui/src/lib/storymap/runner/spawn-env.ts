@@ -30,6 +30,8 @@
 
 import path from "node:path";
 
+import { nomeLegadoDe, resolverAliasesDeEnv } from "@/lib/storymap/env-aliases";
+
 // C1 (2026-07-08, ny4v26): o serviço roda sob lifecycle bun-run, que PREPENDE todo node_modules/.bin
 // ao process.env.PATH. Spawns herdavam isso e um bin-shim de dependência sombreava binário de sistema
 // para TODOS os runs (o shim `just` do just-install saía 0 mudo → no-op silencioso). Runs resolvem
@@ -44,7 +46,7 @@ export function sanitizeSpawnPath(pathValue: string | undefined, delimiter: stri
 }
 
 /**
- * O PREFIXO por onde um tier de credencial MCP se chama: `STORYMAP_MCP_TOKEN` (primário, nível
+ * O PREFIXO por onde um tier de credencial MCP se chama: `AGILEHARNESS_MCP_TOKEN` (primário, nível
  * `full`), `_ORCH`, `_RO`, `_SESSION` e o que `settings.yaml` (`mcpTokens[].tokenEnv`) declarar
  * amanhã. É a MESMA régua por prefixo que `runner/config.ts` usa para ACEITAR a declaração de um
  * tier e que `server/main.ts` usa para AUDITAR a força dele.
@@ -53,7 +55,12 @@ export function sanitizeSpawnPath(pathValue: string | undefined, delimiter: stri
  * NOVO nascer já removido do env de filho, em vez de voltar a viajar em silêncio. Foi exatamente
  * assim que o `_ORCH` sobrou quando a remoção nomeava só o primário.
  */
-export const MCP_TOKEN_ENV_PREFIX = "STORYMAP_MCP_TOKEN";
+export const MCP_TOKEN_ENV_PREFIX = "AGILEHARNESS_MCP_TOKEN";
+/**
+ * As DUAS grafias do prefixo — enquanto a ponte de nomes (`env-aliases.ts`) durar, o env do serviço
+ * carrega cada tier também como `STORYMAP_MCP_TOKEN*`; remover só a grafia nova deixaria a velha viajar.
+ */
+export const MCP_TOKEN_ENV_PREFIXES: readonly string[] = [MCP_TOKEN_ENV_PREFIX, nomeLegadoDe(MCP_TOKEN_ENV_PREFIX)!];
 
 /**
  * OS SEGREDOS DO SERVIÇO que não são tier MCP — e por que esta lista precisa existir.
@@ -88,17 +95,22 @@ export const SEGREDOS_DO_SERVICO = [
   // `process.env.NOME` literal; foi um teste novo com o literal que o expôs (issue #2 do repo).
   "AGILEHARNESS_AUTH_TOKEN",
   // Chave privada de Web Push.
-  "STORYMAP_VAPID_PRIVATE_KEY",
+  "AGILEHARNESS_VAPID_PRIVATE_KEY",
   // Tokens de ingestão de feedback (escrita em board-data por integração externa).
-  "STORYMAP_FEEDBACK_INGEST_TOKENS",
+  "AGILEHARNESS_FEEDBACK_INGEST_TOKENS",
   // Credencial de terceiro; não é usada por nenhum run, e vazá-la é custo puro.
   "OPENAI_API_KEY",
 ] as const;
 
+/** Cada segredo E o seu twin legado (`STORYMAP_VAPID_PRIVATE_KEY`…): a ponte de nomes põe os dois no env do serviço. */
+const SEGREDOS_NAS_DUAS_GRAFIAS: ReadonlySet<string> = new Set(
+  SEGREDOS_DO_SERVICO.flatMap((k) => [k, nomeLegadoDe(k)]).filter((k): k is string => typeof k === "string"),
+);
+
 /**
  * Cópia SANEADA do env do serviço para um filho spawnado: remove as chaves internas do runtime Next
  * (`__NEXT_*` — inclui `__NEXT_PROCESSED_ENV`, que faz um `next build` filho PULAR seus .env), o
- * `NODE_ENV` do systemd e TODO tier de credencial MCP (`STORYMAP_MCP_TOKEN*`), e aplica
+ * `NODE_ENV` do systemd e TODO tier de credencial MCP (`AGILEHARNESS_MCP_TOKEN*`), e aplica
  * {@link sanitizeSpawnPath} ao PATH (C1). Não muta a fonte. Pure.
  */
 export function sanitizeSpawnEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -109,7 +121,7 @@ export function sanitizeSpawnEnv(source: NodeJS.ProcessEnv = process.env): NodeJ
     if (key.startsWith("__NEXT_")) continue; // runtime interno do next-server do serviço — nunca do filho
     if (key === "NODE_ENV") continue; // do systemd do serviço; um shell manual não tem (paridade)
     // F5.0b ⊕ story-e3lj46 — NENHUM tier de credencial MCP viaja no env de um filho. Antes saía só o
-    // primário (`STORYMAP_MCP_TOKEN`), e o ESCOPADO `_ORCH` — que move card, enfileira run, abre worktree
+    // primário (`AGILEHARNESS_MCP_TOKEN`), e o ESCOPADO `_ORCH` — que move card, enfileira run, abre worktree
     // e publica — ia inteiro, apesar de o nome "sanitize" prometer o contrário.
     //
     // O que a remoção IMPEDE: que a credencial apareça onde o filho a despeja SEM QUERER — `printenv`
@@ -127,7 +139,7 @@ export function sanitizeSpawnEnv(source: NodeJS.ProcessEnv = process.env): NodeJ
     // com `--strict-mcp-config` sem nenhum mount do AgileHarness — nunca teve o que perder. O webhook de
     // deploy importa o token por `systemd-run --setenv` a partir do env do SERVIÇO (plain exec, não passa
     // por aqui) — não é afetado.
-    if (key.startsWith(MCP_TOKEN_ENV_PREFIX)) continue;
+    if (MCP_TOKEN_ENV_PREFIXES.some((p) => key.startsWith(p))) continue;
     // ── IS_SANDBOX HERDADO (F0, achado de medição) ────────────────────────────────────────────────
     // `IS_SANDBOX=1` é o que faz o CLI aceitar autonomia plena como root. O harness passou a setá-lo
     // DELIBERADAMENTE, só quando a válvula explícita foi puxada — mas ele também é uma variável comum
@@ -140,9 +152,13 @@ export function sanitizeSpawnEnv(source: NodeJS.ProcessEnv = process.env): NodeJ
     if (key === "IS_SANDBOX") continue;
     // Os segredos do serviço que não são tier MCP — ver a nota em SEGREDOS_DO_SERVICO. A lista é
     // mantida honesta por um lint exaustivo, não pela minha memória.
-    if ((SEGREDOS_DO_SERVICO as readonly string[]).includes(key)) continue;
+    if (SEGREDOS_NAS_DUAS_GRAFIAS.has(key)) continue;
     env[key] = value;
   }
   env.PATH = sanitizeSpawnPath(env.PATH);
+  // A ponte de nomes, do lado do FILHO: o que a ferramenta emite para o agente (o marcador de run, o alvo)
+  // é lido por hooks de repositórios que não são nossos, ainda na grafia velha. Depois dos segredos, nunca
+  // antes — senão a própria ponte recriaria o tier MCP na outra grafia.
+  resolverAliasesDeEnv(env);
   return env as NodeJS.ProcessEnv;
 }

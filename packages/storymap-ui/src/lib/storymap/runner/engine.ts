@@ -7,6 +7,7 @@
 // channel and a server action load as separate modules but share ONE instance).
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { resolverAliasesDeEnv } from "@/lib/storymap/env-aliases";
 import { existsSync, mkdirSync, promises as fsp, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -491,10 +492,10 @@ export const RESUME_SESSION_MISSING_RE = /No conversation found with session ID/
 /**
  * story-1mxmqy: hard cap on resume→fresh fallbacks per card. Past it the run settles as a real failure
  * for the operator instead of churning fresh sessions forever (the loop the cap exists to prevent).
- * Override via USM_AUTORUN_RESUME_FALLBACK_MAX (default 2; 0 disables the auto-fallback entirely).
+ * Override via AGILEHARNESS_AUTORUN_RESUME_FALLBACK_MAX (default 2; 0 disables the auto-fallback entirely).
  */
 export function resumeFallbackMax(): number {
-  const n = Number(process.env.USM_AUTORUN_RESUME_FALLBACK_MAX);
+  const n = Number(process.env.AGILEHARNESS_AUTORUN_RESUME_FALLBACK_MAX);
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 2;
 }
 
@@ -613,9 +614,9 @@ export function permissionArgsForTier(tier: AutonomyTier): string[] {
 }
 
 // O teto de tier por BOARD (o "piso" que o adotante ganha sem que o dono perca nada). Duas portas, a mais
-// específica vencendo: `USM_AUTORUN_TIER_CAP_<BOARD>` e o global `USM_AUTORUN_TIER_CAP`. Board id é slug
+// específica vencendo: `AGILEHARNESS_AUTORUN_TIER_CAP_<BOARD>` e o global `AGILEHARNESS_AUTORUN_TIER_CAP`. Board id é slug
 // (SLUG abaixo), então a chave é determinística: maiúsculas com `-` → `_`.
-const TIER_CAP_ENV = "USM_AUTORUN_TIER_CAP";
+const TIER_CAP_ENV = "AGILEHARNESS_AUTORUN_TIER_CAP";
 /** Um valor de teto inválido já avisado (uma linha por processo, não por run — senão um typo virava enxurrada). */
 const tierCapWarned = new Set<string>();
 
@@ -650,7 +651,7 @@ export function resolveTierCap(env: Record<string, string | undefined>, board?: 
 // que está contido. Então a declaração existe, viaja para o filho (é o contrato que um wrapper/proxy do
 // adotante consome) e ANUNCIA que não é aplicada. `enforced` é literalmente `false` no tipo: o dia em que
 // alguém aplicar de fato, o tipo é o que obriga a mexer aqui.
-const EGRESS_ENV = "USM_AUTORUN_EGRESS_ALLOW";
+const EGRESS_ENV = "AGILEHARNESS_AUTORUN_EGRESS_ALLOW";
 // Charset de HOSTNAME (+ curinga de subdomínio). Recusar o resto não é purismo: este valor vai para o env
 // de um filho que roda com shell, então uma entrada com espaço/quote/barra é lixo que não deve viajar.
 const EGRESS_HOST = /^\*?[a-z0-9.-]+$/i;
@@ -678,7 +679,7 @@ export function resolveEgressDeclaration(env: Record<string, string | undefined>
     egressWarned = true;
     console.warn(
       `[autorun] allowlist de egresso DECLARADA (${allow.join(", ")}) mas NÃO APLICADA: nada neste processo bloqueia saída de rede. ` +
-        `O valor viaja no env USM_EGRESS_ALLOW para um wrapper/proxy que a aplique — sem ele, considere o run com rede ABERTA.`,
+        `O valor viaja no env AGILEHARNESS_EGRESS_ALLOW para um wrapper/proxy que a aplique — sem ele, considere o run com rede ABERTA.`,
     );
   }
   return { allow, enforced: false };
@@ -833,14 +834,14 @@ export const RECENTLY_CANCELLED_TTL_MS = 60_000;
 // loop bug or a column toggled on over a big backlog could fan out dozens of opus/max
 // runs. The default ceiling is high enough never to bite normal use (a single card's
 // cascade is ~6 runs); blowing past it logs + refuses, a deliberate sangria stop.
-// Env-tunable (operational knob, like USM_AUTORUN=0) — NOT in the settings panel, so a
+// Env-tunable (operational knob, like AGILEHARNESS_AUTORUN=0) — NOT in the settings panel, so a
 // panel save can't silently drop it. Manual runs are exempt (they pass no window).
 const AUTORUN_RATE_MAX_DEFAULT = 30;
 const AUTORUN_RATE_WINDOW_MS_DEFAULT = 10 * 60_000;
 
 function autorunRateLimit(): { max: number; windowMs: number } {
-  const max = Number(process.env.USM_AUTORUN_RATE_MAX);
-  const win = Number(process.env.USM_AUTORUN_RATE_WINDOW_MS);
+  const max = Number(process.env.AGILEHARNESS_AUTORUN_RATE_MAX);
+  const win = Number(process.env.AGILEHARNESS_AUTORUN_RATE_WINDOW_MS);
   return {
     max: Number.isFinite(max) && max > 0 ? Math.floor(max) : AUTORUN_RATE_MAX_DEFAULT,
     windowMs: Number.isFinite(win) && win > 0 ? Math.floor(win) : AUTORUN_RATE_WINDOW_MS_DEFAULT,
@@ -2025,9 +2026,9 @@ export class RunnerEngine {
       preservedBranch?: string;
       /**
        * Pre-resolved headroom proxy URL (story-5m0r3n). Caller reads board.yaml +
-       * `STORYMAP_HEADROOM_URL` via {@link resolveHeadroomUrl} and passes the result here; the
+       * `AGILEHARNESS_HEADROOM_URL` via {@link resolveHeadroomUrl} and passes the result here; the
        * engine probes liveness and injects `ANTHROPIC_BASE_URL` into the spawn env. When omitted,
-       * the engine falls back to `STORYMAP_HEADROOM_URL` only (no board.yaml). Null ⇒ direct.
+       * the engine falls back to `AGILEHARNESS_HEADROOM_URL` only (no board.yaml). Null ⇒ direct.
        */
       headroomUrl?: string | null;
       /**
@@ -2637,9 +2638,9 @@ export class RunnerEngine {
         // can find this session on disk.
         const sessionFlags = opts.resumeSessionId ? [] : ["--session-id", sessionId];
         // stream-json + verbose feed the live read-only console. SAFETY: if the installed CLI ever
-        // rejects these, USM_AUTORUN_NO_STREAM=1 drops them (keeping --session-id, so resume works).
+        // rejects these, AGILEHARNESS_AUTORUN_NO_STREAM=1 drops them (keeping --session-id, so resume works).
         const streamFlags =
-          process.env.USM_AUTORUN_NO_STREAM === "1"
+          process.env.AGILEHARNESS_AUTORUN_NO_STREAM === "1"
             ? sessionFlags
             : ["--output-format", "stream-json", "--verbose", ...sessionFlags];
         // Per-card policy (--model/--effort routed by complexity, --max-turns from the column) + the
@@ -2788,7 +2789,7 @@ export class RunnerEngine {
         // every turn and SURVIVES the compaction that summarizes a long run's first user-turn (where the
         // note used to live); (b) a FILE sidesteps shell-escaping the note's literal backticks/`$` under
         // shell:true. Fail-open: empty body → no file/flag (byte-for-byte the legacy command). On a write
-        // error OR the USM_AUTORUN_SYSTEM_PROMPT_FILE=0 knob, fall back to the legacy INLINE note (still
+        // error OR the AGILEHARNESS_AUTORUN_SYSTEM_PROMPT_FILE=0 knob, fall back to the legacy INLINE note (still
         // supported by buildPrompt) so a CLI flag regression can never strand runs.
         // story-harness-adk A1: inline a deterministic state snapshot (status/mode/open questions/tasks)
         // read fresh from the card at enqueue, so the run sees its canonical checkpoint VERBATIM (the ADK
@@ -2839,7 +2840,7 @@ export class RunnerEngine {
           systemPromptFor(trigger),
         );
         let inlineNote: string | null = null;
-        if (sysPromptBody && process.env.USM_AUTORUN_SYSTEM_PROMPT_FILE !== "0") {
+        if (sysPromptBody && process.env.AGILEHARNESS_AUTORUN_SYSTEM_PROMPT_FILE !== "0") {
           try {
             // SYNC write (tiny file, once per run): keeps the spawn in the SAME tick — an extra async I/O
             // await here would defer the spawn past the test harness's flush() AND needlessly yield the loop.
@@ -2874,7 +2875,7 @@ export class RunnerEngine {
         // RECUSA (fail-CLOSED). Duas camadas que discordam sobre o que fazer quando não conseguem
         // proteger é a garantia de que um dia alguém confia na errada — e a errada é sempre a que
         // deixa passar. Risco da remoção, medido: ZERO. O flag nascia `enabled: false`, nenhum board o
-        // ligava, e `USM_AUTORUN_SANDBOX` estava ausente do ambiente do serviço em produção.
+        // ligava, e `AGILEHARNESS_AUTORUN_SANDBOX` estava ausente do ambiente do serviço em produção.
         const cmdToScope = cmd;
         // SM-4 governor: wrap the run in a `systemd-run --scope` (MemoryMax/CPUQuota for this lane)
         // so the kernel enforces the resource ceiling the scheduler admitted under. No-op when the
@@ -2922,12 +2923,12 @@ export class RunnerEngine {
         // sendo aplicada por ninguém: o que este controle impede é o operador acreditar que tem isolamento
         // de saída quando não tem. Um knob honesto e inerte é melhor que um sandbox não testado dizendo que isola.
         const egress = resolveEgressDeclaration(process.env);
-        if (egress) baseEnv.USM_EGRESS_ALLOW = egress.allow.join(",");
+        if (egress) baseEnv.AGILEHARNESS_EGRESS_ALLOW = egress.allow.join(",");
         // Business-intent guard (story-ns8x0o): inject the run's identity into every spawn
         // so the guard-business-intent hook can discriminate autorun runs from human sessions.
-        // The hook blocks on STORYMAP_AUTORUN_RUN_ID present; a human in the notebook has none.
-        baseEnv.STORYMAP_AUTORUN_RUN_ID = sessionId;
-        baseEnv.STORYMAP_AUTORUN_TRIGGER = trigger;
+        // The hook blocks on AGILEHARNESS_AUTORUN_RUN_ID present; a human in the notebook has none.
+        baseEnv.AGILEHARNESS_AUTORUN_RUN_ID = sessionId;
+        baseEnv.AGILEHARNESS_AUTORUN_TRIGGER = trigger;
         // ── ONDE A FERRAMENTA MORA, dito ao filho ────────────────────────────────────────────────
         // O run é cortado num worktree do ALVO, então tudo que ele resolve por caminho relativo cai no
         // repositório do USUÁRIO. Enquanto a ferramenta morava dentro dele, `packages/storymap-ui/…`
@@ -2940,6 +2941,9 @@ export class RunnerEngine {
         // para o lugar errado. Aqui só a DECLARAMOS para quem não pode derivá-la — o filho não tem o
         // `import.meta.url` desta árvore. `sanitizeSpawnEnv` é denylist, então ela viaja sozinha.
         baseEnv.AGILEHARNESS_TOOL_ROOT = findToolPackageDir();
+        // As chaves acima entraram DEPOIS do chokepoint; a ponte de nomes precisa vê-las — é o marcador de
+        // run (`AGILEHARNESS_AUTORUN_RUN_ID`) que o hook do alvo ainda lê como `STORYMAP_AUTORUN_RUN_ID`.
+        resolverAliasesDeEnv(baseEnv as Record<string, string | undefined>);
         // ADR-063 Fase 4c: hand the read-only mount plan to the sandbox wrapper script (only set when the
         // sandbox was actually applied above — otherwise the script isn't in the command and these are inert).
         // Headroom proxy injection (story-5m0r3n; cobertura total em 2026-07-28). Resolution order:
@@ -2947,7 +2951,7 @@ export class RunnerEngine {
         //      (the cascade dispatcher / manual actions, which already hold the BoardConfig).
         //   2. ENV/default via resolveHeadroomUrl — para chamadores sem board config em escopo.
         // Hoje o default é LIGADO (headroom.ts): um caller que não passe URL ainda roteia. O que
-        // desliga é `board.yaml headroom.enabled:false` ou STORYMAP_HEADROOM_URL=off.
+        // desliga é `board.yaml headroom.enabled:false` ou AGILEHARNESS_HEADROOM_URL=off.
         // A broken sidecar is auto-bypassed (passthrough) — a run NEVER blocks on it.
         const headroom = await applyHeadroomEnv(baseEnv, {
           url: opts.headroomUrl ?? resolveHeadroomUrl(null, process.env),

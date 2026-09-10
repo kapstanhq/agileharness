@@ -4,7 +4,7 @@
 //
 // The AgileHarness MCP server is the running service's own HTTP endpoint (/api/usm/<token>/<transport>), so the
 // spawn mounts an on-the-fly config pointing there. O token é o SCOPED do orquestrador
-// (STORYMAP_MCP_TOKEN_ORCH, nível `write`) — NÃO o token full do operador. Fail-open: sem token ⇒ SKIP com log
+// (AGILEHARNESS_MCP_TOKEN_ORCH, nível `write`) — NÃO o token full do operador. Fail-open: sem token ⇒ SKIP com log
 // (o Jido não age sem as tools, mas o tick nunca quebra). Detached + unref'd so the run outlives the tick
 // that started it; board-data cwd = repo root.
 //
@@ -163,7 +163,7 @@ export function buildOrchestratorPrompt(board: string, mode: OrchestratorMode, r
 export interface OrchestratorSpawnDeps {
   /** the `claude` binary (settings.autorun.claudeBin). */
   claudeBin: string;
-  /** o token MCP SCOPED do orquestrador (STORYMAP_MCP_TOKEN_ORCH, nível `write`); ausente/vazio ⇒ spawn pulado. */
+  /** o token MCP SCOPED do orquestrador (AGILEHARNESS_MCP_TOKEN_ORCH, nível `write`); ausente/vazio ⇒ spawn pulado. */
   token: string | undefined;
   /** the service port the AgileHarness MCP is served on (default 3008). */
   port?: number;
@@ -181,9 +181,9 @@ export interface OrchestratorSpawnDeps {
 export async function spawnOrchestrator(board: string, mode: OrchestratorMode, deps: OrchestratorSpawnDeps): Promise<boolean> {
   const token = deps.token?.trim();
   if (!token) {
-    // A mensagem ANTES nomeava STORYMAP_MCP_TOKEN (o token full do operador) — mas o tick usa o SCOPED. Quem
+    // A mensagem ANTES nomeava AGILEHARNESS_MCP_TOKEN (o token full do operador) — mas o tick usa o SCOPED. Quem
     // fosse debugar procurava a variável errada e concluía que já estava tudo setado.
-    console.warn(`[orchestrator ${board}] STORYMAP_MCP_TOKEN_ORCH ausente — copiloto não pode agir (spawn pulado).`);
+    console.warn(`[orchestrator ${board}] AGILEHARNESS_MCP_TOKEN_ORCH ausente — copiloto não pode agir (spawn pulado).`);
     return false;
   }
   // DECLARADO FORA DO `try` de propósito. MEDIDO: 841 diretórios órfãos vieram DESTE site, e por

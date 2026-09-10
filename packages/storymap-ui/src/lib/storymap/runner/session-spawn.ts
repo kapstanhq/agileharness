@@ -332,7 +332,7 @@ export interface SessionSpawnDeps {
   claudeBin: string;
   repoRoot: string;
   stateDir: string;
-  /** the scoped `orch` MCP token (STORYMAP_MCP_TOKEN_ORCH); absent ⇒ the session mounts no AgileHarness tools. */
+  /** the scoped `orch` MCP token (AGILEHARNESS_MCP_TOKEN_ORCH); absent ⇒ the session mounts no AgileHarness tools. */
   mcpToken?: string;
   port: number;
   now?: () => number;

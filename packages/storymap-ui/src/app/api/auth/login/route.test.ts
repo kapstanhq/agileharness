@@ -114,9 +114,9 @@ beforeEach(() => {
   process.env[SESSION_SECRET_ENV] = SESSION_SECRET;
   // O rastro do perímetro é um arquivo — cada teste ganha o seu, para nenhum ler a linha do vizinho
   // (e para nenhum escrever no estado do serviço vivo).
-  prevStateDir = process.env.STORYMAP_RUNNER_STATE_DIR;
+  prevStateDir = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
   stateDir = mkdtempSync(path.join(tmpdir(), "login-route-"));
-  process.env.STORYMAP_RUNNER_STATE_DIR = stateDir;
+  process.env.AGILEHARNESS_RUNNER_STATE_DIR = stateDir;
   // A ORIGEM DECLARADA é o primeiro degrau de `sessionCookieSecure` — declarada `https:`, o cookie sai
   // Secure SEMPRE, e é isso que se quer em produção. Aqui ela é ZERADA por padrão para que cada teste
   // estabeleça a própria precondição.
@@ -138,8 +138,8 @@ afterEach(async () => {
   else process.env[TOKEN_ENV] = prevToken;
   if (prevSecret === undefined) delete process.env[SESSION_SECRET_ENV];
   else process.env[SESSION_SECRET_ENV] = prevSecret;
-  if (prevStateDir === undefined) delete process.env.STORYMAP_RUNNER_STATE_DIR;
-  else process.env.STORYMAP_RUNNER_STATE_DIR = prevStateDir;
+  if (prevStateDir === undefined) delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+  else process.env.AGILEHARNESS_RUNNER_STATE_DIR = prevStateDir;
   if (prevPublicUrl === undefined) delete process.env[PUBLIC_ORIGIN_ENV];
   else process.env[PUBLIC_ORIGIN_ENV] = prevPublicUrl;
   // DEPOIS do flush: o rastro do perímetro ainda escreve neste diretório. Apagá-lo antes trocaria

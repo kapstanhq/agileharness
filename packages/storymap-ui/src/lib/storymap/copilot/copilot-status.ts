@@ -15,7 +15,7 @@ export type CopilotStatusLevel =
   | "paired"
   /** autônomo, mas o tick global está desarmado em settings ⇒ nunca roda. */
   | "auto-disarmed"
-  /** autônomo e armado, mas sem STORYMAP_MCP_TOKEN_ORCH no serviço ⇒ o spawn é pulado. */
+  /** autônomo e armado, mas sem AGILEHARNESS_MCP_TOKEN_ORCH no serviço ⇒ o spawn é pulado. */
   | "auto-inert"
   /** autônomo de verdade, mas a matriz só permite `read` ⇒ ele lê e PEDE aprovação p/ qualquer escrita. */
   | "auto-readonly"
@@ -39,7 +39,7 @@ export interface CopilotStatusInput {
   mode: OrchestratorMode;
   /** settings.orchestrator.enabled — o tick global. */
   enabled: boolean;
-  /** STORYMAP_MCP_TOKEN_ORCH presente no env do serviço. */
+  /** AGILEHARNESS_MCP_TOKEN_ORCH presente no env do serviço. */
   orchTokenPresent: boolean;
   /** a disposição RESOLVIDA da classe `write-board` (a que decide se ele edita cards sozinho). */
   writeBoard: RiskDisposition;
@@ -86,7 +86,7 @@ export function copilotStatus(s: CopilotStatusInput): CopilotStatus {
       tone: "warn",
       label: "inerte",
       detail:
-        "Autônomo LIGADO, mas INERTE: falta o token do orquestrador (STORYMAP_MCP_TOKEN_ORCH) no env do serviço — sem ele o spawn é pulado e nada roda.",
+        "Autônomo LIGADO, mas INERTE: falta o token do orquestrador (AGILEHARNESS_MCP_TOKEN_ORCH) no env do serviço — sem ele o spawn é pulado e nada roda.",
       inert: true,
     };
   }

@@ -4,7 +4,7 @@
 // "o registro não faz nada e o assert é fraco". Toda afirmação aqui aparece em dupla: o caso que passa e
 // o caso vizinho que TEM de falhar. Onde a dupla não cabe num `it`, o próprio `it` carrega os dois lados.
 //
-// TODO teste deste arquivo escreve numa RAIZ TEMPORÁRIA (STORYMAP_TARGET + resetRepoRootCache), nunca na
+// TODO teste deste arquivo escreve numa RAIZ TEMPORÁRIA (AGILEHARNESS_TARGET + resetRepoRootCache), nunca na
 // árvore do repositório — e o `afterEach` remove o que criou (a disciplina de /tmp desta casa).
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -29,19 +29,19 @@ function raizComBase(): string {
   // O `_base` REAL, copiado do repositório. Um `_base` sintético mediria a minha ideia de herança;
   // este mede a herança que existe.
   cpSync(baseDeVerdade(), path.join(raiz, "storymap", "boards", "_base"), { recursive: true });
-  process.env.STORYMAP_TARGET = raiz;
+  process.env.AGILEHARNESS_TARGET = raiz;
   resetRepoRootCache();
   return raiz;
 }
 
-/** O `_base` do repositório de verdade — resolvido ANTES de qualquer STORYMAP_TARGET entrar em jogo. */
+/** O `_base` do repositório de verdade — resolvido ANTES de qualquer AGILEHARNESS_TARGET entrar em jogo. */
 const BASE_REAL = path.join(findRepoRoot(), "storymap", "boards", "_base");
 function baseDeVerdade(): string {
   return BASE_REAL;
 }
 
 afterEach(() => {
-  delete process.env.STORYMAP_TARGET;
+  delete process.env.AGILEHARNESS_TARGET;
   resetRepoRootCache();
   while (temporarios.length > 0) rmSync(temporarios.pop() as string, { recursive: true, force: true });
 });
@@ -218,7 +218,7 @@ describe("o board nasce DESARMADO, e a prova é o avaliador de autorun — não 
     await registerBoard({ id: "loja", name: "Loja" });
 
     // O PISO que impede o vácuo: `evaluateAutorunOnEntry` sai LOGO no interruptor MESTRE
-    // (`settings.yaml autorun.enabled` / USM_AUTORUN=0). Se ele estivesse desligado nesta raiz, os DOIS
+    // (`settings.yaml autorun.enabled` / AGILEHARNESS_AUTORUN=0). Se ele estivesse desligado nesta raiz, os DOIS
     // lados do par ficariam mudos — pelo mesmo motivo — e o teste passaria sem medir nada.
     const { loadRunnerConfig } = await import("./runner/config");
     expect(
@@ -325,7 +325,7 @@ describe("registro num alvo SEM pipeline herdável", () => {
     const raiz = mkdtempSync(path.join(os.tmpdir(), "ah-virgem-"));
     temporarios.push(raiz);
     writeFileSync(path.join(raiz, "turbo.json"), "{}\n");
-    process.env.STORYMAP_TARGET = raiz;
+    process.env.AGILEHARNESS_TARGET = raiz;
     resetRepoRootCache();
     return raiz;
   }

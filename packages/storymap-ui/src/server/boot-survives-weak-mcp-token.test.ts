@@ -38,7 +38,7 @@ const ENVS_TOCADAS = [
   "AGILEHARNESS_ALLOW_PUBLIC_BIND",
   "NODE_ENV",
   "PORT",
-  "STORYMAP_MCP_TOKEN",
+  "AGILEHARNESS_MCP_TOKEN",
   "__NEXT_PROCESSED_ENV",
   SESSION_SECRET_ENV,
   TOKEN_ENV,
@@ -66,7 +66,7 @@ beforeAll(async () => {
   delete process.env.AGILEHARNESS_ALLOW_PUBLIC_BIND;
   delete process.env.__NEXT_PROCESSED_ENV;
   process.env.AGILEHARNESS_PORT = "39120";
-  process.env.STORYMAP_MCP_TOKEN = DO_PISO_ANTIGO;
+  process.env.AGILEHARNESS_MCP_TOKEN = DO_PISO_ANTIGO;
   process.env[TOKEN_ENV] = forte();
   process.env[SESSION_SECRET_ENV] = forte();
 
@@ -102,7 +102,7 @@ describe("token MCP do piso ANTIGO em loopback — a atualização não pode der
 
   it("o aviso é PRESCRITIVO: nomeia a env, o motivo, o comando que gera um forte e o efeito real", () => {
     const aviso = saidaDe(warn);
-    expect(aviso).toContain("STORYMAP_MCP_TOKEN");
+    expect(aviso).toContain("AGILEHARNESS_MCP_TOKEN");
     expect(aviso).toContain("menos de 32 caracteres");
     expect(aviso).toContain("randomBytes(32)");
     // O efeito é o que o operador precisa entender: a superfície MCP está FECHADA, não "meio aberta".

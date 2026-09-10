@@ -42,19 +42,19 @@ describe("resolveHeadroomUrl — declarado, nunca assumido (auditoria de extraç
     expect(resolveHeadroomUrl({ headroom: { enabled: true, proxyUrl: "" } }, {})).toBeNull();
   });
 
-  it("ENV STORYMAP_HEADROOM_URL vence qualquer config de board", () => {
+  it("ENV AGILEHARNESS_HEADROOM_URL vence qualquer config de board", () => {
     expect(
       resolveHeadroomUrl(
         { headroom: { enabled: true, proxyUrl: "http://from-board" } },
-        { STORYMAP_HEADROOM_URL: "http://from-env" },
+        { AGILEHARNESS_HEADROOM_URL: "http://from-env" },
       ),
     ).toBe("http://from-env");
   });
 
   it("ENV off/0/false desliga — inclusive contra o default", () => {
     for (const off of ["off", "0", "false", "none", "disabled", "OFF"]) {
-      expect(resolveHeadroomUrl({ headroom: { enabled: true, proxyUrl: "http://b" } }, { STORYMAP_HEADROOM_URL: off })).toBeNull();
-      expect(resolveHeadroomUrl(null, { STORYMAP_HEADROOM_URL: off })).toBeNull();
+      expect(resolveHeadroomUrl({ headroom: { enabled: true, proxyUrl: "http://b" } }, { AGILEHARNESS_HEADROOM_URL: off })).toBeNull();
+      expect(resolveHeadroomUrl(null, { AGILEHARNESS_HEADROOM_URL: off })).toBeNull();
     }
   });
 });

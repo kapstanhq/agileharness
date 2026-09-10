@@ -71,7 +71,7 @@ describe("o portão não pode cegar o diagnóstico que ele existe para entregar"
   it("runId, branch de sessão, nome de env e caminho continuam LEGÍVEIS", () => {
     const texto =
       "run agent-b38597ce-3ef1-4805-bca8-0a1f5ed1d520 · branch failed/agent/b38597ce-3ef1-4805-bca8-0a1f5ed1d520 · " +
-      "USM_AUTORUN_NO_PROGRESS_MAX=3 · packages/storymap-ui/src/lib/storymap/runner/merge-queue.ts · " +
+      "AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX=3 · packages/storymap-ui/src/lib/storymap/runner/merge-queue.ts · " +
       "split-code-not-landed-agent-b38597ce.patch";
     expect(elideCredentialBytes(texto)).toBe(texto);
   });

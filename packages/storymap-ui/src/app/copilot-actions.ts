@@ -368,7 +368,7 @@ export async function copilotSessionMeterAction(boardId: string, view?: string):
 // ── Fase 5.1 — the Copiloto config tab overview ──────────────────────────────────────────────────
 
 export interface CopilotOrchestratorOverview {
-  /** global runner settings (settings.yaml), with the ORIGIN of `enabled` (yaml vs the STORYMAP_ORCH_ENABLED override). */
+  /** global runner settings (settings.yaml), with the ORIGIN of `enabled` (yaml vs the AGILEHARNESS_ORCH_ENABLED override). */
   settings: {
     enabled: { value: boolean; origin: "yaml" | "env-override" };
     tickMinutes: number;
@@ -412,7 +412,7 @@ export interface CopilotOrchestratorOverview {
   /** Fase 6.5 — whether the server-side riskMatrix enforcement is actually wired. FALSE ⇒ the UI must BLOCK
    *  toggle→autonomous (the only containment would be the skill prompt). */
   enforcementShipped: boolean;
-  /** Item 3 — the scoped orchestrator token (STORYMAP_MCP_TOKEN_ORCH) is present on the service ⇒ the autonomous
+  /** Item 3 — the scoped orchestrator token (AGILEHARNESS_MCP_TOKEN_ORCH) is present on the service ⇒ the autonomous
    *  tick can actually SPAWN. FALSE ⇒ autonomous is INERT (spawnOrchestrator no-ops) — the UI says so honestly. */
   orchTokenPresent: boolean;
 }
@@ -426,9 +426,9 @@ export async function orchestratorOverviewAction(boardId: string): Promise<Copil
   await requireSession("orchestratorOverviewAction");
   const eff = loadRunnerConfig().orchestrator!; // readFileSettings always populates orchestrator (coerce fills defaults)
   const file = readFileSettings().orchestrator!;
-  // origin of `enabled`: STORYMAP_ORCH_ENABLED (0/1) is applied in applyEnvOverrides but NOT listed by
+  // origin of `enabled`: AGILEHARNESS_ORCH_ENABLED (0/1) is applied in applyEnvOverrides but NOT listed by
   // activeEnvOverrides, so probe it directly. When set to 0/1 the effective value comes from the env, not yaml.
-  const envFlag = process.env.STORYMAP_ORCH_ENABLED;
+  const envFlag = process.env.AGILEHARNESS_ORCH_ENABLED;
   const enabledFromEnv = envFlag === "0" || envFlag === "1";
 
   const policy = (await readBoardConfig(boardId).catch(() => null))?.orchestrator ?? null;
@@ -482,7 +482,7 @@ export async function orchestratorOverviewAction(boardId: string): Promise<Copil
       ...(clock.pendingWake ? { pendingWake: { reason: clock.pendingWake.reason, dueAt: clock.pendingWake.dueAt } } : {}),
     },
     enforcementShipped: autonomousModeSafe(),
-    orchTokenPresent: !!process.env.STORYMAP_MCP_TOKEN_ORCH?.trim(),
+    orchTokenPresent: !!process.env.AGILEHARNESS_MCP_TOKEN_ORCH?.trim(),
   };
 }
 

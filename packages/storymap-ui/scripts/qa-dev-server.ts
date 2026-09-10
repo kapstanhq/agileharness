@@ -22,7 +22,7 @@
 //       the engine can reap it at settle even when systemd is absent (no scope to stop). Cleaned on exit.
 //
 // Usage:  bun packages/storymap-ui/scripts/qa-dev-server.ts   (run from the worktree's storymap-ui)
-//   env:  STORYMAP_AUTORUN_RUN_ID  — the run's sessionId (the engine injects it on every spawn);
+//   env:  AGILEHARNESS_AUTORUN_RUN_ID  — the run's sessionId (the engine injects it on every spawn);
 //                                    falls back to a per-process id so a manual invocation still works.
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -31,7 +31,7 @@ import {
   resolveNextBinary,
   writeDevServerPid,
   devServerPidFile,
-  STORYMAP_PROD_PORT,
+  PROD_PORT,
 } from "../src/lib/storymap/runner/dev-server";
 import { unlinkSync } from "node:fs";
 
@@ -42,10 +42,10 @@ const MAX_PORT_ATTEMPTS = 3;
 const EADDRINUSE_RE = /EADDRINUSE|address already in use|port \d+ is in use/i;
 
 async function main() {
-  // The engine injects STORYMAP_AUTORUN_RUN_ID on every autorun spawn (engine.ts) — that IS the
+  // The engine injects AGILEHARNESS_AUTORUN_RUN_ID on every autorun spawn (engine.ts) — that IS the
   // sessionId, so the derived port is stable across a re-run/resume of the same card. A manual
   // invocation (no env) falls back to a per-process id so the script still serves a free port.
-  const runId = process.env.STORYMAP_AUTORUN_RUN_ID || `manual-${process.pid}`;
+  const runId = process.env.AGILEHARNESS_AUTORUN_RUN_ID || `manual-${process.pid}`;
 
   // EDGE 2: resolve `next` ONCE (PATH-independent) — reused across port retries.
   const nextBin = resolveNextBinary(process.cwd());
@@ -69,9 +69,9 @@ async function main() {
     }
 
     // Belt-and-suspenders (the guard already lives in resolveDevServerPort): never proceed on 3008.
-    if (port === STORYMAP_PROD_PORT) {
+    if (port === PROD_PORT) {
       console.error(
-        `[qa-dev-server] guard: porta resolvida é ${STORYMAP_PROD_PORT} (prod) — abortando`,
+        `[qa-dev-server] guard: porta resolvida é ${PROD_PORT} (prod) — abortando`,
       );
       process.exit(1);
       return;

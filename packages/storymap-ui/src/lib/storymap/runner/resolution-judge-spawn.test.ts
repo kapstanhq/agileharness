@@ -190,7 +190,7 @@ describe("spawnResolutionJudge — a contenção do juiz (F0)", () => {
   beforeEach(() => {
     vi.mocked(assertContainmentReachedArgv).mockClear();
     // O proxy de headroom não é objeto deste teste; sem o opt-out, cada spawn sondaria localhost.
-    vi.stubEnv("STORYMAP_HEADROOM_URL", "off");
+    vi.stubEnv("AGILEHARNESS_HEADROOM_URL", "off");
   });
 
   it("(a) postura RECUSADA ⇒ o juiz NÃO spawna, e a divergência sobe para o humano", async () => {
@@ -221,7 +221,7 @@ describe("spawnResolutionJudge — a contenção do juiz (F0)", () => {
     const capturado: { args?: readonly string[]; portaoJaChamado?: number; env?: NodeJS.ProcessEnv } = {};
     let worktree = "";
     let posturaUsada: ReturnType<typeof posturaContida> | undefined;
-    vi.stubEnv("STORYMAP_MCP_TOKEN", "full-xyz");
+    vi.stubEnv("AGILEHARNESS_MCP_TOKEN", "full-xyz");
     // O pai AFIRMA estar num sandbox — o caso MEDIDO nesta caixa (o serviço herda a chave de quem o
     // iniciou). O filho contido não pode receber isso por herança: quem afirma tem de ser quem decidiu.
     vi.stubEnv("IS_SANDBOX", "1");
@@ -262,7 +262,7 @@ describe("spawnResolutionJudge — a contenção do juiz (F0)", () => {
     // reintroduz o bypass justamente onde a fase acabou de tirá-lo.
     expect(capturado.env?.IS_SANDBOX, "postura contida não pode declarar IS_SANDBOX").toBeUndefined();
     // O env passa pelo chokepoint (sanitizeSpawnEnv ⊕ headroom): nenhum tier de credencial MCP viaja.
-    expect(Object.keys(capturado.env ?? {}).filter((k) => k.startsWith("STORYMAP_MCP_TOKEN"))).toEqual([]);
+    expect(Object.keys(capturado.env ?? {}).filter((k) => k.startsWith("AGILEHARNESS_MCP_TOKEN"))).toEqual([]);
   });
 
   it("(c) o portão é LOAD-BEARING: settings que não é fronteira ⇒ erro e NENHUM spawn", async () => {

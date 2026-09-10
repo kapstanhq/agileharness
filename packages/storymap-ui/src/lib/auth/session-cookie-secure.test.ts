@@ -70,14 +70,14 @@ beforeEach(() => {
   prevToken = process.env[TOKEN_ENV];
   prevSecret = process.env[SESSION_SECRET_ENV];
   prevPublicUrl = process.env[PUBLIC_ORIGIN_ENV];
-  prevStateDir = process.env.STORYMAP_RUNNER_STATE_DIR;
+  prevStateDir = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
   process.env[TOKEN_ENV] = TOKEN;
   process.env[SESSION_SECRET_ENV] = SESSION_SECRET;
   delete process.env[PUBLIC_ORIGIN_ENV];
   // O rastro do perímetro é um ARQUIVO: cada teste ganha o seu, para nenhum escrever no estado do
   // serviço vivo desta VPS.
   stateDir = mkdtempSync(path.join(tmpdir(), "cookie-secure-"));
-  process.env.STORYMAP_RUNNER_STATE_DIR = stateDir;
+  process.env.AGILEHARNESS_RUNNER_STATE_DIR = stateDir;
   resetPerimeterState();
 });
 
@@ -88,7 +88,7 @@ afterEach(async () => {
     [TOKEN_ENV, prevToken],
     [SESSION_SECRET_ENV, prevSecret],
     [PUBLIC_ORIGIN_ENV, prevPublicUrl],
-    ["STORYMAP_RUNNER_STATE_DIR", prevStateDir],
+    ["AGILEHARNESS_RUNNER_STATE_DIR", prevStateDir],
   ] as const) {
     if (valor === undefined) delete process.env[nome];
     else process.env[nome] = valor;

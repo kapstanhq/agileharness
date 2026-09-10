@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { STORYMAP_MCP_INSTRUCTIONS, ONBOARDING_GUIDE } from "./onboarding";
+import { MCP_INSTRUCTIONS, ONBOARDING_GUIDE } from "./onboarding";
 
 // story-26xi3s — discoverability of the high-use authoring tools that the client
 // harness DEFERS (update_card, save_persona, save_system, triage_finding). An agent
@@ -11,25 +11,25 @@ import { STORYMAP_MCP_INSTRUCTIONS, ONBOARDING_GUIDE } from "./onboarding";
 
 const DEFERRED_TOOLS = ["update_card", "save_persona", "save_system", "triage_finding"];
 
-describe("STORYMAP_MCP_INSTRUCTIONS — names the high-use deferred authoring tools", () => {
+describe("MCP_INSTRUCTIONS — names the high-use deferred authoring tools", () => {
   it("names all four high-use deferred authoring tools", () => {
     for (const tool of DEFERRED_TOOLS) {
-      expect(STORYMAP_MCP_INSTRUCTIONS).toContain(tool);
+      expect(MCP_INSTRUCTIONS).toContain(tool);
     }
   });
 
   it("tells the agent HOW to load a deferred tool (tool_search)", () => {
-    expect(STORYMAP_MCP_INSTRUCTIONS).toMatch(/tool_search/);
+    expect(MCP_INSTRUCTIONS).toMatch(/tool_search/);
   });
 
   it("frames update_card as the way to fix/edit a card (not tmux/scripts)", () => {
-    expect(STORYMAP_MCP_INSTRUCTIONS).toMatch(/update_card/);
-    expect(STORYMAP_MCP_INSTRUCTIONS.toLowerCase()).toMatch(/poluíd|corrigir|editar/);
+    expect(MCP_INSTRUCTIONS).toMatch(/update_card/);
+    expect(MCP_INSTRUCTIONS.toLowerCase()).toMatch(/poluíd|corrigir|editar/);
   });
 
   it("does NOT promise the server un-defers the tool (the deferral is client-side)", () => {
     // No misleading promise like "removemos/tiramos a update_card do deferral".
-    expect(STORYMAP_MCP_INSTRUCTIONS).not.toMatch(/(remov|tira)\w*[^\n]*deferr?al/i);
+    expect(MCP_INSTRUCTIONS).not.toMatch(/(remov|tira)\w*[^\n]*deferr?al/i);
   });
 });
 
@@ -60,14 +60,14 @@ describe("ONBOARDING_GUIDE — LEIA PRIMEIRO block for the deferred authoring to
 // intent→tool map so any agent knows when to reach for usm_capture vs create_card/report_issue.
 
 describe("intent→tool map — names usm_capture for full plans (AC4)", () => {
-  it("STORYMAP_MCP_INSTRUCTIONS names usm_capture alongside create_card and report_issue", () => {
-    expect(STORYMAP_MCP_INSTRUCTIONS).toContain("usm_capture");
-    expect(STORYMAP_MCP_INSTRUCTIONS).toContain("create_card");
-    expect(STORYMAP_MCP_INSTRUCTIONS).toContain("report_issue");
+  it("MCP_INSTRUCTIONS names usm_capture alongside create_card and report_issue", () => {
+    expect(MCP_INSTRUCTIONS).toContain("usm_capture");
+    expect(MCP_INSTRUCTIONS).toContain("create_card");
+    expect(MCP_INSTRUCTIONS).toContain("report_issue");
   });
 
-  it("STORYMAP_MCP_INSTRUCTIONS frames usm_capture as the full-plan / hierarchy path", () => {
-    expect(STORYMAP_MCP_INSTRUCTIONS.toLowerCase()).toMatch(/plano completo|hierarquia|brain-dump/);
+  it("MCP_INSTRUCTIONS frames usm_capture as the full-plan / hierarchy path", () => {
+    expect(MCP_INSTRUCTIONS.toLowerCase()).toMatch(/plano completo|hierarquia|brain-dump/);
   });
 
   it("ONBOARDING_GUIDE documents usm_capture (propose→apply) in the create/edit section + a recipe", () => {

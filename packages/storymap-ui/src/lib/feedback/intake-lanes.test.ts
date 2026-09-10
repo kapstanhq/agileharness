@@ -52,12 +52,12 @@ async function post(headers: Record<string, string>, body: string = greedyBatch(
 
 beforeEach(() => {
   vi.clearAllMocks();
-  process.env.STORYMAP_FEEDBACK_INGEST_TOKENS = `acme:${APP_TOKEN},storymap:${OTHER_TOKEN}`;
+  process.env.AGILEHARNESS_FEEDBACK_INGEST_TOKENS = `acme:${APP_TOKEN},storymap:${OTHER_TOKEN}`;
   process.env.AGILEHARNESS_SESSION_SECRET = SESSION_SECRET;
   process.env.AGILEHARNESS_AUTH_TOKEN = OPERATOR_TOKEN;
 });
 afterEach(() => {
-  delete process.env.STORYMAP_FEEDBACK_INGEST_TOKENS;
+  delete process.env.AGILEHARNESS_FEEDBACK_INGEST_TOKENS;
   delete process.env.AGILEHARNESS_SESSION_SECRET;
   delete process.env.AGILEHARNESS_AUTH_TOKEN;
 });
@@ -94,7 +94,7 @@ describe("ingest lane — a relayed batch is TRIAGE-ONLY, in the token's board",
   });
 
   it("with the lane OFF the very same request is refused (not silently promoted to same-origin)", async () => {
-    delete process.env.STORYMAP_FEEDBACK_INGEST_TOKENS;
+    delete process.env.AGILEHARNESS_FEEDBACK_INGEST_TOKENS;
     const res = await post({ "x-ah-ingest": APP_TOKEN });
     expect(res.status).toBe(401);
     const { reportIssueAction } = await import("@/app/actions");
@@ -113,7 +113,7 @@ describe("ingest lane — a relayed batch is TRIAGE-ONLY, in the token's board",
   // why the classifier must refuse absence of signal instead of trusting it. The terminal knob is ON
   // here on purpose: the refusal has to hold even with the riskiest sink armed.
   it("a headerless POST reaches NO sink — no paste into a live Claude, no card, no reopen", async () => {
-    process.env.STORYMAP_FEEDBACK_TERMINAL = "1";
+    process.env.AGILEHARNESS_FEEDBACK_TERMINAL = "1";
     try {
       const res = await post({});
       expect(res.status).toBe(403);
@@ -123,7 +123,7 @@ describe("ingest lane — a relayed batch is TRIAGE-ONLY, in the token's board",
       expect(reportIssueAction).not.toHaveBeenCalled();
       expect(refineCardAction).not.toHaveBeenCalled();
     } finally {
-      delete process.env.STORYMAP_FEEDBACK_TERMINAL;
+      delete process.env.AGILEHARNESS_FEEDBACK_TERMINAL;
     }
   });
 
@@ -131,7 +131,7 @@ describe("ingest lane — a relayed batch is TRIAGE-ONLY, in the token's board",
   // always carries Origin): full capability is untouched — the operator's own overlay still pastes
   // into a live session. The relay's downgrade is what the token buys; nothing was taken from the board.
   it("contrast: the same batch from the board's own UI keeps full capability, paste included", async () => {
-    process.env.STORYMAP_FEEDBACK_TERMINAL = "1"; // the paste path's own opt-in, off by default
+    process.env.AGILEHARNESS_FEEDBACK_TERMINAL = "1"; // the paste path's own opt-in, off by default
     try {
       const res = await post({
         origin: "http://board.local",
@@ -143,14 +143,14 @@ describe("ingest lane — a relayed batch is TRIAGE-ONLY, in the token's board",
       const { sendToClaudeSession } = await import("@/lib/vps/tmux");
       expect(sendToClaudeSession).toHaveBeenCalledTimes(1);
     } finally {
-      delete process.env.STORYMAP_FEEDBACK_TERMINAL;
+      delete process.env.AGILEHARNESS_FEEDBACK_TERMINAL;
     }
   });
   // The route is PUBLIC (self-auth) since story-14xvpa step 2: without this check, the same-origin
   // signal alone — two headers any curl can write — would be the full-capability lane. The 401 must
   // come BEFORE any sink, and must not depend on the terminal knob.
   it("a same-origin-looking POST WITHOUT the operator's session gets 401 and reaches no sink", async () => {
-    process.env.STORYMAP_FEEDBACK_TERMINAL = "1";
+    process.env.AGILEHARNESS_FEEDBACK_TERMINAL = "1";
     try {
       const res = await post({ origin: "http://board.local", host: "board.local", "sec-fetch-site": "same-origin" });
       expect(res.status).toBe(401);
@@ -161,7 +161,7 @@ describe("ingest lane — a relayed batch is TRIAGE-ONLY, in the token's board",
       expect(reportIssueAction).not.toHaveBeenCalled();
       expect(refineCardAction).not.toHaveBeenCalled();
     } finally {
-      delete process.env.STORYMAP_FEEDBACK_TERMINAL;
+      delete process.env.AGILEHARNESS_FEEDBACK_TERMINAL;
     }
   });
   it("a forged or expired session cookie is worth nothing — 401, no sink", async () => {
@@ -188,7 +188,7 @@ describe("ingest lane — a relayed batch is TRIAGE-ONLY, in the token's board",
 describe("ingest lane — bounded", () => {
   it("refuses with 429 once the per-board ceiling is hit, and says when to retry", async () => {
     // A board of its own so the shared in-process limiter can't leak this into another test.
-    process.env.STORYMAP_FEEDBACK_INGEST_TOKENS = `limite:${APP_TOKEN}`;
+    process.env.AGILEHARNESS_FEEDBACK_INGEST_TOKENS = `limite:${APP_TOKEN}`;
     let last: Response | null = null;
     for (let i = 0; i < 40; i++) {
       last = await post({ "x-ah-ingest": APP_TOKEN });

@@ -190,13 +190,13 @@ describe("readAgentSessionsOrNull — o null que arma a classe-6 é alcançável
   let dir: string;
   let prev: string | undefined;
   beforeEach(() => {
-    prev = process.env.STORYMAP_RUNNER_STATE_DIR;
+    prev = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
     dir = mkdtempSync(path.join(os.tmpdir(), "killguard-"));
-    process.env.STORYMAP_RUNNER_STATE_DIR = dir;
+    process.env.AGILEHARNESS_RUNNER_STATE_DIR = dir;
   });
   afterEach(() => {
-    if (prev === undefined) delete process.env.STORYMAP_RUNNER_STATE_DIR;
-    else process.env.STORYMAP_RUNNER_STATE_DIR = prev;
+    if (prev === undefined) delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+    else process.env.AGILEHARNESS_RUNNER_STATE_DIR = prev;
     rmSync(dir, { recursive: true, force: true });
   });
 

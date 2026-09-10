@@ -42,7 +42,7 @@ const ENVS_TOCADAS = [
   "AGILEHARNESS_ALLOW_PUBLIC_BIND",
   "NODE_ENV",
   "PORT",
-  "STORYMAP_MCP_TOKEN",
+  "AGILEHARNESS_MCP_TOKEN",
   "__NEXT_PROCESSED_ENV",
   SESSION_SECRET_ENV,
   TOKEN_ENV,
@@ -70,7 +70,7 @@ beforeAll(async () => {
 
   // O token de tutorial chega POR ARQUIVO — o caminho real da instalação.
   dirDoServico = mkdtempSync(path.join(tmpdir(), "ah-boot-weak-mcp-"));
-  writeFileSync(path.join(dirDoServico, ".env.local"), `STORYMAP_MCP_TOKEN=${ADIVINHAVEL}\n`, { mode: 0o600 });
+  writeFileSync(path.join(dirDoServico, ".env.local"), `AGILEHARNESS_MCP_TOKEN=${ADIVINHAVEL}\n`, { mode: 0o600 });
   process.chdir(dirDoServico);
 
   // O CENÁRIO DO ATAQUE: porta aberta para a rede, credenciais do operador FORTES (para o único
@@ -81,7 +81,7 @@ beforeAll(async () => {
   process.env[SESSION_SECRET_ENV] = forte();
   delete process.env.AGILEHARNESS_DEV;
   delete process.env.AGILEHARNESS_ALLOW_PUBLIC_BIND;
-  delete process.env.STORYMAP_MCP_TOKEN;
+  delete process.env.AGILEHARNESS_MCP_TOKEN;
   delete process.env.__NEXT_PROCESSED_ENV;
 
   warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -118,7 +118,7 @@ describe("bind aberto + token MCP de tutorial no .env.local — o boot RECUSA", 
 
   it("a recusa NOMEIA o token MCP — e nunca imprime o PASS afirmativo sobre este ambiente", () => {
     const aviso = saidaDe(warn);
-    expect(aviso).toContain("STORYMAP_MCP_TOKEN");
+    expect(aviso).toContain("AGILEHARNESS_MCP_TOKEN");
     // O PASS falso é o achado: com a env carregada só depois, a auditoria não via o token do arquivo
     // e imprimia "Auto-checagem: OK — toda credencial alcançável passou o teste de entropia".
     expect(aviso).not.toContain("Auto-checagem: OK");

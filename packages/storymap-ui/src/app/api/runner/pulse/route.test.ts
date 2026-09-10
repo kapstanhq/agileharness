@@ -48,11 +48,11 @@ let stateDir = "";
 const dirsAvulsos: string[] = [];
 
 beforeEach(() => {
-  prevToken = process.env.STORYMAP_MCP_TOKEN;
-  process.env.STORYMAP_MCP_TOKEN = TOKEN;
-  prevStateDir = process.env.STORYMAP_RUNNER_STATE_DIR;
+  prevToken = process.env.AGILEHARNESS_MCP_TOKEN;
+  process.env.AGILEHARNESS_MCP_TOKEN = TOKEN;
+  prevStateDir = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
   stateDir = mkdtempSync(path.join(tmpdir(), "pulse-auth-"));
-  process.env.STORYMAP_RUNNER_STATE_DIR = stateDir;
+  process.env.AGILEHARNESS_RUNNER_STATE_DIR = stateDir;
   resetPerimeterState();
   resetQueryDeprecationNotice();
 });
@@ -62,10 +62,10 @@ afterEach(async () => {
   await flushHandleTouches();
   resetPerimeterState();
   resetQueryDeprecationNotice();
-  if (prevToken === undefined) delete process.env.STORYMAP_MCP_TOKEN;
-  else process.env.STORYMAP_MCP_TOKEN = prevToken;
-  if (prevStateDir === undefined) delete process.env.STORYMAP_RUNNER_STATE_DIR;
-  else process.env.STORYMAP_RUNNER_STATE_DIR = prevStateDir;
+  if (prevToken === undefined) delete process.env.AGILEHARNESS_MCP_TOKEN;
+  else process.env.AGILEHARNESS_MCP_TOKEN = prevToken;
+  if (prevStateDir === undefined) delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+  else process.env.AGILEHARNESS_RUNNER_STATE_DIR = prevStateDir;
   // Só DEPOIS dos flushes acima: apagar antes trocaria o diretório órfão por um erro de escrita.
   rmSync(stateDir, { recursive: true, force: true });
   for (const d of dirsAvulsos.splice(0)) rmSync(d, { recursive: true, force: true });
@@ -168,7 +168,7 @@ describe("GET /api/runner/pulse — auth", () => {
   });
 
   it("um HANDLE REVOGADO deixa de entrar no request seguinte — sem restart do serviço", async () => {
-    // É a propriedade que o token do env NÃO tem: rotacionar `STORYMAP_MCP_TOKEN` exige reiniciar o
+    // É a propriedade que o token do env NÃO tem: rotacionar `AGILEHARNESS_MCP_TOKEN` exige reiniciar o
     // serviço, e é por isso que o token vazado ficou vivo 54 dias. Aqui o corte é imediato.
     const { handle, record } = await createMcpHandle({ level: "ro", label: "monitor" });
     expect((await GET(req(BOARD, { authorization: `Bearer ${handle}` }))).status).toBe(200);
@@ -193,7 +193,7 @@ describe("GET /api/runner/pulse — auth", () => {
     dirsAvulsos.push(raizEnotdir);
     const arquivo = path.join(raizEnotdir, "sou-um-arquivo");
     writeFileSync(arquivo, "x");
-    process.env.STORYMAP_RUNNER_STATE_DIR = path.join(arquivo, "estado");
+    process.env.AGILEHARNESS_RUNNER_STATE_DIR = path.join(arquivo, "estado");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       expect((await GET(req(`${BOARD}&secret=nope`, fromIp("203.0.113.90")))).status).toBe(401);

@@ -2826,7 +2826,7 @@ function CardConsoleModal({ board, cardId, onClose }: { board: string; cardId: s
               type="button"
               onClick={openTerminal}
               disabled={!sessionId}
-              title="Abrir num terminal real (requer USM_AUTORUN_OPEN_TERMINAL=1)"
+              title="Abrir num terminal real (requer AGILEHARNESS_AUTORUN_OPEN_TERMINAL=1)"
               className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1.5 text-xs font-medium text-fg-muted transition hover:bg-surface-hover disabled:opacity-40"
             >
               <ExternalLink className="h-3.5 w-3.5" /> Abrir

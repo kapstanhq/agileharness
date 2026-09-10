@@ -26,7 +26,7 @@
 //      ESCOPÁVEL (o handle carrega o próprio nível, então o que vaza no log pode não ser a autoridade
 //      máxima) e DESACOPLADO das 4 rotas do runner. Emitir `full` continua permitido: contenção que
 //      custasse autonomia estaria errada.
-//   2. TOKEN LEGADO do env (`STORYMAP_MCP_TOKEN` e os escopados de `settings.mcpTokens`), com a MESMA
+//   2. TOKEN LEGADO do env (`AGILEHARNESS_MCP_TOKEN` e os escopados de `settings.mcpTokens`), com a MESMA
 //      ordem de resolução de sempre. Isto NÃO é cortesia: é o que o conector do dono usa hoje, e
 //      quebrá-lo seria remoção de capacidade disfarçada de hardening.
 //
@@ -78,7 +78,7 @@ import { isMcpTokenValid } from "@/lib/storymap/mcp/auth";
 import { decodeRouteParam } from "@/lib/storymap/deep-links";
 import { registerStorymapTools } from "@/lib/storymap/mcp/tools";
 import { registerDevTools } from "@/lib/storymap/mcp/dev-tools";
-import { registerOnboarding, STORYMAP_MCP_INSTRUCTIONS } from "@/lib/storymap/mcp/onboarding";
+import { registerOnboarding, MCP_INSTRUCTIONS } from "@/lib/storymap/mcp/onboarding";
 import { registerResources } from "@/lib/storymap/mcp/resources";
 import { setServerLevel } from "@/lib/storymap/mcp/register";
 import { runWithMcpActor, type McpActor } from "@/lib/storymap/mcp/actor";
@@ -189,7 +189,7 @@ function handlerFor(secret: string, level: McpLevel): (req: Request) => Promise<
     },
     // `instructions` ride in the MCP initialize response → every client sees the mental
     // model + rules before the first tool call (the canonical fix for "the agent feels lost").
-    { serverInfo: { name: "storymap", version: "0.2.3" }, instructions: STORYMAP_MCP_INSTRUCTIONS },
+    { serverInfo: { name: "storymap", version: "0.3.0" }, instructions: MCP_INSTRUCTIONS },
     // Stateless Streamable HTTP (no sessionIdGenerator) → no Redis needed; SSE is
     // disabled (removed from the MCP spec since 2025-03-26 and the source of the
     // Redis requirement we deliberately avoid).

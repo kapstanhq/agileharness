@@ -27,16 +27,16 @@ function patch(body: unknown): Request {
   });
 }
 
-// prefs-store persiste em runnerStateDir(), que honra STORYMAP_RUNNER_STATE_DIR — um dir POR TESTE
+// prefs-store persiste em runnerStateDir(), que honra AGILEHARNESS_RUNNER_STATE_DIR — um dir POR TESTE
 // (e não por arquivo, como o vitest.setup faz) para que uma gravação não vaze para a asserção da
 // próxima: metade destes testes afirma justamente que NADA foi gravado.
 let dir: string;
 let prevEnv: string | undefined;
 
 beforeEach(() => {
-  prevEnv = process.env.STORYMAP_RUNNER_STATE_DIR;
+  prevEnv = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
   dir = mkdtempSync(path.join(os.tmpdir(), "termsessions-"));
-  process.env.STORYMAP_RUNNER_STATE_DIR = dir;
+  process.env.AGILEHARNESS_RUNNER_STATE_DIR = dir;
   listBoards.mockResolvedValue([
     { id: "storymap", name: "AgileHarness" },
     { id: "acme", name: "Nest" },
@@ -44,8 +44,8 @@ beforeEach(() => {
   listRunningServices.mockResolvedValue([]);
 });
 afterEach(() => {
-  if (prevEnv === undefined) delete process.env.STORYMAP_RUNNER_STATE_DIR;
-  else process.env.STORYMAP_RUNNER_STATE_DIR = prevEnv;
+  if (prevEnv === undefined) delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+  else process.env.AGILEHARNESS_RUNNER_STATE_DIR = prevEnv;
   rmSync(dir, { recursive: true, force: true });
   vi.clearAllMocks();
 });

@@ -24,7 +24,7 @@ import { isBoardDataWriterArmed, planBoardDataFlush } from "./board-data-policy"
 
 // Quiet window before a flush fires. Coalesces a burst of edits (approve N changes, edit M cards) into one
 // commit. Tunable via env for the VPS; a floor keeps it from degenerating into a per-edit commit storm.
-const DEBOUNCE_MS = Math.max(1000, Number(process.env.STORYMAP_BOARD_FLUSH_MS) || 5000);
+const DEBOUNCE_MS = Math.max(1000, Number(process.env.AGILEHARNESS_BOARD_FLUSH_MS) || 5000);
 const FLUSH_MESSAGE = "board: estado vivo (bancada)";
 
 let timer: ReturnType<typeof setTimeout> | null = null;

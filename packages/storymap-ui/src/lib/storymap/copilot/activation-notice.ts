@@ -1,6 +1,6 @@
 // Item 3 — a CONFIRMAÇÃO honesta que o header mostra ao trocar o modo do board. Reflete o estado REAL: um
 // board autônomo só AGE se (a) o tick global está armado (settings.enabled), (b) o token do orquestrador
-// (STORYMAP_MCP_TOKEN_ORCH) está no serviço e (c) a matriz de risco lhe deu permissão de escrever no board.
+// (AGILEHARNESS_MCP_TOKEN_ORCH) está no serviço e (c) a matriz de risco lhe deu permissão de escrever no board.
 // Faltando qualquer um, `autonomous` fica INERTE ou só-leitura — e o operador precisa VER isso, senão acha que
 // o Jido está trabalhando quando não está.
 //
@@ -16,7 +16,7 @@ export interface ActivationState {
   mode: OrchestratorMode;
   /** tick global armado (settings.orchestrator.enabled). */
   enabled: boolean;
-  /** STORYMAP_MCP_TOKEN_ORCH presente no serviço → o tick consegue spawnar o orquestrador. */
+  /** AGILEHARNESS_MCP_TOKEN_ORCH presente no serviço → o tick consegue spawnar o orquestrador. */
   orchTokenPresent: boolean;
   /** cadência do tick (min), p/ dizer quando o Jido age. */
   tickMinutes: number;

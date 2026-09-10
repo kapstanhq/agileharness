@@ -10,7 +10,7 @@
 //   - Path:     <checkout>/storymap/.runner/service.lock
 //   - Conteúdo: { pid, port, startedAt }
 //   - Vivo:     o hook valida o pid (kill(0) + /proc/<pid>/cmdline). Sem lock ou pid morto ⇒ NO-OP.
-// ⚠️ `STORYMAP_RUNNER_STATE_DIR` redireciona runnerStateDir() (a suíte SEMPRE o aponta para um temp
+// ⚠️ `AGILEHARNESS_RUNNER_STATE_DIR` redireciona runnerStateDir() (a suíte SEMPRE o aponta para um temp
 // dir): sob teste o lock não suja o checkout vivo, e o hook — que lê o path literal — não vê nada.
 // Em produção o override não existe e os dois caminhos coincidem.
 //

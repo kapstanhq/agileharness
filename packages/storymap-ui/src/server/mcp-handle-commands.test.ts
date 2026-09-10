@@ -44,7 +44,7 @@ const ENVS_TOCADAS = [
   "AGILEHARNESS_DEV",
   "NODE_ENV",
   "PORT",
-  "STORYMAP_MCP_TOKEN",
+  "AGILEHARNESS_MCP_TOKEN",
   "__NEXT_PROCESSED_ENV",
   SESSION_SECRET_ENV,
   TOKEN_ENV,
@@ -70,13 +70,13 @@ const saidaDe = (spy: Espiao): string =>
 beforeAll(async () => {
   for (const k of ENVS_TOCADAS) salvo[k] = process.env[k];
   argvOriginal = process.argv;
-  prevStateDir = process.env.STORYMAP_RUNNER_STATE_DIR;
+  prevStateDir = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
   stateDir = mkdtempSync(path.join(tmpdir(), "mcp-handle-cmd-"));
-  process.env.STORYMAP_RUNNER_STATE_DIR = stateDir;
+  process.env.AGILEHARNESS_RUNNER_STATE_DIR = stateDir;
 
   delete process.env.AGILEHARNESS_HOST;
   delete process.env.AGILEHARNESS_DEV;
-  delete process.env.STORYMAP_MCP_TOKEN;
+  delete process.env.AGILEHARNESS_MCP_TOKEN;
   delete process.env.__NEXT_PROCESSED_ENV;
   process.env.AGILEHARNESS_PORT = "39131";
 
@@ -105,8 +105,8 @@ afterAll(() => {
     if (salvo[k] === undefined) delete process.env[k];
     else (process.env as EnvLike)[k] = salvo[k];
   }
-  if (prevStateDir === undefined) delete process.env.STORYMAP_RUNNER_STATE_DIR;
-  else process.env.STORYMAP_RUNNER_STATE_DIR = prevStateDir;
+  if (prevStateDir === undefined) delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+  else process.env.AGILEHARNESS_RUNNER_STATE_DIR = prevStateDir;
   vi.restoreAllMocks();
   // No fim de tudo: os comandos já escreveram e leram o que precisavam neste diretório.
   if (stateDir) rmSync(stateDir, { recursive: true, force: true });
@@ -193,8 +193,8 @@ describe(`node dist/ah-server.mjs ${LISTAR}`, () => {
 
   it("sem handle nenhum, ensina como emitir em vez de imprimir vazio", async () => {
     const outro = mkdtempSync(path.join(tmpdir(), "mcp-handle-vazio-"));
-    const anterior = process.env.STORYMAP_RUNNER_STATE_DIR;
-    process.env.STORYMAP_RUNNER_STATE_DIR = outro;
+    const anterior = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+    process.env.AGILEHARNESS_RUNNER_STATE_DIR = outro;
     try {
       info.mockClear();
       expect(await mod.runMcpHandleCommand([...argvOriginal, LISTAR])).toBe(true);
@@ -202,7 +202,7 @@ describe(`node dist/ah-server.mjs ${LISTAR}`, () => {
       expect(saida).toContain("Nenhum handle MCP emitido");
       expect(saida).toContain(EMITIR);
     } finally {
-      process.env.STORYMAP_RUNNER_STATE_DIR = anterior;
+      process.env.AGILEHARNESS_RUNNER_STATE_DIR = anterior;
       rmSync(outro, { recursive: true, force: true });
     }
   });

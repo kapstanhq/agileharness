@@ -145,7 +145,7 @@ const KEYWORD_ASSIGN = new RegExp(
 // --- Nome de env que DECLARA credencial (SCREAMING_SNAKE terminando em KEY/TOKEN/SECRET/…) -----
 // Existe porque metade das credenciais reais não usa NENHUMA palavra da lista acima:
 // `WHATSAPP_VERIFY_TOKEN`, `PINECONE_API_KEY` sem prefixo reconhecível, e — o mais grave — o
-// `STORYMAP_MCP_TOKEN` do próprio produto. Aqui o NOME é o contexto, e é ele que autoriza afrouxar
+// `AGILEHARNESS_MCP_TOKEN` do próprio produto. Aqui o NOME é o contexto, e é ele que autoriza afrouxar
 // a exigência de classes de caractere no valor (ver `looksLikeSecretValue({ declared: true })`).
 const ENV_CRED_NAME = String.raw`[A-Z][A-Z0-9_]{2,}(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|PWD)`;
 const ENV_ASSIGN = new RegExp(
@@ -276,12 +276,18 @@ function matchedValue(quoted, bare) {
 // JSON do mcp-remote, dá no mesmo. Isto COMPLEMENTA (não substitui) a régua por FORMA abaixo, que é a
 // que protege o repositório publicado, onde o token de quem commita não é o token vazado.
 const SELF_SECRET_ENV_VARS = [
-  'STORYMAP_MCP_TOKEN',
-  'STORYMAP_ORCH_TOKEN',
-  'STORYMAP_READONLY_TOKEN',
-  'STORYMAP_VAPID_PRIVATE_KEY',
+  'AGILEHARNESS_MCP_TOKEN',
+  'AGILEHARNESS_MCP_TOKEN_ORCH',
+  'AGILEHARNESS_MCP_TOKEN_RO',
+  'AGILEHARNESS_VAPID_PRIVATE_KEY',
   'AGILEHARNESS_AUTH_TOKEN',
   'AGILEHARNESS_SESSION_SECRET',
+  // As grafias LEGADAS (ponte de nomes, packages/storymap-ui/src/lib/storymap/env-aliases.ts): o ambiente de
+  // quem commita pode ainda tê-las — e o valor é o mesmo segredo.
+  'STORYMAP_MCP_TOKEN',
+  'STORYMAP_MCP_TOKEN_ORCH',
+  'STORYMAP_MCP_TOKEN_RO',
+  'STORYMAP_VAPID_PRIVATE_KEY',
 ];
 
 /** Literais a bloquear, lidos do ambiente. Nunca ecoa o valor — o achado nomeia só a variável. */
@@ -348,7 +354,7 @@ function looksLikeNakedToken(tok) {
   if (tok.length < NAKED_MIN_LEN) return false;
   if (PLACEHOLDER.test(tok) || looksLikeFixture(tok)) return false;
   if (/^[0-9a-fA-F-]+$/.test(tok)) return false; // sha de commit, digest hex, UUID
-  // assinatura de alfabeto aleatório: as três classes juntas. Derruba `USM_AUTORUN_PUBLISH_ENABLED`,
+  // assinatura de alfabeto aleatório: as três classes juntas. Derruba `AGILEHARNESS_AUTORUN_PUBLISH_ENABLED`,
   // `packages-storymap-ui-runner` e afins sem precisar de lista de exceções.
   if (!/[a-z]/.test(tok) || !/[A-Z]/.test(tok) || !/[0-9]/.test(tok)) return false;
   return shannonEntropy(tok) >= NAKED_MIN_ENTROPY;

@@ -2105,7 +2105,7 @@ export async function approveDataDeletionAction(input: {
   await requireSession("approveDataDeletionAction");
   try {
     if (!loadRunnerConfig().autorun.enabled) {
-      return { ok: false, error: "Runner desligado (Config → autorun, ou USM_AUTORUN=0). Ligue para executar a remoção." };
+      return { ok: false, error: "Runner desligado (Config → autorun, ou AGILEHARNESS_AUTORUN=0). Ligue para executar a remoção." };
     }
     const approved = await updateCardOnDisk(input.boardId, input.cardId, (card) => {
       if (card.mode !== "retire" || !card.retirement) throw new Error("Card não está em descontinuação.");
@@ -2276,7 +2276,7 @@ export async function setBoardOrchestratorModeAction(input: {
     await writeBoardConfig(input.boardId, next);
     revalidateBoard(input.boardId);
     // Item 2 — ativar autonomous dispara um tick IMEDIATO só deste board (fire-and-forget, lazy import) em vez
-    // de esperar até 30min pelo próximo tick global. Inerte sem STORYMAP_MCP_TOKEN_ORCH (spawnOrchestrator pula).
+    // de esperar até 30min pelo próximo tick global. Inerte sem AGILEHARNESS_MCP_TOKEN_ORCH (spawnOrchestrator pula).
     if (input.mode === "autonomous") {
       void import("@/lib/storymap/runner/orchestrator-run")
         .then(({ runBoardTickNow }) => runBoardTickNow(input.boardId, "você acabou de ligar o modo autônomo"))
@@ -2347,7 +2347,7 @@ export async function setEconomyModeAction(input: { enabled: boolean }): Promise
  * Persist the GLOBAL runner settings (storymap/settings.yaml) that drive the
  * autorun trigger-runner channel: kill switch, concurrency, watchdogs, claude
  * binary, global extra args, and the model/effort/maxTurns column fallbacks.
- * USM_* env vars still override these at runtime — the panel flags active ones.
+ * AGILEHARNESS_AUTORUN_* env vars still override these at runtime — the panel flags active ones.
  */
 export async function saveRunnerSettingsAction(input: {
   settings: RunnerSettings;
@@ -2366,16 +2366,16 @@ export async function saveRunnerSettingsAction(input: {
 /**
  * Open a real OS terminal running `claude --resume <sessionId>` so the user can
  * take over a card's headless run interactively. Opt-in via
- * USM_AUTORUN_OPEN_TERMINAL=1 (default off — the primary affordance is copying
+ * AGILEHARNESS_AUTORUN_OPEN_TERMINAL=1 (default off — the primary affordance is copying
  * the command). The sessionId is validated as a UUID before use.
  */
 export async function openTerminalForSessionAction(input: { sessionId: string }): Promise<Result> {
   await requireSession("openTerminalForSessionAction");
   try {
-    if (process.env.USM_AUTORUN_OPEN_TERMINAL !== "1") {
+    if (process.env.AGILEHARNESS_AUTORUN_OPEN_TERMINAL !== "1") {
       return {
         ok: false,
-        error: "Abrir terminal está desligado. Defina USM_AUTORUN_OPEN_TERMINAL=1 (ou copie o comando).",
+        error: "Abrir terminal está desligado. Defina AGILEHARNESS_AUTORUN_OPEN_TERMINAL=1 (ou copie o comando).",
       };
     }
     const id = String(input.sessionId || "").trim();
@@ -2772,7 +2772,7 @@ export async function getCardRunDiffStatAction(input: {
  * only governs AUTO-triggering on entry); it still goes through the SAME engine, so
  * it shares the in-flight lock + concurrency cap, registers in the runner registry,
  * and streams to the live console exactly like an autorun run. Requires a column
- * with a `trigger` and the global master switch on (so USM_AUTORUN=0 is honored).
+ * with a `trigger` and the global master switch on (so AGILEHARNESS_AUTORUN=0 is honored).
  */
 export async function runCardSkillAction(input: {
   boardId: string;
@@ -2781,7 +2781,7 @@ export async function runCardSkillAction(input: {
   await requireSession("runCardSkillAction");
   try {
     if (!loadRunnerConfig().autorun.enabled) {
-      return { ok: false, error: "Runner desligado (Config → autorun, ou USM_AUTORUN=0). Ligue para rodar." };
+      return { ok: false, error: "Runner desligado (Config → autorun, ou AGILEHARNESS_AUTORUN=0). Ligue para rodar." };
     }
     const [config, cards] = await Promise.all([
       readBoardConfig(input.boardId),
@@ -2823,7 +2823,7 @@ export async function runCardSkillAction(input: {
  * backbone (activity/step). The skill reviews the card against the real code, updates
  * its fields and repositions it by facts. Shares the SAME engine as autorun (in-flight
  * lock + concurrency cap + live console + `claude --resume`), and honors the same master
- * switch (USM_AUTORUN=0). The model/effort come from the synthetic SYNC_STATUS_DEF, so
+ * switch (AGILEHARNESS_AUTORUN=0). The model/effort come from the synthetic SYNC_STATUS_DEF, so
  * the run is capable regardless of which column the card sits in.
  */
 export async function syncCardAction(input: {
@@ -2833,7 +2833,7 @@ export async function syncCardAction(input: {
   await requireSession("syncCardAction");
   try {
     if (!loadRunnerConfig().autorun.enabled) {
-      return { ok: false, error: "Runner desligado (Config → autorun, ou USM_AUTORUN=0). Ligue para sincronizar." };
+      return { ok: false, error: "Runner desligado (Config → autorun, ou AGILEHARNESS_AUTORUN=0). Ligue para sincronizar." };
     }
     const [card, config] = await Promise.all([
       readCards(input.boardId).then((cs) => cs.find((c) => c.id === input.cardId)),

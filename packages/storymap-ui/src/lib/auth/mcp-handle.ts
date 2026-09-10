@@ -25,14 +25,14 @@
 // público seria teatro — quem lê o log do proxy e copia o handle entra, até a revogação. O ganho
 // real são três propriedades que o token do env NÃO tem:
 //
-//   1. REVOGÁVEL NA HORA, sem restart. Trocar `STORYMAP_MCP_TOKEN` exige reiniciar o serviço, e o
+//   1. REVOGÁVEL NA HORA, sem restart. Trocar `AGILEHARNESS_MCP_TOKEN` exige reiniciar o serviço, e o
 //      guardrail do projeto proíbe reiniciá-lo sem autorização — é por isso que a rotação está, na
 //      prática, TRAVADA, e é por isso que o token vazado ficou vivo 54 dias. O registro daqui é
 //      relido a cada resolução, então `revokeMcpHandle` corta o acesso no request seguinte.
 //   2. ESCOPÁVEL. O handle carrega o próprio nível (`ro`/`write`/`orch`/`full`), então o que vaza no
 //      log pode não ser a autoridade máxima. Emitir `full` continua permitido — contenção que
 //      custasse autonomia estaria errada.
-//   3. DESACOPLADO DO ENV. Revogar um handle não obriga a rotacionar o `STORYMAP_MCP_TOKEN` (nem o
+//   3. DESACOPLADO DO ENV. Revogar um handle não obriga a rotacionar o `AGILEHARNESS_MCP_TOKEN` (nem o
 //      contrário): os dois caminhos são independentes, e é isso que torna a revogação uma ação
 //      barata. ⚠️ NÃO leia isso como "o handle só vale para o MCP": `api/runner/perimeter.ts` resolve
 //      pela MESMA função, então um handle com nível suficiente TAMBÉM abre as 4 rotas
@@ -46,7 +46,7 @@
 //
 // ── COMPATIBILIDADE É REQUISITO, NÃO CORTESIA ─────────────────────────────────────────────────
 //
-// O token legado (`STORYMAP_MCP_TOKEN` e os escopados de `settings.mcpTokens`) CONTINUA valendo no
+// O token legado (`AGILEHARNESS_MCP_TOKEN` e os escopados de `settings.mcpTokens`) CONTINUA valendo no
 // path, com a MESMA ordem de resolução de hoje. O handle é caminho ADICIONAL. Quebrar o legado
 // pararia o conector do dono — isso seria remoção de capacidade, não hardening. `McpCredential.via`
 // diz QUAL caminho entrou, que é o dado de que a depreciação futura precisa (e a atribuição no

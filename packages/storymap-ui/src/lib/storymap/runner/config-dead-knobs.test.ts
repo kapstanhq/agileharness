@@ -7,7 +7,7 @@ import { settingsPath } from "@/lib/storymap/paths";
 // INTERRUPTOR PUBLICADO SEM LEITOR — a classe, não o caso.
 //
 // Medido em 2026-08-20 no artefato: `settings.yaml` trazia `autorun.sandbox.enabled: false` e
-// `runner/config.ts` tinha o `if (env.USM_AUTORUN_SANDBOX === "1" || … === "0") { }` — corpo VAZIO.
+// `runner/config.ts` tinha o `if (env.AGILEHARNESS_AUTORUN_SANDBOX === "1" || … === "0") { }` — corpo VAZIO.
 // A alavanca saiu em 2026-08-05 junto com a camada fail-open que ela governava (`runner/sandbox.ts`,
 // removida quando o F0 pousou), e os dois resíduos ficaram quinze dias prometendo um controle de
 // contenção que não existia. É a pior classe de mentira de configuração: quem lê o arquivo publicado
@@ -48,6 +48,6 @@ describe("configuração não publica interruptor que ninguém lê", () => {
       .split("\n")
       .filter((l) => !l.trim().startsWith("//"))
       .join("\n");
-    expect(semComentarios).not.toContain("USM_AUTORUN_SANDBOX");
+    expect(semComentarios).not.toContain("AGILEHARNESS_AUTORUN_SANDBOX");
   });
 });

@@ -919,9 +919,9 @@ describe("makeMergeQueue — resolveMergeConflict (AC3 → resume)", () => {
     const { mq } = makeQueue({ exec });
     await mq.enqueueMerge(input({ runId: "a", branch: "run/a" }));
     await mq.whenIdle();
-    await mq.resolveMergeConflict("a", "aborted", "agente (STORYMAP_MCP_TOKEN_ORCH)");
+    await mq.resolveMergeConflict("a", "aborted", "agente (AGILEHARNESS_MCP_TOKEN_ORCH)");
     await mq.whenIdle();
-    expect(mq.getSnapshot().entries[0].failureReason).toContain("agente (STORYMAP_MCP_TOKEN_ORCH)");
+    expect(mq.getSnapshot().entries[0].failureReason).toContain("agente (AGILEHARNESS_MCP_TOKEN_ORCH)");
   });
 
   it("is a no-op on an unknown / non-conflicting runId", async () => {
@@ -1821,10 +1821,10 @@ describe("makeDefaultGateRunner — staging worktree lifecycle", () => {
   // saneador ESVAZIAR o env (o filho precisa achar o bun): uma chave neutra tem de atravessar.
   it("[PRODUTOR] a suíte E o tsc recebem env SANEADO — sem NODE_ENV, __NEXT_* nem token MCP; o resto atravessa", async () => {
     const env = process.env as Record<string, string | undefined>;
-    const antes = { NODE_ENV: env.NODE_ENV, NEXT: env.__NEXT_PROCESSED_ENV, TOK: env.STORYMAP_MCP_TOKEN, PROBE: env.GATE_ENV_PROBE };
+    const antes = { NODE_ENV: env.NODE_ENV, NEXT: env.__NEXT_PROCESSED_ENV, TOK: env.AGILEHARNESS_MCP_TOKEN, PROBE: env.GATE_ENV_PROBE };
     env.NODE_ENV = "production";
     env.__NEXT_PROCESSED_ENV = "true";
-    env.STORYMAP_MCP_TOKEN = "segredo-que-nao-pode-viajar";
+    env.AGILEHARNESS_MCP_TOKEN = "segredo-que-nao-pode-viajar";
     env.GATE_ENV_PROBE = "atravessa";
     try {
       const { exec, calls } = makeGateExec({ mergedFailures: [] });
@@ -1841,11 +1841,11 @@ describe("makeDefaultGateRunner — staging worktree lifecycle", () => {
         expect(c.env, `sem env ⇒ herda o do serviço: ${c.cmd}`).toBeDefined();
         expect(c.env!.NODE_ENV).toBeUndefined();
         expect(c.env!.__NEXT_PROCESSED_ENV).toBeUndefined();
-        expect(c.env!.STORYMAP_MCP_TOKEN).toBeUndefined();
+        expect(c.env!.AGILEHARNESS_MCP_TOKEN).toBeUndefined();
         expect(c.env!.GATE_ENV_PROBE).toBe("atravessa");
       }
     } finally {
-      for (const [k, v] of [["NODE_ENV", antes.NODE_ENV], ["__NEXT_PROCESSED_ENV", antes.NEXT], ["STORYMAP_MCP_TOKEN", antes.TOK], ["GATE_ENV_PROBE", antes.PROBE]] as const) {
+      for (const [k, v] of [["NODE_ENV", antes.NODE_ENV], ["__NEXT_PROCESSED_ENV", antes.NEXT], ["AGILEHARNESS_MCP_TOKEN", antes.TOK], ["GATE_ENV_PROBE", antes.PROBE]] as const) {
         if (v === undefined) delete env[k];
         else env[k] = v;
       }

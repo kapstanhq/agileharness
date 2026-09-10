@@ -5,7 +5,7 @@
 // com `git worktree remove --force`, recupera o MERGE TRAIN (que faz merge/push sobre o `.git`),
 // respawna runs, arma a fila de publicação (que DEPLOYA) e o tick do copiloto (que gasta dinheiro).
 //
-// Nada disso tem gate hoje: `USM_AUTORUN=0` cobre 4 dos ~15 efeitos e NÃO cobre o reaper nem o train.
+// Nada disso tem gate hoje: `AGILEHARNESS_AUTORUN=0` cobre 4 dos ~15 efeitos e NÃO cobre o reaper nem o train.
 // Consequência observada em 2026-07-23: subir `next start` de dentro de um worktree — algo que se faz
 // para validar UI, e que a própria skill de QA faz no dogfood — arma um SEGUNDO merge train sobre o
 // MESMO `.git` do serviço de produção, e um reaper que declarou quatro worktrees de sessão VIVOS como
@@ -26,7 +26,7 @@ export interface EngineArmedVerdict {
 }
 
 export interface EngineArmedInputs {
-  /** `process.env.STORYMAP_ENGINE` cru (undefined quando não setado). */
+  /** `process.env.AGILEHARNESS_ENGINE` cru (undefined quando não setado). */
   flag: string | undefined;
   /**
    * `.git` da raiz do repo é um DIRETÓRIO? É o discriminador ESTRUTURAL entre o checkout canônico
@@ -53,10 +53,10 @@ export function engineArmedDecision({ flag, gitIsDirectory }: EngineArmedInputs)
   const normalized = flag?.trim().toLowerCase();
 
   if (normalized === "off") {
-    return { armed: false, reason: "STORYMAP_ENGINE=off (desligado explicitamente)" };
+    return { armed: false, reason: "AGILEHARNESS_ENGINE=off (desligado explicitamente)" };
   }
   if (normalized === "on") {
-    return { armed: true, reason: "STORYMAP_ENGINE=on (ligado explicitamente)" };
+    return { armed: true, reason: "AGILEHARNESS_ENGINE=on (ligado explicitamente)" };
   }
   if (gitIsDirectory === true) {
     return { armed: true, reason: "checkout canônico (.git é diretório)" };
@@ -75,6 +75,6 @@ export function engineInertWarning(reason: string): string {
   return (
     `[harness-boot] MOTOR INERTE (${reason}): este processo só SERVE — sem service.lock, sem recuperação ` +
     `de runs, sem varredura de worktree, sem merge train, sem fila de publicação e sem tick do ` +
-    `copiloto. Páginas, server actions e SSE seguem funcionando. Para armar mesmo assim: STORYMAP_ENGINE=on.`
+    `copiloto. Páginas, server actions e SSE seguem funcionando. Para armar mesmo assim: AGILEHARNESS_ENGINE=on.`
   );
 }

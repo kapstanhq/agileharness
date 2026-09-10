@@ -69,7 +69,7 @@ async function writeBoard(id: string, raw: string): Promise<void> {
 let erros: string[];
 
 beforeEach(() => {
-  delete process.env.STORYMAP_FRONTMATTER_MAX_BYTES;
+  delete process.env.AGILEHARNESS_FRONTMATTER_MAX_BYTES;
   erros = [];
   vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
     erros.push(args.map((a) => (a instanceof Error ? a.message : String(a))).join(" "));
@@ -152,7 +152,7 @@ describe("RECUSA POR CONTROLE DE SEGURANÇA no `_base`: segue fail-CLOSED", () =
   });
 
   it("`_base` acima do teto de bytes também derruba a leitura (o teto é do operador, a recusa é dura)", async () => {
-    process.env.STORYMAP_FRONTMATTER_MAX_BYTES = "512";
+    process.env.AGILEHARNESS_FRONTMATTER_MAX_BYTES = "512";
     await writeBase(`pad: "${"a".repeat(2048)}"\n`);
     await writeBoard("acme", OWN_BOARD);
 

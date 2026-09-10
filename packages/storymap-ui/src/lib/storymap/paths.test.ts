@@ -104,31 +104,31 @@ describe("runnerStateDir — isolamento do estado vivo durante os testes", () =>
     expect(
       insideRepo,
       `runnerStateDir() resolveu para ${dir} — DENTRO do repo. A suíte está escrevendo no estado do serviço ` +
-        `vivo (journal/budget/auditoria). Confira setupFiles + vitest.setup.ts (STORYMAP_RUNNER_STATE_DIR).`,
+        `vivo (journal/budget/auditoria). Confira setupFiles + vitest.setup.ts (AGILEHARNESS_RUNNER_STATE_DIR).`,
     ).toBe(false);
     expect(dir).not.toBe(path.join(storymapDir(), ".runner"));
   });
 
   it("lê o override a CADA chamada (não o congela no load do módulo)", () => {
     // Se o valor fosse capturado no import, o setup do vitest chegaria tarde demais para metade dos módulos.
-    const prev = process.env.STORYMAP_RUNNER_STATE_DIR;
+    const prev = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
     try {
-      process.env.STORYMAP_RUNNER_STATE_DIR = "/tmp/storymap-state-a";
+      process.env.AGILEHARNESS_RUNNER_STATE_DIR = "/tmp/storymap-state-a";
       expect(runnerStateDir()).toBe("/tmp/storymap-state-a");
-      process.env.STORYMAP_RUNNER_STATE_DIR = "/tmp/storymap-state-b";
+      process.env.AGILEHARNESS_RUNNER_STATE_DIR = "/tmp/storymap-state-b";
       expect(runnerStateDir()).toBe("/tmp/storymap-state-b");
     } finally {
-      process.env.STORYMAP_RUNNER_STATE_DIR = prev;
+      process.env.AGILEHARNESS_RUNNER_STATE_DIR = prev;
     }
   });
 
   it("sem override, cai no diretório canônico do repo (o comportamento de PRODUÇÃO segue intacto)", () => {
-    const prev = process.env.STORYMAP_RUNNER_STATE_DIR;
+    const prev = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
     try {
-      delete process.env.STORYMAP_RUNNER_STATE_DIR;
+      delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
       expect(runnerStateDir()).toBe(path.join(storymapDir(), ".runner"));
     } finally {
-      process.env.STORYMAP_RUNNER_STATE_DIR = prev;
+      process.env.AGILEHARNESS_RUNNER_STATE_DIR = prev;
     }
   });
 });

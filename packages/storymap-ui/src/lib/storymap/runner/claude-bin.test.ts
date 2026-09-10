@@ -77,7 +77,7 @@ describe("resolveClaudeBinVerdict — ENDEREÇO > NOME > PATH > recusa", () => {
 });
 
 describe("o NOME que chega ABSOLUTO — compatibilidade preservada, e a recusa honesta", () => {
-  it("um nome absoluto que existe é aceito (USM_AUTORUN_CLAUDE_BIN=/opt/... funciona hoje)", () => {
+  it("um nome absoluto que existe é aceito (AGILEHARNESS_AUTORUN_CLAUDE_BIN=/opt/... funciona hoje)", () => {
     const r = resolveClaudeBinVerdict({
       name: "/opt/claude-canary/claude",
       env: { PATH: "/usr/bin" },
@@ -98,7 +98,7 @@ describe("o NOME que chega ABSOLUTO — compatibilidade preservada, e a recusa h
     // Mandar corrigir uma variável que o operador nunca escreveu é como um diagnóstico vira
     // uma caça ao ganso.
     expect(recusa).toContain("autorun.claudeBin");
-    expect(recusa).toContain("USM_AUTORUN_CLAUDE_BIN");
+    expect(recusa).toContain("AGILEHARNESS_AUTORUN_CLAUDE_BIN");
     expect(recusa).not.toMatch(/AGILEHARNESS_CLAUDE=".*" foi declarado/);
   });
 

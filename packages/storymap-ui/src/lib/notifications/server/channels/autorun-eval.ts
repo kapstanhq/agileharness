@@ -212,7 +212,7 @@ export interface EvaluateAutorunOpts {
  * ACT on the decision — run the column's skill, forward past a gated landing, or stop.
  *
  * Best-effort + idempotent: it honors the LIVE master switch (settings.yaml enabled:false
- * OR USM_AUTORUN=0), reads the card fresh from disk, and the engine's dedupe window
+ * OR AGILEHARNESS_AUTORUN=0), reads the card fresh from disk, and the engine's dedupe window
  * (AUTORUN_DEDUPE_MS) + per-card in-flight lock collapse a duplicate fire (e.g. the watcher
  * echoing the same move this call already handled) into a single run. Safe to call from a
  * server action without awaiting completion — it never throws into the caller's happy path.
@@ -222,7 +222,7 @@ export async function evaluateAutorunOnEntry(
   cardId: string,
   opts: EvaluateAutorunOpts = {},
 ): Promise<void> {
-  // Master switch, evaluated LIVE (settings.yaml enabled:false OR USM_AUTORUN=0).
+  // Master switch, evaluated LIVE (settings.yaml enabled:false OR AGILEHARNESS_AUTORUN=0).
   const runnerConfig = loadRunnerConfig();
   if (!runnerConfig.autorun.enabled) return;
 
@@ -360,7 +360,7 @@ export async function evaluateAutorunOnEntry(
     getRunnerEngine().runSkill(boardId, card.id, decision.trigger, status, {
       dedupeWindowMs: AUTORUN_DEDUPE_MS,
       // Route this run's Anthropic traffic through the headroom compression proxy when the board
-      // enables it (board.yaml headroom.enabled) / STORYMAP_HEADROOM_URL is set. Resolved HERE
+      // enables it (board.yaml headroom.enabled) / AGILEHARNESS_HEADROOM_URL is set. Resolved HERE
       // because the engine has no BoardConfig in scope — without this the proxy is never injected.
       headroomUrl: resolveHeadroomUrl(config, process.env),
       // Reuse the theme's session when the column threads it (Discovery), else a fresh id.

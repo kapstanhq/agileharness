@@ -59,8 +59,8 @@ statuses: []
 
 test('AC1 — run + board.yaml personas changed → BLOCKED with field and run id', () => {
   fs.writeFileSync(boardYamlPath, BEFORE_YAML_UNCHANGED, 'utf8');
-  const savedEnv = process.env.STORYMAP_AUTORUN_RUN_ID;
-  process.env.STORYMAP_AUTORUN_RUN_ID = 'run-test-abc';
+  const savedEnv = process.env.AGILEHARNESS_AUTORUN_RUN_ID;
+  process.env.AGILEHARNESS_AUTORUN_RUN_ID = 'run-test-abc';
 
   try {
     const result = check.test(writeInput(boardYamlPath, AFTER_YAML_PERSONAS_CHANGED));
@@ -69,8 +69,8 @@ test('AC1 — run + board.yaml personas changed → BLOCKED with field and run i
     assert.match(result.message, /run-test-abc/);
     assert.match(result.message, /personas/);
   } finally {
-    if (savedEnv === undefined) delete process.env.STORYMAP_AUTORUN_RUN_ID;
-    else process.env.STORYMAP_AUTORUN_RUN_ID = savedEnv;
+    if (savedEnv === undefined) delete process.env.AGILEHARNESS_AUTORUN_RUN_ID;
+    else process.env.AGILEHARNESS_AUTORUN_RUN_ID = savedEnv;
   }
 });
 
@@ -78,31 +78,31 @@ test('AC1 — run + board.yaml releases changed → BLOCKED', () => {
   const before = `id: demo\nreleases:\n  - id: r1\n    name: v1\npersonas: []\n`;
   const after = `id: demo\nreleases:\n  - id: r1\n    name: v1\n  - id: r2\n    name: v2\npersonas: []\n`;
   fs.writeFileSync(boardYamlPath, before, 'utf8');
-  const savedEnv = process.env.STORYMAP_AUTORUN_RUN_ID;
-  process.env.STORYMAP_AUTORUN_RUN_ID = 'run-xyz';
+  const savedEnv = process.env.AGILEHARNESS_AUTORUN_RUN_ID;
+  process.env.AGILEHARNESS_AUTORUN_RUN_ID = 'run-xyz';
 
   try {
     const result = check.test(writeInput(boardYamlPath, after));
     assert.ok(result, 'expected a violation');
     assert.match(result.message, /releases/);
   } finally {
-    if (savedEnv === undefined) delete process.env.STORYMAP_AUTORUN_RUN_ID;
-    else process.env.STORYMAP_AUTORUN_RUN_ID = savedEnv;
+    if (savedEnv === undefined) delete process.env.AGILEHARNESS_AUTORUN_RUN_ID;
+    else process.env.AGILEHARNESS_AUTORUN_RUN_ID = savedEnv;
   }
 });
 
 // ── AC3: no env → human session → NEVER blocked ──────────────────────────────
 
-test('AC3 — no STORYMAP_AUTORUN_RUN_ID → human → ALLOWED even with human field change', () => {
+test('AC3 — no AGILEHARNESS_AUTORUN_RUN_ID → human → ALLOWED even with human field change', () => {
   fs.writeFileSync(boardYamlPath, BEFORE_YAML_UNCHANGED, 'utf8');
-  const savedEnv = process.env.STORYMAP_AUTORUN_RUN_ID;
-  delete process.env.STORYMAP_AUTORUN_RUN_ID;
+  const savedEnv = process.env.AGILEHARNESS_AUTORUN_RUN_ID;
+  delete process.env.AGILEHARNESS_AUTORUN_RUN_ID;
 
   try {
     const result = check.test(writeInput(boardYamlPath, AFTER_YAML_PERSONAS_CHANGED));
     assert.strictEqual(result, null);
   } finally {
-    if (savedEnv !== undefined) process.env.STORYMAP_AUTORUN_RUN_ID = savedEnv;
+    if (savedEnv !== undefined) process.env.AGILEHARNESS_AUTORUN_RUN_ID = savedEnv;
   }
 });
 
@@ -110,15 +110,15 @@ test('AC3 — no STORYMAP_AUTORUN_RUN_ID → human → ALLOWED even with human f
 
 test('AC4 — run + card.md → ALLOWED (owner:agent territory)', () => {
   fs.writeFileSync(cardPath, '---\nid: story-abc\nstatus: desenvolver\n---\n\nBody.\n', 'utf8');
-  const savedEnv = process.env.STORYMAP_AUTORUN_RUN_ID;
-  process.env.STORYMAP_AUTORUN_RUN_ID = 'run-agent';
+  const savedEnv = process.env.AGILEHARNESS_AUTORUN_RUN_ID;
+  process.env.AGILEHARNESS_AUTORUN_RUN_ID = 'run-agent';
 
   try {
     const result = check.test(writeInput(cardPath, '---\nid: story-abc\nstatus: revisar-codigo\n---\n\nBody.\n'));
     assert.strictEqual(result, null);
   } finally {
-    if (savedEnv === undefined) delete process.env.STORYMAP_AUTORUN_RUN_ID;
-    else process.env.STORYMAP_AUTORUN_RUN_ID = savedEnv;
+    if (savedEnv === undefined) delete process.env.AGILEHARNESS_AUTORUN_RUN_ID;
+    else process.env.AGILEHARNESS_AUTORUN_RUN_ID = savedEnv;
   }
 });
 
@@ -126,15 +126,15 @@ test('AC4 — run + card.md → ALLOWED (owner:agent territory)', () => {
 
 test('AC2 — run + proposals/ path → ALLOWED (draft zone)', () => {
   fs.writeFileSync(proposalPath, '{"northStar": "proposta"}', 'utf8');
-  const savedEnv = process.env.STORYMAP_AUTORUN_RUN_ID;
-  process.env.STORYMAP_AUTORUN_RUN_ID = 'run-proposing';
+  const savedEnv = process.env.AGILEHARNESS_AUTORUN_RUN_ID;
+  process.env.AGILEHARNESS_AUTORUN_RUN_ID = 'run-proposing';
 
   try {
     const result = check.test(writeInput(proposalPath, '{"northStar": "updated proposta"}'));
     assert.strictEqual(result, null);
   } finally {
-    if (savedEnv === undefined) delete process.env.STORYMAP_AUTORUN_RUN_ID;
-    else process.env.STORYMAP_AUTORUN_RUN_ID = savedEnv;
+    if (savedEnv === undefined) delete process.env.AGILEHARNESS_AUTORUN_RUN_ID;
+    else process.env.AGILEHARNESS_AUTORUN_RUN_ID = savedEnv;
   }
 });
 
@@ -142,8 +142,8 @@ test('AC2 — run + proposals/ path → ALLOWED (draft zone)', () => {
 
 test('Edit tool — BLOCKED when board.yaml human field changes via Edit', () => {
   fs.writeFileSync(boardYamlPath, BEFORE_YAML_UNCHANGED, 'utf8');
-  const savedEnv = process.env.STORYMAP_AUTORUN_RUN_ID;
-  process.env.STORYMAP_AUTORUN_RUN_ID = 'run-edit-test';
+  const savedEnv = process.env.AGILEHARNESS_AUTORUN_RUN_ID;
+  process.env.AGILEHARNESS_AUTORUN_RUN_ID = 'run-edit-test';
 
   try {
     const result = check.test(editInput(
@@ -155,8 +155,8 @@ test('Edit tool — BLOCKED when board.yaml human field changes via Edit', () =>
     assert.strictEqual(result.rule, 'business-intent-guard');
     assert.match(result.message, /personas/);
   } finally {
-    if (savedEnv === undefined) delete process.env.STORYMAP_AUTORUN_RUN_ID;
-    else process.env.STORYMAP_AUTORUN_RUN_ID = savedEnv;
+    if (savedEnv === undefined) delete process.env.AGILEHARNESS_AUTORUN_RUN_ID;
+    else process.env.AGILEHARNESS_AUTORUN_RUN_ID = savedEnv;
   }
 });
 
@@ -167,16 +167,16 @@ test('lenient — unreadable board.yaml (no disk file + malformed Write) → ALL
   // Remove any existing board.yaml so before=null
   try { fs.unlinkSync(missingPath); } catch { /* ok */ }
 
-  const savedEnv = process.env.STORYMAP_AUTORUN_RUN_ID;
-  process.env.STORYMAP_AUTORUN_RUN_ID = 'run-lenient';
+  const savedEnv = process.env.AGILEHARNESS_AUTORUN_RUN_ID;
+  process.env.AGILEHARNESS_AUTORUN_RUN_ID = 'run-lenient';
 
   try {
     // Malformed YAML as the final content → parseYaml returns null → lenient allow
     const result = check.test(writeInput(missingPath, 'not: valid: yaml: :::'));
     assert.strictEqual(result, null);
   } finally {
-    if (savedEnv === undefined) delete process.env.STORYMAP_AUTORUN_RUN_ID;
-    else process.env.STORYMAP_AUTORUN_RUN_ID = savedEnv;
+    if (savedEnv === undefined) delete process.env.AGILEHARNESS_AUTORUN_RUN_ID;
+    else process.env.AGILEHARNESS_AUTORUN_RUN_ID = savedEnv;
   }
 });
 
@@ -186,14 +186,14 @@ test('AC4 (board) — run writes board.yaml but only changes statuses (non-human
   const before = `id: demo\npersonas:\n  - id: p1\n    name: Alice\nstatuses: []\n`;
   const after = `id: demo\npersonas:\n  - id: p1\n    name: Alice\nstatuses:\n  - id: s1\n`;
   fs.writeFileSync(boardYamlPath, before, 'utf8');
-  const savedEnv = process.env.STORYMAP_AUTORUN_RUN_ID;
-  process.env.STORYMAP_AUTORUN_RUN_ID = 'run-nonhuman';
+  const savedEnv = process.env.AGILEHARNESS_AUTORUN_RUN_ID;
+  process.env.AGILEHARNESS_AUTORUN_RUN_ID = 'run-nonhuman';
 
   try {
     const result = check.test(writeInput(boardYamlPath, after));
     assert.strictEqual(result, null);
   } finally {
-    if (savedEnv === undefined) delete process.env.STORYMAP_AUTORUN_RUN_ID;
-    else process.env.STORYMAP_AUTORUN_RUN_ID = savedEnv;
+    if (savedEnv === undefined) delete process.env.AGILEHARNESS_AUTORUN_RUN_ID;
+    else process.env.AGILEHARNESS_AUTORUN_RUN_ID = savedEnv;
   }
 });

@@ -6,5 +6,5 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(): Promise<Response> {
-  return Response.json({ publicKey: process.env.STORYMAP_VAPID_PUBLIC_KEY ?? null });
+  return Response.json({ publicKey: process.env.AGILEHARNESS_VAPID_PUBLIC_KEY ?? null });
 }

@@ -108,14 +108,14 @@ describePosix("repositório de layout PLANO — o motor lê a forma DECLARADA (f
     await git(`update-ref refs/agent-base/${SESSAO_PENDENTE} ${base2}`);
     await git(`checkout -q ${BRANCH_DE_DADOS}`);
 
-    alvoAnterior = process.env.STORYMAP_TARGET;
-    process.env.STORYMAP_TARGET = repo;
+    alvoAnterior = process.env.AGILEHARNESS_TARGET;
+    process.env.AGILEHARNESS_TARGET = repo;
     resetRepoRootCache();
   });
 
   afterAll(async () => {
-    if (alvoAnterior === undefined) delete process.env.STORYMAP_TARGET;
-    else process.env.STORYMAP_TARGET = alvoAnterior;
+    if (alvoAnterior === undefined) delete process.env.AGILEHARNESS_TARGET;
+    else process.env.AGILEHARNESS_TARGET = alvoAnterior;
     resetRepoRootCache();
     await fsp.rm(tmpRoot, { recursive: true, force: true });
   });

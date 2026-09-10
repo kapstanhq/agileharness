@@ -70,7 +70,7 @@ export const CODE_SKILL_INVARIANTS =
  * O INCIDENTE (2026-07-18, acme/story-tlz0dt). A doutrina D4/WS-3 diz que um agente só muta board-data do
  * checkout de RUNTIME via MCP, "nunca por fs direto" — escrita direta é last-writer-wins contra o serviço.
  * A regra é verdadeira para uma sessão HUMANA/interativa e FALSA para um run do engine, que é isento: o
- * engine injeta `STORYMAP_AUTORUN_RUN_ID` em todo spawn e o hook `block-runtime-board-writes` devolve
+ * engine injeta `AGILEHARNESS_AUTORUN_RUN_ID` em todo spawn e o hook `block-runtime-board-writes` devolve
  * `null` quando o vê. Só que a isenção era invisível de onde o run lê: a cláusula na raiz não NOMEIA a
  * variável (não dá para se auto-verificar), a versão detalhada mora num CLAUDE.md path-scoped que um run de
  * outro board não abre, e a SKILL.md não menciona nada disso. Um `harness-grill` então inverteu o próprio
@@ -85,7 +85,7 @@ export const CODE_SKILL_INVARIANTS =
  */
 export const BOARD_DATA_SKILL_INVARIANTS =
   "Você é um run de autorun SANCIONADO do AgileHarness: o engine te deu identidade própria (a env " +
-  "STORYMAP_AUTORUN_RUN_ID) e, com ela, o direito de escrever os dados de board deste checkout. " +
+  "AGILEHARNESS_AUTORUN_RUN_ID) e, com ela, o direito de escrever os dados de board deste checkout. " +
   "Invariantes inegociáveis: (1) escreva o card/sidecar DIRETAMENTE com Edit/Write — a regra 'só via MCP' " +
   "vale para sessão humana, NÃO para você, e o hook que a aplica te ISENTA por essa env; (2) você NÃO tem " +
   "servidor MCP algum e não precisa de nenhum — não procure, não peça para montar; (3) rodando headless, " +

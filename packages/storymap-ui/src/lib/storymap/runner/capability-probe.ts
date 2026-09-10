@@ -41,7 +41,7 @@ export function ttlFromEnv(name: string, fallback: number, env: Record<string, s
 
 /** How long a SUCCESSFUL probe is trusted before re-proving. Long: a host that has Chrome keeps having
  *  Chrome, and the point of the cache is that the hot dispatch path pays ~0. */
-export const PROBE_TTL_OK_MS = ttlFromEnv("USM_PROBE_TTL_OK_MS", 30 * 60_000);
+export const PROBE_TTL_OK_MS = ttlFromEnv("AGILEHARNESS_PROBE_TTL_OK_MS", 30 * 60_000);
 /**
  * How long a FAILED probe is trusted. Deliberately much shorter than the success TTL: the operator's fix
  * (install the binary, plug the mount) must take effect quickly, without a service restart.
@@ -51,7 +51,7 @@ export const PROBE_TTL_OK_MS = ttlFromEnv("USM_PROBE_TTL_OK_MS", 30 * 60_000);
  * 5-minute TTL charges every QA dispatch up to 26s for a provider the operator may have knowingly given up
  * on. Raising it trades fix-detection latency for dispatch latency — an operator decision, not ours.
  */
-export const PROBE_TTL_FAIL_MS = ttlFromEnv("USM_PROBE_TTL_FAIL_MS", 5 * 60_000);
+export const PROBE_TTL_FAIL_MS = ttlFromEnv("AGILEHARNESS_PROBE_TTL_FAIL_MS", 5 * 60_000);
 
 /** One provider's verdict on one host at one moment. */
 export interface ProbeVerdict {

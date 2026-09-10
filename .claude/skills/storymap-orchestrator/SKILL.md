@@ -379,7 +379,7 @@ item único isolado → `create_card`; bug/ideia em texto livre → `report_issu
 ## Gotchas operacionais (lições caras)
 
 - **Resume sem sessão:** `claude --resume` que não acha a sessão → `exit 1` mata o run.
-  O engine tem fallback (re-dispatch fresco com teto `USM_AUTORUN_RESUME_FALLBACK_MAX`).
+  O engine tem fallback (re-dispatch fresco com teto `AGILEHARNESS_AUTORUN_RESUME_FALLBACK_MAX`).
   Mass-"exit 1" logo após restart geralmente é isso ou carga no MCP, não bug de código.
 - **Abort de parqueada desacopla o card:** o status avança na main mas o código fica no
   branch descartado → card "acha" que tem código mas tasks=false/code=null. Fix: mover

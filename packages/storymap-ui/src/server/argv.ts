@@ -59,8 +59,8 @@ export function textoDeAjuda(flags: ReadonlyArray<{ flag: string; resumo: string
     ...linhas,
     "  --help, -h" + " ".repeat(Math.max(1, largura - 9)) + "  esta ajuda",
     "",
-    "Ambiente: AGILEHARNESS_PORT (default 3008) · AGILEHARNESS_HOST · STORYMAP_TARGET (a raiz do",
-    "repositório que este serviço gerencia) · STORYMAP_ENGINE=off (só serve, sem motor).",
+    "Ambiente: AGILEHARNESS_PORT (default 3008) · AGILEHARNESS_HOST · AGILEHARNESS_TARGET (a raiz do",
+    "repositório que este serviço gerencia) · AGILEHARNESS_ENGINE=off (só serve, sem motor).",
   ].join("\n");
 }
 

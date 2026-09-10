@@ -962,7 +962,7 @@ export function registerStorymapTools(server: McpServer): void {
     },
     async ({ board, cardId }) => {
       if (!loadRunnerConfig().autorun.enabled) {
-        return fail("Runner desligado (Config → autorun, ou USM_AUTORUN=0). Ligue para enfileirar.");
+        return fail("Runner desligado (Config → autorun, ou AGILEHARNESS_AUTORUN=0). Ligue para enfileirar.");
       }
       const t = await resolveEnqueueTarget(board, cardId);
       if (!t.ok) return fail(t.error);
@@ -995,7 +995,7 @@ export function registerStorymapTools(server: McpServer): void {
     },
     async ({ cards, deps }) => {
       if (!loadRunnerConfig().autorun.enabled) {
-        return fail("Runner desligado (Config → autorun, ou USM_AUTORUN=0). Ligue para enfileirar.");
+        return fail("Runner desligado (Config → autorun, ou AGILEHARNESS_AUTORUN=0). Ligue para enfileirar.");
       }
       const edges = (deps ?? []).map((d) => ({ from: d.from, to: d.to }));
       const keys = cards.map((c) => `${c.board}/${c.cardId}`);

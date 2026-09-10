@@ -28,7 +28,7 @@ function envDeMentira(): Record<string, string> {
     LD_PRELOAD: " /tmp/evil.so ",
     GIT_SSH_COMMAND: " ssh -o ProxyCommand=/tmp/evil ",
     HOME: " /root ",
-    STORYMAP_MCP_TOKEN_ORCH: ` ${FORTE} `,
+    AGILEHARNESS_MCP_TOKEN_ORCH: ` ${FORTE} `,
   };
 }
 
@@ -70,7 +70,7 @@ describe("[ATAQUE] settings.yaml não escolhe qual env var do serviço é escrit
 
   it("nome que não é sequer formato de env var (injeção/lixo) também não escreve", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
-    for (const nome of ["path", "STORYMAP_MCP_TOKEN;rm -rf /", "__proto__", "$PATH", "1_TOKEN", ""]) {
+    for (const nome of ["path", "AGILEHARNESS_MCP_TOKEN;rm -rf /", "__proto__", "$PATH", "1_TOKEN", ""]) {
       const env = envDeMentira();
       const chavesAntes = JSON.stringify(env);
 
@@ -96,22 +96,22 @@ describe("[ATAQUE] settings.yaml não escolhe qual env var do serviço é escrit
 });
 
 describe("o controle não custa capacidade: o tier LEGÍTIMO continua sendo normalizado", () => {
-  it("`STORYMAP_MCP_TOKEN_ORCH` sujo é normalizado e a env fica com o valor que AUTENTICA", () => {
+  it("`AGILEHARNESS_MCP_TOKEN_ORCH` sujo é normalizado e a env fica com o valor que AUTENTICA", () => {
     const env = envDeMentira();
 
-    const valor = normalizeScopedMcpTokenEnv("STORYMAP_MCP_TOKEN_ORCH", env as unknown as NodeJS.ProcessEnv);
+    const valor = normalizeScopedMcpTokenEnv("AGILEHARNESS_MCP_TOKEN_ORCH", env as unknown as NodeJS.ProcessEnv);
 
     expect(valor).toBe(FORTE);
-    expect(env.STORYMAP_MCP_TOKEN_ORCH).toBe(FORTE);
+    expect(env.AGILEHARNESS_MCP_TOKEN_ORCH).toBe(FORTE);
   });
 
   it("qualquer tier novo com o prefixo certo segue valendo — o operador declara quantos quiser", () => {
-    const env = { STORYMAP_MCP_TOKEN_QUALQUER_COISA_NOVA: `\t${FORTE}\n` };
+    const env = { AGILEHARNESS_MCP_TOKEN_QUALQUER_COISA_NOVA: `\t${FORTE}\n` };
 
-    expect(normalizeScopedMcpTokenEnv("STORYMAP_MCP_TOKEN_QUALQUER_COISA_NOVA", env as unknown as NodeJS.ProcessEnv)).toBe(
+    expect(normalizeScopedMcpTokenEnv("AGILEHARNESS_MCP_TOKEN_QUALQUER_COISA_NOVA", env as unknown as NodeJS.ProcessEnv)).toBe(
       FORTE,
     );
-    expect(env.STORYMAP_MCP_TOKEN_QUALQUER_COISA_NOVA).toBe(FORTE);
+    expect(env.AGILEHARNESS_MCP_TOKEN_QUALQUER_COISA_NOVA).toBe(FORTE);
   });
 });
 
@@ -119,16 +119,16 @@ describe("leitor e escritor usam UMA régua só — é isso que impede a valida�
   it("o veredito de `isMcpTokenEnvName` casa com o de `coerceMcpTokens` para todo nome da tabela", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const nomes = [
-      "STORYMAP_MCP_TOKEN",
-      "STORYMAP_MCP_TOKEN_ORCH",
-      "STORYMAP_MCP_TOKEN_RO",
-      "STORYMAP_MCP_TOKEN2",
+      "AGILEHARNESS_MCP_TOKEN",
+      "AGILEHARNESS_MCP_TOKEN_ORCH",
+      "AGILEHARNESS_MCP_TOKEN_RO",
+      "AGILEHARNESS_MCP_TOKEN2",
       "PATH",
       "LD_PRELOAD",
       "HOME",
       "storymap_mcp_token_x",
-      "STORYMAP_MCP_TOKEN-X",
-      "$STORYMAP_MCP_TOKEN",
+      "AGILEHARNESS_MCP_TOKEN-X",
+      "$AGILEHARNESS_MCP_TOKEN",
       "1_TOKEN",
       "MCP_TOKEN_STORYMAP",
     ];

@@ -10,7 +10,7 @@
 //             `OPENAI_API_KEY=…` era invisível. Das 12 credenciais reais do
 //             `packages/acmeapp/deployment/cloud-run/config/environment.production.env.yaml` só 2
 //             (`AIza…` e `sk-or-v1-…`) eram pegas — 10 passavam.
-//   Forma 2 — o token NU do próprio produto (`STORYMAP_MCP_TOKEN`): sem palavra-chave e sem aspas,
+//   Forma 2 — o token NU do próprio produto (`AGILEHARNESS_MCP_TOKEN`): sem palavra-chave e sem aspas,
 //             nenhuma regra o via — nem em crase, nem em URL, nem em bloco de código.
 //
 // Todos os valores abaixo são SINTÉTICOS: mesmo SHAPE das credenciais reais, nenhum byte real. Eles
@@ -120,11 +120,11 @@ describe("scan-secrets — chave OpenAI com segmentos hifenizados (sk-proj-…)"
 const OPERATOR_TOKEN = "Kq7Vt2ZmXbNr9LpHc4WsGyDf6JuAe1Rk3TnQiOb5vZM"; // pragma: allowlist secret
 
 describe("scan-secrets — o token do PRÓPRIO produto vazando nu", () => {
-  const withToken = { STORYMAP_MCP_TOKEN: OPERATOR_TOKEN };
+  const withToken = { AGILEHARNESS_MCP_TOKEN: OPERATOR_TOKEN };
 
   // As 6 formas reproduzidas no card, todas com o valor LITERAL do token do ambiente.
   const FORMAS: Array<[string, string]> = [
-    ["atribuído por nome", `STORYMAP_MCP_TOKEN=${OPERATOR_TOKEN}`],
+    ["atribuído por nome", `AGILEHARNESS_MCP_TOKEN=${OPERATOR_TOKEN}`],
     ["em negrito num doc", `**Operator token:** \`${OPERATOR_TOKEN}\``],
     ["numa linha de bloco de código", `  ${OPERATOR_TOKEN}`],
     ["num path de URL", `curl https://ah.example.dev/api/usm/${OPERATOR_TOKEN}/mcp`],
@@ -141,7 +141,7 @@ describe("scan-secrets — o token do PRÓPRIO produto vazando nu", () => {
     const res = scanLine("README.md", `token: ${OPERATOR_TOKEN}`, withToken);
     const finding = res.findings?.find((f) => f.rule === "self-secret-literal");
     expect(finding).toBeTruthy();
-    expect(finding?.preview).toContain("STORYMAP_MCP_TOKEN");
+    expect(finding?.preview).toContain("AGILEHARNESS_MCP_TOKEN");
     // um scanner que ecoa o segredo no stderr (log de CI, journal do train) vaza o que veio bloquear
     expect(finding?.preview).not.toContain(OPERATOR_TOKEN);
   });
@@ -160,8 +160,8 @@ describe("scan-secrets — o token do PRÓPRIO produto vazando nu", () => {
     expect(res.findings?.some((f) => f.rule === "naked-high-entropy-token")).toBe(true);
   });
 
-  it("o nome da variável do produto sozinho já bloqueia (STORYMAP_MCP_TOKEN=<valor opaco>)", () => {
-    const res = scanLine(".env.production", "STORYMAP_MCP_TOKEN=Xt4Bq9WnPmLc7ZrVs2HkDyGf5JuAe1Rk3TnQiOb"); // pragma: allowlist secret
+  it("o nome da variável do produto sozinho já bloqueia (AGILEHARNESS_MCP_TOKEN=<valor opaco>)", () => {
+    const res = scanLine(".env.production", "AGILEHARNESS_MCP_TOKEN=Xt4Bq9WnPmLc7ZrVs2HkDyGf5JuAe1Rk3TnQiOb"); // pragma: allowlist secret
     expect(res.code).toBe(BLOCKED);
   });
 
@@ -190,7 +190,7 @@ describe("scan-secrets — precisão das regras novas", () => {
   });
 
   it("um identificador SCREAMING_SNAKE longo em crase não é achado", () => {
-    expect(scanLine("docs/guides/env.md", "a flag `USM_AUTORUN_PUBLISH_QUEUE_ENABLED` liga a fila").code).toBe(0);
+    expect(scanLine("docs/guides/env.md", "a flag `AGILEHARNESS_AUTORUN_PUBLISH_QUEUE_ENABLED` liga a fila").code).toBe(0);
   });
 
   it("um path de arquivo comprido em crase/URL não é achado", () => {
@@ -199,7 +199,7 @@ describe("scan-secrets — precisão das regras novas", () => {
 
   it("`.env.example` com placeholder segue passando", () => {
     expect(scanLine(".env.example", "OPENAI_API_KEY=your-key-here").code).toBe(0);
-    expect(scanLine(".env.example", "STORYMAP_MCP_TOKEN=<gere-com-openssl-rand>").code).toBe(0);
+    expect(scanLine(".env.example", "AGILEHARNESS_MCP_TOKEN=<gere-com-openssl-rand>").code).toBe(0);
   });
 
   it("valor com marcador explícito de fixture segue dispensado, com ou sem aspas", () => {
@@ -288,7 +288,7 @@ describe("Forma 3 — o handle/token MCP do próprio produto", () => {
   });
 
   const FORMAS_REAIS: Array<[nome: string, linha: string]> = [
-    ["nome canônico de env", `export const STORYMAP_MCP_TOKEN = "${HANDLE}";`],
+    ["nome canônico de env", `export const AGILEHARNESS_MCP_TOKEN = "${HANDLE}";`],
     // O nome que o PRODUTO usa não termina em TOKEN/KEY/SECRET, então ENV_ASSIGN não o vê.
     ["o nome que o produto usa (…_HANDLE)", `export const AGILEHARNESS_MCP_HANDLE = "${HANDLE}";`],
     ["valor nu entre aspas, sem palavra-chave", `export const X = "${HANDLE}";`],

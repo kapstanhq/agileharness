@@ -24,7 +24,7 @@ const g = globalThis as unknown as { __copilotLiveTurns?: Map<string, FakeEntry>
 const LIVE = (): Map<string, FakeEntry> => (g.__copilotLiveTurns ??= new Map());
 const RESERVED = (): Map<string, number> => (g.__copilotReservedTurns ??= new Map());
 
-const DEFAULT_TIMEOUT_MS = Number(process.env.USM_COPILOT_TIMEOUT_MS) || 600_000;
+const DEFAULT_TIMEOUT_MS = Number(process.env.AGILEHARNESS_COPILOT_TIMEOUT_MS) || 600_000;
 const TTL_MS = DEFAULT_TIMEOUT_MS + 60_000;
 
 // A LiveTurn shaped like the module's, with a no-pid child (killTree early-returns → never signals a real pid).

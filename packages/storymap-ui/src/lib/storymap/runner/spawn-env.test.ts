@@ -39,21 +39,21 @@ describe("sanitizeSpawnEnv — env de filho igual ao de um shell manual (irmão 
   // escopado devia sobreviver ("o run monta via config"), o que trocava a causa (o run monta via
   // ARQUIVO, logo não precisa do env) pela conclusão oposta (então deixe o env passar). O tier
   // `_ORCH` agora sai junto — a remoção por tier está coberta no bloco story-e3lj46 abaixo.
-  it("F5.0b — remove STORYMAP_MCP_TOKEN (token full do operador nunca vaza p/ o env do filho)", () => {
-    const env = sanitizeSpawnEnv(asEnv({ STORYMAP_MCP_TOKEN: "super-secret", STORYMAP_MCP_TOKEN_ORCH: "scoped", USER: "root" }));
-    expect(env.STORYMAP_MCP_TOKEN).toBeUndefined();
-    expect(env.STORYMAP_MCP_TOKEN_ORCH).toBeUndefined();
+  it("F5.0b — remove AGILEHARNESS_MCP_TOKEN (token full do operador nunca vaza p/ o env do filho)", () => {
+    const env = sanitizeSpawnEnv(asEnv({ AGILEHARNESS_MCP_TOKEN: "super-secret", AGILEHARNESS_MCP_TOKEN_ORCH: "scoped", USER: "root" }));
+    expect(env.AGILEHARNESS_MCP_TOKEN).toBeUndefined();
+    expect(env.AGILEHARNESS_MCP_TOKEN_ORCH).toBeUndefined();
     expect(env.USER).toBe("root");
   });
 
   it("preserva NEXT_PUBLIC_* e as demais vars (só as internas do runtime saem)", () => {
     const env = sanitizeSpawnEnv(asEnv({
       NEXT_PUBLIC_FIREBASE_API_KEY: "abc",
-      STORYMAP_HEADROOM_URL: "http://x",
+      AGILEHARNESS_HEADROOM_URL: "http://x",
       PATH: "/usr/bin",
     }));
     expect(env.NEXT_PUBLIC_FIREBASE_API_KEY).toBe("abc");
-    expect(env.STORYMAP_HEADROOM_URL).toBe("http://x");
+    expect(env.AGILEHARNESS_HEADROOM_URL).toBe("http://x");
   });
 
   it("sanitiza o PATH (C1: nunca vazar node_modules/.bin do lifecycle bun-run)", () => {
@@ -71,8 +71,8 @@ describe("sanitizeSpawnEnv — env de filho igual ao de um shell manual (irmão 
 });
 
 // ── story-e3lj46 — nenhum TIER de credencial MCP viaja no ambiente de um filho ───────────────────
-// O nome prometia blindagem; saía UM tier só (o `STORYMAP_MCP_TOKEN` primário). O ESCOPADO
-// `STORYMAP_MCP_TOKEN_ORCH` — nível `orch`: move card, enfileira run, abre worktree, publica —
+// O nome prometia blindagem; saía UM tier só (o `AGILEHARNESS_MCP_TOKEN` primário). O ESCOPADO
+// `AGILEHARNESS_MCP_TOKEN_ORCH` — nível `orch`: move card, enfileira run, abre worktree, publica —
 // viajava inteiro para dentro de TODO filho spawnado pelo serviço.
 //
 // O ATAQUE que isso abre não exige root nem malícia: um card com prompt-injection pede ao run
@@ -88,8 +88,8 @@ describe("sanitizeSpawnEnv — nenhum tier de credencial MCP chega ao filho (sto
   const ORCH = "orch-Zt4Bq9WnPmLc7ZrVs2HkDyGf5JuAe1Rk3TnQiOb"; // pragma: allowlist secret
 
   it("o tier ESCOPADO `_ORCH` não chega ao filho (era ele que o `printenv` de um run despejava)", () => {
-    const env = sanitizeSpawnEnv(asEnv({ STORYMAP_MCP_TOKEN_ORCH: ORCH, USER: "root" }));
-    expect(env.STORYMAP_MCP_TOKEN_ORCH).toBeUndefined();
+    const env = sanitizeSpawnEnv(asEnv({ AGILEHARNESS_MCP_TOKEN_ORCH: ORCH, USER: "root" }));
+    expect(env.AGILEHARNESS_MCP_TOKEN_ORCH).toBeUndefined();
     expect(env.USER).toBe("root");
   });
 
@@ -98,11 +98,11 @@ describe("sanitizeSpawnEnv — nenhum tier de credencial MCP chega ao filho (sto
   // removido do env de filho, em vez de voltar a viajar em silêncio — que é como o `_ORCH` sobrou.
   it("nenhum tier sobrevive: primário, `_ORCH`, `_RO`, `_SESSION` e um declarado amanhã", () => {
     const tiers = [
-      "STORYMAP_MCP_TOKEN",
-      "STORYMAP_MCP_TOKEN_ORCH",
-      "STORYMAP_MCP_TOKEN_RO",
-      "STORYMAP_MCP_TOKEN_SESSION",
-      "STORYMAP_MCP_TOKEN_UM_TIER_QUE_AINDA_NAO_EXISTE",
+      "AGILEHARNESS_MCP_TOKEN",
+      "AGILEHARNESS_MCP_TOKEN_ORCH",
+      "AGILEHARNESS_MCP_TOKEN_RO",
+      "AGILEHARNESS_MCP_TOKEN_SESSION",
+      "AGILEHARNESS_MCP_TOKEN_UM_TIER_QUE_AINDA_NAO_EXISTE",
     ];
     const source: Record<string, string> = { HOME: "/root" };
     for (const t of tiers) source[t] = `${ORCH}-${t}`;
@@ -115,13 +115,13 @@ describe("sanitizeSpawnEnv — nenhum tier de credencial MCP chega ao filho (sto
   // O ataque na forma em que ele ACONTECE: o filho não precisa saber o nome da variável — basta
   // despejar o ambiente e procurar o valor. Nenhum VALOR de tier pode restar sob nome nenhum.
   it("o VALOR de um tier não sobra em NENHUMA variável — um `printenv | grep` do filho volta vazio", () => {
-    const env = sanitizeSpawnEnv(asEnv({ STORYMAP_MCP_TOKEN_ORCH: ORCH, PATH: "/usr/bin", HOME: "/root" }));
+    const env = sanitizeSpawnEnv(asEnv({ AGILEHARNESS_MCP_TOKEN_ORCH: ORCH, PATH: "/usr/bin", HOME: "/root" }));
     expect(Object.values(env).some((v) => typeof v === "string" && v.includes(ORCH))).toBe(false);
   });
 
   // ZERO CUSTO DE AUTONOMIA — a prova de que remover do env não desmonta tool nenhuma: quem PRECISA
   // de MCP (tick, copiloto, sessão) recebe o token INLINADO no arquivo do `--mcp-config`, lido pelo
-  // PARENT. Se algum dia alguém trocar o arquivo por interpolação de env (`${STORYMAP_MCP_TOKEN_ORCH}`),
+  // PARENT. Se algum dia alguém trocar o arquivo por interpolação de env (`${AGILEHARNESS_MCP_TOKEN_ORCH}`),
   // este teste cai — e é exatamente aí que a remoção passaria a custar capacidade.
   it("o mount de quem precisa de MCP não depende do env: o token é INLINADO no arquivo do --mcp-config", () => {
     const cfg = JSON.parse(buildOrchestratorMcpConfig(ORCH, 3008));
@@ -132,16 +132,16 @@ describe("sanitizeSpawnEnv — nenhum tier de credencial MCP chega ao filho (sto
   // chave do modelo e o run pararia de rodar: perda de capacidade disfarçada de segurança.
   it("o env operacional do run sobrevive intacto (inclusive a credencial que ele PRECISA)", () => {
     const env = sanitizeSpawnEnv(asEnv({
-      STORYMAP_MCP_TOKEN_ORCH: ORCH,
+      AGILEHARNESS_MCP_TOKEN_ORCH: ORCH,
       ANTHROPIC_API_KEY: "sk-ant-precisa-disso", // pragma: allowlist secret
-      STORYMAP_AUTORUN_RUN_ID: "run-1",
+      AGILEHARNESS_AUTORUN_RUN_ID: "run-1",
       NEXT_PUBLIC_FIREBASE_API_KEY: "abc",
       HOME: "/root",
       PATH: "/usr/bin",
     }));
-    expect(env.STORYMAP_MCP_TOKEN_ORCH).toBeUndefined();
+    expect(env.AGILEHARNESS_MCP_TOKEN_ORCH).toBeUndefined();
     expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-precisa-disso");
-    expect(env.STORYMAP_AUTORUN_RUN_ID).toBe("run-1");
+    expect(env.AGILEHARNESS_AUTORUN_RUN_ID).toBe("run-1");
     expect(env.NEXT_PUBLIC_FIREBASE_API_KEY).toBe("abc");
     expect(env.HOME).toBe("/root");
     expect(env.PATH).toBe("/usr/bin");
@@ -151,8 +151,8 @@ describe("sanitizeSpawnEnv — nenhum tier de credencial MCP chega ao filho (sto
   // juiz de conflito, agente de deploy) montam o env por aqui. Fechar no chokepoint é o que impede uma
   // superfície NOVA de nascer vazando — o `_ORCH` só sumia no peer-review, que remendava por call site.
   it("o chokepoint de TODO spawn de Claude (buildAgentSpawnEnv) também não deixa o tier passar", async () => {
-    const env = await buildAgentSpawnEnv(asEnv({ STORYMAP_MCP_TOKEN_ORCH: ORCH, HOME: "/root" }), { url: null });
-    expect(env.STORYMAP_MCP_TOKEN_ORCH).toBeUndefined();
+    const env = await buildAgentSpawnEnv(asEnv({ AGILEHARNESS_MCP_TOKEN_ORCH: ORCH, HOME: "/root" }), { url: null });
+    expect(env.AGILEHARNESS_MCP_TOKEN_ORCH).toBeUndefined();
     expect(env.HOME).toBe("/root");
   });
 });
@@ -196,10 +196,10 @@ describe("IS_SANDBOX não é herdado — a intenção do harness é a única fon
 describe("nenhum segredo do serviço viaja para o filho sem estar classificado", () => {
   /** Nomes de cara secreta que NÃO são segredo — cada um com o motivo, porque "óbvio" envelhece. */
   const NAO_SAO_SEGREDO: Record<string, string> = {
-    STORYMAP_VAPID_PUBLIC_KEY: "chave PÚBLICA de Web Push — publicada no cliente por desenho",
-    STORYMAP_VAPID_SUBJECT: "o mailto: do contato VAPID; identifica, não autentica",
-    STORYMAP_WEEKLY_TOKEN_LIMIT: "um NÚMERO (teto semanal de tokens); 'TOKEN' aqui é a unidade, não credencial",
-    STORYMAP_MCP_TOKEN_ESPACO: "nome de VARIÁVEL de tier, não o valor — casado pelo prefixo e já removido",
+    AGILEHARNESS_VAPID_PUBLIC_KEY: "chave PÚBLICA de Web Push — publicada no cliente por desenho",
+    AGILEHARNESS_VAPID_SUBJECT: "o mailto: do contato VAPID; identifica, não autentica",
+    AGILEHARNESS_WEEKLY_TOKEN_LIMIT: "um NÚMERO (teto semanal de tokens); 'TOKEN' aqui é a unidade, não credencial",
+    AGILEHARNESS_MCP_TOKEN_ESPACO: "nome de VARIÁVEL de tier, não o valor — casado pelo prefixo e já removido",
   };
 
   it("EXAUSTIVO: toda env de nome secreto lida em src/ é removida, ou declarada como não-segredo", () => {

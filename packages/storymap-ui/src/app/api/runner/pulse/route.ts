@@ -16,7 +16,7 @@
 // DEPRECADO (a query string do poll vaza em todo log de acesso e de proxy — foi ESTA rota que
 // reproduziu ao vivo os 6 × 401 sem trava e sem uma única linha no journal). O monitor autônomo do dono
 // polla por query hoje, então ela continua funcionando: quebrá-la seria remoção de capacidade. A trava
-// por origem e o rastro durável estão em `../perimeter`; fail-closed em STORYMAP_MCP_TOKEN
+// por origem e o rastro durável estão em `../perimeter`; fail-closed em AGILEHARNESS_MCP_TOKEN
 // ausente/fraco segue igual.
 //
 // `?board=<id>` scopes the (heavier) demands IO to one board — the autonomous monitor passes its board

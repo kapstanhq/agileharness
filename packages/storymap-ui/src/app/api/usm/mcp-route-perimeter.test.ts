@@ -49,7 +49,7 @@ vi.mock("@/lib/storymap/mcp/tools", () => ({ registerStorymapTools: () => {} }))
 vi.mock("@/lib/storymap/mcp/dev-tools", () => ({ registerDevTools: () => {} }));
 vi.mock("@/lib/storymap/mcp/onboarding", () => ({
   registerOnboarding: () => {},
-  STORYMAP_MCP_INSTRUCTIONS: "instruções",
+  MCP_INSTRUCTIONS: "instruções",
 }));
 vi.mock("@/lib/storymap/mcp/register", () => ({ setServerLevel: () => {} }));
 
@@ -75,7 +75,7 @@ import { PERIMETER_POLICY, authFailuresPath, flushAuthFailures, readAuthFailures
 import { createMcpHandle, flushHandleTouches, revokeMcpHandle, type McpCredential } from "@/lib/auth/mcp-handle";
 import { POST } from "@/app/api/usm/[secret]/[transport]/route";
 
-const TOKEN_ENV = "STORYMAP_MCP_TOKEN";
+const TOKEN_ENV = "AGILEHARNESS_MCP_TOKEN";
 
 /** Um token legado FORTE, no formato que `--generate-mcp-token` produz (32 bytes em base64url). */
 const TOKEN_LEGADO = "wA7fQ2mZ9pX4vK1sT6bR8yL3nC5hJ0dG-eU_iO2aP4Q";
@@ -85,11 +85,11 @@ let dirDoTeste = "";
 let tokenAnterior: string | undefined;
 
 beforeEach(() => {
-  dirAnterior = process.env.STORYMAP_RUNNER_STATE_DIR;
+  dirAnterior = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
   tokenAnterior = process.env[TOKEN_ENV];
   // Estado do runner PRÓPRIO por teste: o rastro de um caso não pode ser lido pelo seguinte.
   dirDoTeste = mkdtempSync(path.join(tmpdir(), "mcp-route-"));
-  process.env.STORYMAP_RUNNER_STATE_DIR = dirDoTeste;
+  process.env.AGILEHARNESS_RUNNER_STATE_DIR = dirDoTeste;
   // A porta nasce FECHADA em cada caso: quem quiser o caminho legado declara a env explicitamente,
   // como uma instalação de verdade faz.
   delete process.env[TOKEN_ENV];
@@ -103,8 +103,8 @@ afterEach(async () => {
   await flushAuthFailures();
   await flushHandleTouches();
   resolucaoForjada = null;
-  if (dirAnterior === undefined) delete process.env.STORYMAP_RUNNER_STATE_DIR;
-  else process.env.STORYMAP_RUNNER_STATE_DIR = dirAnterior;
+  if (dirAnterior === undefined) delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+  else process.env.AGILEHARNESS_RUNNER_STATE_DIR = dirAnterior;
   if (tokenAnterior === undefined) delete process.env[TOKEN_ENV];
   else process.env[TOKEN_ENV] = tokenAnterior;
   // Só DEPOIS da drenagem acima: apagar antes trocaria o diretório órfão por um erro de escrita.

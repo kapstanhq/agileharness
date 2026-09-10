@@ -3,9 +3,9 @@
 // continuarem valendo depois de um restart —, e o perímetro de brinde (a auto-checagem passa a
 // julgar o segredo EFETIVO em vez de um ambiente vazio).
 //
-// MEDIDO no serviço vivo (2026-07-29): /proc/<MainPID>/environ carrega `STORYMAP_MCP_TOKEN_ORCH` e
-// `STORYMAP_MCP_TOKEN_RO`, mas NÃO o token primário — a unit systemd não tem `EnvironmentFile=`,
-// então `STORYMAP_MCP_TOKEN` chega SÓ por `packages/storymap-ui/.env.local`. E o `.env.local` era
+// MEDIDO no serviço vivo (2026-07-29): /proc/<MainPID>/environ carrega `AGILEHARNESS_MCP_TOKEN_ORCH` e
+// `AGILEHARNESS_MCP_TOKEN_RO`, mas NÃO o token primário — a unit systemd não tem `EnvironmentFile=`,
+// então `AGILEHARNESS_MCP_TOKEN` chega SÓ por `packages/storymap-ui/.env.local`. E o `.env.local` era
 // aplicado pelo @next/env DENTRO de `app.prepare()`, isto é, DEPOIS do boot dos segredos. Duas
 // consequências, ambas contra o mandato "porta blindada, agente livre":
 //   • o bootstrap do token MCP via a env VAZIA, GERAVA um token novo e o injetava em process.env —
@@ -46,7 +46,7 @@ const ENVS_TOCADAS = [
   "AGILEHARNESS_ALLOW_PUBLIC_BIND",
   "NODE_ENV",
   "PORT",
-  "STORYMAP_MCP_TOKEN",
+  "AGILEHARNESS_MCP_TOKEN",
   // O @next/env marca este flag em process.env quando processa os arquivos. O worker do vitest é
   // COMPARTILHADO entre arquivos: deixá-lo posto faria o próximo boot PULAR os .env dele.
   "__NEXT_PROCESSED_ENV",
@@ -82,14 +82,14 @@ beforeAll(async () => {
   // máquina de quem roda a suíte.
   dirDoServico = mkdtempSync(path.join(tmpdir(), "ah-boot-env-order-"));
   tokenDoOperador = forte();
-  writeFileSync(path.join(dirDoServico, ".env.local"), `STORYMAP_MCP_TOKEN=${tokenDoOperador}\n`, { mode: 0o600 });
+  writeFileSync(path.join(dirDoServico, ".env.local"), `AGILEHARNESS_MCP_TOKEN=${tokenDoOperador}\n`, { mode: 0o600 });
   process.chdir(dirDoServico);
 
   // O CENÁRIO REAL do serviço vivo: loopback, token primário SÓ no arquivo, tudo o mais forte.
   delete process.env.AGILEHARNESS_HOST;
   delete process.env.AGILEHARNESS_DEV;
   delete process.env.AGILEHARNESS_ALLOW_PUBLIC_BIND;
-  delete process.env.STORYMAP_MCP_TOKEN;
+  delete process.env.AGILEHARNESS_MCP_TOKEN;
   delete process.env.__NEXT_PROCESSED_ENV;
   process.env.AGILEHARNESS_PORT = "39118"; // porta improvável: se o boot regredir, não briga com o :3008 vivo
   process.env[TOKEN_ENV] = forte();
@@ -123,13 +123,13 @@ describe("boot com o token MCP no .env.local — a credencial de produção não
   it("o token do .env.local é o que fica valendo — o boot NÃO gera outro por cima", () => {
     // Este é o blocker: quando o boot gerava um token por a env estar (ainda) vazia, o valor do
     // operador nunca era aplicado, e a URL do conector morria no primeiro restart.
-    expect(process.env.STORYMAP_MCP_TOKEN).toBe(tokenDoOperador);
+    expect(process.env.AGILEHARNESS_MCP_TOKEN).toBe(tokenDoOperador);
   });
 
   it("nada é gravado em storymap/.runner/mcp-token — a porta MCP não se arma sozinha", () => {
     // Geração automática no boot faria TODA instalação nascer com a superfície MCP existindo, numa
     // superfície cujas tools spawnam `claude --dangerously-skip-permissions`.
-    const arquivo = path.join(process.env.STORYMAP_RUNNER_STATE_DIR!, "mcp-token");
+    const arquivo = path.join(process.env.AGILEHARNESS_RUNNER_STATE_DIR!, "mcp-token");
     expect(existsSync(arquivo)).toBe(false);
   });
 

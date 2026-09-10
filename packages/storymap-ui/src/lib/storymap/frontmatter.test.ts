@@ -93,9 +93,9 @@ function expectRejection(run: () => unknown, reason: string) {
 
 beforeEach(() => {
   sentinel.executou = false;
-  delete process.env.STORYMAP_FRONTMATTER_MAX_BYTES;
-  delete process.env.STORYMAP_FRONTMATTER_MAX_DEPTH;
-  delete process.env.STORYMAP_FRONTMATTER_MAX_NODES;
+  delete process.env.AGILEHARNESS_FRONTMATTER_MAX_BYTES;
+  delete process.env.AGILEHARNESS_FRONTMATTER_MAX_DEPTH;
+  delete process.env.AGILEHARNESS_FRONTMATTER_MAX_NODES;
 });
 
 afterEach(async () => {
@@ -225,7 +225,7 @@ describe("ATAQUE: DoS por parse (volume e alias bomb)", () => {
   it("o teto de bytes é um knob de operador — apertá-lo recusa um card que passaria", () => {
     const card = `---\ntitle: x\npad: "${"a".repeat(4096)}"\n---\nb\n`;
     expect(() => parseFrontmatter(card, "board/story-x.md")).not.toThrow();
-    process.env.STORYMAP_FRONTMATTER_MAX_BYTES = "1024";
+    process.env.AGILEHARNESS_FRONTMATTER_MAX_BYTES = "1024";
     expect(frontmatterLimits().maxBytes).toBe(1024);
     expectRejection(() => parseFrontmatter(card, "board/story-x.md"), "too-large");
   });
@@ -483,7 +483,7 @@ describe("o caminho REAL de leitura de card (repo.ts) recusa o payload", () => {
     // PARSER, não o READ. Sem o `stat` antes do `readFile`, o card de 500MB era carregado inteiro e só
     // então recusado — o volume acontecia ANTES da recusa, que é exatamente o DoS que o teto promete
     // fechar. Aqui o teto é apertado por env (o mesmo knob do operador) para o fixture caber no teste.
-    process.env.STORYMAP_FRONTMATTER_MAX_BYTES = "2048";
+    process.env.AGILEHARNESS_FRONTMATTER_MAX_BYTES = "2048";
     await writeCard("acme", "story-ok", okCard("story-ok"));
     await writeCard("acme", "story-gorda", `---\nid: story-gorda\ntype: story\nstatus: triage\n---\n${"a".repeat(64 * 1024)}\n`);
 
@@ -500,7 +500,7 @@ describe("o caminho REAL de leitura de card (repo.ts) recusa o payload", () => {
   });
 
   it("readCard (uma carta só) também recusa antes de ler", async () => {
-    process.env.STORYMAP_FRONTMATTER_MAX_BYTES = "2048";
+    process.env.AGILEHARNESS_FRONTMATTER_MAX_BYTES = "2048";
     await writeCard("acme", "story-gorda", `---\nid: story-gorda\n---\n${"a".repeat(64 * 1024)}\n`);
     const spy = vi.spyOn(fs, "readFile");
     expect(await readCard("acme", "story-gorda")).toBeNull();

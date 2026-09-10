@@ -4,7 +4,7 @@
 // second store — that would drift, the story-248pqq stale-names class of bug). It is same-origin
 // board only, NO CORS ever: a cross-origin page can trigger the GET but the same-origin policy blocks
 // it from READING the session/card list. Session mode is present ONLY when the terminal round-trip is
-// enabled (STORYMAP_FEEDBACK_TERMINAL=1) — recon (this list) and action (the paste) ship together or
+// enabled (AGILEHARNESS_FEEDBACK_TERMINAL=1) — recon (this list) and action (the paste) ship together or
 // not at all. (Fase 3b: a cross-origin product embed gets a triage-only projection via a nonce path.)
 
 import { checkSameOrigin } from "@/lib/feedback/guard";
@@ -28,7 +28,7 @@ export async function GET(request: Request): Promise<Response> {
     return Response.json({ ok: false, error: guard.error }, { status: guard.status });
   }
 
-  const sessionEnabled = process.env.STORYMAP_FEEDBACK_TERMINAL === "1";
+  const sessionEnabled = process.env.AGILEHARNESS_FEEDBACK_TERMINAL === "1";
 
   // Cards for the picker: strip everything but the fields the projection needs (no ops-intel leaks by
   // construction) and stamp `terminal` from the board config so a closed/shipped card — a poor refine

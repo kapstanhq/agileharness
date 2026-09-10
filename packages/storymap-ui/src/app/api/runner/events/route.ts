@@ -20,7 +20,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function GET(request: Request): Promise<Response> {
-  // Header OU query, o MESMO conjunto de segredos de antes (STORYMAP_MCP_TOKEN) + handle revogável.
+  // Header OU query, o MESMO conjunto de segredos de antes (AGILEHARNESS_MCP_TOKEN) + handle revogável.
   // Fail-closed continua valendo: segredo configurado ausente/fraco nunca autentica.
   const auth = await authorizeRunnerRequest(request, RUNNER_SURFACE_AUTH.events);
   if (!auth.ok) return auth.response;

@@ -603,7 +603,7 @@ describe("(10) O ÚLTIMO PORTÃO — a contenção é VERIFICADA no comando fina
 
   // ── OS DOIS VETORES DE CONFIGURAÇÃO (achado de revisão) ──────────────────────────────────────────
   // O portão verificava PRESENÇA de `--settings` e AUSÊNCIA da flag perigosa, e nada mais. Duas coisas
-  // que um operador escreve em `USM_AUTORUN_EXTRA_ARGS` — não um bug de programação — desfaziam a
+  // que um operador escreve em `AGILEHARNESS_AUTORUN_EXTRA_ARGS` — não um bug de programação — desfaziam a
   // contenção com o log ainda anunciando "sandbox: bubblewrap".
 
   it("extraArgs com `--permission-mode bypassPermissions` ⇒ LANÇA (o ÚLTIMO modo é o que vale)", () => {

@@ -132,7 +132,7 @@ vazia, e quem prova que o gate continua funcionando é a fixture da suíte de su
 disposições sintéticas, uma por verificador). O que **permanece**, e é regra deste documento, é o
 chokepoint: o teto de bytes/profundidade/nós antes do parser **limita** o custo de um documento
 hostil e **não elimina** a classe de CPU desproporcional em YAML — um documento dentro dos tetos ainda
-pode custar mais do que parece. O teto é ajustável pelo operador (`STORYMAP_FRONTMATTER_MAX_*`);
+pode custar mais do que parece. O teto é ajustável pelo operador (`AGILEHARNESS_FRONTMATTER_MAX_*`);
 apertá-lo reduz a janela e aumenta o risco de recusar dado legítimo.
 
 ### R5 — o token MCP **já vazou** em claro nos logs do sistema

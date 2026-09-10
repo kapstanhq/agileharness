@@ -65,8 +65,8 @@ let previousCap: string | undefined;
 let avisos: string[];
 
 beforeEach(() => {
-  previousCap = process.env.STORYMAP_FRONTMATTER_MAX_BYTES;
-  process.env.STORYMAP_FRONTMATTER_MAX_BYTES = String(TIGHT_CAP);
+  previousCap = process.env.AGILEHARNESS_FRONTMATTER_MAX_BYTES;
+  process.env.AGILEHARNESS_FRONTMATTER_MAX_BYTES = String(TIGHT_CAP);
   tmpRoot = mkdtempSync(path.join(os.tmpdir(), "sm-statfail-"));
   readPaths().length = 0;
   statFail().paths.length = 0;
@@ -78,8 +78,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (previousCap === undefined) delete process.env.STORYMAP_FRONTMATTER_MAX_BYTES;
-  else process.env.STORYMAP_FRONTMATTER_MAX_BYTES = previousCap;
+  if (previousCap === undefined) delete process.env.AGILEHARNESS_FRONTMATTER_MAX_BYTES;
+  else process.env.AGILEHARNESS_FRONTMATTER_MAX_BYTES = previousCap;
   vi.restoreAllMocks();
   // A árvore do run é POR TESTE (o `beforeEach` acima cria uma nova). Sem esta remoção cada passada do
   // portão deixa um diretório em /tmp — a mesma dívida de inode que a revisão contou aos milhares. Vem

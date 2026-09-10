@@ -40,10 +40,10 @@ import type { DiscardSessionResult } from "./session-worktree";
  */
 export const SESSION_GC_GRACE_MS = 2 * SESSION_HEARTBEAT_TTL_MS; // 12h
 
-/** Resolve the grace window from the env (USM_SESSION_GC_GRACE_MS). <=0 / garbage → the default; never off
+/** Resolve the grace window from the env (AGILEHARNESS_SESSION_GC_GRACE_MS). <=0 / garbage → the default; never off
  *  (a disabled session GC is what let 8 zombies pile up). Pure — exported for tests. */
 export function sessionGcGraceMs(env: Record<string, string | undefined> = process.env): number {
-  const raw = env.USM_SESSION_GC_GRACE_MS;
+  const raw = env.AGILEHARNESS_SESSION_GC_GRACE_MS;
   if (raw == null || raw === "") return SESSION_GC_GRACE_MS;
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return SESSION_GC_GRACE_MS;

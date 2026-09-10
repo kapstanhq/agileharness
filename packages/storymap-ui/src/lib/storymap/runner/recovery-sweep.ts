@@ -17,13 +17,13 @@
 // Pure + DI-friendly: `runRecoverySweepTick` is awaitable and stub-driven (no real timer); the timer
 // wiring (`startRecoverySweep`) is a thin re-arming setTimeout so a tick can never overlap itself.
 
-/** Default sweep cadence (10 min). Env-tunable via USM_AUTORUN_RECOVERY_SWEEP_MS; <=0 disables the sweep. */
+/** Default sweep cadence (10 min). Env-tunable via AGILEHARNESS_AUTORUN_RECOVERY_SWEEP_MS; <=0 disables the sweep. */
 export const RECOVERY_SWEEP_DEFAULT_MS = 10 * 60_000;
 
 /** Resolve the sweep interval from the env. Returns 0 (disabled) for an explicit 0 / negative / a
  *  non-finite value other than unset (unset ⇒ the default). Pure — exported for tests. */
 export function recoverySweepIntervalMs(env: Record<string, string | undefined> = process.env): number {
-  const raw = env.USM_AUTORUN_RECOVERY_SWEEP_MS;
+  const raw = env.AGILEHARNESS_AUTORUN_RECOVERY_SWEEP_MS;
   if (raw == null || raw === "") return RECOVERY_SWEEP_DEFAULT_MS;
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return 0; // explicit disable / garbage → off

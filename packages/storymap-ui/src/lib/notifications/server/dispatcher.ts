@@ -40,16 +40,16 @@ export function getDispatcher(): Dispatcher {
 
   const dispatcher = new Dispatcher();
   dispatcher.register(getBroadcaster()); // always: the bridge to the browser
-  const slack = createSlackChannel(); // opt-in via STORYMAP_SLACK_WEBHOOK_URL
+  const slack = createSlackChannel(); // opt-in via AGILEHARNESS_SLACK_WEBHOOK_URL
   if (slack) dispatcher.register(slack);
-  // Phone push: opt-in via STORYMAP_VAPID_* keys. The channel covers card.moved
+  // Phone push: opt-in via AGILEHARNESS_VAPID_* keys. The channel covers card.moved
   // (advanced + the "needs you" subset); the bridge wires runner failures (which
   // flow through the registry, NOT this dispatcher) into the same push sender.
   const webPush = createWebPushChannel();
   if (webPush) dispatcher.register(webPush);
   initRunnerFailurePush(); // no-op when push is unconfigured
   // Always registered; gated LIVE per event by autorun.enabled (settings.yaml)
-  // or USM_AUTORUN=0 (env) — so the Config panel can toggle it without a restart.
+  // or AGILEHARNESS_AUTORUN=0 (env) — so the Config panel can toggle it without a restart.
   dispatcher.register(createTriggerRunnerChannel());
   // O copiloto AUTÔNOMO acorda por evento (card travado, finding novo, item na fila de decisão) em vez de só
   // pelo tick de 30min. Sempre registrado; gated ao vivo (orchestrator.enabled + wake.enabled + o board estar

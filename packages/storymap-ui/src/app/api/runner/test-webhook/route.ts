@@ -11,7 +11,7 @@
 // gravações do token medidas em story-u4yf1i) porque um runner de CI externo pode não conseguir setar
 // header, e quebrá-lo seria remoção de capacidade. Como esta rota MUTA (retoma a cascata, e com ela o
 // próximo spawn/deploy), ela exige nível `orch`: um handle de leitura vazado não dispara pipeline.
-// Fail-closed em STORYMAP_MCP_TOKEN ausente/fraco; trava + rastro de toda recusa em `../perimeter`.
+// Fail-closed em AGILEHARNESS_MCP_TOKEN ausente/fraco; trava + rastro de toda recusa em `../perimeter`.
 // SERVER-ONLY (Node runtime — touches the durable ledger + re-evaluates the cascade).
 
 import { getTestQueue } from "@/lib/storymap/runner/test-queue";

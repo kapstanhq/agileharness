@@ -586,7 +586,7 @@ describe("reconcile_stage — mode='reset' é do OPERADOR, nunca de um ator esco
   // linha: ele só entra em cena depois que o operador concede `merge-resolve: auto`, que é exatamente quando
   // a modalidade destrutiva passaria de carona. Testar as duas camadas separadas mantém a asserção honesta.
   it("SEM concessão: o guard recusa antes, nomeando a alavanca do settings.yaml", async () => {
-    const r = await runWithMcpActor({ level: "orch", tokenEnv: "STORYMAP_MCP_TOKEN_ORCH" }, () =>
+    const r = await runWithMcpActor({ level: "orch", tokenEnv: "AGILEHARNESS_MCP_TOKEN_ORCH" }, () =>
       reconcileHandler()({ mode: "reset", confirmReset: true }),
     );
     expect(r.isError).toBe(true);
@@ -596,7 +596,7 @@ describe("reconcile_stage — mode='reset' é do OPERADOR, nunca de um ator esco
   it("COM `merge-resolve: auto` concedido: o guard libera, mas o corte do handler barra o reset", async () => {
     repoRiskMatrix = { "merge-resolve": "auto" };
     try {
-      const r = await runWithMcpActor({ level: "orch", tokenEnv: "STORYMAP_MCP_TOKEN_ORCH" }, () =>
+      const r = await runWithMcpActor({ level: "orch", tokenEnv: "AGILEHARNESS_MCP_TOKEN_ORCH" }, () =>
         reconcileHandler()({ mode: "reset", confirmReset: true }),
       );
       expect(r.isError).toBe(true);
@@ -611,7 +611,7 @@ describe("reconcile_stage — mode='reset' é do OPERADOR, nunca de um ator esco
   it("COM a concessão, mode='sync' passa do corte (a metade segura é o que o `auto` habilita)", async () => {
     repoRiskMatrix = { "merge-resolve": "auto" };
     try {
-      const r = await runWithMcpActor({ level: "orch", tokenEnv: "STORYMAP_MCP_TOKEN_ORCH" }, () =>
+      const r = await runWithMcpActor({ level: "orch", tokenEnv: "AGILEHARNESS_MCP_TOKEN_ORCH" }, () =>
         reconcileHandler()({ mode: "sync" }),
       );
       // Chega na lógica real (staging desabilitado no ambiente de teste); o que importa é que a recusa NÃO é

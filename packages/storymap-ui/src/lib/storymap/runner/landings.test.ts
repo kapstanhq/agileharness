@@ -14,10 +14,10 @@ describe("landings — o recibo do split", () => {
 
   beforeEach(async () => {
     dir = await fsp.mkdtemp(path.join(os.tmpdir(), "sm-landings-"));
-    process.env.STORYMAP_RUNNER_STATE_DIR = dir;
+    process.env.AGILEHARNESS_RUNNER_STATE_DIR = dir;
   });
   afterEach(async () => {
-    delete process.env.STORYMAP_RUNNER_STATE_DIR;
+    delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
     await fsp.rm(dir, { recursive: true, force: true });
   });
 
@@ -77,7 +77,7 @@ describe("landings — o recibo do split", () => {
     // que falha de verdade (e falha RÁPIDO — apontar para /proc trava em vez de errar).
     const notADir = path.join(dir, "sou-um-arquivo");
     await fsp.writeFile(notADir, "");
-    process.env.STORYMAP_RUNNER_STATE_DIR = path.join(notADir, "runner");
+    process.env.AGILEHARNESS_RUNNER_STATE_DIR = path.join(notADir, "runner");
 
     await expect(
       recordLanding({ runId: "r9", board: "acme", half: "code", ref: "stage", sha: "x" }),

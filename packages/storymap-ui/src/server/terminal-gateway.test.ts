@@ -313,11 +313,11 @@ describe("perímetro do terminal — a superfície que entrega SHELL", () => {
   beforeEach(async () => {
     prevSecret = process.env[SESSION_SECRET_ENV];
     prevToken = process.env[TOKEN_ENV];
-    prevStateDir = process.env.STORYMAP_RUNNER_STATE_DIR;
+    prevStateDir = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
     process.env[SESSION_SECRET_ENV] = SECRET;
     process.env[TOKEN_ENV] = TOKEN;
     stateDir = mkdtempSync(path.join(tmpdir(), "terminal-perimetro-"));
-    process.env.STORYMAP_RUNNER_STATE_DIR = stateDir;
+    process.env.AGILEHARNESS_RUNNER_STATE_DIR = stateDir;
     resetPerimeterState();
     ttyd = await abrirTtydFalso();
   });
@@ -330,8 +330,8 @@ describe("perímetro do terminal — a superfície que entrega SHELL", () => {
     else process.env[SESSION_SECRET_ENV] = prevSecret;
     if (prevToken === undefined) delete process.env[TOKEN_ENV];
     else process.env[TOKEN_ENV] = prevToken;
-    if (prevStateDir === undefined) delete process.env.STORYMAP_RUNNER_STATE_DIR;
-    else process.env.STORYMAP_RUNNER_STATE_DIR = prevStateDir;
+    if (prevStateDir === undefined) delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+    else process.env.AGILEHARNESS_RUNNER_STATE_DIR = prevStateDir;
     // DEPOIS do flush acima — apagar antes trocaria lixo em /tmp por erro de escrita intermitente.
     if (stateDir) rmSync(stateDir, { recursive: true, force: true });
     stateDir = undefined;

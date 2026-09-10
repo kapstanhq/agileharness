@@ -422,33 +422,33 @@ function makeEngine(
 // the never-closing fake child in these tests leaks no event-loop-holding timer.
 const codeDef: StatusDef = { id: "desenvolver", name: "Desenvolver" };
 
-const ORIGINAL_MAX = process.env.USM_AUTORUN_MAX;
-const ORIGINAL_RATE_MAX = process.env.USM_AUTORUN_RATE_MAX;
-const ORIGINAL_WORKTREE = process.env.USM_AUTORUN_WORKTREE;
+const ORIGINAL_MAX = process.env.AGILEHARNESS_AUTORUN_MAX;
+const ORIGINAL_RATE_MAX = process.env.AGILEHARNESS_AUTORUN_RATE_MAX;
+const ORIGINAL_WORKTREE = process.env.AGILEHARNESS_AUTORUN_WORKTREE;
 // Auditoria 2026-08-19: o push do board-data virou DECLARADO (default desligado). Os casos que
 // medem o push declaram o knob; o `afterEach` abaixo o restaura junto com o do worktree.
-const ORIGINAL_AUTOPUSH = process.env.STORYMAP_BOARD_AUTOPUSH;
-const ORIGINAL_HEAVY_MEM = process.env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX;
-const ORIGINAL_HEAVY_CPU = process.env.USM_AUTORUN_LANE_HEAVY_CPU_QUOTA;
-const ORIGINAL_RESUME_FALLBACK_MAX = process.env.USM_AUTORUN_RESUME_FALLBACK_MAX;
-const ORIGINAL_MAXTURNS_RESUME_MAX = process.env.USM_AUTORUN_MAXTURNS_RESUME_MAX;
+const ORIGINAL_AUTOPUSH = process.env.AGILEHARNESS_BOARD_AUTOPUSH;
+const ORIGINAL_HEAVY_MEM = process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX;
+const ORIGINAL_HEAVY_CPU = process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_CPU_QUOTA;
+const ORIGINAL_RESUME_FALLBACK_MAX = process.env.AGILEHARNESS_AUTORUN_RESUME_FALLBACK_MAX;
+const ORIGINAL_MAXTURNS_RESUME_MAX = process.env.AGILEHARNESS_AUTORUN_MAXTURNS_RESUME_MAX;
 afterEach(() => {
-  if (ORIGINAL_MAXTURNS_RESUME_MAX === undefined) delete process.env.USM_AUTORUN_MAXTURNS_RESUME_MAX;
-  else process.env.USM_AUTORUN_MAXTURNS_RESUME_MAX = ORIGINAL_MAXTURNS_RESUME_MAX;
-  if (ORIGINAL_RESUME_FALLBACK_MAX === undefined) delete process.env.USM_AUTORUN_RESUME_FALLBACK_MAX;
-  else process.env.USM_AUTORUN_RESUME_FALLBACK_MAX = ORIGINAL_RESUME_FALLBACK_MAX;
-  if (ORIGINAL_MAX === undefined) delete process.env.USM_AUTORUN_MAX;
-  else process.env.USM_AUTORUN_MAX = ORIGINAL_MAX;
-  if (ORIGINAL_RATE_MAX === undefined) delete process.env.USM_AUTORUN_RATE_MAX;
-  else process.env.USM_AUTORUN_RATE_MAX = ORIGINAL_RATE_MAX;
-  if (ORIGINAL_WORKTREE === undefined) delete process.env.USM_AUTORUN_WORKTREE;
-  else process.env.USM_AUTORUN_WORKTREE = ORIGINAL_WORKTREE;
-  if (ORIGINAL_AUTOPUSH === undefined) delete process.env.STORYMAP_BOARD_AUTOPUSH;
-  else process.env.STORYMAP_BOARD_AUTOPUSH = ORIGINAL_AUTOPUSH;
-  if (ORIGINAL_HEAVY_MEM === undefined) delete process.env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX;
-  else process.env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX = ORIGINAL_HEAVY_MEM;
-  if (ORIGINAL_HEAVY_CPU === undefined) delete process.env.USM_AUTORUN_LANE_HEAVY_CPU_QUOTA;
-  else process.env.USM_AUTORUN_LANE_HEAVY_CPU_QUOTA = ORIGINAL_HEAVY_CPU;
+  if (ORIGINAL_MAXTURNS_RESUME_MAX === undefined) delete process.env.AGILEHARNESS_AUTORUN_MAXTURNS_RESUME_MAX;
+  else process.env.AGILEHARNESS_AUTORUN_MAXTURNS_RESUME_MAX = ORIGINAL_MAXTURNS_RESUME_MAX;
+  if (ORIGINAL_RESUME_FALLBACK_MAX === undefined) delete process.env.AGILEHARNESS_AUTORUN_RESUME_FALLBACK_MAX;
+  else process.env.AGILEHARNESS_AUTORUN_RESUME_FALLBACK_MAX = ORIGINAL_RESUME_FALLBACK_MAX;
+  if (ORIGINAL_MAX === undefined) delete process.env.AGILEHARNESS_AUTORUN_MAX;
+  else process.env.AGILEHARNESS_AUTORUN_MAX = ORIGINAL_MAX;
+  if (ORIGINAL_RATE_MAX === undefined) delete process.env.AGILEHARNESS_AUTORUN_RATE_MAX;
+  else process.env.AGILEHARNESS_AUTORUN_RATE_MAX = ORIGINAL_RATE_MAX;
+  if (ORIGINAL_WORKTREE === undefined) delete process.env.AGILEHARNESS_AUTORUN_WORKTREE;
+  else process.env.AGILEHARNESS_AUTORUN_WORKTREE = ORIGINAL_WORKTREE;
+  if (ORIGINAL_AUTOPUSH === undefined) delete process.env.AGILEHARNESS_BOARD_AUTOPUSH;
+  else process.env.AGILEHARNESS_BOARD_AUTOPUSH = ORIGINAL_AUTOPUSH;
+  if (ORIGINAL_HEAVY_MEM === undefined) delete process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX;
+  else process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX = ORIGINAL_HEAVY_MEM;
+  if (ORIGINAL_HEAVY_CPU === undefined) delete process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_CPU_QUOTA;
+  else process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_CPU_QUOTA = ORIGINAL_HEAVY_CPU;
 });
 
 describe("timeoutFor — the wall-clock watchdog is ALWAYS a number (no run runs unbounded)", () => {
@@ -504,16 +504,16 @@ describe("RunnerEngine.runSkill — security + idempotency + concurrency", () =>
     expect(cmds[0]).toContain('"/harness-do acme/story-1"');
   });
 
-  it("injects STORYMAP_AUTORUN_RUN_ID and STORYMAP_AUTORUN_TRIGGER into spawn env (story-ns8x0o)", async () => {
+  it("injects AGILEHARNESS_AUTORUN_RUN_ID and AGILEHARNESS_AUTORUN_TRIGGER into spawn env (story-ns8x0o)", async () => {
     const { engine, spawnOpts } = makeEngine();
     expect(engine.runSkill("acme", "story-1", "harness-do", codeDef).ok).toBe(true);
     await flush();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const env = (spawnOpts[0] as any).env as Record<string, string>;
     expect(env).toBeDefined();
-    expect(env.STORYMAP_AUTORUN_TRIGGER).toBe("harness-do");
-    expect(typeof env.STORYMAP_AUTORUN_RUN_ID).toBe("string");
-    expect(env.STORYMAP_AUTORUN_RUN_ID.length).toBeGreaterThan(0);
+    expect(env.AGILEHARNESS_AUTORUN_TRIGGER).toBe("harness-do");
+    expect(typeof env.AGILEHARNESS_AUTORUN_RUN_ID).toBe("string");
+    expect(env.AGILEHARNESS_AUTORUN_RUN_ID.length).toBeGreaterThan(0);
   });
 
   it("routes --model/--effort by the card's complexity within the column ceiling (story-rotear-model-effort)", async () => {
@@ -560,7 +560,7 @@ describe("RunnerEngine.runSkill — security + idempotency + concurrency", () =>
   });
 
   it("honors maxConcurrent: a burst of 3 spawns only 2; the 3rd waits for a free slot", async () => {
-    process.env.USM_AUTORUN_MAX = "2"; // ENV wins over settings.yaml/defaults
+    process.env.AGILEHARNESS_AUTORUN_MAX = "2"; // ENV wins over settings.yaml/defaults
     const { engine, children, cmds } = makeEngine();
     engine.runSkill("acme", "a", "harness-do", codeDef);
     engine.runSkill("acme", "b", "harness-do", codeDef);
@@ -609,8 +609,8 @@ describe("RunnerEngine.runSkill — security + idempotency + concurrency", () =>
   });
 
   it("autorun rate limit (circuit breaker) refuses spawns beyond the window cap", async () => {
-    process.env.USM_AUTORUN_RATE_MAX = "2"; // tiny cap for the test
-    process.env.USM_AUTORUN_MAX = "5"; // don't let maxConcurrent mask the rate refusal
+    process.env.AGILEHARNESS_AUTORUN_RATE_MAX = "2"; // tiny cap for the test
+    process.env.AGILEHARNESS_AUTORUN_MAX = "5"; // don't let maxConcurrent mask the rate refusal
     const { engine } = makeEngine();
     // Distinct cards so neither in-flight nor cooldown interferes — only the rate cap.
     expect(engine.runSkill("acme", "a", "harness-do", codeDef, { dedupeWindowMs: 1 }).ok).toBe(true);
@@ -624,8 +624,8 @@ describe("RunnerEngine.runSkill — security + idempotency + concurrency", () =>
   });
 
   it("a MANUAL run is exempt from the autorun rate limit", async () => {
-    process.env.USM_AUTORUN_RATE_MAX = "1";
-    process.env.USM_AUTORUN_MAX = "5";
+    process.env.AGILEHARNESS_AUTORUN_RATE_MAX = "1";
+    process.env.AGILEHARNESS_AUTORUN_MAX = "5";
     const { engine } = makeEngine();
     engine.runSkill("acme", "a", "harness-do", codeDef, { dedupeWindowMs: 1 }); // uses the 1 autorun slot
     expect(engine.runSkill("acme", "b", "harness-do", codeDef).ok).toBe(true); // manual → not counted/limited
@@ -633,7 +633,7 @@ describe("RunnerEngine.runSkill — security + idempotency + concurrency", () =>
   });
 
   it("records the run start (enqueue pid null → spawn upsert real pid + worktree) and its finish in the journal", async () => {
-    process.env.USM_AUTORUN_WORKTREE = "1"; // this assertion is about the worktree path → flag ON
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1"; // this assertion is about the worktree path → flag ON
     const { engine, children, starts, finishes, worktreeCreates } = makeEngine();
     engine.runSkill("acme", "story-1", "harness-do", codeDef);
     await flush();
@@ -654,7 +654,7 @@ describe("RunnerEngine.runSkill — security + idempotency + concurrency", () =>
   });
 
   it("journals a QUEUED run immediately (pid null) so a crash-while-queued stays recoverable", async () => {
-    process.env.USM_AUTORUN_MAX = "2";
+    process.env.AGILEHARNESS_AUTORUN_MAX = "2";
     const { engine, cmds, starts } = makeEngine();
     engine.runSkill("acme", "a", "harness-do", codeDef);
     engine.runSkill("acme", "b", "harness-do", codeDef);
@@ -789,14 +789,14 @@ describe("RunnerEngine.runSkill — a fronteira chega ao comando executado", () 
   it("um --settings a MAIS (extraArgs do operador) impede o run em vez de deixá-lo nascer", async () => {
     // O portão é load-bearing: se alguém o remover, comentar, ou movê-lo para longe do spawn, este
     // teste passa a deixar o run nascer com a fronteira que o operador sobrescreveu.
-    process.env.USM_AUTORUN_EXTRA_ARGS = "--settings /outro/qualquer.json";
+    process.env.AGILEHARNESS_AUTORUN_EXTRA_ARGS = "--settings /outro/qualquer.json";
     try {
       const { engine, cmds } = makeEngine(async () => null);
       engine.runSkill("acme", "cont-2", "harness-do", codeDef);
       await flush();
       expect(cmds, "o run NASCEU com dois --settings: o último vence e a cerca é outra").toEqual([]);
     } finally {
-      delete process.env.USM_AUTORUN_EXTRA_ARGS;
+      delete process.env.AGILEHARNESS_AUTORUN_EXTRA_ARGS;
     }
   });
 });
@@ -804,8 +804,8 @@ describe("RunnerEngine.runSkill — a fronteira chega ao comando executado", () 
 describe("RunnerEngine.runSkill — SM-4 governor (systemd-run scope + OOM detection)", () => {
   // harness-do rides the HEAVY lane, so the heavy-lane quota env is what arms the scope here.
   it("wraps the spawn in a systemd-run --scope when a lane quota + systemd are present", async () => {
-    process.env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
-    process.env.USM_AUTORUN_LANE_HEAVY_CPU_QUOTA = "300";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_CPU_QUOTA = "300";
     const { engine, cmds } = makeEngine(async () => null, { systemdCheck: () => true });
     engine.runSkill("acme", "story-1", "harness-do", codeDef);
     await flush();
@@ -821,7 +821,7 @@ describe("RunnerEngine.runSkill — SM-4 governor (systemd-run scope + OOM detec
   });
 
   it("a SIGKILL on a SCOPED run is the kernel OOM killer → outcome oom-killed (contained)", async () => {
-    process.env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
     const reader = async () => "desenvolver"; // card did NOT advance ⇒ a real failure (not falha-fantasma)
     const { engine, children, finishes } = makeEngine(reader, { systemdCheck: () => true });
     engine.runSkill("acme", "oom-1", "harness-do", codeDef);
@@ -841,7 +841,7 @@ describe("RunnerEngine.runSkill — SM-4 governor (systemd-run scope + OOM detec
     // dash exec-opts into from `sh -c "… -- claude …"`); systemd-run/the shell relays that as exit
     // 137 (128+SIGKILL), signal=null — NOT a literal SIGKILL on Node's direct child. This is the
     // vector task t4 named ("código de saída 137") and the one that actually fires on the VPS.
-    process.env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
     const reader = async () => "desenvolver"; // card did NOT advance ⇒ a real failure (not falha-fantasma)
     const { engine, children, finishes } = makeEngine(reader, { systemdCheck: () => true });
     engine.runSkill("acme", "oom137", "harness-do", codeDef);
@@ -872,7 +872,7 @@ describe("RunnerEngine.runSkill — SM-4 governor (systemd-run scope + OOM detec
     // killTree sends only SIGTERM (143 = 128+SIGTERM). 143 must stay a generic exit even under a
     // scope, else a forced release of a hung run would be mislabeled oom-killed. (Guards the
     // deliberate choice in finish() to match 137 but not 143.)
-    process.env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
     const reader = async () => "desenvolver";
     const { engine, children, finishes } = makeEngine(reader, { systemdCheck: () => true });
     engine.runSkill("acme", "term143", "harness-do", codeDef);
@@ -895,7 +895,7 @@ describe("RunnerEngine.runSkill — SM-4 governor (systemd-run scope + OOM detec
   });
 
   it("graceful degradation: a configured quota with systemd ABSENT runs unscoped + logs a warning", async () => {
-    process.env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
     const { engine, cmds } = makeEngine(async () => null, { systemdCheck: () => false });
     engine.runSkill("acme", "degr-1", "harness-do", codeDef);
     await flush();
@@ -907,7 +907,7 @@ describe("RunnerEngine.runSkill — SM-4 governor (systemd-run scope + OOM detec
   });
 
   it("a clean exit on a scoped run is still a normal ok (scope does not taint the happy path)", async () => {
-    process.env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
     const { engine, children, finishes } = makeEngine(async () => null, { systemdCheck: () => true });
     engine.runSkill("acme", "ok-1", "harness-do", codeDef);
     await flush();
@@ -919,10 +919,10 @@ describe("RunnerEngine.runSkill — SM-4 governor (systemd-run scope + OOM detec
   // process the agent detached (e.g. the QA dev server) dies BY scope, never by loose PID — and the
   // unit it stops can ONLY ever be this run's `harness-run-<id>.scope`, never storymap.service.
   it("settle() of a SCOPED run stops the run's OWN harness-run-*.scope (by scope, never by PID)", async () => {
-    process.env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
     // Disable worktree isolation so the teardown path is the simple remove → settle's finally runs
     // immediately (no async merge-queue deferral to thread through).
-    process.env.USM_AUTORUN_WORKTREE = "0";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0";
     const { engine, children, stopScopeCalls } = makeEngine(async () => null, { systemdCheck: () => true });
     engine.runSkill("acme", "scope-1", "harness-do", codeDef);
     await flush();
@@ -938,8 +938,8 @@ describe("RunnerEngine.runSkill — SM-4 governor (systemd-run scope + OOM detec
 
   it("settle() of an UNSCOPED run (systemd absent) does NOT stop any scope", async () => {
     // systemd unavailable → scopeApplied stays false → settle must skip the scope reap entirely.
-    process.env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
-    process.env.USM_AUTORUN_WORKTREE = "0";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0";
     const { engine, children, stopScopeCalls } = makeEngine(async () => null, { systemdCheck: () => false });
     engine.runSkill("acme", "noscope-1", "harness-do", codeDef);
     await flush();
@@ -949,8 +949,8 @@ describe("RunnerEngine.runSkill — SM-4 governor (systemd-run scope + OOM detec
   });
 
   it("settle() reaps the scope EVEN on a failed/non-clean exit (teardown runs in finally)", async () => {
-    process.env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
-    process.env.USM_AUTORUN_WORKTREE = "0";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0";
     const reader = async () => "desenvolver"; // card did NOT advance ⇒ a real failure
     const { engine, children, stopScopeCalls } = makeEngine(reader, { systemdCheck: () => true });
     engine.runSkill("acme", "scopefail-1", "harness-do", codeDef);
@@ -966,8 +966,8 @@ describe("RunnerEngine.runSkill — SM-4 governor (systemd-run scope + OOM detec
   // dev-server PID, so a dev server the agent detached out of killTree's group can't leak (the
   // orphan-3009 symptom). The reaper is keyed by the run's sessionId, never a loose/scanned pid.
   it("settle() of an UNSCOPED run STILL reaps the dev-server PID file (the only teardown w/o systemd)", async () => {
-    process.env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
-    process.env.USM_AUTORUN_WORKTREE = "0";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0";
     const { engine, children, reapDevServerCalls, stopScopeCalls } = makeEngine(async () => null, {
       systemdCheck: () => false, // no systemd → no scope reap → the PID reap is the ONLY teardown
     });
@@ -983,8 +983,8 @@ describe("RunnerEngine.runSkill — SM-4 governor (systemd-run scope + OOM detec
   });
 
   it("settle() ALWAYS reaps the dev-server PID file — even when scoped (complement, not replacement)", async () => {
-    process.env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
-    process.env.USM_AUTORUN_WORKTREE = "0";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0";
     const { engine, children, reapDevServerCalls } = makeEngine(async () => null, { systemdCheck: () => true });
     engine.runSkill("acme", "scoped-pid-1", "harness-do", codeDef);
     await flush();
@@ -994,8 +994,8 @@ describe("RunnerEngine.runSkill — SM-4 governor (systemd-run scope + OOM detec
   });
 
   it("settle() reaps the dev-server PID file EVEN on a failed exit (teardown in finally)", async () => {
-    process.env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
-    process.env.USM_AUTORUN_WORKTREE = "0";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0";
     const { engine, children, reapDevServerCalls } = makeEngine(async () => "desenvolver", {
       systemdCheck: () => false,
     });
@@ -1007,8 +1007,8 @@ describe("RunnerEngine.runSkill — SM-4 governor (systemd-run scope + OOM detec
   });
 
   it("a throwing dev-server reaper NEVER escapes settle (slot still freed, run still finishes)", async () => {
-    process.env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
-    process.env.USM_AUTORUN_WORKTREE = "0";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0";
     const { engine, children, finishes } = makeEngine(async () => null, {
       systemdCheck: () => false,
       reapDevServer: async () => {
@@ -1060,7 +1060,7 @@ describe("RunnerEngine.runSkill — falha-fantasma guard (exit≠0 após o card 
   it("a non-clean exit AFTER the card advanced is NOT recorded as a failure", async () => {
     // Disable isolation so emitComplete fires immediately (non-isolated path). The r0zr3s describe
     // block covers the isolated-path deferral separately.
-    process.env.USM_AUTORUN_WORKTREE = "0";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0";
     // Reader: enqueue read → "priorizar" (before), finish read → "pronta" (after) ⇒ advanced.
     let calls = 0;
     const reader = async () => (calls++ === 0 ? "priorizar" : "pronta");
@@ -1102,7 +1102,7 @@ describe("RunnerEngine.runSkill — sucesso-fantasma guard (exit 0 mas o card N�
   const fastDef: StatusDef = { id: "enriquecer", name: "Enriquecer" };
 
   it("a clean exit (exit 0) of harness-enrich that did NOT advance is a 'no-op' failure, not ok", async () => {
-    process.env.USM_AUTORUN_WORKTREE = "0";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0";
     const reader = async () => "enriquecer"; // before === after ⇒ did NOT advance
     const { engine, children, finishes } = makeEngine(reader);
     engine.runSkill("storymap", "ghost-noop", "harness-enrich", fastDef);
@@ -1118,7 +1118,7 @@ describe("RunnerEngine.runSkill — sucesso-fantasma guard (exit 0 mas o card N�
   });
 
   it("a clean exit of harness-enrich that DID advance is a normal ok (no false positive)", async () => {
-    process.env.USM_AUTORUN_WORKTREE = "0";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0";
     let calls = 0;
     const reader = async () => (calls++ === 0 ? "enriquecer" : "priorizar"); // advanced
     const { engine, children, finishes } = makeEngine(reader);
@@ -1131,7 +1131,7 @@ describe("RunnerEngine.runSkill — sucesso-fantasma guard (exit 0 mas o card N�
   });
 
   it("a clean exit of a NON-advancing skill (harness-grill, HITL) that did NOT advance stays ok — never a no-op", async () => {
-    process.env.USM_AUTORUN_WORKTREE = "0";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0";
     const reader = async () => "grill"; // before === after, but grill is human-in-the-loop → expected
     const { engine, children, finishes } = makeEngine(reader);
     const grillDef: StatusDef = { id: "grill", name: "Dúvidas" };
@@ -1150,7 +1150,7 @@ describe("RunnerEngine.onComplete — cascade continuation hook", () => {
     // covers the isolated path where emitComplete is deferred until after merge-back.
     // Uses a NON-must-advance skill (harness-do) so the clean-exit hot path stays synchronous — the
     // sucesso-fantasma guard makes the clean-exit path async ONLY for advancesOnSuccess skills.
-    process.env.USM_AUTORUN_WORKTREE = "0";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0";
     const { engine, children } = makeEngine();
     const seen: unknown[] = [];
     engine.onComplete((ev) => seen.push(ev));
@@ -1173,7 +1173,7 @@ describe("RunnerEngine.onComplete — cascade continuation hook", () => {
   });
 
   it("story-harness-cc #4: carries the structured result (agent's final message + stop subtype + cost/turns)", async () => {
-    process.env.USM_AUTORUN_WORKTREE = "0";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0";
     const { engine, children } = makeEngine();
     const seen: Array<{ result?: { finalText?: string; subtype?: string; cost?: number; turns?: number } }> = [];
     engine.onComplete((ev) => seen.push(ev as { result?: { finalText?: string; subtype?: string; cost?: number; turns?: number } }));
@@ -1194,7 +1194,7 @@ describe("RunnerEngine.onComplete — cascade continuation hook", () => {
     // Non-isolated path so emitComplete fires synchronously. The lock-before-emit invariant holds
     // on both paths (finally releases before the if-not-deferred emit), but this test checks the
     // synchronous re-spawn which only works on the non-isolated path.
-    process.env.USM_AUTORUN_WORKTREE = "0";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0";
     // This is the cascade fix: the next skill must be spawnable from inside onComplete.
     const { engine, children, cmds } = makeEngine();
     engine.onComplete(({ board, cardId }) => {
@@ -1234,7 +1234,7 @@ describe("RunnerEngine.onComplete — cascade continuation hook", () => {
   });
 
   it("a throwing listener doesn't break the engine (other listeners + cleanup still run)", async () => {
-    process.env.USM_AUTORUN_WORKTREE = "0";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0";
     const { engine, children } = makeEngine();
     const seen: unknown[] = [];
     engine.onComplete(() => {
@@ -1306,7 +1306,7 @@ describe("RunnerEngine — isolated run cascade deferred to merge-back (story-r0
   it("does NOT fire onComplete when the run is enqueued on the merge train (emitComplete deferred)", async () => {
     // With isolation ON, a successful run commits+detaches+enqueues. The cascade must NOT fire at
     // settle time (status on main is still the old column) but AFTER the merge-back via onMergeDone.
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
     const { engine, children, mergeEnqueues } = makeEngine(async () => null, { committed: true });
     const seen: unknown[] = [];
     engine.onComplete((ev) => seen.push(ev));
@@ -1321,7 +1321,7 @@ describe("RunnerEngine — isolated run cascade deferred to merge-back (story-r0
 
   it("fires onComplete immediately when the isolated run has an EMPTY DIFF (nothing to merge)", async () => {
     // Empty diff → no merge enqueued → cascade should fire now (no merge-back to wait for)
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
     const { engine, children } = makeEngine(async () => null, { committed: false });
     const seen: unknown[] = [];
     engine.onComplete((ev) => seen.push(ev));
@@ -1339,7 +1339,7 @@ describe("RunnerEngine — sweep-commit do merge-back NUNCA destrói trabalho (s
     // O incidente 5a3103d3: a mensagem com o Decision: do agente quebrava o commit. A proveniência
     // NUNCA pode custar o trabalho — a 2ª tentativa usa a mensagem mínima determinística (subject +
     // Run-Id, sem Decision/Model) e o fluxo normal (detach + enqueue no train) segue.
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
     const { engine, children, mergeEnqueues, worktreeCommits, worktreeRemoves, worktreeDetaches, finishes } =
       makeEngine(async () => null, { commitThrowsTimes: 1 });
     const seen: unknown[] = [];
@@ -1364,7 +1364,7 @@ describe("RunnerEngine — sweep-commit do merge-back NUNCA destrói trabalho (s
     // caminho force-removia o worktree com o trabalho não-commitado dentro e o run assentava "ok"
     // (sucesso-fantasma). Agora: NENHUM remove, journal vira "error" (visível em Processos), e a
     // cascade ainda emite (nunca se perde permanentemente).
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
     const { engine, children, mergeEnqueues, worktreeCommits, worktreeRemoves, worktreeDetaches, finishes } =
       makeEngine(async () => null, { commitThrowsTimes: 2 });
     const seen: unknown[] = [];
@@ -1397,9 +1397,9 @@ describe("RunnerEngine.runSkill — board-data (isCode:false) runs edit main liv
   };
 
   it("creates NO worktree, spawns in repoRoot, and never enqueues a merge — even with isolation ON", async () => {
-    // The CORE of the fix: with USM_AUTORUN_WORKTREE=1, a CODE run would allocate a worktree + commit
+    // The CORE of the fix: with AGILEHARNESS_AUTORUN_WORKTREE=1, a CODE run would allocate a worktree + commit
     // boundary-1 + enqueue. A board-data run (harness-enrich) must do NONE of that — it edits main live.
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
     const repoRoot = findRepoRoot();
     const { engine, cmds, spawnOpts, worktreeCreates, worktreeBoardCommits, mergeEnqueues } = makeEngine(
       advancingReader(),
@@ -1416,7 +1416,7 @@ describe("RunnerEngine.runSkill — board-data (isCode:false) runs edit main liv
   it("on a clean (advancing) exit, commits its board-data on main via the per-cwd serializer", async () => {
     // The skill wrote the card .md straight on main but never committed — settle must sweep it into one
     // `board:`-prefixed commit on repoRoot, routed through the injected commitSerializer (keyed by cwd).
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
     const repoRoot = findRepoRoot();
     const serializerCwds: string[] = [];
     const recordingSerializer: CommitSerializer = (cwd, fn) => {
@@ -1447,7 +1447,7 @@ describe("RunnerEngine.runSkill — board-data (isCode:false) runs edit main liv
   it("a FAILED board-data run does NOT commit anything (failure must not persist partial board edits)", async () => {
     // A non-zero / killed isCode:false run leaves the dirty tree alone — the operator re-runs; we never
     // turn a partial edit into a clean `board:` commit.
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
     const reader = async () => "enriquecer"; // never advances → the killed run is a real failure
     const { engine, children, worktreeBoardCommits, finishes } = makeEngine(reader);
     engine.runSkill("storymap", "c1", "harness-enrich", fastDef);
@@ -1463,8 +1463,8 @@ describe("RunnerEngine.runSkill — board-data (isCode:false) runs edit main liv
     // through the per-cwd serializer keyed on repoRoot — so they serialize on one chain (no .git/index
     // race), never interleave. boardCommitDelayMs holds the first commit open across a macrotask so a
     // non-serialized impl WOULD overlap; the recording serializer asserts the single ordered chain.
-    process.env.USM_AUTORUN_WORKTREE = "1";
-    process.env.USM_AUTORUN_MAX = "2"; // both run at once
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_MAX = "2"; // both run at once
     const repoRoot = findRepoRoot();
     // A faithful per-cwd serializer (mirrors serialCommit) that records start/end ordering so we can
     // assert the second commit only STARTS after the first SETTLES (no overlap on the shared index).
@@ -1532,8 +1532,8 @@ describe("RunnerEngine.runSkill — board-data (isCode:false) runs edit main liv
     // Prod runs worktreeIsolation=TRUE: pre-apz8sa a board-data run reached origin via worktree→merge-
     // train→push. With the no-worktree settle, the commit lands local-only — so it MUST push to origin
     // (via commitBoardStateAndPush → the shared pushHeadToOrigin) or other checkouts never see the edit.
-    process.env.USM_AUTORUN_WORKTREE = "1";
-    process.env.STORYMAP_BOARD_AUTOPUSH = "1"; // o push é declarado desde a auditoria de 2026-08-19
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_BOARD_AUTOPUSH = "1"; // o push é declarado desde a auditoria de 2026-08-19
     const repoRoot = findRepoRoot();
     const { engine, children, worktreeBoardCommits, worktreeBoardPushes } = makeEngine(advancingReader(), {
       boardDataCommitted: true, // the skill wrote the card .md → a real commit to push
@@ -1554,7 +1554,7 @@ describe("RunnerEngine.runSkill — board-data (isCode:false) runs edit main liv
   it("FIX 1: a FAILED/cancelled board-data run commits NOTHING, so it pushes NOTHING", async () => {
     // The push is GATED on a real commit: a killed isCode:false run leaves the dirty tree alone (no
     // commit), so there is nothing to push — origin is never touched by an incomplete board edit.
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
     const reader = async () => "enriquecer"; // never advances → the killed run is a real failure
     const { engine, children, worktreeBoardCommits, worktreeBoardPushes, finishes } = makeEngine(reader);
     engine.runSkill("storymap", "c1", "harness-enrich", fastDef);
@@ -1572,8 +1572,8 @@ describe("RunnerEngine.runSkill — board-data (isCode:false) runs edit main liv
     // que empurrava board-data para o remoto de quem instalou a ferramenta, sem knob e sem aviso. A
     // durabilidade não se perde: `git push` é cumulativo, então o próximo merge-back de um run de
     // CÓDIGO leva o commit junto.
-    process.env.USM_AUTORUN_WORKTREE = "1";
-    delete process.env.STORYMAP_BOARD_AUTOPUSH;
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
+    delete process.env.AGILEHARNESS_BOARD_AUTOPUSH;
     const { engine, children, worktreeBoardCommits, worktreeBoardPushes } = makeEngine(advancingReader(), {
       boardDataCommitted: true,
     });
@@ -1589,8 +1589,8 @@ describe("RunnerEngine.runSkill — board-data (isCode:false) runs edit main liv
   it("FIX 1: a FAILED push is non-fatal — the run still completes (push is cumulative, recovers later)", async () => {
     // FAIL-OPEN: an origin outage (boardDataPushFails) must NOT crash the run or lose the cascade — the
     // commit is local-durable and the next push recovers it. The cascade still fires (deferred).
-    process.env.USM_AUTORUN_WORKTREE = "1";
-    process.env.STORYMAP_BOARD_AUTOPUSH = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_BOARD_AUTOPUSH = "1";
     const { engine, children, worktreeBoardCommits, worktreeBoardPushes } = makeEngine(advancingReader(), {
       boardDataCommitted: true,
       boardDataPushFails: true, // origin rejects the push (and the reconcile didn't recover it)
@@ -1613,7 +1613,7 @@ describe("RunnerEngine.runSkill — board-data (isCode:false) runs edit main liv
     // commitBoardStateAndPush promise REJECTS. The engine swallows it (logged) and STILL fires the
     // deferred cascade — a misclassified run can never write code to main as board data, and the card
     // is not silently stranded (the next code run's boundary-1 sweeps any legit leftover board delta).
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
     const { engine, children, worktreeBoardPushes } = makeEngine(advancingReader(), {
       boardDataCommitThrows: true, // models the code-guard / secret-scan abort
     });
@@ -1635,7 +1635,7 @@ describe("RunnerEngine.runSkill — isCode:true runs STILL isolate + enqueue (st
     // The mirror assertion: the fix gates the worktree on isCode, so a CODE run must keep the UNCHANGED
     // behavior — exactly what the l.494 journal test + the r0zr3s deferral test cover, asserted here
     // explicitly as an isCode-gated regression guard.
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
     const { engine, children, spawnOpts, worktreeCreates, worktreeBoardCommits, mergeEnqueues } = makeEngine(
       async () => null,
       { committed: true },
@@ -2005,7 +2005,7 @@ describe("SM-09 — per-app context note injected into the spawn prompt", () => 
     // carried the run's own standing — and the light lane is exactly the lane that writes board-data in the
     // runtime checkout under an exemption it could not discover. acme/story-tlz0dt: a harness-grill run read the
     // "board-data only via MCP" doctrine, could not find the clause exempting engine runs (the root file
-    // never names STORYMAP_AUTORUN_RUN_ID; the file that does is package-scoped), abandoned the Edit it was
+    // never names AGILEHARNESS_AUTORUN_RUN_ID; the file that does is package-scoped), abandoned the Edit it was
     // granted, chased an MCP tool it was not, and spent its budget asking a human who does not exist.
     it("systemPromptFor: a light-lane skill carries the BOARD-DATA invariants (it must know its own standing)", () => {
       expect(systemPromptFor("harness-grill")).toBe(BOARD_DATA_SKILL_INVARIANTS);
@@ -2014,7 +2014,7 @@ describe("SM-09 — per-app context note injected into the spawn prompt", () => 
 
     it("the light-lane invariants state the exemption, the empty MCP surface, and the no-human rule", () => {
       // Asserting the SUBSTANCE, not the prose: each clause is one of the three beliefs that stalled the run.
-      expect(BOARD_DATA_SKILL_INVARIANTS).toContain("STORYMAP_AUTORUN_RUN_ID"); // self-verifiable, unlike the doc
+      expect(BOARD_DATA_SKILL_INVARIANTS).toContain("AGILEHARNESS_AUTORUN_RUN_ID"); // self-verifiable, unlike the doc
       expect(BOARD_DATA_SKILL_INVARIANTS).toMatch(/Edit\/Write/); // write directly — the granted path
       expect(BOARD_DATA_SKILL_INVARIANTS).toMatch(/não existe humano/i); // never end a turn asking permission
     });
@@ -2263,8 +2263,8 @@ describe("SM-09 — per-app context note injected into the spawn prompt", () => 
       expect(systemPromptFor("harness-nao-existe" as never)).toBeNull();
     });
 
-    it("G8: USM_AUTORUN_SYSTEM_PROMPT_FILE=0 inline fallback carries contextNote AND the per-skill invariants (not only contextNote)", async () => {
-      process.env.USM_AUTORUN_SYSTEM_PROMPT_FILE = "0";
+    it("G8: AGILEHARNESS_AUTORUN_SYSTEM_PROMPT_FILE=0 inline fallback carries contextNote AND the per-skill invariants (not only contextNote)", async () => {
+      process.env.AGILEHARNESS_AUTORUN_SYSTEM_PROMPT_FILE = "0";
       try {
         const { engine, cmds } = makeEngine(async () => null, { readBoardConfig: async () => boardCfg() });
         expect(engine.runSkill("acme", "story-1", "harness-do", codeDef).ok).toBe(true);
@@ -2275,7 +2275,7 @@ describe("SM-09 — per-app context note injected into the spawn prompt", () => 
         // fallback no longer silently strips a code run of its non-negotiables.
         expect(cmds[0]).toContain("fix-the-app");
       } finally {
-        delete process.env.USM_AUTORUN_SYSTEM_PROMPT_FILE;
+        delete process.env.AGILEHARNESS_AUTORUN_SYSTEM_PROMPT_FILE;
       }
     });
 
@@ -2353,7 +2353,7 @@ describe("RunnerEngine.runSkill — resume an interrupted run via --resume (stor
   });
 
   it("reuses the original run's worktree as cwd and does NOT create a new one (resume into the existing tree)", async () => {
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
     const { engine, cmds, spawnOpts, worktreeCreates, worktreeBoardCommits } = makeEngine();
     engine.runSkill("storymap", "story-1", "harness-do", codeDef, {
       dedupeWindowMs: 0,
@@ -2365,13 +2365,13 @@ describe("RunnerEngine.runSkill — resume an interrupted run via --resume (stor
     expect(worktreeBoardCommits).toHaveLength(0); // boundary-1 ran before the original run → skipped
     expect(cmds).toHaveLength(1);
     expect(spawnOpts[0].cwd).toBe("/repo/.worktrees/run-sess-prev"); // spawn cwd IS the original tree
-    delete process.env.USM_AUTORUN_WORKTREE;
+    delete process.env.AGILEHARNESS_AUTORUN_WORKTREE;
   });
 
   it("resume WITHOUT an existing worktree runs in the repo root — even with isolation ON (no fresh tree)", async () => {
     // A resume never mints a NEW worktree (the branch run/<resumeSessionId> would collide and the
     // transcript already encodes the original tree's work) — so isolation ON is irrelevant here.
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
     const { engine, cmds, spawnOpts, worktreeCreates } = makeEngine();
     const repoRoot = findRepoRoot();
     engine.runSkill("storymap", "story-1", "harness-do", codeDef, { dedupeWindowMs: 0, resumeSessionId: "sess-prev" });
@@ -2379,7 +2379,7 @@ describe("RunnerEngine.runSkill — resume an interrupted run via --resume (stor
     expect(worktreeCreates).toHaveLength(0);
     expect(cmds).toHaveLength(1);
     expect(spawnOpts[0].cwd).toBe(repoRoot);
-    delete process.env.USM_AUTORUN_WORKTREE;
+    delete process.env.AGILEHARNESS_AUTORUN_WORKTREE;
   });
 });
 
@@ -2420,8 +2420,8 @@ describe("RunnerEngine.runSkill — resume fallback to a FRESH dispatch (story-1
     expect(finishes.some((f) => f.outcome === "exit")).toBe(true); // settled as a real failure
   });
 
-  it("respects the retry cap — USM_AUTORUN_RESUME_FALLBACK_MAX=0 fails to the operator, never re-dispatching", async () => {
-    process.env.USM_AUTORUN_RESUME_FALLBACK_MAX = "0";
+  it("respects the retry cap — AGILEHARNESS_AUTORUN_RESUME_FALLBACK_MAX=0 fails to the operator, never re-dispatching", async () => {
+    process.env.AGILEHARNESS_AUTORUN_RESUME_FALLBACK_MAX = "0";
     const { engine, cmds, children, finishes } = makeEngine();
     engine.runSkill("storymap", "story-1", "harness-do", codeDef, { dedupeWindowMs: 0, resumeSessionId: "sess-gone" });
     await flush();
@@ -2440,10 +2440,10 @@ describe("RunnerEngine.runSkill — resume on --max-turns (story-9s52tu HALF B)"
   const MAX_TURNS_EVENT = JSON.stringify({ type: "result", subtype: "error_max_turns", is_error: true }) + "\n";
 
   beforeEach(() => {
-    process.env.USM_AUTORUN_WORKTREE = "1"; // a worktree must exist to preserve + resume into
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1"; // a worktree must exist to preserve + resume into
   });
   afterEach(() => {
-    delete process.env.USM_AUTORUN_WORKTREE;
+    delete process.env.AGILEHARNESS_AUTORUN_WORKTREE;
   });
 
   it("AC5: a max-turns stop where the card did NOT advance PRESERVES the worktree+branch and marks the run RESUMABLE (no force-delete, no failure)", async () => {
@@ -2533,7 +2533,7 @@ describe("RunnerEngine.runSkill — resume on --max-turns (story-9s52tu HALF B)"
   // outlier. Measured cost of the old contract: acme/story-tlz0dt stopped mid-thought, wrote nothing, and
   // was never retried.
   it("a max-turns stop with NO worktree is STILL resumable — the session resumes without a tree", async () => {
-    process.env.USM_AUTORUN_WORKTREE = "0"; // no worktree — the light lane's normal shape
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0"; // no worktree — the light lane's normal shape
     const reader = async () => "desenvolver";
     const { engine, children, cmds, spawnOpts, finishes, resumables, worktreeRemoves, worktreeCreates } =
       makeEngine(reader);
@@ -2639,7 +2639,7 @@ describe("RunnerEngine.runSkill — resume on --max-turns (story-9s52tu HALF B)"
   //    ESCALATES to a genuine failure + force-deletes the tree, instead of looping forever. FAILS on
   //    the pre-fix diff (no counter, no cap → always preserves). ───────────────────────────────────
   it("HIGH #2: at the resume cap the card ESCALATES — genuine 'error' failure + the worktree is FORCE-DELETED (no resumable orphan, no resume)", async () => {
-    process.env.USM_AUTORUN_MAXTURNS_RESUME_MAX = "2"; // cap = 2
+    process.env.AGILEHARNESS_AUTORUN_MAXTURNS_RESUME_MAX = "2"; // cap = 2
     const reader = async () => "desenvolver"; // never advances → chronically stuck
     const { engine, children, finishes, resumables, worktreeCreates, worktreeRemoves } = makeEngine(reader);
     // This run ALREADY carries resumeCount === cap (2) — the 3rd cycle. It must NOT preserve again.
@@ -2660,7 +2660,7 @@ describe("RunnerEngine.runSkill — resume on --max-turns (story-9s52tu HALF B)"
   });
 
   it("HIGH #2: UNDER the cap still preserves + resumes (the cap is the only thing that stops the loop)", async () => {
-    process.env.USM_AUTORUN_MAXTURNS_RESUME_MAX = "2";
+    process.env.AGILEHARNESS_AUTORUN_MAXTURNS_RESUME_MAX = "2";
     const reader = async () => "desenvolver";
     const { engine, children, resumables, worktreeRemoves } = makeEngine(reader);
     engine.runSkill("storymap", "story-1", "harness-do", codeDef, { maxTurnsResumeCount: 1 }); // 1 < cap 2
@@ -2675,7 +2675,7 @@ describe("RunnerEngine.runSkill — resume on --max-turns (story-9s52tu HALF B)"
   });
 
   it("HIGH #2: cap=0 disables auto-resume — the FIRST max-turns settle escalates straight to a failure", async () => {
-    process.env.USM_AUTORUN_MAXTURNS_RESUME_MAX = "0";
+    process.env.AGILEHARNESS_AUTORUN_MAXTURNS_RESUME_MAX = "0";
     const reader = async () => "desenvolver";
     const { engine, children, finishes, resumables, worktreeCreates, worktreeRemoves } = makeEngine(reader);
     engine.runSkill("storymap", "story-1", "harness-do", codeDef); // resumeCount 0 >= cap 0 → escalate
@@ -2715,7 +2715,7 @@ describe("RunnerEngine.runSkill — resume on --max-turns (story-9s52tu HALF B)"
 
   // ── (d) a NORMAL completion still cascades (the suppression is scoped to the resumable path ONLY). ─
   it("(d) a NORMAL (clean) completion still emits the generic cascade — suppression is the resumable path ONLY", async () => {
-    process.env.USM_AUTORUN_WORKTREE = "0"; // non-isolated → emitComplete fires synchronously on clean exit
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0"; // non-isolated → emitComplete fires synchronously on clean exit
     const reader = async () => "desenvolver";
     const { engine, children } = makeEngine(reader);
     const seen: Array<{ outcome: string }> = [];
@@ -2820,7 +2820,7 @@ describe("formatRunAge — coarse handoff-source age (G5)", () => {
 describe("RunnerEngine — git worktree isolation (R1)", () => {
   // The whole capability is gated behind worktreeIsolation (DEFAULT OFF) — turn it ON for this block.
   beforeEach(() => {
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
   });
 
   it("creates an isolated worktree BEFORE spawning and uses it as the run's cwd (AC1)", async () => {
@@ -3096,7 +3096,7 @@ describe("RunnerEngine — git worktree isolation (R1)", () => {
   });
 
   it("gives two concurrent runs DISTINCT worktrees so their files never collide (AC3)", async () => {
-    process.env.USM_AUTORUN_MAX = "2";
+    process.env.AGILEHARNESS_AUTORUN_MAX = "2";
     const { engine, spawnOpts, worktreeCreates } = makeEngine();
     engine.runSkill("acme", "a", "harness-do", codeDef);
     engine.runSkill("acme", "b", "harness-do", codeDef);
@@ -3183,7 +3183,7 @@ describe("RunnerEngine — git worktree isolation (R1)", () => {
 describe("RunnerEngine.forceRelease — liberar/matar uma run travada (R1)", () => {
   // These assert worktree teardown on force-release → isolation ON.
   beforeEach(() => {
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
   });
 
   it("kills an EXECUTING run's child, releases its in-flight lock and tears down its worktree", async () => {
@@ -3211,7 +3211,7 @@ describe("RunnerEngine.forceRelease — liberar/matar uma run travada (R1)", () 
   });
 
   it("cancels a QUEUED run cleanly, never spawning it (cap=1) and journaling it finished", async () => {
-    process.env.USM_AUTORUN_MAX = "1";
+    process.env.AGILEHARNESS_AUTORUN_MAX = "1";
     const { engine, children, cmds, finishes, worktreeCreates } = makeEngine();
     expect(engine.runSkill("acme", "run-a", "harness-do", codeDef).ok).toBe(true); // executes
     expect(engine.runSkill("acme", "run-b", "harness-do", codeDef).ok).toBe(true); // queued (cap 1)
@@ -3242,7 +3242,7 @@ describe("RunnerEngine.forceRelease — liberar/matar uma run travada (R1)", () 
   });
 
   it("#44: a queued cancel re-stamps the dedupe window so an AUTORUN echo can't resurrect it (manual re-run still allowed)", async () => {
-    process.env.USM_AUTORUN_MAX = "1";
+    process.env.AGILEHARNESS_AUTORUN_MAX = "1";
     const { engine, children, cmds } = makeEngine();
     // A executes (holds the single slot); B queues behind it with the autorun dedupe window.
     expect(engine.runSkill("acme", "run-a", "harness-do", codeDef, { dedupeWindowMs: 30_000 }).ok).toBe(true);
@@ -3294,7 +3294,7 @@ describe("RunnerEngine.forceRelease — liberar/matar uma run travada (R1)", () 
     // forceRelease marks it forceKilled (so it is NOT mislabeled OOM) AND cancelledKills (story-vbkazs:
     // a DELIBERATE cancel), so the 137 classifies as the non-failure outcome "cancelled" — never
     // "oom-killed". The regression guarded here remains: it must NOT be attributed to the kernel's OOM.
-    process.env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
     const reader = async () => "desenvolver";
     const { engine, children, finishes } = makeEngine(reader, { systemdCheck: () => true });
     engine.runSkill("acme", "fk-1", "harness-do", codeDef);
@@ -3353,7 +3353,7 @@ describe("RunnerEngine.forceRelease — liberar/matar uma run travada (R1)", () 
   });
 
   it("a QUEUED run force-released then dequeued records 'cancelled' (not 'exit') + NO RunnerFailure", async () => {
-    process.env.USM_AUTORUN_MAX = "1";
+    process.env.AGILEHARNESS_AUTORUN_MAX = "1";
     const { engine, children, cmds, finishes } = makeEngine();
     expect(engine.runSkill("acme", "q-a", "harness-do", codeDef).ok).toBe(true); // executes (holds the slot)
     expect(engine.runSkill("acme", "q-b", "harness-do", codeDef).ok).toBe(true); // queued (cap 1)
@@ -3387,7 +3387,7 @@ describe("RunnerEngine.forceRelease — liberar/matar uma run travada (R1)", () 
   it("REGRESSION: an OOM SIGKILL/137 on a SCOPED run stays 'oom-killed' (cancelledKills empty)", async () => {
     // The OOM path is untouched by story-vbkazs: no forceRelease → cancelledKills empty → the scope's
     // 137 is still attributed to the kernel's cgroup OOM killer, NEVER reclassified as a cancel.
-    process.env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX = "2G";
     const { engine, children, finishes } = makeEngine(async () => "desenvolver", { systemdCheck: () => true });
     engine.runSkill("acme", "oom-vb", "harness-do", codeDef);
     await flush();
@@ -3472,7 +3472,7 @@ function mergeExecWithBoardCommit(opts: { commitDelayMs?: number } = {}) {
 
 describe("RunnerEngine + merge train — per-cwd commit mutex across BOTH boundaries (story-ms5rmt)", () => {
   beforeEach(() => {
-    process.env.USM_AUTORUN_WORKTREE = "1"; // boundary 1 only runs with isolation ON
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1"; // boundary 1 only runs with isolation ON
   });
 
   it("serializes the engine's boundary-1 START commit and the merge train's boundary-2 commit on the SAME main tree (AC1/AC4, f-serial-start-test)", async () => {
@@ -3504,7 +3504,7 @@ describe("RunnerEngine + merge train — per-cwd commit mutex across BOTH bounda
   });
 
   it("serializes 2 concurrent STARTS + 1 merge on the same repoRoot, and never routes a per-worktree commit through the mutex (AC1/AC2)", async () => {
-    process.env.USM_AUTORUN_MAX = "2"; // let both starts run at once
+    process.env.AGILEHARNESS_AUTORUN_MAX = "2"; // let both starts run at once
     const repoRoot = findRepoRoot();
     const ser = makeConcurrencySerializer();
     const { engine } = makeEngine(async () => null, {
@@ -3537,13 +3537,13 @@ describe("RunnerEngine — resource-aware admission lanes (story-scheduler-lanes
   // Lane caps + thresholds are driven by env (which always wins over settings.yaml). Isolation OFF so
   // the spawn path is the plain repo-root one — these tests are about admission, not worktrees.
   const LANE_ENV = [
-    "USM_AUTORUN_LANE_LIGHT_MAX",
-    "USM_AUTORUN_LANE_HEAVY_MAX",
-    "USM_AUTORUN_RAM_FREE_MB",
-    "USM_AUTORUN_LOAD_AVG_1",
+    "AGILEHARNESS_AUTORUN_LANE_LIGHT_MAX",
+    "AGILEHARNESS_AUTORUN_LANE_HEAVY_MAX",
+    "AGILEHARNESS_AUTORUN_RAM_FREE_MB",
+    "AGILEHARNESS_AUTORUN_LOAD_AVG_1",
   ] as const;
   beforeEach(() => {
-    process.env.USM_AUTORUN_WORKTREE = "0";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0";
   });
   afterEach(() => {
     for (const k of LANE_ENV) delete process.env[k];
@@ -3553,9 +3553,9 @@ describe("RunnerEngine — resource-aware admission lanes (story-scheduler-lanes
   const countSkill = (cmds: string[], skill: string) => cmds.filter((c) => c.includes(`"/${skill} `)).length;
 
   it("a heavy run waits when the heavy lane is at its cap, while a light run still passes (AC2)", async () => {
-    process.env.USM_AUTORUN_MAX = "5"; // global ceiling not the binding constraint here
-    process.env.USM_AUTORUN_LANE_HEAVY_MAX = "1"; // only ONE heavy run at a time
-    process.env.USM_AUTORUN_LANE_LIGHT_MAX = "5";
+    process.env.AGILEHARNESS_AUTORUN_MAX = "5"; // global ceiling not the binding constraint here
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MAX = "1"; // only ONE heavy run at a time
+    process.env.AGILEHARNESS_AUTORUN_LANE_LIGHT_MAX = "5";
     const { engine, children, cmds } = makeEngine();
     engine.runSkill("acme", "heavy-a", "harness-do", codeDef); // admitted (heavy lane: 1/1)
     engine.runSkill("acme", "heavy-b", "harness-do", codeDef); // BLOCKED — heavy lane full
@@ -3571,11 +3571,11 @@ describe("RunnerEngine — resource-aware admission lanes (story-scheduler-lanes
   });
 
   it("blocks the heavy lane while the VPS is over the RAM threshold, but never the light lane (AC2)", async () => {
-    process.env.USM_AUTORUN_MAX = "5";
-    process.env.USM_AUTORUN_LANE_HEAVY_MAX = "5"; // lane caps are NOT the constraint — the probe is
-    process.env.USM_AUTORUN_LANE_LIGHT_MAX = "5";
-    process.env.USM_AUTORUN_RAM_FREE_MB = "400"; // heavy waits while free RAM < 400 MB
-    process.env.USM_AUTORUN_LOAD_AVG_1 = "999"; // isolate the RAM axis
+    process.env.AGILEHARNESS_AUTORUN_MAX = "5";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MAX = "5"; // lane caps are NOT the constraint — the probe is
+    process.env.AGILEHARNESS_AUTORUN_LANE_LIGHT_MAX = "5";
+    process.env.AGILEHARNESS_AUTORUN_RAM_FREE_MB = "400"; // heavy waits while free RAM < 400 MB
+    process.env.AGILEHARNESS_AUTORUN_LOAD_AVG_1 = "999"; // isolate the RAM axis
     let overloaded = true;
     const probe = () => ({ freeRamMb: overloaded ? 100 : Infinity, loadAvg1: 0 });
     const { engine, children, cmds } = makeEngine(async () => null, { probeResources: probe });
@@ -3606,10 +3606,10 @@ describe("RunnerEngine — resource-aware admission lanes (story-scheduler-lanes
     });
 
     it("heavy barrado com a caixa QUENTE e nada rodando: não spawna, e RE-ARMA (antes: esperava para sempre)", async () => {
-      process.env.USM_AUTORUN_MAX = "5";
-      process.env.USM_AUTORUN_LANE_HEAVY_MAX = "5";
-      process.env.USM_AUTORUN_RAM_FREE_MB = "400";
-      process.env.USM_AUTORUN_LOAD_AVG_1 = "999";
+      process.env.AGILEHARNESS_AUTORUN_MAX = "5";
+      process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MAX = "5";
+      process.env.AGILEHARNESS_AUTORUN_RAM_FREE_MB = "400";
+      process.env.AGILEHARNESS_AUTORUN_LOAD_AVG_1 = "999";
       let overloaded = true;
       const { engine, cmds, pumpTimers } = makeEngine(async () => null, {
         probeResources: () => ({ freeRamMb: overloaded ? 100 : Infinity, loadAvg1: 0 }),
@@ -3627,10 +3627,10 @@ describe("RunnerEngine — resource-aware admission lanes (story-scheduler-lanes
     });
 
     it("ainda quente no retry: re-arma (UM timer por vez — retenta, não vira busy-loop)", async () => {
-      process.env.USM_AUTORUN_MAX = "5";
-      process.env.USM_AUTORUN_LANE_HEAVY_MAX = "5";
-      process.env.USM_AUTORUN_RAM_FREE_MB = "400";
-      process.env.USM_AUTORUN_LOAD_AVG_1 = "999";
+      process.env.AGILEHARNESS_AUTORUN_MAX = "5";
+      process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MAX = "5";
+      process.env.AGILEHARNESS_AUTORUN_RAM_FREE_MB = "400";
+      process.env.AGILEHARNESS_AUTORUN_LOAD_AVG_1 = "999";
       const { engine, cmds, pumpTimers } = makeEngine(async () => null, {
         probeResources: () => ({ freeRamMb: 100, loadAvg1: 0 }), // NUNCA esfria
       });
@@ -3648,8 +3648,8 @@ describe("RunnerEngine — resource-aware admission lanes (story-scheduler-lanes
     });
 
     it("com um run EM VOO nada é armado — o assentamento dele é a borda (nenhum timer supérfluo)", async () => {
-      process.env.USM_AUTORUN_MAX = "5";
-      process.env.USM_AUTORUN_LANE_HEAVY_MAX = "1"; // o 2º heavy fica na fila pela COTA, não pelo nível
+      process.env.AGILEHARNESS_AUTORUN_MAX = "5";
+      process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MAX = "1"; // o 2º heavy fica na fila pela COTA, não pelo nível
       const { engine, pumpTimers } = makeEngine(async () => null, {});
       engine.runSkill("acme", "heavy-1", "harness-do", codeDef);
       engine.runSkill("acme", "heavy-2", "harness-do", codeDef);
@@ -3661,11 +3661,11 @@ describe("RunnerEngine — resource-aware admission lanes (story-scheduler-lanes
   it("blocks the heavy lane while the VPS is over the LOAD threshold, but never the light lane (AC2)", async () => {
     // Sibling of the RAM-threshold test on the OTHER axis of isVpsOverloaded — proves the load/CPU
     // half of AC2 is wired through pump() end-to-end, not only in the pure isVpsOverloaded unit.
-    process.env.USM_AUTORUN_MAX = "5";
-    process.env.USM_AUTORUN_LANE_HEAVY_MAX = "5"; // lane caps are NOT the constraint — the probe is
-    process.env.USM_AUTORUN_LANE_LIGHT_MAX = "5";
-    process.env.USM_AUTORUN_RAM_FREE_MB = "0"; // isolate the LOAD axis (never block on RAM)
-    process.env.USM_AUTORUN_LOAD_AVG_1 = "3.5"; // heavy waits while 1-min load > 3.5
+    process.env.AGILEHARNESS_AUTORUN_MAX = "5";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MAX = "5"; // lane caps are NOT the constraint — the probe is
+    process.env.AGILEHARNESS_AUTORUN_LANE_LIGHT_MAX = "5";
+    process.env.AGILEHARNESS_AUTORUN_RAM_FREE_MB = "0"; // isolate the LOAD axis (never block on RAM)
+    process.env.AGILEHARNESS_AUTORUN_LOAD_AVG_1 = "3.5"; // heavy waits while 1-min load > 3.5
     let overloaded = true;
     const probe = () => ({ freeRamMb: Infinity, loadAvg1: overloaded ? 9 : 0 });
     const { engine, children, cmds } = makeEngine(async () => null, { probeResources: probe });
@@ -3683,9 +3683,9 @@ describe("RunnerEngine — resource-aware admission lanes (story-scheduler-lanes
   });
 
   it("maxConcurrent > 2 admits runs distributed across BOTH lanes up to the per-lane caps (AC3)", async () => {
-    process.env.USM_AUTORUN_MAX = "4"; // the operator raised the ceiling above the legacy 2
-    process.env.USM_AUTORUN_LANE_LIGHT_MAX = "3";
-    process.env.USM_AUTORUN_LANE_HEAVY_MAX = "1";
+    process.env.AGILEHARNESS_AUTORUN_MAX = "4"; // the operator raised the ceiling above the legacy 2
+    process.env.AGILEHARNESS_AUTORUN_LANE_LIGHT_MAX = "3";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MAX = "1";
     const { engine, cmds } = makeEngine();
     engine.runSkill("acme", "heavy-a", "harness-do", codeDef);
     engine.runSkill("acme", "light-b", "harness-enrich", codeDef);
@@ -3703,8 +3703,8 @@ describe("RunnerEngine — resource-aware admission lanes (story-scheduler-lanes
     // Guards the runningHeavy invariant on the cancel-while-queued teardown: pump() claims the heavy
     // slot when it dequeues the cancelled run, and finishCancelled() must release it via the SAME lane
     // captured at enqueue. If it leaked, the heavy lane (cap 1) would stay permanently throttled.
-    process.env.USM_AUTORUN_MAX = "5";
-    process.env.USM_AUTORUN_LANE_HEAVY_MAX = "1"; // one heavy at a time → the counter must recover
+    process.env.AGILEHARNESS_AUTORUN_MAX = "5";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MAX = "1"; // one heavy at a time → the counter must recover
     const { engine, children, cmds } = makeEngine();
     engine.runSkill("acme", "heavy-a", "harness-do", codeDef); // admitted (heavy lane 1/1)
     engine.runSkill("acme", "heavy-b", "harness-do", codeDef); // queued behind the heavy cap
@@ -3727,7 +3727,7 @@ describe("RunnerEngine — merge train re-drive wiring (story-92ldyt)", () => {
   // Isolation ON so a successful run hands its branch to the merge train (where the trigger/driveCount
   // it carries decide re-drive eligibility).
   beforeEach(() => {
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
   });
 
   const board: BoardConfig = {
@@ -3794,7 +3794,7 @@ describe("RunnerEngine — merge train re-drive wiring (story-92ldyt)", () => {
 
 describe("RunnerEngine + merge train — conflict re-drive end-to-end (story-92ldyt, AC1+AC2)", () => {
   beforeEach(() => {
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
   });
 
   it("a conflicting run is RE-DRIVEN — the skill re-runs against the updated main, the regenerated branch merges CLEAN, with no manual pause", async () => {
@@ -3892,7 +3892,7 @@ describe("RunnerEngine + merge train — conflict re-drive end-to-end (story-92l
 
 describe("RunnerEngine — worktree isolation OFF by default (safe default)", () => {
   it("allocates NO worktree and runs in the repo root (cwd=repoRoot) when the flag is off", async () => {
-    process.env.USM_AUTORUN_WORKTREE = "0"; // explicit default-off (independent of any settings.yaml)
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0"; // explicit default-off (independent of any settings.yaml)
     const { engine, children, cmds, spawnOpts, starts, worktreeCreates, worktreeBoardCommits, worktreeRemoves } = makeEngine();
     expect(engine.runSkill("acme", "story-1", "harness-do", codeDef).ok).toBe(true);
     await flush();
@@ -3934,7 +3934,7 @@ describe("RunnerEngine.getQueueInfo — admission snapshot (story-mcp-enfileiram
   });
 
   it("reports queued lane + 0-indexed position, shifting in lockstep as the queue drains", async () => {
-    process.env.USM_AUTORUN_MAX = "1"; // one heavy run at a time → qb, qc queue behind qa
+    process.env.AGILEHARNESS_AUTORUN_MAX = "1"; // one heavy run at a time → qb, qc queue behind qa
     const { engine, children } = makeEngine();
     engine.runSkill("qi", "qa", "harness-do", codeDef); // runs
     engine.runSkill("qi", "qb", "harness-do", codeDef); // queued, position 0
@@ -4096,7 +4096,7 @@ describe("sanitizeSpawnPath", () => {
 // reclassifica como no-op ANTES do teardown, para a falha aparecer e o branch flip-only não mergear.
 describe("RunnerEngine.runSkill — guard de artefatos de código (C2/O3.5, harness-do)", () => {
   it("clean exit de harness-do cujo worktree só mudou storymap/boards/ → reclassificado no-op", async () => {
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
     const { engine, children, finishes } = makeEngine(async () => null, {
       changedPaths: ["storymap/boards/acme/cards/story-c2ghost.md"],
     });
@@ -4114,7 +4114,7 @@ describe("RunnerEngine.runSkill — guard de artefatos de código (C2/O3.5, harn
   });
 
   it("clean exit de harness-do com artefato de código → ok (sem falso positivo)", async () => {
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
     const { engine, children, finishes } = makeEngine(async () => null, {
       changedPaths: ["storymap/boards/acme/cards/story-c2ok.md", "packages/acmeapp/web/src/components/Facet.tsx"],
     });
@@ -4128,7 +4128,7 @@ describe("RunnerEngine.runSkill — guard de artefatos de código (C2/O3.5, harn
   });
 
   it("fail-open: ops sem changedPaths (default) → guard OFF, clean exit segue ok", async () => {
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
     const { engine, children, finishes } = makeEngine();
     engine.runSkill("acme", "story-c2off", "harness-do", codeDef);
     await flush();
@@ -4139,7 +4139,7 @@ describe("RunnerEngine.runSkill — guard de artefatos de código (C2/O3.5, harn
   });
 
   it("um harness-review sem mudanças de código NÃO é reclassificado (zero código é legítimo fora do harness-do)", async () => {
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
     const { engine, children, finishes } = makeEngine(async () => null, { changedPaths: [] });
     const revDef: StatusDef = { id: "revisar-codigo", name: "Rev" };
     engine.runSkill("acme", "story-c2rev", "harness-review", revDef);
@@ -4174,7 +4174,7 @@ describe("RunnerEngine.runSkill — guarda C2 × convergência: o delta já ater
   // O run: harness-do isolado que sai LIMPO tendo mudado só storymap/boards/ — exatamente a forma do
   // sucesso-fantasma. O que decide entre "fantasma" e "já aterrissou" é SÓ o veredito da régua.
   const runGhostBuild = async (opts: { verdict: "landed" | "partial" | "unknown"; card?: Card | null; onDisk?: Card | null }) => {
-    process.env.USM_AUTORUN_WORKTREE = "1";
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
     const rulerCalls: Array<{ range: { base: string; head: string }; target: string }> = [];
     const card = opts.card === undefined ? deltaCard : opts.card;
     const h = makeEngine(async () => null, {

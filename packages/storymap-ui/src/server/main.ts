@@ -31,6 +31,7 @@ import { loadEnvConfig } from "@next/env";
 import next from "next";
 
 import { SESSION_SECRET_ENV, TOKEN_ENV, type EnvLike } from "@/lib/auth/env";
+import { avisoDeLegados, resolverAliasesDeEnv } from "@/lib/storymap/env-aliases";
 import type { McpLevel } from "@/lib/storymap/types";
 import { GENERATE_TOKEN_HINT, secretWeakness, weaknessAdvice } from "@/lib/storymap/mcp/auth";
 // O NOME da env vem do módulo que a define — repetir a string aqui criaria uma segunda verdade, e a
@@ -72,8 +73,8 @@ const dev = isDevMode();
 // O que esta linha IMPEDE: que o boot decida sobre segredos que ele ainda não consegue ver.
 //
 // MEDIDO no serviço vivo (2026-07-29): a unit systemd não tem `EnvironmentFile=`, e
-// /proc/<MainPID>/environ carrega os tiers `STORYMAP_MCP_TOKEN_ORCH`/`_RO` mas NÃO o token primário —
-// `STORYMAP_MCP_TOKEN` chega SÓ por `packages/storymap-ui/.env.local`. E o `.env.local` era aplicado
+// /proc/<MainPID>/environ carrega os tiers `AGILEHARNESS_MCP_TOKEN_ORCH`/`_RO` mas NÃO o token primário —
+// `AGILEHARNESS_MCP_TOKEN` chega SÓ por `packages/storymap-ui/.env.local`. E o `.env.local` era aplicado
 // pelo @next/env DENTRO de `app.prepare()` (next/dist/server/config.js → loadEnvConfig), isto é,
 // DEPOIS do boot dos segredos e DEPOIS da auto-checagem de perímetro. Duas consequências, ambas ruins:
 //   • o bootstrap do token MCP via a env VAZIA e GERAVA um token novo, rotacionando em silêncio a
@@ -94,6 +95,14 @@ const dev = isDevMode();
 // são lidos (`.env.development*` vs `.env.production*`). Mesma propriedade que o `NODE_ENV` tem no
 // Next: a chave que escolhe o ambiente não pode morar dentro do ambiente que ela escolhe.
 loadEnvConfig(process.cwd(), dev);
+
+// ── A PONTE DE NOMES (Fase 4 do doc 10): `STORYMAP_*`/`USM_*` ⇄ `AGILEHARNESS_*` ─────────────────
+// Logo DEPOIS do env estar completo (real + .env.local) e ANTES de qualquer leitura: daqui para baixo o
+// código lê só a grafia nova, e o operador que ainda escreve a velha continua atendido — avisado UMA vez,
+// aqui, nomeando o que trocar. Ver `lib/storymap/env-aliases.ts`.
+const aliasesDeEnv = resolverAliasesDeEnv(process.env as Record<string, string | undefined>);
+const avisoDeAliases = avisoDeLegados(aliasesDeEnv);
+if (avisoDeAliases) console.warn(avisoDeAliases);
 
 /**
  * LOOPBACK por default — a postura que o plano OSS fixa para um serviço que spawna agentes com
@@ -140,7 +149,7 @@ process.env.PORT = String(port);
 //
 // CUSTO DE AUTONOMIA: ZERO. Nada aqui olha para skip-permissions, deploy, delete ou qualquer poder
 // do agente — é postura de REDE. E tem válvula para o dono assumir o risco: `ALLOW_PUBLIC_BIND_ENV`,
-// literal EXATO (mesma régua de `STORYMAP_ENGINE=on`, para desarmar uma guarda nunca ser um typo),
+// literal EXATO (mesma régua de `AGILEHARNESS_ENGINE=on`, para desarmar uma guarda nunca ser um typo),
 // com o aviso saindo em stderr a CADA start — inclusive com a válvula armada.
 
 /** A válvula explícita: o dono assume um bind aberto que reprovou a auto-checagem. */
@@ -352,14 +361,14 @@ export function auditBind(env: EnvLike = process.env): BindAudit {
         `Ou APAGUE a env e use o token que o serviço cria em storymap/.runner/auth-token.`,
     );
   }
-  // Todo TIER de token do MCP, achado por PREFIXO — `STORYMAP_MCP_TOKEN`, `_ORCH`, `_SESSION` e o
+  // Todo TIER de token do MCP, achado por PREFIXO — `AGILEHARNESS_MCP_TOKEN`, `_ORCH`, `_SESSION` e o
   // que `settings.yaml` (mcpTokens[].tokenEnv) declarar amanhã. Auditar só o primário deixaria de
   // fora o escopado `write`, que move card, enfileira run e abre worktree.
   // AUSENTE não entra na lista de propósito: `isMcpTokenValid` é fail-closed contra segredo ausente e
   // NADA gera um token por conta própria (mcp/token-bootstrap.ts), então sem env a superfície fica
   // FECHADA — exigir que exista não fecharia porta nenhuma, só obrigaria configuração.
   for (const name of Object.keys(env).sort()) {
-    if (!name.startsWith("STORYMAP_MCP_TOKEN")) continue;
+    if (!name.startsWith("AGILEHARNESS_MCP_TOKEN")) continue;
     if (!env[name]?.trim()) continue;
     const mcp = weakSecretReason(env[name]);
     if (mcp) {
@@ -605,7 +614,7 @@ async function sondasDoHost() {
         return undefined; // sem diretorio de boards nada e afirmado
       }
     })(),
-    motorInerte: (process.env.STORYMAP_ENGINE ?? "").trim().toLowerCase() === "off",
+    motorInerte: (process.env.AGILEHARNESS_ENGINE ?? "").trim().toLowerCase() === "off",
     envSource: fonte,
     portaOcupada,
     run: (cmd: string, args: string[]) => {
@@ -1116,7 +1125,7 @@ async function main(): Promise<void> {
   void whenEngineBooted(BOOT_ALARM_MS).then((booted) => {
     // "boot concluído", NÃO "motor armado" — o sinal não carrega a segunda coisa. `markEngineBooted`
     // é chamado num `finally` de propósito, valendo TAMBÉM quando o motor saiu cedo por estar inerte
-    // (`STORYMAP_ENGINE=off`, worktree). Enquanto esta linha dizia "motor armado", ela aparecia UMA
+    // (`AGILEHARNESS_ENGINE=off`, worktree). Enquanto esta linha dizia "motor armado", ela aparecia UMA
     // LINHA DEPOIS de `[harness-boot] MOTOR INERTE` — e um adotante parou o trabalho para reler três
     // vezes, achando que tinha estragado a instalação. Um log que se contradiz na primeira tela
     // envenena toda leitura seguinte que a pessoa fizer do boot.

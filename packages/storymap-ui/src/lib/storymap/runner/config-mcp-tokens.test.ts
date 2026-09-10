@@ -37,39 +37,39 @@ afterEach(() => {
 
 describe("ATAQUE: escalar para `full` sem declarar nível", () => {
   it("entrada SEM level não recebe full — cai no menos privilegiado", () => {
-    setEnv("STORYMAP_MCP_TOKEN_X", FORTE);
+    setEnv("AGILEHARNESS_MCP_TOKEN_X", FORTE);
 
-    const out = coerceMcpTokens([{ tokenEnv: "STORYMAP_MCP_TOKEN_X" }]);
+    const out = coerceMcpTokens([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_X" }]);
 
-    expect(out).toEqual([{ tokenEnv: "STORYMAP_MCP_TOKEN_X", level: "ro" }]);
+    expect(out).toEqual([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_X", level: "ro" }]);
   });
 
   it("level fora do conjunto conhecido (root/admin/1/null) não recebe full", () => {
-    setEnv("STORYMAP_MCP_TOKEN_X", FORTE);
+    setEnv("AGILEHARNESS_MCP_TOKEN_X", FORTE);
 
     for (const level of ["root", "admin", "FULL", 1, null, true, ["full"]]) {
-      const out = coerceMcpTokens([{ tokenEnv: "STORYMAP_MCP_TOKEN_X", level }]);
-      expect(out).toEqual([{ tokenEnv: "STORYMAP_MCP_TOKEN_X", level: "ro" }]);
+      const out = coerceMcpTokens([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_X", level }]);
+      expect(out).toEqual([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_X", level: "ro" }]);
     }
   });
 
   it("o rebaixamento é AVISADO, não silencioso (o operador precisa descobrir o typo)", () => {
-    setEnv("STORYMAP_MCP_TOKEN_X", FORTE);
+    setEnv("AGILEHARNESS_MCP_TOKEN_X", FORTE);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    coerceMcpTokens([{ tokenEnv: "STORYMAP_MCP_TOKEN_X", level: "orq" }]);
+    coerceMcpTokens([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_X", level: "orq" }]);
 
     const msg = warn.mock.calls.flat().join("\n");
-    expect(msg).toContain("STORYMAP_MCP_TOKEN_X");
+    expect(msg).toContain("AGILEHARNESS_MCP_TOKEN_X");
     expect(msg).toContain("ro");
   });
 
   it("`full` DECLARADO por extenso continua concedido — o controle fecha a omissão, não a autonomia", () => {
-    setEnv("STORYMAP_MCP_TOKEN_FULL2", FORTE);
+    setEnv("AGILEHARNESS_MCP_TOKEN_FULL2", FORTE);
 
-    const out = coerceMcpTokens([{ tokenEnv: "STORYMAP_MCP_TOKEN_FULL2", level: "full" }]);
+    const out = coerceMcpTokens([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_FULL2", level: "full" }]);
 
-    expect(out).toEqual([{ tokenEnv: "STORYMAP_MCP_TOKEN_FULL2", level: "full" }]);
+    expect(out).toEqual([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_FULL2", level: "full" }]);
   });
 });
 
@@ -88,7 +88,7 @@ describe("ATAQUE: apontar tokenEnv para uma variável de ambiente ALHEIA", () =>
   });
 
   it("recusa nome que não é sequer formato de env var (injeção/lixo)", () => {
-    for (const nome of ["storymap_mcp_token_x", "STORYMAP_MCP_TOKEN-X", "$STORYMAP_MCP_TOKEN", "1_TOKEN"]) {
+    for (const nome of ["storymap_mcp_token_x", "AGILEHARNESS_MCP_TOKEN-X", "$AGILEHARNESS_MCP_TOKEN", "1_TOKEN"]) {
       expect(coerceMcpTokens([{ tokenEnv: nome, level: "ro" }])).toBeUndefined();
     }
   });
@@ -106,15 +106,15 @@ describe("ATAQUE: apontar tokenEnv para uma variável de ambiente ALHEIA", () =>
   });
 
   it("preserva as entradas legítimas mesmo quando uma alheia vem no meio", () => {
-    setEnv("STORYMAP_MCP_TOKEN_ORCH", FORTE);
+    setEnv("AGILEHARNESS_MCP_TOKEN_ORCH", FORTE);
     setEnv("HOME_FAKE", OUTRO_FORTE);
 
     const out = coerceMcpTokens([
       { tokenEnv: "HOME_FAKE", level: "full" },
-      { tokenEnv: "STORYMAP_MCP_TOKEN_ORCH", level: "orch" },
+      { tokenEnv: "AGILEHARNESS_MCP_TOKEN_ORCH", level: "orch" },
     ]);
 
-    expect(out).toEqual([{ tokenEnv: "STORYMAP_MCP_TOKEN_ORCH", level: "orch" }]);
+    expect(out).toEqual([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_ORCH", level: "orch" }]);
   });
 });
 
@@ -127,24 +127,24 @@ describe("ATAQUE: conceder autoridade contra um segredo que não existe ou é ad
   it("recusa a entrada quando a env var declarada está AUSENTE do ambiente", () => {
     // Uma credencial fantasma prometia um nível que nada segura — e escondia o erro de deploy
     // (a env var que ninguém setou) atrás de um 404 silencioso.
-    const declarados = coerceMcpTokens([{ tokenEnv: "STORYMAP_MCP_TOKEN_INEXISTENTE", level: "orch" }]);
+    const declarados = coerceMcpTokens([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_INEXISTENTE", level: "orch" }]);
     expect(efetiva(declarados).mcpTokens).toBeUndefined();
   });
 
   it("recusa a entrada quando a env var está vazia/em branco", () => {
-    setEnv("STORYMAP_MCP_TOKEN_VAZIO", "   ");
-    const declarados = coerceMcpTokens([{ tokenEnv: "STORYMAP_MCP_TOKEN_VAZIO", level: "write" }]);
+    setEnv("AGILEHARNESS_MCP_TOKEN_VAZIO", "   ");
+    const declarados = coerceMcpTokens([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_VAZIO", level: "write" }]);
     expect(efetiva(declarados).mcpTokens).toBeUndefined();
   });
 
   it("recusa um segredo curto (o piso antigo de 24) com o MOTIVO no log", () => {
-    setEnv("STORYMAP_MCP_TOKEN_CURTO", FORTE.slice(0, 24));
+    setEnv("AGILEHARNESS_MCP_TOKEN_CURTO", FORTE.slice(0, 24));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    expect(mcpTokensBackedBySecret([{ tokenEnv: "STORYMAP_MCP_TOKEN_CURTO", level: "orch" }])).toBeUndefined();
+    expect(mcpTokensBackedBySecret([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_CURTO", level: "orch" }])).toBeUndefined();
 
     const msg = warn.mock.calls.flat().join("\n");
-    expect(msg).toContain("STORYMAP_MCP_TOKEN_CURTO");
+    expect(msg).toContain("AGILEHARNESS_MCP_TOKEN_CURTO");
     expect(msg).toMatch(/menos de 32 caracteres/);
     // O log de recusa não pode ser o vazamento do segredo que ele está recusando.
     expect(msg).not.toContain(FORTE.slice(0, 24));
@@ -152,41 +152,41 @@ describe("ATAQUE: conceder autoridade contra um segredo que não existe ou é ad
   });
 
   it("recusa um segredo longo mas degenerado (caractere repetido)", () => {
-    setEnv("STORYMAP_MCP_TOKEN_FRACO", "z".repeat(48));
-    const declarados = coerceMcpTokens([{ tokenEnv: "STORYMAP_MCP_TOKEN_FRACO", level: "ro" }]);
+    setEnv("AGILEHARNESS_MCP_TOKEN_FRACO", "z".repeat(48));
+    const declarados = coerceMcpTokens([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_FRACO", level: "ro" }]);
     expect(efetiva(declarados).mcpTokens).toBeUndefined();
   });
 
   it("não avisa a MESMA fraqueza a cada leitura (o log de recusa não pode inundar o journald)", () => {
     // A recusa roda por REQUISIÇÃO agora. Se ela falasse toda vez, o aviso que o operador precisa
     // ler viraria ruído — e ruído é a forma mais comum de um controle de segurança ser ignorado.
-    setEnv("STORYMAP_MCP_TOKEN_REPETE", "y".repeat(40));
+    setEnv("AGILEHARNESS_MCP_TOKEN_REPETE", "y".repeat(40));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const entrada = [{ tokenEnv: "STORYMAP_MCP_TOKEN_REPETE", level: "ro" as const }];
+    const entrada = [{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_REPETE", level: "ro" as const }];
 
     for (let i = 0; i < 5; i++) expect(mcpTokensBackedBySecret(entrada)).toBeUndefined();
 
-    expect(warn.mock.calls.filter((c) => c.join(" ").includes("STORYMAP_MCP_TOKEN_REPETE"))).toHaveLength(1);
+    expect(warn.mock.calls.filter((c) => c.join(" ").includes("AGILEHARNESS_MCP_TOKEN_REPETE"))).toHaveLength(1);
   });
 
   it("a config REAL do repo continua valendo: token forte + level declarado sobrevive intacto", () => {
     // A régua de "não tirar capacidade": o que o settings.yaml declara hoje (orch + ro) tem de
     // atravessar a coerção com o nível DECLARADO, senão o hardening virou perda de autonomia.
-    setEnv("STORYMAP_MCP_TOKEN_ORCH", FORTE);
-    setEnv("STORYMAP_MCP_TOKEN_RO", OUTRO_FORTE);
+    setEnv("AGILEHARNESS_MCP_TOKEN_ORCH", FORTE);
+    setEnv("AGILEHARNESS_MCP_TOKEN_RO", OUTRO_FORTE);
 
     const declarados = coerceMcpTokens([
-      { tokenEnv: "STORYMAP_MCP_TOKEN_ORCH", level: "orch" },
-      { tokenEnv: "STORYMAP_MCP_TOKEN_RO", level: "ro" },
+      { tokenEnv: "AGILEHARNESS_MCP_TOKEN_ORCH", level: "orch" },
+      { tokenEnv: "AGILEHARNESS_MCP_TOKEN_RO", level: "ro" },
     ]);
 
     expect(declarados).toEqual([
-      { tokenEnv: "STORYMAP_MCP_TOKEN_ORCH", level: "orch" },
-      { tokenEnv: "STORYMAP_MCP_TOKEN_RO", level: "ro" },
+      { tokenEnv: "AGILEHARNESS_MCP_TOKEN_ORCH", level: "orch" },
+      { tokenEnv: "AGILEHARNESS_MCP_TOKEN_RO", level: "ro" },
     ]);
     expect(efetiva(declarados).mcpTokens).toEqual([
-      { tokenEnv: "STORYMAP_MCP_TOKEN_ORCH", level: "orch" },
-      { tokenEnv: "STORYMAP_MCP_TOKEN_RO", level: "ro" },
+      { tokenEnv: "AGILEHARNESS_MCP_TOKEN_ORCH", level: "orch" },
+      { tokenEnv: "AGILEHARNESS_MCP_TOKEN_RO", level: "ro" },
     ]);
   });
 });
@@ -203,34 +203,34 @@ describe("ARMADILHA DE BOOT: credencial válida que chega DEPOIS do primeiro loa
   it("passa a autenticar sem tocar o settings.yaml", () => {
     // 1) O load acontece com a env AUSENTE. A FORMA (nome + level) é declarativa e sobrevive —
     //    é só isso que o cache por mtime tem direito de congelar.
-    const doArquivo = coerceMcpTokens([{ tokenEnv: "STORYMAP_MCP_TOKEN_TARDE", level: "write" }]);
-    expect(doArquivo).toEqual([{ tokenEnv: "STORYMAP_MCP_TOKEN_TARDE", level: "write" }]);
+    const doArquivo = coerceMcpTokens([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_TARDE", level: "write" }]);
+    expect(doArquivo).toEqual([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_TARDE", level: "write" }]);
     // ...e, sem segredo, nada autentica: a config efetiva não expõe a entrada (fail-closed).
     expect(efetiva(doArquivo).mcpTokens).toBeUndefined();
 
     // 2) A env chega. O settings.yaml NÃO mudou — o cache por mtime devolve o MESMO objeto de arquivo.
-    setEnv("STORYMAP_MCP_TOKEN_TARDE", FORTE);
+    setEnv("AGILEHARNESS_MCP_TOKEN_TARDE", FORTE);
 
     // 3) A credencial existe na leitura seguinte, com o nível DECLARADO, sem `touch` em nada.
-    expect(efetiva(doArquivo).mcpTokens).toEqual([{ tokenEnv: "STORYMAP_MCP_TOKEN_TARDE", level: "write" }]);
+    expect(efetiva(doArquivo).mcpTokens).toEqual([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_TARDE", level: "write" }]);
   });
 
   it("um segredo TROCADO por um fraco volta a ser recusado na leitura seguinte (a régua vale nos dois sentidos)", () => {
-    const entrada = [{ tokenEnv: "STORYMAP_MCP_TOKEN_ROTATE", level: "orch" as const }];
-    setEnv("STORYMAP_MCP_TOKEN_ROTATE", FORTE);
+    const entrada = [{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_ROTATE", level: "orch" as const }];
+    setEnv("AGILEHARNESS_MCP_TOKEN_ROTATE", FORTE);
     expect(efetiva(entrada).mcpTokens).toEqual(entrada);
 
     // Rotação malfeita (o operador colou um valor curto): a autoridade cai na MESMA leitura seguinte,
     // sem esperar edição de arquivo nem restart — o inverso exato do caso acima.
-    setEnv("STORYMAP_MCP_TOKEN_ROTATE", "curto");
+    setEnv("AGILEHARNESS_MCP_TOKEN_ROTATE", "curto");
     expect(efetiva(entrada).mcpTokens).toBeUndefined();
   });
 
   it("a entrada devolvida é CÓPIA: a camada ENV não muta o objeto memoizado do arquivo", () => {
     // O objeto do arquivo é compartilhado por todas as requisições (é o cache). Devolver a mesma
     // referência deixaria um consumidor descuidado corromper a config de todos os outros.
-    setEnv("STORYMAP_MCP_TOKEN_COPIA", FORTE);
-    const doArquivo = coerceMcpTokens([{ tokenEnv: "STORYMAP_MCP_TOKEN_COPIA", level: "write" }])!;
+    setEnv("AGILEHARNESS_MCP_TOKEN_COPIA", FORTE);
+    const doArquivo = coerceMcpTokens([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_COPIA", level: "write" }])!;
 
     const efetivos = efetiva(doArquivo).mcpTokens!;
     efetivos[0].level = "full";
@@ -261,49 +261,49 @@ describe("PERDA DE CAPACIDADE: espaço sobrando na env do tier ESCOPADO", () => 
   }
 
   it("token com `\\n` no fim AUTENTICA — a credencial não fica aprovada-mas-inútil", () => {
-    setEnv("STORYMAP_MCP_TOKEN_SUJO", `${FORTE}\n`);
-    const declarados = coerceMcpTokens([{ tokenEnv: "STORYMAP_MCP_TOKEN_SUJO", level: "orch" }]);
+    setEnv("AGILEHARNESS_MCP_TOKEN_SUJO", `${FORTE}\n`);
+    const declarados = coerceMcpTokens([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_SUJO", level: "orch" }]);
 
     const cfg = efetiva(declarados);
-    expect(cfg.mcpTokens).toEqual([{ tokenEnv: "STORYMAP_MCP_TOKEN_SUJO", level: "orch" }]);
+    expect(cfg.mcpTokens).toEqual([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_SUJO", level: "orch" }]);
     // O agente apresenta o valor TRIMADO — é o que `orchestrator-run.ts`/`session-spawn.ts` põem na URL
     // do MCP (`process.env.X?.trim()`). Sem a normalização os dois lados divergem em 1 byte.
-    expect(resolveActor(FORTE, cfg)).toEqual({ level: "orch", tokenEnv: "STORYMAP_MCP_TOKEN_SUJO" });
+    expect(resolveActor(FORTE, cfg)).toEqual({ level: "orch", tokenEnv: "AGILEHARNESS_MCP_TOKEN_SUJO" });
   });
 
   it("os DOIS tiers reais do repo (`_ORCH` e `_RO`) atravessam com espaço em volta, cada um no seu nível", () => {
-    setEnv("STORYMAP_MCP_TOKEN_ORCH", ` ${FORTE} `);
-    setEnv("STORYMAP_MCP_TOKEN_RO", `\t${OUTRO_FORTE}\n`);
+    setEnv("AGILEHARNESS_MCP_TOKEN_ORCH", ` ${FORTE} `);
+    setEnv("AGILEHARNESS_MCP_TOKEN_RO", `\t${OUTRO_FORTE}\n`);
     const cfg = efetiva(
       coerceMcpTokens([
-        { tokenEnv: "STORYMAP_MCP_TOKEN_ORCH", level: "orch" },
-        { tokenEnv: "STORYMAP_MCP_TOKEN_RO", level: "ro" },
+        { tokenEnv: "AGILEHARNESS_MCP_TOKEN_ORCH", level: "orch" },
+        { tokenEnv: "AGILEHARNESS_MCP_TOKEN_RO", level: "ro" },
       ]),
     );
 
-    expect(resolveActor(FORTE, cfg)).toEqual({ level: "orch", tokenEnv: "STORYMAP_MCP_TOKEN_ORCH" });
-    expect(resolveActor(OUTRO_FORTE, cfg)).toEqual({ level: "ro", tokenEnv: "STORYMAP_MCP_TOKEN_RO" });
+    expect(resolveActor(FORTE, cfg)).toEqual({ level: "orch", tokenEnv: "AGILEHARNESS_MCP_TOKEN_ORCH" });
+    expect(resolveActor(OUTRO_FORTE, cfg)).toEqual({ level: "ro", tokenEnv: "AGILEHARNESS_MCP_TOKEN_RO" });
   });
 
   it("a env fica com o valor que AUTENTICA — uma verdade só, como no token primário", () => {
-    setEnv("STORYMAP_MCP_TOKEN_ESPACO", `  ${FORTE}  `);
+    setEnv("AGILEHARNESS_MCP_TOKEN_ESPACO", `  ${FORTE}  `);
 
-    efetiva(coerceMcpTokens([{ tokenEnv: "STORYMAP_MCP_TOKEN_ESPACO", level: "ro" }]));
+    efetiva(coerceMcpTokens([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_ESPACO", level: "ro" }]));
 
-    expect(process.env.STORYMAP_MCP_TOKEN_ESPACO).toBe(FORTE);
+    expect(process.env.AGILEHARNESS_MCP_TOKEN_ESPACO).toBe(FORTE);
   });
 
   it("normalizar NÃO é afrouxar: só-espaço segue recusado", () => {
-    setEnv("STORYMAP_MCP_TOKEN_BRANCO", "   ");
-    const declarados = coerceMcpTokens([{ tokenEnv: "STORYMAP_MCP_TOKEN_BRANCO", level: "full" }]);
+    setEnv("AGILEHARNESS_MCP_TOKEN_BRANCO", "   ");
+    const declarados = coerceMcpTokens([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_BRANCO", level: "full" }]);
     expect(efetiva(declarados).mcpTokens).toBeUndefined();
   });
 
   it("normalizar NÃO é afrouxar: um segredo que só alcança 32 chars COM o padding segue curto", () => {
     // A armadilha do trim mal-feito: `"  " + 30 chars + "  "` tem 34 bytes crus e passaria um piso
     // medido sobre o valor sujo. O piso continua sendo medido sobre o valor NORMALIZADO.
-    setEnv("STORYMAP_MCP_TOKEN_CURTINHO", `  ${FORTE.slice(0, 30)}  `);
-    const declarados = coerceMcpTokens([{ tokenEnv: "STORYMAP_MCP_TOKEN_CURTINHO", level: "orch" }]);
+    setEnv("AGILEHARNESS_MCP_TOKEN_CURTINHO", `  ${FORTE.slice(0, 30)}  `);
+    const declarados = coerceMcpTokens([{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_CURTINHO", level: "orch" }]);
     expect(efetiva(declarados).mcpTokens).toBeUndefined();
   });
 });

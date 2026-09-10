@@ -1257,7 +1257,7 @@ const BASE_LAST_GOOD_FILE = "base-board-lastgood.yaml";
  * serve a ÚLTIMA VERSÃO BOA e os gates continuam de pé.
  *
  * O diretório vem de `runnerStateDir()` — a régua única do estado efêmero do runner —, e NUNCA de um
- * `path.join` próprio: aquela função honra `STORYMAP_RUNNER_STATE_DIR`, que o `vitest.setup.ts` aponta
+ * `path.join` próprio: aquela função honra `AGILEHARNESS_RUNNER_STATE_DIR`, que o `vitest.setup.ts` aponta
  * SEMPRE para um tmp. Montar o caminho à mão pareceria equivalente e faria toda suíte que lê um board
  * escrever no estado do SERVIÇO VIVO — o exato estrago que o override existe para impedir.
  *

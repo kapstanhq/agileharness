@@ -4,7 +4,7 @@
 // switch, concurrency, watchdogs, claude binary, global extra args e os fallbacks de
 // model/effort/maxTurns por coluna), o copiloto (Jido) e o Toolkit & MCP. Per-column policy is edited
 // in the Kanban (⚙ on a column); this shows it read-only + the global defaults columns inherit.
-// ENV USM_* vars always win → flagged up top.
+// ENV AGILEHARNESS_AUTORUN_* vars always win → flagged up top.
 //
 // Duas coisas SAÍRAM daqui, e as duas eram navegação disfarçada de conteúdo:
 //   • "Rotas & Especialistas" → virou seção da tela Orquestração (é sobre o SISTEMA de agentes, não
@@ -115,7 +115,7 @@ export function AutorunSettingsPanel({
           <p className="max-w-prose text-[12.5px] leading-snug text-fg-muted">
             Controla o runner que executa as skills quando você arrasta um card para uma coluna automática. Salvo em{" "}
             <code className="rounded bg-surface-hover px-1 py-0.5 font-mono text-[11px]">storymap/settings.yaml</code>. As
-            variáveis de ambiente <code className="font-mono">USM_*</code> sempre vencem este arquivo.
+            variáveis de ambiente <code className="font-mono">AGILEHARNESS_AUTORUN_*</code> sempre vencem este arquivo.
           </p>
 
           {envOverrides.length > 0 && (

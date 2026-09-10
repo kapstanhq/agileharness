@@ -64,17 +64,17 @@ let prevStateDir: string | undefined;
 let stateDir = "";
 
 beforeEach(() => {
-  prevStateDir = process.env.STORYMAP_RUNNER_STATE_DIR;
+  prevStateDir = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
   stateDir = mkdtempSync(path.join(tmpdir(), "auth-audit-"));
-  process.env.STORYMAP_RUNNER_STATE_DIR = stateDir;
+  process.env.AGILEHARNESS_RUNNER_STATE_DIR = stateDir;
   resetPerimeterState();
 });
 
 afterEach(async () => {
   await flushAuthFailures();
   resetPerimeterState();
-  if (prevStateDir === undefined) delete process.env.STORYMAP_RUNNER_STATE_DIR;
-  else process.env.STORYMAP_RUNNER_STATE_DIR = prevStateDir;
+  if (prevStateDir === undefined) delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+  else process.env.AGILEHARNESS_RUNNER_STATE_DIR = prevStateDir;
   // DEPOIS do flush: o rastro do perímetro ainda escreve neste diretório. Apagá-lo antes trocaria
   // um diretório órfão por um erro de escrita intermitente.
   rmSync(stateDir, { recursive: true, force: true });
@@ -458,7 +458,7 @@ describe("story-et6a4j — o token `full` deixa de escapar do ledger de auditori
   });
 
   it("uma LEITURA não engorda o ledger (mesma régua do ator escopado)", async () => {
-    recordPrivilegedCall({ actor: "env:STORYMAP_MCP_TOKEN", tool: "get_card", cls: "read" });
+    recordPrivilegedCall({ actor: "env:AGILEHARNESS_MCP_TOKEN", tool: "get_card", cls: "read" });
     await flushAgentActions();
     expect(linhas.length, "o ledger registra MUTAÇÃO; uma linha por leitura o afogaria").toBe(0);
   });

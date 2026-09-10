@@ -10,7 +10,7 @@ export const runtime = "nodejs";
 
 export type HeadroomStatus = {
   /** `true` sempre que o tráfego seria roteado — hoje o default é LIGADO; só `headroom.enabled:false`
-   *  no board.yaml ou STORYMAP_HEADROOM_URL=off devolvem `false`. */
+   *  no board.yaml ou AGILEHARNESS_HEADROOM_URL=off devolvem `false`. */
   configured: boolean;
   /** Proxy URL that would be injected, or null when headroom is off. */
   url: string | null;

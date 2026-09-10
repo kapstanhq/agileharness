@@ -1,6 +1,6 @@
 // Runner config — the resolved, editable form of the autorun runner settings.
 // Layers as: DEFAULTS < storymap/settings.yaml < process.env. ENV ALWAYS wins,
-// so the operational kill switch (USM_AUTORUN=0) and the other USM_* overrides
+// so the operational kill switch (AGILEHARNESS_AUTORUN=0) and the other AGILEHARNESS_AUTORUN_* overrides
 // are untouched — and a MISSING settings.yaml means behavior identical to the
 // pre-settings era (full back-compat).
 //
@@ -12,6 +12,7 @@
 // the server actions in app/actions.ts instead.
 
 import { promises as fsp, readFileSync, statSync } from "node:fs";
+import { nomeLegadoDe } from "@/lib/storymap/env-aliases";
 import yaml from "js-yaml";
 import { settingsPath } from "@/lib/storymap/paths";
 // A decomposição base+variante do modelo mora em copilot-status (fonte única; só importa `types`).
@@ -150,7 +151,7 @@ export const DEFAULT_RUNNER_SETTINGS: RunnerSettings = {
     // produção há meses. Quem precisa do modo antigo desliga explicitamente — e recebe um aviso alto,
     // porque a diferença é de perímetro, não de conveniência.
     worktreeIsolation: true,
-    // Integration gate DEFAULT OFF — a dormant capability turned on via settings.yaml / USM_AUTORUN_MERGE_GATE=1.
+    // Integration gate DEFAULT OFF — a dormant capability turned on via settings.yaml / AGILEHARNESS_AUTORUN_MERGE_GATE=1.
     mergeGate: {
       enabled: false,
       checkCommand: GATE_CHECK_COMMAND,
@@ -168,7 +169,7 @@ export const DEFAULT_RUNNER_SETTINGS: RunnerSettings = {
     mergeTrain: { maxRedrives: DEFAULT_MAX_REDRIVES, semanticResolution: true },
     // Staged release (Fase 4a) DEFAULT OFF — a dormant capability: a run touching `packages/**` routes
     // its CODE to the `stage` branch (held for a human release gate) while board data lands on main.
-    // Off ⇒ every run merges to main as before. Boot-fixed (not hot-reloaded). USM_AUTORUN_STAGING=1/0.
+    // Off ⇒ every run merges to main as before. Boot-fixed (not hot-reloaded). AGILEHARNESS_AUTORUN_STAGING=1/0.
     // `dataDerived` empty by default: routing stays pure path-prefix until a repo declares otherwise.
     staging: { enabled: false, branch: STAGING_BRANCH, codePrefixes: [...STAGING_CODE_PREFIXES], dataDerived: [] },
     // Medição da superfície de UI: ON por default (ao contrário das capacidades dormentes acima) —
@@ -535,7 +536,7 @@ function coerceChatSettings(raw: unknown, d: OrchestratorSettings["chat"]): { mo
 
 /**
  * story-6h3ioj — o env-var de um token de autoridade MCP tem de se CHAMAR como um: prefixo
- * obrigatório `STORYMAP_MCP_TOKEN*`, nome em formato de env var.
+ * obrigatório `AGILEHARNESS_MCP_TOKEN*`, nome em formato de env var.
  *
  * O que a allowlist IMPEDE: que quem escreve `settings.yaml` transforme uma variável ALHEIA já
  * presente no ambiente do serviço numa credencial MCP. Sem ela, `tokenEnv: HOSTNAME` (ou `USER`,
@@ -544,7 +545,10 @@ function coerceChatSettings(raw: unknown, d: OrchestratorSettings["chat"]): { mo
  * --dangerously-skip-permissions` nesta máquina. Zero custo de capacidade: o operador declara
  * quantos tokens quiser, só precisa nomear a env var pelo que ela é.
  */
-const MCP_TOKEN_ENV_PREFIX = "STORYMAP_MCP_TOKEN";
+const MCP_TOKEN_ENV_PREFIX = "AGILEHARNESS_MCP_TOKEN";
+// A grafia LEGADA continua aceitável enquanto a ponte de nomes durar (`env-aliases.ts`): um `settings.yaml`
+// de alvo que declara `tokenEnv: STORYMAP_MCP_TOKEN_ORCH` não pode virar recusa numa atualização de minor.
+const MCP_TOKEN_ENV_PREFIXES: readonly string[] = [MCP_TOKEN_ENV_PREFIX, nomeLegadoDe(MCP_TOKEN_ENV_PREFIX)!];
 const ENV_VAR_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
 
 /**
@@ -561,7 +565,7 @@ const ENV_VAR_NAME_RE = /^[A-Z][A-Z0-9_]*$/;
  * não existe.
  */
 export function isMcpTokenEnvName(name: string): boolean {
-  return ENV_VAR_NAME_RE.test(name) && name.startsWith(MCP_TOKEN_ENV_PREFIX);
+  return ENV_VAR_NAME_RE.test(name) && MCP_TOKEN_ENV_PREFIXES.some((p) => name.startsWith(p));
 }
 
 /**
@@ -638,7 +642,7 @@ export function coerceMcpTokens(raw: unknown): { tokenEnv: string; level: McpLev
 const mcpSecretWarned = new Map<string, string>();
 
 /**
- * story-6h3ioj (onda 2) — NORMALIZA a env de um tier ESCOPADO (`STORYMAP_MCP_TOKEN_ORCH`, `_RO`, ou
+ * story-6h3ioj (onda 2) — NORMALIZA a env de um tier ESCOPADO (`AGILEHARNESS_MCP_TOKEN_ORCH`, `_RO`, ou
  * qualquer `mcpTokens[].tokenEnv`) e devolve o valor que vai autenticar.
  *
  * O que isto IMPEDE: que uma credencial VÁLIDA seja aprovada na config e devolva 404 em TODA
@@ -862,99 +866,99 @@ export function applyEnvOverrides(s: RunnerSettings): RunnerSettings {
     // var que chegue depois do primeiro load passa a autenticar sem precisar tocar o settings.yaml.
     mcpTokens: mcpTokensBackedBySecret(s.mcpTokens),
   };
-  if (env.USM_AUTORUN === "0") next.autorun.enabled = false;
-  if (env.USM_AUTORUN_RESUME_ON_BOOT === "0") next.autorun.resumeOnBoot = false;
-  // WS8 — the copiloto kill-switch: STORYMAP_ORCH_ENABLED=0 forces it off (mirrors USM_AUTORUN=0).
-  if (env.STORYMAP_ORCH_ENABLED === "0" && next.orchestrator) next.orchestrator.enabled = false;
+  if (env.AGILEHARNESS_AUTORUN === "0") next.autorun.enabled = false;
+  if (env.AGILEHARNESS_AUTORUN_RESUME_ON_BOOT === "0") next.autorun.resumeOnBoot = false;
+  // WS8 — the copiloto kill-switch: AGILEHARNESS_ORCH_ENABLED=0 forces it off (mirrors AGILEHARNESS_AUTORUN=0).
+  if (env.AGILEHARNESS_ORCH_ENABLED === "0" && next.orchestrator) next.orchestrator.enabled = false;
   // The fidelity canary is a deployment concern, so it gets the same ENV escape hatch as the rest:
   // set it empty to DISABLE the check on a box that cannot reach the published surface.
-  if (typeof env.STORYMAP_DEPLOY_CANARY_COMMAND === "string") {
-    next.deploy = { ...next.deploy, canaryCommand: env.STORYMAP_DEPLOY_CANARY_COMMAND };
+  if (typeof env.AGILEHARNESS_DEPLOY_CANARY_COMMAND === "string") {
+    next.deploy = { ...next.deploy, canaryCommand: env.AGILEHARNESS_DEPLOY_CANARY_COMMAND };
   }
-  if (env.STORYMAP_ORCH_ENABLED === "1" && next.orchestrator) next.orchestrator.enabled = true;
-  const max = asPosInt(env.USM_AUTORUN_MAX);
+  if (env.AGILEHARNESS_ORCH_ENABLED === "1" && next.orchestrator) next.orchestrator.enabled = true;
+  const max = asPosInt(env.AGILEHARNESS_AUTORUN_MAX);
   if (max) next.autorun.maxConcurrent = max;
   // ADR-063 (4b): the loop-guard cap. 0 is a VALID value (disable), so — like the RAM/load thresholds —
   // an EMPTY/whitespace var must read as "unset" (keep the file value), NOT coerce to 0 via Number("").
-  if (isSetEnv(env.USM_AUTORUN_NO_PROGRESS_MAX)) {
-    const noProgress = asNonNegInt(env.USM_AUTORUN_NO_PROGRESS_MAX);
+  if (isSetEnv(env.AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX)) {
+    const noProgress = asNonNegInt(env.AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX);
     if (noProgress !== undefined) next.autorun.noProgressMax = noProgress;
   }
   // ADR-063 (4a): the opt-in per-card $ backstop. A positive float enables it; unset/blank/≤0/garbage
   // leaves the file value untouched (an empty/0 value is NOT a real budget → never silently freezes a card).
-  const cardBudget = asPosNum(env.USM_AUTORUN_CARD_BUDGET_USD);
+  const cardBudget = asPosNum(env.AGILEHARNESS_AUTORUN_CARD_BUDGET_USD);
   if (cardBudget !== undefined) next.autorun.cardBudgetUSD = cardBudget;
-  const fast = asPosInt(env.USM_AUTORUN_TIMEOUT_MS);
+  const fast = asPosInt(env.AGILEHARNESS_AUTORUN_TIMEOUT_MS);
   if (fast) next.autorun.timeouts.fastMs = fast;
-  const doMs = asPosInt(env.USM_AUTORUN_TIMEOUT_DO_MS);
+  const doMs = asPosInt(env.AGILEHARNESS_AUTORUN_TIMEOUT_DO_MS);
   if (doMs) next.autorun.timeouts.doMs = doMs;
-  const universal = asPosInt(env.USM_AUTORUN_TIMEOUT_UNIVERSAL_MS);
+  const universal = asPosInt(env.AGILEHARNESS_AUTORUN_TIMEOUT_UNIVERSAL_MS);
   if (universal) next.autorun.timeouts.universalMs = universal;
-  if (env.USM_AUTORUN_CLAUDE_BIN) next.autorun.claudeBin = env.USM_AUTORUN_CLAUDE_BIN;
-  if (env.USM_AUTORUN_EXTRA_ARGS != null) next.autorun.extraArgs = asStringArray(env.USM_AUTORUN_EXTRA_ARGS);
-  if (env.USM_AUTORUN_WORKTREE === "1") next.autorun.worktreeIsolation = true;
-  else if (env.USM_AUTORUN_WORKTREE === "0") next.autorun.worktreeIsolation = false;
+  if (env.AGILEHARNESS_AUTORUN_CLAUDE_BIN) next.autorun.claudeBin = env.AGILEHARNESS_AUTORUN_CLAUDE_BIN;
+  if (env.AGILEHARNESS_AUTORUN_EXTRA_ARGS != null) next.autorun.extraArgs = asStringArray(env.AGILEHARNESS_AUTORUN_EXTRA_ARGS);
+  if (env.AGILEHARNESS_AUTORUN_WORKTREE === "1") next.autorun.worktreeIsolation = true;
+  else if (env.AGILEHARNESS_AUTORUN_WORKTREE === "0") next.autorun.worktreeIsolation = false;
   // Integration gate (story-1k7els): a 1/0 master switch over the file value. Ensure the object exists
   // (an old file/default without the section) before flipping it, defaulting the rest of the fields.
-  if (env.USM_AUTORUN_MERGE_GATE === "1" || env.USM_AUTORUN_MERGE_GATE === "0") {
+  if (env.AGILEHARNESS_AUTORUN_MERGE_GATE === "1" || env.AGILEHARNESS_AUTORUN_MERGE_GATE === "0") {
     // O fallback vem dos DEFAULTS canônicos, nunca de um literal local: o literal antigo já divergiu
     // deles em duas chaves (retryOnNewFailure, typecheck) — um mergeGate montado por esta via nasceria
     // sem elas e desligaria capacidades default-ON em silêncio.
     const base = next.autorun.mergeGate ?? { ...DEFAULT_RUNNER_SETTINGS.autorun.mergeGate! };
-    next.autorun.mergeGate = { ...base, enabled: env.USM_AUTORUN_MERGE_GATE === "1" };
+    next.autorun.mergeGate = { ...base, enabled: env.AGILEHARNESS_AUTORUN_MERGE_GATE === "1" };
   }
   // Staged release (Fase 4a): a 1/0 master switch over the file value. Ensure the object exists (an old
   // file/default without the section) before flipping it, defaulting branch + codePrefixes. Boot-fixed —
   // the queue reads this once at construction, so this override takes effect on the next service start.
-  if (env.USM_AUTORUN_STAGING === "1" || env.USM_AUTORUN_STAGING === "0") {
+  if (env.AGILEHARNESS_AUTORUN_STAGING === "1" || env.AGILEHARNESS_AUTORUN_STAGING === "0") {
     const base = next.autorun.staging ?? {
       enabled: false,
       branch: STAGING_BRANCH,
       codePrefixes: [...STAGING_CODE_PREFIXES],
     };
-    next.autorun.staging = { ...base, enabled: env.USM_AUTORUN_STAGING === "1" };
+    next.autorun.staging = { ...base, enabled: env.AGILEHARNESS_AUTORUN_STAGING === "1" };
   }
-  // (2026-08-05) O master switch `USM_AUTORUN_SANDBOX` foi REMOVIDO junto com a camada fail-open que
+  // (2026-08-05) O master switch `AGILEHARNESS_AUTORUN_SANDBOX` foi REMOVIDO junto com a camada fail-open que
   // ele governava (`runner/sandbox.ts`), quando o F0 pousou — os dois contratos eram opostos, e o F0
   // RECUSA quando não consegue conter. O `if` de corpo vazio que sobrou aqui ficou 15 dias prometendo
   // uma alavanca inexistente, e a chave `autorun.sandbox.enabled` viajava no settings.yaml publicado
   // dizendo o mesmo. `config-dead-knobs.test.ts` guarda a classe: interruptor publicado sem leitor.
   // scheduler lane caps (positive int) + thresholds (non-negative real, 0 allowed)
-  const laneLight = asPosInt(env.USM_AUTORUN_LANE_LIGHT_MAX);
+  const laneLight = asPosInt(env.AGILEHARNESS_AUTORUN_LANE_LIGHT_MAX);
   if (laneLight) next.autorun.scheduler.lanes.light.maxConcurrent = laneLight;
-  const laneHeavy = asPosInt(env.USM_AUTORUN_LANE_HEAVY_MAX);
+  const laneHeavy = asPosInt(env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MAX);
   if (laneHeavy) next.autorun.scheduler.lanes.heavy.maxConcurrent = laneHeavy;
   // SM-4 governor: per-lane resource quotas (memoryMax string / cpuQuota positive int). Each is an
   // operational override of the systemd-run scope limits; an unset/blank/invalid value leaves the
   // file/default untouched (no quota stays no quota — never silently disables enforcement to 0).
-  const lightMem = asNonEmptyString(env.USM_AUTORUN_LANE_LIGHT_MEMORY_MAX);
+  const lightMem = asNonEmptyString(env.AGILEHARNESS_AUTORUN_LANE_LIGHT_MEMORY_MAX);
   if (lightMem) next.autorun.scheduler.lanes.light.memoryMax = lightMem;
-  const lightCpu = asPosInt(env.USM_AUTORUN_LANE_LIGHT_CPU_QUOTA);
+  const lightCpu = asPosInt(env.AGILEHARNESS_AUTORUN_LANE_LIGHT_CPU_QUOTA);
   if (lightCpu) next.autorun.scheduler.lanes.light.cpuQuota = lightCpu;
-  const heavyMem = asNonEmptyString(env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX);
+  const heavyMem = asNonEmptyString(env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX);
   if (heavyMem) next.autorun.scheduler.lanes.heavy.memoryMax = heavyMem;
-  const heavyCpu = asPosInt(env.USM_AUTORUN_LANE_HEAVY_CPU_QUOTA);
+  const heavyCpu = asPosInt(env.AGILEHARNESS_AUTORUN_LANE_HEAVY_CPU_QUOTA);
   if (heavyCpu) next.autorun.scheduler.lanes.heavy.cpuQuota = heavyCpu;
   // 0 is a VALID threshold (ramFreeMb: 0 = never block on RAM) so we can't use the truthy guard the
   // lane caps use — but an EMPTY/whitespace env value must read as "unset" (fall through to the file),
   // NOT coerce to 0 via Number(""), which would silently disable RAM gating / freeze the heavy lane.
-  if (isSetEnv(env.USM_AUTORUN_RAM_FREE_MB)) {
-    const ramFree = asNonNegNum(env.USM_AUTORUN_RAM_FREE_MB);
+  if (isSetEnv(env.AGILEHARNESS_AUTORUN_RAM_FREE_MB)) {
+    const ramFree = asNonNegNum(env.AGILEHARNESS_AUTORUN_RAM_FREE_MB);
     if (ramFree !== undefined) next.autorun.scheduler.thresholds.ramFreeMb = ramFree;
   }
-  if (isSetEnv(env.USM_AUTORUN_LOAD_AVG_1)) {
-    const loadAvg = asNonNegNum(env.USM_AUTORUN_LOAD_AVG_1);
+  if (isSetEnv(env.AGILEHARNESS_AUTORUN_LOAD_AVG_1)) {
+    const loadAvg = asNonNegNum(env.AGILEHARNESS_AUTORUN_LOAD_AVG_1);
     if (loadAvg !== undefined) next.autorun.scheduler.thresholds.loadAvg1 = loadAvg;
   }
   // Parity with the file knob: the portable per-core ceiling is overridable too, so an operator can retune
   // a host without editing settings.yaml. Positive-only (see the file coercion for why 0 is rejected).
-  if (isSetEnv(env.USM_AUTORUN_LOAD_AVG_1_PER_CORE)) {
-    const perCore = asPosNum(env.USM_AUTORUN_LOAD_AVG_1_PER_CORE);
+  if (isSetEnv(env.AGILEHARNESS_AUTORUN_LOAD_AVG_1_PER_CORE)) {
+    const perCore = asPosNum(env.AGILEHARNESS_AUTORUN_LOAD_AVG_1_PER_CORE);
     if (perCore !== undefined) next.autorun.scheduler.thresholds.loadAvg1PerCore = perCore;
   }
   // WS-1.5 — session worktree cap (positive int; same truthy guard as the lane caps: 0 is not a meaningful
   // cap here, and an invalid value must leave the file/default in force rather than lock sessions out).
-  const sessMax = asPosInt(env.USM_AUTORUN_SESSIONS_MAX_WORKTREES);
+  const sessMax = asPosInt(env.AGILEHARNESS_AUTORUN_SESSIONS_MAX_WORKTREES);
   if (sessMax) next.autorun.sessions.maxWorktrees = sessMax;
   return next;
 }
@@ -1048,32 +1052,32 @@ export async function writeOrchestratorSettings(patch: OrchestratorSettingsPatch
   cache = null; // force reload on next read
 }
 
-/** Which USM_* env overrides are currently active (so the UI can flag them). */
+/** Which AGILEHARNESS_AUTORUN_* env overrides are currently active (so the UI can flag them). */
 export function activeEnvOverrides(): string[] {
   const e = process.env;
   return [
-    "USM_AUTORUN",
-    "USM_AUTORUN_RESUME_ON_BOOT",
-    "USM_AUTORUN_MAX",
-    "USM_AUTORUN_NO_PROGRESS_MAX",
-    "USM_AUTORUN_CARD_BUDGET_USD",
-    "USM_AUTORUN_TIMEOUT_MS",
-    "USM_AUTORUN_TIMEOUT_DO_MS",
-    "USM_AUTORUN_TIMEOUT_UNIVERSAL_MS",
-    "USM_AUTORUN_CLAUDE_BIN",
-    "USM_AUTORUN_EXTRA_ARGS",
-    "USM_AUTORUN_WORKTREE",
-    "USM_AUTORUN_MERGE_GATE",
-    "USM_AUTORUN_STAGING",
-    "USM_AUTORUN_LANE_LIGHT_MAX",
-    "USM_AUTORUN_LANE_HEAVY_MAX",
-    "USM_AUTORUN_LANE_LIGHT_MEMORY_MAX",
-    "USM_AUTORUN_LANE_LIGHT_CPU_QUOTA",
-    "USM_AUTORUN_LANE_HEAVY_MEMORY_MAX",
-    "USM_AUTORUN_LANE_HEAVY_CPU_QUOTA",
-    "USM_AUTORUN_RAM_FREE_MB",
-    "USM_AUTORUN_LOAD_AVG_1",
-    "USM_AUTORUN_LOAD_AVG_1_PER_CORE",
+    "AGILEHARNESS_AUTORUN",
+    "AGILEHARNESS_AUTORUN_RESUME_ON_BOOT",
+    "AGILEHARNESS_AUTORUN_MAX",
+    "AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX",
+    "AGILEHARNESS_AUTORUN_CARD_BUDGET_USD",
+    "AGILEHARNESS_AUTORUN_TIMEOUT_MS",
+    "AGILEHARNESS_AUTORUN_TIMEOUT_DO_MS",
+    "AGILEHARNESS_AUTORUN_TIMEOUT_UNIVERSAL_MS",
+    "AGILEHARNESS_AUTORUN_CLAUDE_BIN",
+    "AGILEHARNESS_AUTORUN_EXTRA_ARGS",
+    "AGILEHARNESS_AUTORUN_WORKTREE",
+    "AGILEHARNESS_AUTORUN_MERGE_GATE",
+    "AGILEHARNESS_AUTORUN_STAGING",
+    "AGILEHARNESS_AUTORUN_LANE_LIGHT_MAX",
+    "AGILEHARNESS_AUTORUN_LANE_HEAVY_MAX",
+    "AGILEHARNESS_AUTORUN_LANE_LIGHT_MEMORY_MAX",
+    "AGILEHARNESS_AUTORUN_LANE_LIGHT_CPU_QUOTA",
+    "AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX",
+    "AGILEHARNESS_AUTORUN_LANE_HEAVY_CPU_QUOTA",
+    "AGILEHARNESS_AUTORUN_RAM_FREE_MB",
+    "AGILEHARNESS_AUTORUN_LOAD_AVG_1",
+    "AGILEHARNESS_AUTORUN_LOAD_AVG_1_PER_CORE",
   ].filter((k) => e[k] != null && e[k] !== "");
 }
 
@@ -1149,10 +1153,10 @@ export function resolveCardArgs(card: Card, def: StatusDef, config: RunnerSettin
  * driveCount) — it is NOT reset each cycle, so a chronically-stuck card (one that exhausts its turn
  * budget every resume without making progress) hits this cap and surfaces to the operator (force-deleted
  * worktree + an "error" finish + an operator finding) rather than silently churning resumes. Override
- * via USM_AUTORUN_MAXTURNS_RESUME_MAX (default 2; 0 disables auto-resume entirely → the first max-turns
+ * via AGILEHARNESS_AUTORUN_MAXTURNS_RESUME_MAX (default 2; 0 disables auto-resume entirely → the first max-turns
  * settle escalates straight to a failure). This is the busy-loop bound for the in-process resume.
  */
 export function maxTurnsResumeMax(): number {
-  const n = Number(process.env.USM_AUTORUN_MAXTURNS_RESUME_MAX);
+  const n = Number(process.env.AGILEHARNESS_AUTORUN_MAXTURNS_RESUME_MAX);
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 2;
 }

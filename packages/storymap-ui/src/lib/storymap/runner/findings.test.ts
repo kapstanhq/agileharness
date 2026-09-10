@@ -175,7 +175,7 @@ describe("withLoopGuardFinding (ADR-063 4b)", () => {
     expect(finding.lens).toBe("general");
     expect(finding.detail).toMatch(/qa-automatizado/);
     expect(finding.detail).toMatch(/3 vez/);
-    expect(finding.detail).toMatch(/USM_AUTORUN_NO_PROGRESS_MAX/); // override hint present
+    expect(finding.detail).toMatch(/AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX/); // override hint present
   });
 
   it("is a NO-OP (null) on the second identical build — the loop-safe idempotency", () => {
@@ -221,7 +221,7 @@ describe("withCardBudgetFinding (ADR-063 4a)", () => {
     expect(finding.lens).toBe("general");
     expect(finding.detail).toMatch(/\$15\.50/);
     expect(finding.detail).toMatch(/\$12\.00/);
-    expect(finding.detail).toMatch(/USM_AUTORUN_CARD_BUDGET_USD/);
+    expect(finding.detail).toMatch(/AGILEHARNESS_AUTORUN_CARD_BUDGET_USD/);
   });
 
   it("is a NO-OP (null) on the second identical build (spent stable while auto-dispatch is paused)", () => {

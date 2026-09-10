@@ -100,7 +100,7 @@ async function reiniciaProcesso(): Promise<void> {
 let erros: string[];
 
 beforeEach(async () => {
-  delete process.env.STORYMAP_FRONTMATTER_MAX_BYTES;
+  delete process.env.AGILEHARNESS_FRONTMATTER_MAX_BYTES;
   erros = [];
   vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
     erros.push(args.map((a) => (a instanceof Error ? a.message : String(a))).join(" "));

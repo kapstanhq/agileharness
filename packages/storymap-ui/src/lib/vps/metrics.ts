@@ -85,7 +85,7 @@ function readLoad(): LoadMetric | null {
   }
 }
 
-// The plan's WEEKLY token budget (denominator for "% usado"). STORYMAP_WEEKLY_TOKEN_LIMIT env
+// The plan's WEEKLY token budget (denominator for "% usado"). AGILEHARNESS_WEEKLY_TOKEN_LIMIT env
 // wins, else settings.yaml `vps.weeklyTokenLimit`, else the per-plan default below. This box is
 // Max 20x; ~760M tokens/week is calibrated so a ~381M week reads ~50% (matching Claude's
 // /usage). ccusage can't read the real plan limit — tune via the env on the systemd unit if it
@@ -93,7 +93,7 @@ function readLoad(): LoadMetric | null {
 // env/default is the durable knob.)
 const DEFAULT_WEEKLY_TOKEN_LIMIT = 760_000_000;
 function configuredWeeklyTokenLimit(): number {
-  const env = Number(process.env.STORYMAP_WEEKLY_TOKEN_LIMIT);
+  const env = Number(process.env.AGILEHARNESS_WEEKLY_TOKEN_LIMIT);
   if (Number.isFinite(env) && env > 0) return Math.floor(env);
   try {
     const raw = yaml.load(readFileSync(settingsPath(), "utf8")) as any;
@@ -107,9 +107,9 @@ function configuredWeeklyTokenLimit(): number {
 
 async function readTokens(now: number): Promise<{ window: TokenWindow | null; error?: string }> {
   // `ccusage` if installed, else `bunx ccusage@latest` (bun caches it after first download).
-  // ccusage reads ~/.claude/projects transcripts by default. STORYMAP_CCUSAGE_CMD overrides.
+  // ccusage reads ~/.claude/projects transcripts by default. AGILEHARNESS_CCUSAGE_CMD overrides.
   // We read the WEEKLY aggregation (the rate-limit window the user tracks in /usage).
-  const override = process.env.STORYMAP_CCUSAGE_CMD?.trim();
+  const override = process.env.AGILEHARNESS_CCUSAGE_CMD?.trim();
   const attempts: Array<[string, string[]]> = override
     ? [[override, ["weekly", "--json"]]]
     : [
@@ -131,21 +131,21 @@ async function readTokens(now: number): Promise<{ window: TokenWindow | null; er
 }
 
 // The REAL Claude usage windows + headroom effectiveness come from the local headroom proxy's
-// `/stats` (it polls Anthropic's subscription endpoint). STORYMAP_HEADROOM_URL overrides / kills
+// `/stats` (it polls Anthropic's subscription endpoint). AGILEHARNESS_HEADROOM_URL overrides / kills
 // it (`off`/`0`/`false`), else the per-board default port. Returns null when headroom is off.
 // How old the proxy's subscription poll may be before the UI stops trusting it. The proxy
-// normally re-polls every few minutes; STORYMAP_USAGE_MAX_AGE_MIN (default 20) is the budget
+// normally re-polls every few minutes; AGILEHARNESS_USAGE_MAX_AGE_MIN (default 20) is the budget
 // beyond which a frozen poll (the poller stalled while the process stayed up) is flagged stale
 // rather than shown as the live `/usage` figure.
 const DEFAULT_USAGE_MAX_AGE_MIN = 20;
 function configuredUsageMaxAgeMs(): number {
-  const env = Number(process.env.STORYMAP_USAGE_MAX_AGE_MIN);
+  const env = Number(process.env.AGILEHARNESS_USAGE_MAX_AGE_MIN);
   const min = Number.isFinite(env) && env > 0 ? env : DEFAULT_USAGE_MAX_AGE_MIN;
   return Math.floor(min * 60_000);
 }
 
 function headroomStatsUrl(): string | null {
-  const env = process.env.STORYMAP_HEADROOM_URL?.trim();
+  const env = process.env.AGILEHARNESS_HEADROOM_URL?.trim();
   if (env && /^(0|off|false|none|disabled)$/i.test(env)) return null;
   const base = (env || "http://127.0.0.1:8787").replace(/\/+$/, "");
   return `${base}/stats`;

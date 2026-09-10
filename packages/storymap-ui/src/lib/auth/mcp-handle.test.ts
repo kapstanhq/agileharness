@@ -35,7 +35,7 @@ import {
   revokeMcpHandle,
 } from "./mcp-handle";
 
-const TOKEN_ENV = "STORYMAP_MCP_TOKEN";
+const TOKEN_ENV = "AGILEHARNESS_MCP_TOKEN";
 
 let prevStateDir: string | undefined;
 let prevToken: string | undefined;
@@ -43,16 +43,16 @@ let prevToken: string | undefined;
 let stateDir: string;
 
 beforeEach(() => {
-  prevStateDir = process.env.STORYMAP_RUNNER_STATE_DIR;
+  prevStateDir = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
   prevToken = process.env[TOKEN_ENV];
   stateDir = mkdtempSync(path.join(tmpdir(), "mcp-handle-"));
-  process.env.STORYMAP_RUNNER_STATE_DIR = stateDir;
+  process.env.AGILEHARNESS_RUNNER_STATE_DIR = stateDir;
 });
 
 afterEach(async () => {
   await flushHandleTouches();
-  if (prevStateDir === undefined) delete process.env.STORYMAP_RUNNER_STATE_DIR;
-  else process.env.STORYMAP_RUNNER_STATE_DIR = prevStateDir;
+  if (prevStateDir === undefined) delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+  else process.env.AGILEHARNESS_RUNNER_STATE_DIR = prevStateDir;
   if (prevToken === undefined) delete process.env[TOKEN_ENV];
   else process.env[TOKEN_ENV] = prevToken;
   // O `beforeEach` cria um diretório por TESTE, não por arquivo. Sem esta linha cada passada da suíte
@@ -176,10 +176,10 @@ describe("COMPATIBILIDADE: quebrar o token legado seria remover capacidade do do
 
   it("um token de tier ESCOPADO continua resolvendo para o nível dele", () => {
     const orch = randomBytes(32).toString("base64url");
-    const env = { STORYMAP_MCP_TOKEN_ORCH: orch };
-    const c = resolveLegacyMcpToken(orch, env, [{ tokenEnv: "STORYMAP_MCP_TOKEN_ORCH", level: "orch" }]);
+    const env = { AGILEHARNESS_MCP_TOKEN_ORCH: orch };
+    const c = resolveLegacyMcpToken(orch, env, [{ tokenEnv: "AGILEHARNESS_MCP_TOKEN_ORCH", level: "orch" }]);
     expect(c?.level).toBe("orch");
-    expect(c?.tokenEnv).toBe("STORYMAP_MCP_TOKEN_ORCH");
+    expect(c?.tokenEnv).toBe("AGILEHARNESS_MCP_TOKEN_ORCH");
   });
 
   it("o tier PRIMÁRIO é o primeiro da ordem de resolução, como hoje", () => {

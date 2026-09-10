@@ -32,7 +32,7 @@ function tmpDescartavel(prefixo: string): string {
 
 afterEach(() => {
   resetRepoRootCache();
-  delete process.env.STORYMAP_TARGET;
+  delete process.env.AGILEHARNESS_TARGET;
   // DEPOIS do restore de cwd/env (que os próprios testes fazem no `finally`): remover antes de um
   // chdir de volta trocaria lixo em /tmp por falha intermitente de escrita.
   while (temporarios.length > 0) {
@@ -63,7 +63,7 @@ describe("o fallback silencioso está MORTO (e não pode voltar por descuido)", 
       } catch (err) {
         const msg = String(err);
         expect(msg).toMatch(/turbo\.json|\.git/);
-        expect(msg).toMatch(/STORYMAP_TARGET/);
+        expect(msg).toMatch(/AGILEHARNESS_TARGET/);
       }
     } finally {
       process.chdir(prev);
@@ -94,18 +94,18 @@ describe("o fallback silencioso está MORTO (e não pode voltar por descuido)", 
 });
 
 describe("declaração explícita vence — e é validada, não confiada", () => {
-  it("STORYMAP_TARGET com marcador resolve — a declaração é honrada", () => {
+  it("AGILEHARNESS_TARGET com marcador resolve — a declaração é honrada", () => {
     const target = tmpDescartavel("ah-target-");
     writeFileSync(path.join(target, ".git"), "gitdir: /outro/lugar\n", "utf8"); // worktree linkado: `.git` é ARQUIVO
-    process.env.STORYMAP_TARGET = target;
+    process.env.AGILEHARNESS_TARGET = target;
     resetRepoRootCache();
     // realpath: no macOS /tmp é symlink para /private/tmp e o resolve normaliza.
     expect(findRepoRoot()).toBe(path.resolve(target));
   });
 
-  it("STORYMAP_TARGET SEM marcador LANÇA — este teste foi INVERTIDO, e o porquê importa", () => {
+  it("AGILEHARNESS_TARGET SEM marcador LANÇA — este teste foi INVERTIDO, e o porquê importa", () => {
     // ⚠ A versão anterior se chamava "resolve mesmo sem marcador nenhum" e AFIRMAVA o comportamento
-    // permissivo. Uma revisão mostrou o que isso custava: `STORYMAP_TARGET=<repo>/packages` é um
+    // permissivo. Uma revisão mostrou o que isso custava: `AGILEHARNESS_TARGET=<repo>/packages` é um
     // diretório que existe, passava, virava `cachedRoot`, e a partir dali `instrumentation.ts` e
     // `recovery.ts` rodam `git branch -D` e `git worktree remove --force` com cwd nesse caminho — o git
     // resolve para CIMA e as operações atingiriam o repositório PAI.
@@ -114,15 +114,15 @@ describe("declaração explícita vence — e é validada, não confiada", () =>
     // e com um agravante — aqui o operador acredita ter declarado a raiz certa. Uma prova que cimenta
     // a permissividade é pior que a ausência dela, porque dá confiança.
     const target = tmpDescartavel("ah-target-sem-marcador-");
-    process.env.STORYMAP_TARGET = target;
+    process.env.AGILEHARNESS_TARGET = target;
     resetRepoRootCache();
     expect(() => findRepoRoot()).toThrow(RepoRootUnresolvedError);
   });
 
-  it("STORYMAP_TARGET inexistente LANÇA em vez de cair na busca", () => {
+  it("AGILEHARNESS_TARGET inexistente LANÇA em vez de cair na busca", () => {
     // Se um typo no env degradasse para a busca, o operador acharia que declarou a raiz e estaria
     // rodando contra outra — que é a classe inteira que F0 remove.
-    process.env.STORYMAP_TARGET = path.join(os.tmpdir(), "nao-existe-ah-" + Date.now());
+    process.env.AGILEHARNESS_TARGET = path.join(os.tmpdir(), "nao-existe-ah-" + Date.now());
     resetRepoRootCache();
     expect(() => findRepoRoot()).toThrow(RepoRootUnresolvedError);
   });
@@ -159,7 +159,7 @@ describe("o módulo de deploy não derruba o boot num alvo que não é este mono
 //
 // Quem clica em "Download ZIP" no GitHub não recebe `.git`; e o artefato publicado também não tem
 // `turbo.json` (a régua da extração corta a infra do monorepo). MEDIDO na árvore extraída: a
-// ferramenta não subia — e a saída que o PRÓPRIO erro sugeria (`STORYMAP_TARGET=$PWD`, exatamente o
+// ferramenta não subia — e a saída que o PRÓPRIO erro sugeria (`AGILEHARNESS_TARGET=$PWD`, exatamente o
 // que o README mandava) falhava igual, porque o caminho declarado é cobrado do mesmo marcador. O
 // primeiro contato do projeto era um beco sem saída.
 //
@@ -189,9 +189,9 @@ describe("a árvore SEM .git (ZIP baixado) é encontrada pela própria pasta de 
     }
   });
 
-  it("STORYMAP_TARGET apontando para essa raiz é HONRADO — a saída que o erro sugere funciona", () => {
+  it("AGILEHARNESS_TARGET apontando para essa raiz é HONRADO — a saída que o erro sugere funciona", () => {
     const raiz = arvoreDeZip();
-    process.env.STORYMAP_TARGET = raiz;
+    process.env.AGILEHARNESS_TARGET = raiz;
     resetRepoRootCache();
     expect(realpathSync(findRepoRoot())).toBe(realpathSync(raiz));
   });
@@ -201,7 +201,7 @@ describe("a árvore SEM .git (ZIP baixado) é encontrada pela própria pasta de 
     // git resolvem para CIMA e atingiriam o repositório de fora. `packages/storymap-ui` não tem
     // `storymap/boards`, então o marcador novo não lhe dá passagem.
     const raiz = arvoreDeZip();
-    process.env.STORYMAP_TARGET = path.join(raiz, "packages", "storymap-ui");
+    process.env.AGILEHARNESS_TARGET = path.join(raiz, "packages", "storymap-ui");
     resetRepoRootCache();
     expect(() => findRepoRoot()).toThrow(RepoRootUnresolvedError);
   });

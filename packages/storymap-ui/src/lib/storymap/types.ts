@@ -1853,7 +1853,7 @@ export interface BoardConfig {
    * Headroom proxy toggle (per-board, story-5m0r3n). When `enabled`, the engine
    * injects `ANTHROPIC_BASE_URL=<proxyUrl>` into the headless `claude` env so
    * traffic flows through the local headroom compression sidecar (60–95% token
-   * reduction). ENV `STORYMAP_HEADROOM_URL` overrides this entry. Probe failure
+   * reduction). ENV `AGILEHARNESS_HEADROOM_URL` overrides this entry. Probe failure
    * falls back to direct API (passthrough) — runs NEVER block on a broken proxy.
    */
   headroom?: {
@@ -2160,7 +2160,7 @@ export interface RunnerColumnDefaults {
 
 /**
  * GLOBAL runner configuration — the editable, persisted form of what used to be
- * env-only (USM_AUTORUN*). Lives at storymap/settings.yaml and is read by the
+ * env-only (AGILEHARNESS_AUTORUN*). Lives at storymap/settings.yaml and is read by the
  * trigger-runner channel with precedence: hardcoded defaults < settings.yaml <
  * process.env (ENV always wins, so the operational kill switch is untouched).
  * Per-PIPELINE policy (which model column X uses) lives on StatusDef in
@@ -2170,11 +2170,11 @@ export interface RunnerSettings {
   /** schema version for future migration */
   version: number;
   autorun: {
-    /** master switch; ENV USM_AUTORUN=0 still forces this off */
+    /** master switch; ENV AGILEHARNESS_AUTORUN=0 still forces this off */
     enabled: boolean;
-    /** re-drive runs a crash interrupted on the next boot; ENV USM_AUTORUN_RESUME_ON_BOOT=0 forces off */
+    /** re-drive runs a crash interrupted on the next boot; ENV AGILEHARNESS_AUTORUN_RESUME_ON_BOOT=0 forces off */
     resumeOnBoot: boolean;
-    /** max concurrent skill processes (ENV USM_AUTORUN_MAX overrides) */
+    /** max concurrent skill processes (ENV AGILEHARNESS_AUTORUN_MAX overrides) */
     maxConcurrent: number;
     /**
      * ADR-063 (4b) — same-column-no-progress LOOP-GUARD cap. The autorun cascade circuit-breaks a card
@@ -2182,14 +2182,14 @@ export interface RunnerSettings {
      * story-olr777 burn: harness-qa re-fired every non-advancing integration, ~$15 with no verdict). Once a
      * card has run `noProgressMax` CONSECUTIVE non-advancing times for the same trigger, the shell writes
      * an operator finding and STOPS auto-dispatching (a move / manual run / raising the cap resets it).
-     * Default 3; 0 DISABLES the guard. ENV USM_AUTORUN_NO_PROGRESS_MAX overrides (0 disables). */
+     * Default 3; 0 DISABLES the guard. ENV AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX overrides (0 disables). */
     noProgressMax: number;
     /**
      * ADR-063 (4a) — OPT-IN per-CARD lifetime $ backstop. When set (> 0), the shell sums the card's
      * telemetry `costUSD` across ALL its runs and STOPS auto-dispatching once the total reaches this
      * ceiling (writing an operator finding) — the budget the per-run maxTurnsResumeMax cap can't see (a
      * card burns $ ACROSS re-spawns, not within one run). DEFAULT undefined = DISABLED (no behaviour
-     * change unless the operator opts in). ENV USM_AUTORUN_CARD_BUDGET_USD overrides (a positive float). */
+     * change unless the operator opts in). ENV AGILEHARNESS_AUTORUN_CARD_BUDGET_USD overrides (a positive float). */
     cardBudgetUSD?: number;
     timeouts: {
       /** watchdog for fast skills (enrich/tasks/prioritize), ms */
@@ -2199,23 +2199,23 @@ export interface RunnerSettings {
       /** last-resort wall-clock ceiling applied to ANY run regardless of classification —
        * the universal watchdog that keeps a code skill WITHOUT costGuard/doMs (e.g. refine)
        * from holding a concurrency slot forever. NEVER null (defaults guarantee a number,
-       * generous enough not to kill a legit run). ENV USM_AUTORUN_TIMEOUT_UNIVERSAL_MS overrides. */
+       * generous enough not to kill a legit run). ENV AGILEHARNESS_AUTORUN_TIMEOUT_UNIVERSAL_MS overrides. */
       universalMs: number;
     };
-    /** binary that resolves `claude` from PATH (ENV USM_AUTORUN_CLAUDE_BIN overrides) */
+    /** binary that resolves `claude` from PATH (ENV AGILEHARNESS_AUTORUN_CLAUDE_BIN overrides) */
     claudeBin: string;
-    /** extra CLI flags appended to EVERY run (global escape hatch; ENV USM_AUTORUN_EXTRA_ARGS overrides) */
+    /** extra CLI flags appended to EVERY run (global escape hatch; ENV AGILEHARNESS_AUTORUN_EXTRA_ARGS overrides) */
     extraArgs: string[];
     /** isolate each run in an ephemeral git worktree (R1, harness paralelo). DEFAULT OFF — a
      * dormant capability until a merge-queue exists to integrate the per-run branches; with it
-     * ON but no merge-back, each run's card edits are discarded. ENV USM_AUTORUN_WORKTREE=1/0 overrides. */
+     * ON but no merge-back, each run's card edits are discarded. ENV AGILEHARNESS_AUTORUN_WORKTREE=1/0 overrides. */
     worktreeIsolation: boolean;
     /**
      * Integration gate (story-1k7els). Before the merge train applies `git merge --no-ff` on main, it
      * merges the run branch into a TEMPORARY staging worktree and runs `checkCommand` there — integrating
      * on main ONLY if green. Catches a SEMANTIC break between runs that each isolated per-run test passes.
      * DEFAULT OFF (`enabled: false`) — running the suite per integration has a cost. ENV
-     * USM_AUTORUN_MERGE_GATE=1/0 overrides. Optional/absent ⇒ disabled (pre-gate behavior). */
+     * AGILEHARNESS_AUTORUN_MERGE_GATE=1/0 overrides. Optional/absent ⇒ disabled (pre-gate behavior). */
     mergeGate?: {
       /** master switch for the gate; default false */
       enabled: boolean;
@@ -2301,7 +2301,7 @@ export interface RunnerSettings {
      * unaffected (merges to main exactly as before — the common case, ~93% of runs empirically).
      * BOOT-FIXED: read once at queue construction, NOT hot-reloaded per entry (unlike `mergeGate.enabled`)
      * — so editing settings.yaml can never split ONE batch of runs across main/stage mid-flight. DEFAULT
-     * OFF (`enabled: false`) ⇒ pre-staging behavior. ENV USM_AUTORUN_STAGING=1/0 overrides. */
+     * OFF (`enabled: false`) ⇒ pre-staging behavior. ENV AGILEHARNESS_AUTORUN_STAGING=1/0 overrides. */
     staging?: {
       /** master switch; default false (boot-fixed, NOT hot-reloaded) */
       enabled: boolean;
@@ -2380,13 +2380,13 @@ export interface RunnerSettings {
      * concurrency caps, and a heavy run is held while the VPS is over a RAM/CPU threshold. The
      * defaults are PERMISSIVE (lanes 99/99, thresholds 0/999) so a config lacking this section
      * behaves identically to the pre-scheduler engine. Tuned operationally in settings.yaml; each
-     * field is ENV-overridable (USM_AUTORUN_LANE_LIGHT_MAX / _LANE_HEAVY_MAX / _RAM_FREE_MB / _LOAD_AVG_1). */
+     * field is ENV-overridable (AGILEHARNESS_AUTORUN_LANE_LIGHT_MAX / _LANE_HEAVY_MAX / _RAM_FREE_MB / _LOAD_AVG_1). */
     scheduler: {
       /** per-lane concurrency caps (within the global maxConcurrent ceiling) + the per-run
        * resource quota (SM-4 governor): `memoryMax` is a systemd `MemoryMax` value (e.g. "2G",
        * "8G") and `cpuQuota` a `CPUQuota` percentage (100 = 1 core, 300 = 3 cores). Both OPTIONAL —
        * absent ⇒ no systemd-run scope is applied for that lane (back-compat with the pre-governor
-       * engine). ENV-overridable (USM_AUTORUN_LANE_{LIGHT,HEAVY}_{MEMORY_MAX,CPU_QUOTA}). */
+       * engine). ENV-overridable (AGILEHARNESS_AUTORUN_LANE_{LIGHT,HEAVY}_{MEMORY_MAX,CPU_QUOTA}). */
       lanes: {
         light: { maxConcurrent: number; memoryMax?: string; cpuQuota?: number };
         heavy: { maxConcurrent: number; memoryMax?: string; cpuQuota?: number };
@@ -2409,7 +2409,7 @@ export interface RunnerSettings {
      * like a HEAVY run (it builds + runs the suite), so it reuses `scheduler.thresholds` for the box; this
      * cap is the extra limit on how many session trees may exist AT ONCE. Disk is cheap (node_modules are
      * links) — simultaneous BUILDS are not, and admission is the only thing throttling a session (unlike a
-     * run, nothing else queues it). Absent ⇒ the default cap. ENV: USM_AUTORUN_SESSIONS_MAX_WORKTREES.
+     * run, nothing else queues it). Absent ⇒ the default cap. ENV: AGILEHARNESS_AUTORUN_SESSIONS_MAX_WORKTREES.
      */
     sessions: {
       maxWorktrees: number;
@@ -2478,7 +2478,7 @@ export interface RunnerSettings {
 
 /** WS8 — the orchestrator deployment settings (settings.yaml). All optional; absent ⇒ enabled:false. */
 export interface OrchestratorSettings {
-  /** master kill-switch; default false. ENV STORYMAP_ORCH_ENABLED=0 also forces off. */
+  /** master kill-switch; default false. ENV AGILEHARNESS_ORCH_ENABLED=0 also forces off. */
   enabled: boolean;
   /** in-process tick cadence in minutes (the copiloto analyses the board every N min); default 30. */
   tickMinutes: number;

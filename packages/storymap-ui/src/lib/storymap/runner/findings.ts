@@ -259,7 +259,7 @@ function ehSegmentoDeIdentificador(p: string): boolean {
 
 /**
  * O token é um IDENTIFICADOR segmentado escrito por gente/máquina — runId (`agent-<uuid>`), branch
- * (`failed/agent/<uuid>`), nome de env (`USM_AUTORUN_NO_PROGRESS_MAX`), nome de pacote kebab?
+ * (`failed/agent/<uuid>`), nome de env (`AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX`), nome de pacote kebab?
  *
  * MESMA régua do `looksLikeHumanIdentifier` (scripts/git-hooks/scan-secrets.mjs), reimplementada aqui de
  * propósito: um import daqui para `scripts/` amarraria o pacote publicável ao layout do umbrella.
@@ -735,7 +735,7 @@ export function withLoopGuardFinding(
     detail:
       `O autorun rodou ${runs} vez(es) seguidas em '${status}' sem o card avançar de coluna — ` +
       `circuit-breaker acionado (ADR-063 4b), auto-dispatch pausado para este card. Para destravar: ` +
-      `mova o card para outra coluna, rode a skill à mão ("Rodar agora"), ou aumente USM_AUTORUN_NO_PROGRESS_MAX.`,
+      `mova o card para outra coluna, rode a skill à mão ("Rodar agora"), ou aumente AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX.`,
     status: "open",
   });
 }
@@ -800,7 +800,7 @@ export function withCardBudgetFinding(
     title: "orçamento do card estourado",
     detail:
       `O card gastou $${spentUSD.toFixed(2)} em ${runs} run(s), atingindo o teto de $${budgetUSD.toFixed(2)} ` +
-      `(ADR-063 4a) — auto-dispatch pausado para este card. Para retomar: aumente USM_AUTORUN_CARD_BUDGET_USD ` +
+      `(ADR-063 4a) — auto-dispatch pausado para este card. Para retomar: aumente AGILEHARNESS_AUTORUN_CARD_BUDGET_USD ` +
       `ou investigue por que ele não avança.`,
     status: "open",
   });

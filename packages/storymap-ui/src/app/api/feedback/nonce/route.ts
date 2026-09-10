@@ -21,7 +21,7 @@ export async function POST(request: Request): Promise<Response> {
 
   // Minting while no origin is allowlisted would hand out a key to a door that doesn't exist — say so
   // instead of returning a token that can never work.
-  const allowed = parseEmbedOrigins(process.env.STORYMAP_FEEDBACK_EMBED_ORIGINS);
+  const allowed = parseEmbedOrigins(process.env.AGILEHARNESS_FEEDBACK_EMBED_ORIGINS);
   if (allowed.length === 0) {
     // NOTE: no example hostname here on purpose — this tool is app-agnostic (agnostic-lint), so the
     // consumer's own origins live in its config (.env.example documents the format), never in code.
@@ -29,7 +29,7 @@ export async function POST(request: Request): Promise<Response> {
       {
         ok: false,
         error:
-          "nenhuma origem de embed configurada — defina STORYMAP_FEEDBACK_EMBED_ORIGINS com as origens permitidas (separadas por vírgula, sem path)",
+          "nenhuma origem de embed configurada — defina AGILEHARNESS_FEEDBACK_EMBED_ORIGINS com as origens permitidas (separadas por vírgula, sem path)",
       },
       { status: 409 },
     );

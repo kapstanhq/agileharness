@@ -125,7 +125,7 @@ const nextConfig = {
    * build de deploy poder escolher sem que o RUNTIME saiba: o systemd não define a variável, então o
    * serviço sempre serve `.next`.
    */
-  distDir: process.env.STORYMAP_DIST_DIR || ".next",
+  distDir: process.env.AGILEHARNESS_DIST_DIR || ".next",
   reactStrictMode: true,
   typescript: { ignoreBuildErrors: true },
   eslint: { ignoreDuringBuilds: true },

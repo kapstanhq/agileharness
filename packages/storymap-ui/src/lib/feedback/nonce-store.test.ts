@@ -4,7 +4,7 @@ import path from "node:path";
 import { mintNonce, NONCE_TTL_MS, revokeAllNonces, verifyNonce } from "./nonce-store";
 import { runnerStateDir } from "@/lib/storymap/paths";
 
-// SAFE to exercise for real: vitest.setup.ts redirects STORYMAP_RUNNER_STATE_DIR to a temp dir, so
+// SAFE to exercise for real: vitest.setup.ts redirects AGILEHARNESS_RUNNER_STATE_DIR to a temp dir, so
 // none of this touches the live service's operator state.
 const NOW = 1_800_000_000_000;
 

@@ -150,7 +150,7 @@ function ccusageBucket(tokens: TokenWindow | null): QuotaBucket | null {
 }
 
 function configuredUsageMaxAgeMs(): number {
-  const env = Number(process.env.STORYMAP_USAGE_MAX_AGE_MIN);
+  const env = Number(process.env.AGILEHARNESS_USAGE_MAX_AGE_MIN);
   const min = Number.isFinite(env) && env > 0 ? env : DEFAULT_USAGE_MAX_AGE_MIN;
   return Math.floor(min * 60_000);
 }

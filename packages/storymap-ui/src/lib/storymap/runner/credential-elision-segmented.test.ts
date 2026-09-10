@@ -4,7 +4,7 @@
 // A onda 2 trocou a régua de `elideCredentialBytes` de "contagem de classes de caractere" para "FORMA do
 // token" — e fechou duas portas grandes (token sem maiúscula, hex puro). A régua nova isenta um token
 // SEGMENTADO por `-`/`_` cujos pedaços tenham forma de palavra/hex, para o diagnóstico do train seguir
-// legível (`agent-<uuid>`, `failed/agent/<uuid>`, `USM_AUTORUN_NO_PROGRESS_MAX`).
+// legível (`agent-<uuid>`, `failed/agent/<uuid>`, `AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX`).
 //
 // A isenção era larga demais num ponto MEDIDO: um segmento como `abcDEF123456` casa
 // `^[a-z][A-Za-z0-9]*$`, então um token de bot do Slack (`xoxb-<dígitos>-<dígitos>-<run>`) satisfazia a
@@ -56,7 +56,7 @@ describe("apertar a isenção não pode cegar o diagnóstico do train", () => {
   it("runId, branch de sessão, nome de env, caminho e sha continuam LEGÍVEIS", () => {
     const texto =
       "run agent-b38597ce-3ef1-4805-bca8-0a1f5ed1d520 · branch failed/agent/b38597ce-3ef1-4805-bca8-0a1f5ed1d520 · " +
-      "USM_AUTORUN_NO_PROGRESS_MAX=3 · packages/storymap-ui/src/lib/storymap/runner/merge-queue.ts · " +
+      "AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX=3 · packages/storymap-ui/src/lib/storymap/runner/merge-queue.ts · " +
       "merge a09d389c1e2f3a4b5c6d7e8f9012345678901234 · split-code-not-landed-agent-b38597ce.patch";
     expect(elideCredentialBytes(texto)).toBe(texto);
   });

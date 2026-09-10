@@ -49,13 +49,13 @@ export const SESSION_HEARTBEAT_TTL_MS = 6 * 60 * 60 * 1000; // 6h
 export const PUBLISH_EMBARGO_TTL_MS = 90 * 60 * 1000; // 90min
 
 /**
- * A janela de embargo, do env (`USM_PUBLISH_EMBARGO_TTL_MS`). Lixo/<=0 → o default; nunca desligada
+ * A janela de embargo, do env (`AGILEHARNESS_PUBLISH_EMBARGO_TTL_MS`). Lixo/<=0 → o default; nunca desligada
  * (embargo infinito é o bug, embargo zero seria perder a guarda). TETO no TTL de liveness: uma sessão
  * já considerada MORTA para todo o resto do sistema não pode seguir embargando aqui. Pura — exportada
  * para teste.
  */
 export function publishEmbargoTtlMs(env: Record<string, string | undefined> = process.env): number {
-  const raw = env.USM_PUBLISH_EMBARGO_TTL_MS;
+  const raw = env.AGILEHARNESS_PUBLISH_EMBARGO_TTL_MS;
   const n = raw == null || raw === "" ? NaN : Number(raw);
   const chosen = Number.isFinite(n) && n > 0 ? Math.floor(n) : PUBLISH_EMBARGO_TTL_MS;
   return Math.min(chosen, SESSION_HEARTBEAT_TTL_MS);

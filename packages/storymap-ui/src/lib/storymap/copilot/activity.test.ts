@@ -111,7 +111,7 @@ describe("tickOutcomeText — toda decisão vira uma frase que o humano entende"
   it("spawn que não nasceu = ERRO visível (não um 'pulei' qualquer): falta o token", () => {
     const r = tickOutcomeText("skipped-spawn-failed");
     expect(r?.kind).toBe("error");
-    expect(r?.text).toContain("STORYMAP_MCP_TOKEN_ORCH");
+    expect(r?.text).toContain("AGILEHARNESS_MCP_TOKEN_ORCH");
   });
 
   it("board não-autônomo NÃO gera linha (não houve decisão a comunicar)", () => {
@@ -125,8 +125,8 @@ describe("tickOutcomeText — toda decisão vira uma frase que o humano entende"
 describe("appendCopilotActivity — a regra da frase corrida vale na GERAÇÃO", () => {
   it("um summary markdown do LLM é gravado JÁ como frase corrida", async () => {
     const tmp = await mkdtemp(join(tmpdir(), "diary-"));
-    const prev = process.env.STORYMAP_RUNNER_STATE_DIR;
-    process.env.STORYMAP_RUNNER_STATE_DIR = tmp; // runnerStateDir() lê o env A CADA chamada
+    const prev = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+    process.env.AGILEHARNESS_RUNNER_STATE_DIR = tmp; // runnerStateDir() lê o env A CADA chamada
     try {
       await appendCopilotActivity("acme-test", {
         kind: "finished",
@@ -141,8 +141,8 @@ describe("appendCopilotActivity — a regra da frase corrida vale na GERAÇÃO",
       expect(entries[0].text).not.toContain("**");
       expect(entries[0].detail).toBe("$0.42 · 31s"); // detalhe já corrido passa intacto
     } finally {
-      if (prev === undefined) delete process.env.STORYMAP_RUNNER_STATE_DIR;
-      else process.env.STORYMAP_RUNNER_STATE_DIR = prev;
+      if (prev === undefined) delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+      else process.env.AGILEHARNESS_RUNNER_STATE_DIR = prev;
       await rm(tmp, { recursive: true, force: true });
     }
   });

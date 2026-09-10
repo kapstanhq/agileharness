@@ -11,7 +11,7 @@ cd packages/storymap-ui
 bun run build && bun run start                # comes up at http://127.0.0.1:3008
 ```
 
-Point it elsewhere with `STORYMAP_TARGET=/path/to/repo` if you don't want it operating on this same
+Point it elsewhere with `AGILEHARNESS_TARGET=/path/to/repo` if you don't want it operating on this same
 repository. To iterate, `bun run dev` — which is **not** `next dev`: it's the app's own entrypoint
 (`bun run build:server` + `node dist/ah-server.mjs`) with `AGILEHARNESS_DEV=1`.
 

@@ -8,13 +8,13 @@
 // frontmatter, que precisou de duas ondas exatamente por não ter lint.
 //
 // O que este lint IMPEDE: que uma superfície NOVA de spawn de Claude nasça montando o env do serviço à mão —
-// com todo tier de credencial MCP (`STORYMAP_MCP_TOKEN*`) e o `__NEXT_PROCESSED_ENV` do next-server dentro —
+// com todo tier de credencial MCP (`AGILEHARNESS_MCP_TOKEN*`) e o `__NEXT_PROCESSED_ENV` do next-server dentro —
 // sem que ninguém veja na revisão. Ele NÃO julga se o env é seguro; julga que o filho nasce DO chokepoint, que
 // é onde a régua por prefixo vive e onde um tier novo já nasce removido (spawn-env.ts).
 //
 // Como acha as superfícies, sem depender de lista: varre `src/**` não-teste, casa CHAMADAS de criação de
 // processo e pergunta se o argv0 é o binário do Claude — literal `"claude"`, expressão que carrega
-// `claudeBin`/`USM_AUTORUN_CLAUDE_BIN` (traçada por até 2 saltos de atribuição, que é como
+// `claudeBin`/`AGILEHARNESS_AUTORUN_CLAUDE_BIN` (traçada por até 2 saltos de atribuição, que é como
 // ``const cmd = `${bin} -p …` `` se resolve) ou um SEAM injetável de spawn de agente (`spawnProcess`/`doSpawn`,
 // que existem só para isso). `spawn("tmux"|"git"|"bash"|"taskkill")` não casa — argv0 literal que não é claude.
 //
@@ -43,7 +43,7 @@ const AGENT_SEAM = /^(?:this\.)?(?:spawnProcess|doSpawn)$/;
 // (ver runner/claude-bin.ts). Sem ele o censo perdia a superfície do `run_task`: o capturador de
 // argv0 acima para no primeiro `)`, que numa chamada aninhada cai DENTRO de `loadRunnerConfig()` —
 // e o pedaço truncado não continha mais a palavra `claudeBin`.
-const CLAUDE_BIN_TOKEN = /claudeBin|USM_AUTORUN_CLAUDE_BIN|resolvedClaudeBin/;
+const CLAUDE_BIN_TOKEN = /claudeBin|AGILEHARNESS_AUTORUN_CLAUDE_BIN|resolvedClaudeBin/;
 const CLAUDE_LITERAL = /^["'`]\s*claude\b/;
 const STRING_LITERAL = /^["'`]/;
 /** As duas portas legítimas, e CHAMADAS: a higiene pura e a higiene ⊕ headroom (que chama a primeira). */
@@ -137,7 +137,7 @@ function assignmentsOf(code: string, ident: string): string[] {
 /**
  * A expressão do argv0 chega ao binário do Claude? Direto (`deps.claudeBin`, `"claude"`) ou por até 2 saltos de
  * atribuição no MESMO arquivo — o salto existe porque os call sites de shell montam a linha em etapas
- * (``const cmd = `${bin} -p …` `` ⊕ `const bin = process.env.USM_AUTORUN_CLAUDE_BIN || "claude"`).
+ * (``const cmd = `${bin} -p …` `` ⊕ `const bin = process.env.AGILEHARNESS_AUTORUN_CLAUDE_BIN || "claude"`).
  */
 function tracesToClaudeBin(code: string, expr: string, depth = 0): boolean {
   if (CLAUDE_BIN_TOKEN.test(expr) || CLAUDE_LITERAL.test(expr.trim())) return true;
@@ -347,7 +347,7 @@ describe("o detector do lint (contra-provas — um lint que não pega nada passa
 
   it("reconhece o comando montado em 2 saltos (`const cmd = `${bin} -p …``)", () => {
     const src = [
-      'const bin = process.env.USM_AUTORUN_CLAUDE_BIN || "claude";',
+      'const bin = process.env.AGILEHARNESS_AUTORUN_CLAUDE_BIN || "claude";',
       "const cmd = `${bin} -p --output-format json`;",
       "const env = sanitizeSpawnEnv(process.env);",
       "spawn(cmd, { shell: true, env });",

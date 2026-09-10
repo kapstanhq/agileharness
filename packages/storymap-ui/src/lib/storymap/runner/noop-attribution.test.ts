@@ -6,7 +6,7 @@ import type { RiskClass } from "@/lib/storymap/types";
 // WS-12 (D16) — a atribuição é DETERMINÍSTICA e vem do LEDGER DO GUARD: as tool calls que de fato aconteceram,
 // com o cardId lido dos args canônicos. Nunca da presença do item no board, nunca do auto-relato do run.
 
-const ORCH = "STORYMAP_MCP_TOKEN_ORCH";
+const ORCH = "AGILEHARNESS_MCP_TOKEN_ORCH";
 const T0 = Date.parse("2026-07-16T15:00:00Z");
 const WINDOW = { board: "acme", from: T0, to: T0 + 60_000, actor: ORCH };
 
@@ -59,7 +59,7 @@ describe("WS-12.1 — deriveRunAttempt: quem o run TENTOU, segundo o ledger", ()
   });
 
   it("ação de OUTRO ator escopado na mesma janela NÃO é creditada a este run", () => {
-    const r = deriveRunAttempt([action({ cardId: "c", actor: "STORYMAP_MCP_TOKEN_SESSION" })], WINDOW);
+    const r = deriveRunAttempt([action({ cardId: "c", actor: "AGILEHARNESS_MCP_TOKEN_SESSION" })], WINDOW);
     expect(r.anyMutation).toBe(false);
     expect(r.attemptedCardIds.size).toBe(0);
   });

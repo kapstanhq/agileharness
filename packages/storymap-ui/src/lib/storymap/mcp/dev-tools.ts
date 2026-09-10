@@ -161,9 +161,9 @@ export const sessionSpawnDeps = (): SessionSpawnDeps => {
     claudeBin: resolvedClaudeBin({ name: autorun.claudeBin }),
     repoRoot: findRepoRoot(),
     stateDir: runnerStateDir(),
-    // G12 — the SCOPED `orch` token, never STORYMAP_MCP_TOKEN (the operator's `full`): a spawned agent may
+    // G12 — the SCOPED `orch` token, never AGILEHARNESS_MCP_TOKEN (the operator's `full`): a spawned agent may
     // drive the pipeline and publish, but never open a shell through MCP nor delete.
-    mcpToken: process.env.STORYMAP_MCP_TOKEN_ORCH,
+    mcpToken: process.env.AGILEHARNESS_MCP_TOKEN_ORCH,
     port: SERVICE_PORT,
   };
 };
@@ -2478,7 +2478,7 @@ export function registerDevTools(server: McpServer): void {
           ? {}
           : {
               aviso:
-                "sem STORYMAP_MCP_TOKEN_ORCH no ambiente do serviço: a sessão NÃO tem as tools do AgileHarness " +
+                "sem AGILEHARNESS_MCP_TOKEN_ORCH no ambiente do serviço: a sessão NÃO tem as tools do AgileHarness " +
                 "(não consegue ler/escrever o board por MCP). Configure o token e recicle a sessão.",
             }),
         hint: "Sessão viva e já trabalhando (o prompt inicial carrega card + worktree + contrato). Acompanhe em /processes ou com claude_capture.",
@@ -2670,7 +2670,7 @@ export function registerDevTools(server: McpServer): void {
       //
       // ⚠ E o env do filho passa pelo CHOKEPOINT (achado de revisão). A fase editou exatamente esta
       // linha para acrescentar `env` e passou `process.env` CRU — entregando ao filho todo tier de
-      // credencial MCP do harness (`STORYMAP_MCP_TOKEN*`), que `sanitizeSpawnEnv` existe para remover.
+      // credencial MCP do harness (`AGILEHARNESS_MCP_TOKEN*`), que `sanitizeSpawnEnv` existe para remover.
       // O `run_task` ingere prompt de fora: um pedido tão simples quanto "mostre seu ambiente" bastava
       // para o segredo virar texto no output da tool. Antes desta linha existir a tool não passava `env`
       // nenhum e herdava por omissão — o defeito é anterior à fase, mas passou a ser explícito nela.

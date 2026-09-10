@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  STORYMAP_PROD_PORT,
+  PROD_PORT,
   EPHEMERAL_PORT_BASE,
   EPHEMERAL_PORT_SPAN,
   ephemeralPortForRun,
@@ -34,12 +34,12 @@ describe("ephemeralPortForRun — deterministic, in-range, never 3008", () => {
 
   it("NEVER returns the prod port 3008 — for any of a large spread of ids", () => {
     for (let i = 0; i < 5000; i++) {
-      expect(ephemeralPortForRun(`run-${i}-${i * 7}`)).not.toBe(STORYMAP_PROD_PORT);
+      expect(ephemeralPortForRun(`run-${i}-${i * 7}`)).not.toBe(PROD_PORT);
     }
   });
 
   it("the range sits ABOVE every dev-all/emulator port + 3008 (base 3100 > 3008)", () => {
-    expect(EPHEMERAL_PORT_BASE).toBeGreaterThan(STORYMAP_PROD_PORT);
+    expect(EPHEMERAL_PORT_BASE).toBeGreaterThan(PROD_PORT);
     // The whole derived range avoids the 30xx web ports and below.
     expect(EPHEMERAL_PORT_BASE).toBe(3100);
     expect(EPHEMERAL_PORT_BASE + EPHEMERAL_PORT_SPAN - 1).toBe(3899);
@@ -53,7 +53,7 @@ describe("ephemeralPortForRun — deterministic, in-range, never 3008", () => {
 
 describe("assertNotProdPort — the fail-early 3008 collision guard (AC3)", () => {
   it("THROWS on the prod port 3008", () => {
-    expect(() => assertNotProdPort(STORYMAP_PROD_PORT)).toThrow(/3008/);
+    expect(() => assertNotProdPort(PROD_PORT)).toThrow(/3008/);
     expect(() => assertNotProdPort(3008)).toThrow(/storymap\.service/);
   });
 
@@ -87,9 +87,9 @@ describe("resolveDevServerPort — deterministic → free, skips 3008, hermetic 
 
   it("NEVER returns 3008 even if 3008 were the only 'free' port (the guard refuses it)", async () => {
     // Force the search to start AT 3008 via a tiny custom range, with 3008 the only free port.
-    const onlyProdFree: PortProbe = async (port) => port === STORYMAP_PROD_PORT;
+    const onlyProdFree: PortProbe = async (port) => port === PROD_PORT;
     await expect(
-      resolveDevServerPort(RUN_ID, onlyProdFree, { base: STORYMAP_PROD_PORT, span: 3, maxTries: 3 }),
+      resolveDevServerPort(RUN_ID, onlyProdFree, { base: PROD_PORT, span: 3, maxTries: 3 }),
     ).rejects.toThrow(/nenhuma porta livre/);
   });
 
@@ -97,7 +97,7 @@ describe("resolveDevServerPort — deterministic → free, skips 3008, hermetic 
     const allFree: PortProbe = async () => true;
     for (let i = 0; i < 200; i++) {
       const port = await resolveDevServerPort(`run-${i}`, allFree);
-      expect(port).not.toBe(STORYMAP_PROD_PORT);
+      expect(port).not.toBe(PROD_PORT);
     }
   });
 

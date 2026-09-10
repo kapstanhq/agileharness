@@ -80,8 +80,8 @@ describe("os documentos da RAIZ do artefato dizem a verdade sobre o código", ()
     expect(ROOT_MARKERS.length).toBeGreaterThanOrEqual(3);
   });
 
-  it("[ATAQUE] nenhum deles manda `STORYMAP_TARGET=$PWD` — é uma armadilha em todo cwd que não seja a raiz", () => {
-    const culpados = DOCS.filter((d) => d.texto.includes("STORYMAP_TARGET=$PWD")).map((d) => d.nome);
+  it("[ATAQUE] nenhum deles manda `AGILEHARNESS_TARGET=$PWD` — é uma armadilha em todo cwd que não seja a raiz", () => {
+    const culpados = DOCS.filter((d) => d.texto.includes("AGILEHARNESS_TARGET=$PWD")).map((d) => d.nome);
     expect(culpados.join(", ")).toBe("");
   });
 

@@ -39,13 +39,13 @@ let prevStateDir: string | undefined;
 let stateDir = "";
 
 beforeEach(() => {
-  prevToken = process.env.STORYMAP_MCP_TOKEN;
-  process.env.STORYMAP_MCP_TOKEN = TOKEN;
+  prevToken = process.env.AGILEHARNESS_MCP_TOKEN;
+  process.env.AGILEHARNESS_MCP_TOKEN = TOKEN;
   // O rastro e o registro de handles vão para um dir de teste: o forense do serviço vivo não é
   // lugar de linha de teste.
-  prevStateDir = process.env.STORYMAP_RUNNER_STATE_DIR;
+  prevStateDir = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
   stateDir = mkdtempSync(path.join(tmpdir(), "events-auth-"));
-  process.env.STORYMAP_RUNNER_STATE_DIR = stateDir;
+  process.env.AGILEHARNESS_RUNNER_STATE_DIR = stateDir;
   resetPerimeterState();
   resetQueryDeprecationNotice();
 });
@@ -55,10 +55,10 @@ afterEach(async () => {
   await flushHandleTouches();
   resetPerimeterState();
   resetQueryDeprecationNotice();
-  if (prevToken === undefined) delete process.env.STORYMAP_MCP_TOKEN;
-  else process.env.STORYMAP_MCP_TOKEN = prevToken;
-  if (prevStateDir === undefined) delete process.env.STORYMAP_RUNNER_STATE_DIR;
-  else process.env.STORYMAP_RUNNER_STATE_DIR = prevStateDir;
+  if (prevToken === undefined) delete process.env.AGILEHARNESS_MCP_TOKEN;
+  else process.env.AGILEHARNESS_MCP_TOKEN = prevToken;
+  if (prevStateDir === undefined) delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+  else process.env.AGILEHARNESS_RUNNER_STATE_DIR = prevStateDir;
   // DEPOIS dos flushes: rastro de auth e registro de handles ainda escrevem aqui.
   rmSync(stateDir, { recursive: true, force: true });
 });
@@ -77,7 +77,7 @@ describe("GET /api/runner/events — auth", () => {
   });
 
   it("401 mesmo com um secret de forma correta quando a env não está definida (fail-closed)", async () => {
-    delete process.env.STORYMAP_MCP_TOKEN;
+    delete process.env.AGILEHARNESS_MCP_TOKEN;
     expect((await GET(req(`?secret=${TOKEN}`))).status).toBe(401);
   });
 
@@ -164,7 +164,7 @@ describe("GET /api/runner/events — auth", () => {
   });
 
   it("um HANDLE `ro` abre esta rota de LEITURA — credencial revogável sem restart", async () => {
-    // Por que isto importa: trocar `STORYMAP_MCP_TOKEN` exige reiniciar o serviço (o guardrail do
+    // Por que isto importa: trocar `AGILEHARNESS_MCP_TOKEN` exige reiniciar o serviço (o guardrail do
     // projeto proíbe reiniciá-lo à vontade), então a rotação está na prática TRAVADA. Um handle é
     // revogável no request seguinte — e um `ro` é o que o dono pode dar a um monitor sem entregar o
     // resto do sistema.

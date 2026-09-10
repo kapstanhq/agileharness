@@ -13,17 +13,17 @@ const flush = () => new Promise<void>((r) => setTimeout(r, 0));
 describe("recoverySweepIntervalMs — env knob", () => {
   it("defaults when unset / empty", () => {
     expect(recoverySweepIntervalMs({})).toBe(RECOVERY_SWEEP_DEFAULT_MS);
-    expect(recoverySweepIntervalMs({ USM_AUTORUN_RECOVERY_SWEEP_MS: "" })).toBe(RECOVERY_SWEEP_DEFAULT_MS);
+    expect(recoverySweepIntervalMs({ AGILEHARNESS_AUTORUN_RECOVERY_SWEEP_MS: "" })).toBe(RECOVERY_SWEEP_DEFAULT_MS);
   });
 
   it("parses a positive integer (ms)", () => {
-    expect(recoverySweepIntervalMs({ USM_AUTORUN_RECOVERY_SWEEP_MS: "60000" })).toBe(60000);
+    expect(recoverySweepIntervalMs({ AGILEHARNESS_AUTORUN_RECOVERY_SWEEP_MS: "60000" })).toBe(60000);
   });
 
   it("disables (0) on explicit 0 / negative / garbage", () => {
-    expect(recoverySweepIntervalMs({ USM_AUTORUN_RECOVERY_SWEEP_MS: "0" })).toBe(0);
-    expect(recoverySweepIntervalMs({ USM_AUTORUN_RECOVERY_SWEEP_MS: "-5" })).toBe(0);
-    expect(recoverySweepIntervalMs({ USM_AUTORUN_RECOVERY_SWEEP_MS: "abc" })).toBe(0);
+    expect(recoverySweepIntervalMs({ AGILEHARNESS_AUTORUN_RECOVERY_SWEEP_MS: "0" })).toBe(0);
+    expect(recoverySweepIntervalMs({ AGILEHARNESS_AUTORUN_RECOVERY_SWEEP_MS: "-5" })).toBe(0);
+    expect(recoverySweepIntervalMs({ AGILEHARNESS_AUTORUN_RECOVERY_SWEEP_MS: "abc" })).toBe(0);
   });
 });
 

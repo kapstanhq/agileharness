@@ -138,7 +138,7 @@ describe("deriveCardModelEffort — route (model, effort) by card complexity", (
 // story-9s52tu HALF A: the column's maxTurns is the CEILING; a per-card effective value scales within
 // [lean baseline, ceiling] from effort + task count. The `storymap desenvolver` column ships maxTurns
 // 220 (the empirical ceiling a big card like w9n03r needs) — used here as the canonical big ceiling.
-const STORYMAP_DESENVOLVER_CEILING = 220;
+const AGILEHARNESS_DESENVOLVER_CEILING = 220;
 
 describe("cardSizeScore — size proxy in [0,1] from effort + task count", () => {
   it("a small card (no effort, ≤2 tasks) scores near 0", () => {
@@ -161,17 +161,17 @@ describe("deriveCardMaxTurns — scale per-card --max-turns within [baseline, co
   it("AC1 big-gets-more: a BIG card (effort 3, ~6 tasks) reaches the column ceiling (~220), NOT re-capped to 120", () => {
     // The exact card this story fixes (w9n03r blew 120 mid-build). With the 220 ceiling kept as the
     // board.yaml override, a big card scores 1 → the full ceiling.
-    expect(deriveCardMaxTurns({ riceEffort: 3, taskCount: 6 }, STORYMAP_DESENVOLVER_CEILING)).toBe(220);
+    expect(deriveCardMaxTurns({ riceEffort: 3, taskCount: 6 }, AGILEHARNESS_DESENVOLVER_CEILING)).toBe(220);
     // Crucially it stays WELL above the _base 120 default → a big card is never re-capped below what it needs.
-    expect(deriveCardMaxTurns({ riceEffort: 3, taskCount: 6 }, STORYMAP_DESENVOLVER_CEILING)).toBeGreaterThan(120);
+    expect(deriveCardMaxTurns({ riceEffort: 3, taskCount: 6 }, AGILEHARNESS_DESENVOLVER_CEILING)).toBeGreaterThan(120);
   });
 
   it("AC2 small-stays-lean: a SMALL card (effort 1, ≤2 tasks) gets a lean value near the baseline, far under the ceiling", () => {
-    const small = deriveCardMaxTurns({ riceEffort: 1, taskCount: 2 }, STORYMAP_DESENVOLVER_CEILING);
+    const small = deriveCardMaxTurns({ riceEffort: 1, taskCount: 2 }, AGILEHARNESS_DESENVOLVER_CEILING);
     expect(small).toBeGreaterThanOrEqual(MAXTURNS_LEAN_BASELINE); // never below the floor
     expect(small).toBeLessThan(120); // a small card never burns the big-card budget
     // A 0-signal card sits exactly at the lean baseline.
-    expect(deriveCardMaxTurns({ riceEffort: null, taskCount: 0 }, STORYMAP_DESENVOLVER_CEILING)).toBe(MAXTURNS_LEAN_BASELINE);
+    expect(deriveCardMaxTurns({ riceEffort: null, taskCount: 0 }, AGILEHARNESS_DESENVOLVER_CEILING)).toBe(MAXTURNS_LEAN_BASELINE);
   });
 
   it("clamp-to-ceiling: the result NEVER exceeds the column ceiling, even for an oversized card", () => {
@@ -181,9 +181,9 @@ describe("deriveCardMaxTurns — scale per-card --max-turns within [baseline, co
   });
 
   it("a mid-size card lands strictly between the baseline and the ceiling (monotonic interpolation)", () => {
-    const mid = deriveCardMaxTurns({ riceEffort: 2, taskCount: 3 }, STORYMAP_DESENVOLVER_CEILING)!;
-    const small = deriveCardMaxTurns({ riceEffort: 1, taskCount: 1 }, STORYMAP_DESENVOLVER_CEILING)!;
-    const big = deriveCardMaxTurns({ riceEffort: 3, taskCount: 6 }, STORYMAP_DESENVOLVER_CEILING)!;
+    const mid = deriveCardMaxTurns({ riceEffort: 2, taskCount: 3 }, AGILEHARNESS_DESENVOLVER_CEILING)!;
+    const small = deriveCardMaxTurns({ riceEffort: 1, taskCount: 1 }, AGILEHARNESS_DESENVOLVER_CEILING)!;
+    const big = deriveCardMaxTurns({ riceEffort: 3, taskCount: 6 }, AGILEHARNESS_DESENVOLVER_CEILING)!;
     expect(mid).toBeGreaterThan(small);
     expect(mid).toBeLessThan(big);
   });
@@ -246,7 +246,7 @@ describe("WS-7 — role × model (the canonical table's executable half)", () =>
   it("§7.2 lean turns come FREE from the size baseline — the profile needs no maxTurns knob (no schema change)", () => {
     // A mechanical spawn is size-neutral (no RICE estimate, no task breakdown) → score 0 → the lean
     // baseline (40), on any column ceiling. THIS is why `mechanical` carries no maxTurns in board.yaml.
-    expect(deriveCardMaxTurns({ riceEffort: null, taskCount: 0 }, STORYMAP_DESENVOLVER_CEILING)).toBe(MAXTURNS_LEAN_BASELINE);
+    expect(deriveCardMaxTurns({ riceEffort: null, taskCount: 0 }, AGILEHARNESS_DESENVOLVER_CEILING)).toBe(MAXTURNS_LEAN_BASELINE);
     expect(deriveCardMaxTurns({ riceEffort: null, taskCount: 0 }, 120)).toBe(MAXTURNS_LEAN_BASELINE);
   });
 
@@ -254,7 +254,7 @@ describe("WS-7 — role × model (the canonical table's executable half)", () =>
     // Documents the sharp edge called out on MECHANICAL_PROFILE_ID: caps bound model/effort, NOT turns.
     // Spawn a resolution with the CONFLICTED CARD's own signals and the size branch scales the budget back
     // up to the ceiling — capped at sonnet, but with a 220-turn leash. A resolution is not the card's build.
-    expect(deriveCardMaxTurns({ riceEffort: 3, taskCount: 6 }, STORYMAP_DESENVOLVER_CEILING)).toBe(220);
+    expect(deriveCardMaxTurns({ riceEffort: 3, taskCount: 6 }, AGILEHARNESS_DESENVOLVER_CEILING)).toBe(220);
   });
 
   it("§7.1 implementer/complex: the row is 'the column CEILING', not 'opus' — _base ships desenvolver sonnet/high", () => {

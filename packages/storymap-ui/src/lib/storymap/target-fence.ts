@@ -1,7 +1,7 @@
 // A CERCA DA ÁRVORE DO ALVO — a metade que faltava de uma proteção que a ferramenta já aplica.
 //
 // POR QUE ESTE MÓDULO EXISTE. `runnerStateDir()` (paths.ts) é `<findRepoRoot()>/storymap/.runner`, e
-// `findRepoRoot()` honra `STORYMAP_TARGET`. Ou seja: no modo que existe justamente para operar o
+// `findRepoRoot()` honra `AGILEHARNESS_TARGET`. Ou seja: no modo que existe justamente para operar o
 // repositório de OUTRA pessoa, estes cinco arquivos nascem DENTRO da árvore dela —
 //
 //   storymap/.runner/auth-token            login da interface (opera o board inteiro)

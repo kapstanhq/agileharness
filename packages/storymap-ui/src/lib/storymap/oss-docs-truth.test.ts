@@ -431,7 +431,7 @@ describe("(5) o threat model não pode apodrecer em silêncio", () => {
     const cfg = ler("src/lib/storymap/runner/config.ts");
     expect(cfg).not.toMatch(/sandbox:\s*\{\s*enabled:/);
     for (const doc of ["SECURITY.md", "docs/threat-model.md"]) {
-      expect(ler(doc), `${doc} ainda cita um mecanismo que não existe`).not.toContain("USM_AUTORUN_SANDBOX");
+      expect(ler(doc), `${doc} ainda cita um mecanismo que não existe`).not.toContain("AGILEHARNESS_AUTORUN_SANDBOX");
     }
   });
 
@@ -447,7 +447,7 @@ describe("(5) o threat model não pode apodrecer em silêncio", () => {
 
   it("os dois documentos de segurança SEPARAM os dois mecanismos pelo nome", () => {
     // A reprovação foi literal: o adotante lia "não há contenção salvo opt-in" e ia ligar
-    // `USM_AUTORUN_SANDBOX=1` achando que estava ligando a proteção — a alavanca errada.
+    // `AGILEHARNESS_AUTORUN_SANDBOX=1` achando que estava ligando a proteção — a alavanca errada.
     const sec = ler("SECURITY.md");
     const tm = ler("docs/threat-model.md");
     for (const [nome, doc] of [
@@ -456,7 +456,7 @@ describe("(5) o threat model não pode apodrecer em silêncio", () => {
     ] as const) {
       expect(doc, `${nome} precisa nomear a contenção do SO`).toMatch(/AGILEHARNESS_SANDBOX_MODE|Conten[çc][ãa]o do SO/);
       // ── AS DUAS OUTRAS ASSERÇÕES SAÍRAM (2026-08-05) ───────────────────────────────────────────
-      // Elas exigiam que os documentos NOMEASSEM `USM_AUTORUN_SANDBOX` e dissessem que os defaults
+      // Elas exigiam que os documentos NOMEASSEM `AGILEHARNESS_AUTORUN_SANDBOX` e dissessem que os defaults
       // eram "opostos". Faziam sentido quando havia dois mecanismos e o adotante podia ligar a
       // alavanca errada. Com a camada fail-open removida, manter as duas obrigaria a main a
       // documentar para sempre um mecanismo apagado — um guarda anti-apodrecimento que ele mesmo

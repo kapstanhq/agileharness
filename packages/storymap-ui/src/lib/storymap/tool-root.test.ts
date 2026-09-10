@@ -17,7 +17,7 @@ import {
 } from "./paths";
 
 // ── A PERGUNTA QUE ESTES CASOS MEDEM ────────────────────────────────────────────────────────────────
-// `findRepoRoot()` responde "onde mora o código do usuário" e obedece a STORYMAP_TARGET.
+// `findRepoRoot()` responde "onde mora o código do usuário" e obedece a AGILEHARNESS_TARGET.
 // `findToolPackageDir()` responde "onde mora o código que está rodando" e NÃO obedece a nada disso.
 // Enquanto a ferramenta viveu dentro do repositório que ela opera, as duas coincidiram e nenhum teste
 // conseguia distingui-las — a suíte inteira de deploy rodava com UMA raiz literal. É essa cegueira que
@@ -58,13 +58,13 @@ describe("findToolPackageDir — a raiz da FERRAMENTA", () => {
   // ── O INVARIANTE CENTRAL ──────────────────────────────────────────────────────────────────────────
   // Apontar o ALVO para outro lugar não muda qual código está no ar. Um `findToolPackageDir()` que se
   // mexesse aqui reintroduziria, inteiro, o defeito C1: o self-deploy reconstruindo a árvore do alvo.
-  it("NÃO se move quando STORYMAP_TARGET aponta para outra árvore", () => {
-    const semAlvo = comEnv({ STORYMAP_TARGET: undefined }, () => findToolPackageDir());
+  it("NÃO se move quando AGILEHARNESS_TARGET aponta para outra árvore", () => {
+    const semAlvo = comEnv({ AGILEHARNESS_TARGET: undefined }, () => findToolPackageDir());
 
     const alheio = mkdtempSync(path.join(tmpdir(), "alvo-alheio-"));
     mkdirSync(path.join(alheio, "storymap", "boards"), { recursive: true }); // marcador de RAIZ do alvo
 
-    const comAlvo = comEnv({ STORYMAP_TARGET: alheio }, () => {
+    const comAlvo = comEnv({ AGILEHARNESS_TARGET: alheio }, () => {
       // a raiz do ALVO obedece — é o contrato dela
       expect(findRepoRoot()).toBe(path.resolve(alheio));
       // a da FERRAMENTA, não
@@ -103,11 +103,11 @@ describe("findToolRoot — o REPOSITÓRIO da ferramenta", () => {
     expect(path.resolve(pacote).startsWith(path.resolve(raiz))).toBe(true);
   });
 
-  it("também ignora STORYMAP_TARGET", () => {
-    const semAlvo = comEnv({ STORYMAP_TARGET: undefined }, () => findToolRoot());
+  it("também ignora AGILEHARNESS_TARGET", () => {
+    const semAlvo = comEnv({ AGILEHARNESS_TARGET: undefined }, () => findToolRoot());
     const alheio = mkdtempSync(path.join(tmpdir(), "alvo-alheio2-"));
     mkdirSync(path.join(alheio, "storymap", "boards"), { recursive: true });
-    expect(comEnv({ STORYMAP_TARGET: alheio }, () => findToolRoot())).toBe(semAlvo);
+    expect(comEnv({ AGILEHARNESS_TARGET: alheio }, () => findToolRoot())).toBe(semAlvo);
   });
 });
 

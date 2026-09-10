@@ -95,13 +95,13 @@ describe("buildPeerReviewContextNote — BLINDING (M1)", () => {
 describe("buildReviewerEnv — o revisor não recebe NENHUM token MCP (M1, hardening pós-review)", () => {
   it("remove o token FULL E o token SCOPED orch (o revisor precisa de zero MCP)", () => {
     const env = buildReviewerEnv({
-      STORYMAP_MCP_TOKEN: "full-xyz",
-      STORYMAP_MCP_TOKEN_ORCH: "orch-xyz",
+      AGILEHARNESS_MCP_TOKEN: "full-xyz",
+      AGILEHARNESS_MCP_TOKEN_ORCH: "orch-xyz",
       PATH: "/usr/bin",
       HOME: "/root",
     } as unknown as NodeJS.ProcessEnv);
-    expect(env.STORYMAP_MCP_TOKEN).toBeUndefined();
-    expect(env.STORYMAP_MCP_TOKEN_ORCH).toBeUndefined(); // a chave que sanitizeSpawnEnv sozinho DEIXAVA passar
+    expect(env.AGILEHARNESS_MCP_TOKEN).toBeUndefined();
+    expect(env.AGILEHARNESS_MCP_TOKEN_ORCH).toBeUndefined(); // a chave que sanitizeSpawnEnv sozinho DEIXAVA passar
     expect(env.HOME).toBe("/root"); // env legítimo preservado
   });
 });
@@ -178,7 +178,7 @@ describe("spawnPeerReview — a contenção do revisor (F0)", () => {
   beforeEach(() => {
     vi.mocked(assertContainmentReachedArgv).mockClear();
     // O proxy de headroom não é objeto deste teste; sem o opt-out, cada spawn sondaria localhost.
-    vi.stubEnv("STORYMAP_HEADROOM_URL", "off");
+    vi.stubEnv("AGILEHARNESS_HEADROOM_URL", "off");
   });
 
   it("(a) postura RECUSADA ⇒ o revisor NÃO spawna, e a proposta segue pendente para um humano", async () => {
@@ -200,7 +200,7 @@ describe("spawnPeerReview — a contenção do revisor (F0)", () => {
     const capturado: { args?: readonly string[]; portaoJaChamado?: number; env?: NodeJS.ProcessEnv } = {};
     let tempdir = "";
     let posturaUsada: ReturnType<typeof posturaContida> | undefined;
-    vi.stubEnv("STORYMAP_MCP_TOKEN_ORCH", "orch-xyz");
+    vi.stubEnv("AGILEHARNESS_MCP_TOKEN_ORCH", "orch-xyz");
     // O pai AFIRMA estar num sandbox — o caso MEDIDO nesta caixa (o serviço herda a chave de quem o
     // iniciou). O filho contido não pode receber isso por herança: quem afirma tem de ser quem decidiu.
     vi.stubEnv("IS_SANDBOX", "1");
@@ -238,7 +238,7 @@ describe("spawnPeerReview — a contenção do revisor (F0)", () => {
     // harness. Era incondicional — um default que reintroduz o bypass é o que a fase remove.
     expect(capturado.env?.IS_SANDBOX, "postura contida não pode declarar IS_SANDBOX").toBeUndefined();
     // E o invariante "revisor sem credencial" agora vale no caminho de spawn, não só no unitário puro.
-    expect(Object.keys(capturado.env ?? {}).filter((k) => k.startsWith("STORYMAP_MCP_TOKEN"))).toEqual([]);
+    expect(Object.keys(capturado.env ?? {}).filter((k) => k.startsWith("AGILEHARNESS_MCP_TOKEN"))).toEqual([]);
   });
 
   it("(c) o portão é LOAD-BEARING: settings que não é fronteira ⇒ erro e NENHUM spawn", async () => {

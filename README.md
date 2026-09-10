@@ -200,14 +200,14 @@ measures that case.
 <summary><b>Pointing it at another repository</b></summary>
 
 AgileHarness operates on the repository it runs in, found by walking up for `turbo.json`,
-`.git`, or `storymap/boards` — or declared explicitly with `STORYMAP_TARGET=/path/to/repo`.
+`.git`, or `storymap/boards` — or declared explicitly with `AGILEHARNESS_TARGET=/path/to/repo`.
 It requires the **root**: pointing it at a subdirectory is refused on purpose, because git
 operations resolve upward and would reach the repository outside.
 
 If you downloaded the ZIP instead of cloning, there is no `.git`: the extracted folder is
 still found by the `storymap/boards` that ships in it, and the engine comes up **inert** —
 it serves the board and does not act on the repository — until you run `git init` or point
-`STORYMAP_TARGET` at a real checkout.
+`AGILEHARNESS_TARGET` at a real checkout.
 
 Two things move when you target another repo:
 
@@ -222,12 +222,12 @@ is in the index, and the remedy is `git rm -r --cached storymap/.runner` **and r
 the secrets. A secret that entered a commit is a leaked secret, private repository or not.
 
 **2 · The inheritable pipeline is looked up in the target.** Every board inherits from
-`storymap/boards/_base/board.yaml`, and under `STORYMAP_TARGET` that path resolves in the
+`storymap/boards/_base/board.yaml`, and under `AGILEHARNESS_TARGET` that path resolves in the
 target's tree — where it doesn't exist yet. Copy it once:
 
 ```bash
-mkdir -p "$STORYMAP_TARGET/storymap/boards/_base"
-cp storymap/boards/_base/board.yaml "$STORYMAP_TARGET/storymap/boards/_base/"
+mkdir -p "$AGILEHARNESS_TARGET/storymap/boards/_base"
+cp storymap/boards/_base/board.yaml "$AGILEHARNESS_TARGET/storymap/boards/_base/"
 ```
 
 Without it, `register_board` **refuses** — and says exactly this — instead of creating a

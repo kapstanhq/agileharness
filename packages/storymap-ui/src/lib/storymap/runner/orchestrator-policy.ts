@@ -18,7 +18,7 @@ import type { OrchestratorPolicy, RiskClass, RiskDisposition } from "../types";
  * whole F5 batch): a PER-CALL guard (mcp/guard.ts) consults the board riskMatrix on EVERY scoped-token tool
  * call; move_card/accept_triage are re-gated at the TARGET column's DYNAMIC class (a move into a deploy column
  * resolves `deploy`, into an autorun column `run` — not the static write-board); the harness-* spawn env no longer
- * carries STORYMAP_MCP_TOKEN (5.0b) so a run can't recover the full MCP surface; governance approve/reject is
+ * carries AGILEHARNESS_MCP_TOKEN (5.0b) so a run can't recover the full MCP surface; governance approve/reject is
  * full-only; a rate limiter + an audit ledger backstop it.
  *
  * F8 (2026-07-12, operator decision) then OPENED the pipeline: a board may declare `run`/`merge-resolve`/
@@ -30,7 +30,7 @@ import type { OrchestratorPolicy, RiskClass, RiskDisposition } from "../types";
  * mounted: the `orch` MCP level never registers it).
  *
  * Turning the CAPABILITY on does NOT turn any board autonomous — every board defaults to mode `off` and stays
- * there until a human explicitly opts it in per board; AND the tick only spawns when STORYMAP_MCP_TOKEN_ORCH is
+ * there until a human explicitly opts it in per board; AND the tick only spawns when AGILEHARNESS_MCP_TOKEN_ORCH is
  * also exported in the service env. Two more locks beyond this flag.
  *
  * ⚠️ Este comentário dizia "(unset today)" sobre o token — e isso deixou de ser verdade em 2026-07-12, quando

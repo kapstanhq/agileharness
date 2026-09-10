@@ -10,33 +10,33 @@ import { CHAT_EFFORTS, CHAT_MODEL_BASES, composeModel } from "@/lib/storymap/cop
 import type { RunnerSettings } from "@/lib/storymap/types";
 
 // applyEnvOverrides is the kill-switch + operational override layer: ENV always
-// wins over settings.yaml. If USM_AUTORUN=0 regresses, autorun can't be turned off
+// wins over settings.yaml. If AGILEHARNESS_AUTORUN=0 regresses, autorun can't be turned off
 // without killing the (forbidden-to-kill) dev server. policy.test.ts only covered
-// USM_AUTORUN=0 and _MAX through loadRunnerConfig; this exercises the full matrix
+// AGILEHARNESS_AUTORUN=0 and _MAX through loadRunnerConfig; this exercises the full matrix
 // and the "env beats a file value" contract directly.
 
 const ENV_KEYS = [
-  "USM_AUTORUN",
-  "USM_AUTORUN_RESUME_ON_BOOT",
-  "USM_AUTORUN_MAX",
-  "USM_AUTORUN_NO_PROGRESS_MAX",
-  "USM_AUTORUN_CARD_BUDGET_USD",
-  "USM_AUTORUN_TIMEOUT_MS",
-  "USM_AUTORUN_TIMEOUT_DO_MS",
-  "USM_AUTORUN_TIMEOUT_UNIVERSAL_MS",
-  "USM_AUTORUN_CLAUDE_BIN",
-  "USM_AUTORUN_EXTRA_ARGS",
-  "USM_AUTORUN_WORKTREE",
-  "USM_AUTORUN_MERGE_GATE",
-  "USM_AUTORUN_STAGING",
-  "USM_AUTORUN_LANE_LIGHT_MAX",
-  "USM_AUTORUN_LANE_HEAVY_MAX",
-  "USM_AUTORUN_LANE_LIGHT_MEMORY_MAX",
-  "USM_AUTORUN_LANE_LIGHT_CPU_QUOTA",
-  "USM_AUTORUN_LANE_HEAVY_MEMORY_MAX",
-  "USM_AUTORUN_LANE_HEAVY_CPU_QUOTA",
-  "USM_AUTORUN_RAM_FREE_MB",
-  "USM_AUTORUN_LOAD_AVG_1",
+  "AGILEHARNESS_AUTORUN",
+  "AGILEHARNESS_AUTORUN_RESUME_ON_BOOT",
+  "AGILEHARNESS_AUTORUN_MAX",
+  "AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX",
+  "AGILEHARNESS_AUTORUN_CARD_BUDGET_USD",
+  "AGILEHARNESS_AUTORUN_TIMEOUT_MS",
+  "AGILEHARNESS_AUTORUN_TIMEOUT_DO_MS",
+  "AGILEHARNESS_AUTORUN_TIMEOUT_UNIVERSAL_MS",
+  "AGILEHARNESS_AUTORUN_CLAUDE_BIN",
+  "AGILEHARNESS_AUTORUN_EXTRA_ARGS",
+  "AGILEHARNESS_AUTORUN_WORKTREE",
+  "AGILEHARNESS_AUTORUN_MERGE_GATE",
+  "AGILEHARNESS_AUTORUN_STAGING",
+  "AGILEHARNESS_AUTORUN_LANE_LIGHT_MAX",
+  "AGILEHARNESS_AUTORUN_LANE_HEAVY_MAX",
+  "AGILEHARNESS_AUTORUN_LANE_LIGHT_MEMORY_MAX",
+  "AGILEHARNESS_AUTORUN_LANE_LIGHT_CPU_QUOTA",
+  "AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX",
+  "AGILEHARNESS_AUTORUN_LANE_HEAVY_CPU_QUOTA",
+  "AGILEHARNESS_AUTORUN_RAM_FREE_MB",
+  "AGILEHARNESS_AUTORUN_LOAD_AVG_1",
 ] as const;
 
 const original: Record<string, string | undefined> = {};
@@ -88,84 +88,84 @@ describe("applyEnvOverrides", () => {
 
   it("does not mutate the input settings object", () => {
     const base = fileSettings();
-    process.env.USM_AUTORUN_MAX = "9";
+    process.env.AGILEHARNESS_AUTORUN_MAX = "9";
     applyEnvOverrides(base);
     expect(base.autorun.maxConcurrent).toBe(5); // untouched
   });
 
-  it("USM_AUTORUN=0 is the kill switch (disables even when the file enables it)", () => {
-    process.env.USM_AUTORUN = "0";
+  it("AGILEHARNESS_AUTORUN=0 is the kill switch (disables even when the file enables it)", () => {
+    process.env.AGILEHARNESS_AUTORUN = "0";
     expect(applyEnvOverrides(fileSettings()).autorun.enabled).toBe(false);
   });
 
-  it("USM_AUTORUN set to anything other than '0' does NOT disable", () => {
-    process.env.USM_AUTORUN = "1";
+  it("AGILEHARNESS_AUTORUN set to anything other than '0' does NOT disable", () => {
+    process.env.AGILEHARNESS_AUTORUN = "1";
     expect(applyEnvOverrides(fileSettings()).autorun.enabled).toBe(true);
   });
 
-  it("USM_AUTORUN_RESUME_ON_BOOT=0 disables boot recovery (env beats the file)", () => {
-    process.env.USM_AUTORUN_RESUME_ON_BOOT = "0";
+  it("AGILEHARNESS_AUTORUN_RESUME_ON_BOOT=0 disables boot recovery (env beats the file)", () => {
+    process.env.AGILEHARNESS_AUTORUN_RESUME_ON_BOOT = "0";
     expect(applyEnvOverrides(fileSettings()).autorun.resumeOnBoot).toBe(false);
   });
 
-  it("USM_AUTORUN_RESUME_ON_BOOT unset keeps the file value (true)", () => {
+  it("AGILEHARNESS_AUTORUN_RESUME_ON_BOOT unset keeps the file value (true)", () => {
     expect(applyEnvOverrides(fileSettings()).autorun.resumeOnBoot).toBe(true);
   });
 
-  it("USM_AUTORUN_MAX overrides maxConcurrent (env beats the file value)", () => {
-    process.env.USM_AUTORUN_MAX = "9";
+  it("AGILEHARNESS_AUTORUN_MAX overrides maxConcurrent (env beats the file value)", () => {
+    process.env.AGILEHARNESS_AUTORUN_MAX = "9";
     expect(applyEnvOverrides(fileSettings()).autorun.maxConcurrent).toBe(9);
   });
 
-  it("an invalid USM_AUTORUN_MAX (0 / non-numeric) is ignored — file value kept", () => {
-    process.env.USM_AUTORUN_MAX = "0";
+  it("an invalid AGILEHARNESS_AUTORUN_MAX (0 / non-numeric) is ignored — file value kept", () => {
+    process.env.AGILEHARNESS_AUTORUN_MAX = "0";
     expect(applyEnvOverrides(fileSettings()).autorun.maxConcurrent).toBe(5);
-    process.env.USM_AUTORUN_MAX = "abc";
+    process.env.AGILEHARNESS_AUTORUN_MAX = "abc";
     expect(applyEnvOverrides(fileSettings()).autorun.maxConcurrent).toBe(5);
   });
 
-  it("USM_AUTORUN_TIMEOUT_MS / _DO_MS / _UNIVERSAL_MS override the watchdog timeouts", () => {
-    process.env.USM_AUTORUN_TIMEOUT_MS = "12345";
-    process.env.USM_AUTORUN_TIMEOUT_DO_MS = "67890";
-    process.env.USM_AUTORUN_TIMEOUT_UNIVERSAL_MS = "111222";
+  it("AGILEHARNESS_AUTORUN_TIMEOUT_MS / _DO_MS / _UNIVERSAL_MS override the watchdog timeouts", () => {
+    process.env.AGILEHARNESS_AUTORUN_TIMEOUT_MS = "12345";
+    process.env.AGILEHARNESS_AUTORUN_TIMEOUT_DO_MS = "67890";
+    process.env.AGILEHARNESS_AUTORUN_TIMEOUT_UNIVERSAL_MS = "111222";
     const out = applyEnvOverrides(fileSettings()).autorun.timeouts;
     expect(out.fastMs).toBe(12345);
     expect(out.doMs).toBe(67890);
     expect(out.universalMs).toBe(111222);
   });
 
-  it("USM_AUTORUN_TIMEOUT_UNIVERSAL_MS unset keeps the file value; an invalid one is ignored", () => {
+  it("AGILEHARNESS_AUTORUN_TIMEOUT_UNIVERSAL_MS unset keeps the file value; an invalid one is ignored", () => {
     expect(applyEnvOverrides(fileSettings()).autorun.timeouts.universalMs).toBe(9000); // file value kept
-    process.env.USM_AUTORUN_TIMEOUT_UNIVERSAL_MS = "0";
+    process.env.AGILEHARNESS_AUTORUN_TIMEOUT_UNIVERSAL_MS = "0";
     expect(applyEnvOverrides(fileSettings()).autorun.timeouts.universalMs).toBe(9000); // 0 ignored
-    process.env.USM_AUTORUN_TIMEOUT_UNIVERSAL_MS = "abc";
+    process.env.AGILEHARNESS_AUTORUN_TIMEOUT_UNIVERSAL_MS = "abc";
     expect(applyEnvOverrides(fileSettings()).autorun.timeouts.universalMs).toBe(9000); // non-numeric ignored
   });
 
-  it("USM_AUTORUN_CLAUDE_BIN overrides the binary", () => {
-    process.env.USM_AUTORUN_CLAUDE_BIN = "env-bin";
+  it("AGILEHARNESS_AUTORUN_CLAUDE_BIN overrides the binary", () => {
+    process.env.AGILEHARNESS_AUTORUN_CLAUDE_BIN = "env-bin";
     expect(applyEnvOverrides(fileSettings()).autorun.claudeBin).toBe("env-bin");
   });
 
-  it("USM_AUTORUN_EXTRA_ARGS overrides extraArgs (whitespace-split)", () => {
-    process.env.USM_AUTORUN_EXTRA_ARGS = "--foo  --bar";
+  it("AGILEHARNESS_AUTORUN_EXTRA_ARGS overrides extraArgs (whitespace-split)", () => {
+    process.env.AGILEHARNESS_AUTORUN_EXTRA_ARGS = "--foo  --bar";
     expect(applyEnvOverrides(fileSettings()).autorun.extraArgs).toEqual(["--foo", "--bar"]);
   });
 
-  it("an empty USM_AUTORUN_EXTRA_ARGS clears extraArgs (env present wins → [])", () => {
-    process.env.USM_AUTORUN_EXTRA_ARGS = "";
+  it("an empty AGILEHARNESS_AUTORUN_EXTRA_ARGS clears extraArgs (env present wins → [])", () => {
+    process.env.AGILEHARNESS_AUTORUN_EXTRA_ARGS = "";
     expect(applyEnvOverrides(fileSettings()).autorun.extraArgs).toEqual([]);
   });
 
-  it("USM_AUTORUN_WORKTREE=0 disables worktree isolation (env beats the file)", () => {
-    process.env.USM_AUTORUN_WORKTREE = "0";
+  it("AGILEHARNESS_AUTORUN_WORKTREE=0 disables worktree isolation (env beats the file)", () => {
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0";
     expect(applyEnvOverrides(fileSettings()).autorun.worktreeIsolation).toBe(false);
   });
 
-  it("USM_AUTORUN_WORKTREE=1 enables it; unset keeps the file value", () => {
-    process.env.USM_AUTORUN_WORKTREE = "1";
+  it("AGILEHARNESS_AUTORUN_WORKTREE=1 enables it; unset keeps the file value", () => {
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1";
     expect(applyEnvOverrides(fileSettings()).autorun.worktreeIsolation).toBe(true);
-    delete process.env.USM_AUTORUN_WORKTREE;
+    delete process.env.AGILEHARNESS_AUTORUN_WORKTREE;
     expect(applyEnvOverrides(fileSettings()).autorun.worktreeIsolation).toBe(true); // file value (true)
   });
 
@@ -177,32 +177,32 @@ describe("applyEnvOverrides", () => {
     return s;
   };
 
-  it("USM_AUTORUN_MERGE_GATE=1 enables the gate over a file value of false (command/timeout preserved)", () => {
-    process.env.USM_AUTORUN_MERGE_GATE = "1";
+  it("AGILEHARNESS_AUTORUN_MERGE_GATE=1 enables the gate over a file value of false (command/timeout preserved)", () => {
+    process.env.AGILEHARNESS_AUTORUN_MERGE_GATE = "1";
     const out = applyEnvOverrides(withGate(false)).autorun.mergeGate;
     expect(out).toEqual({ enabled: true, checkCommand: "vitest run", timeoutMs: 300_000 });
   });
 
-  it("USM_AUTORUN_MERGE_GATE=0 disables the gate over a file value of true (command/timeout preserved)", () => {
-    process.env.USM_AUTORUN_MERGE_GATE = "0";
+  it("AGILEHARNESS_AUTORUN_MERGE_GATE=0 disables the gate over a file value of true (command/timeout preserved)", () => {
+    process.env.AGILEHARNESS_AUTORUN_MERGE_GATE = "0";
     const out = applyEnvOverrides(withGate(true)).autorun.mergeGate;
     expect(out).toEqual({ enabled: false, checkCommand: "vitest run", timeoutMs: 300_000 });
   });
 
-  it("USM_AUTORUN_MERGE_GATE unset keeps the file value; a non-0/1 value is ignored", () => {
+  it("AGILEHARNESS_AUTORUN_MERGE_GATE unset keeps the file value; a non-0/1 value is ignored", () => {
     expect(applyEnvOverrides(withGate(true)).autorun.mergeGate?.enabled).toBe(true); // unset → file
-    process.env.USM_AUTORUN_MERGE_GATE = "yes";
+    process.env.AGILEHARNESS_AUTORUN_MERGE_GATE = "yes";
     expect(applyEnvOverrides(withGate(true)).autorun.mergeGate?.enabled).toBe(true); // garbage ignored
   });
 
-  it("USM_AUTORUN_MERGE_GATE=1 over an ABSENT mergeGate section synthesizes the CANONICAL defaults enabled", () => {
+  it("AGILEHARNESS_AUTORUN_MERGE_GATE=1 over an ABSENT mergeGate section synthesizes the CANONICAL defaults enabled", () => {
     // Covers the `next.autorun.mergeGate ?? { ... }` branch: an old file/default lacking the section.
     // A síntese agora ESPELHA DEFAULT_RUNNER_SETTINGS (a revisão achou o literal local divergindo dos
     // defaults em retryOnNewFailure e typecheck — um mergeGate nascido por esta via desligava
     // capacidades default-ON em silêncio).
     const base = fileSettings(); // no mergeGate
     expect(base.autorun.mergeGate).toBeUndefined();
-    process.env.USM_AUTORUN_MERGE_GATE = "1";
+    process.env.AGILEHARNESS_AUTORUN_MERGE_GATE = "1";
     expect(applyEnvOverrides(base).autorun.mergeGate).toEqual({
       ...DEFAULT_RUNNER_SETTINGS.autorun.mergeGate!,
       enabled: true,
@@ -211,7 +211,7 @@ describe("applyEnvOverrides", () => {
 
   it("does not mutate the input mergeGate object", () => {
     const base = withGate(false);
-    process.env.USM_AUTORUN_MERGE_GATE = "1";
+    process.env.AGILEHARNESS_AUTORUN_MERGE_GATE = "1";
     applyEnvOverrides(base);
     expect(base.autorun.mergeGate?.enabled).toBe(false); // untouched
   });
@@ -225,29 +225,29 @@ describe("applyEnvOverrides", () => {
     return s;
   };
 
-  it("USM_AUTORUN_STAGING=1 enables staging over a file value of false (branch/codePrefixes preserved)", () => {
-    process.env.USM_AUTORUN_STAGING = "1";
+  it("AGILEHARNESS_AUTORUN_STAGING=1 enables staging over a file value of false (branch/codePrefixes preserved)", () => {
+    process.env.AGILEHARNESS_AUTORUN_STAGING = "1";
     const out = applyEnvOverrides(withStaging(false)).autorun.staging;
     expect(out).toEqual({ enabled: true, branch: "stage", codePrefixes: ["packages/"] });
   });
 
-  it("USM_AUTORUN_STAGING=0 disables staging over a file value of true (branch/codePrefixes preserved)", () => {
-    process.env.USM_AUTORUN_STAGING = "0";
+  it("AGILEHARNESS_AUTORUN_STAGING=0 disables staging over a file value of true (branch/codePrefixes preserved)", () => {
+    process.env.AGILEHARNESS_AUTORUN_STAGING = "0";
     const out = applyEnvOverrides(withStaging(true)).autorun.staging;
     expect(out).toEqual({ enabled: false, branch: "stage", codePrefixes: ["packages/"] });
   });
 
-  it("USM_AUTORUN_STAGING unset keeps the file value; a non-0/1 value is ignored", () => {
+  it("AGILEHARNESS_AUTORUN_STAGING unset keeps the file value; a non-0/1 value is ignored", () => {
     expect(applyEnvOverrides(withStaging(true)).autorun.staging?.enabled).toBe(true); // unset → file
-    process.env.USM_AUTORUN_STAGING = "yes";
+    process.env.AGILEHARNESS_AUTORUN_STAGING = "yes";
     expect(applyEnvOverrides(withStaging(true)).autorun.staging?.enabled).toBe(true); // garbage ignored
   });
 
-  it("USM_AUTORUN_STAGING=1 over an ABSENT staging section synthesizes the default object enabled", () => {
+  it("AGILEHARNESS_AUTORUN_STAGING=1 over an ABSENT staging section synthesizes the default object enabled", () => {
     // Covers the `next.autorun.staging ?? { ... }` branch: an old file/default lacking the section.
     const base = fileSettings(); // no staging
     expect(base.autorun.staging).toBeUndefined();
-    process.env.USM_AUTORUN_STAGING = "1";
+    process.env.AGILEHARNESS_AUTORUN_STAGING = "1";
     expect(applyEnvOverrides(base).autorun.staging).toEqual({
       enabled: true,
       branch: "stage",
@@ -257,20 +257,20 @@ describe("applyEnvOverrides", () => {
 
   it("does not mutate the input staging object (codePrefixes array is cloned, not shared)", () => {
     const base = withStaging(false);
-    process.env.USM_AUTORUN_STAGING = "1";
+    process.env.AGILEHARNESS_AUTORUN_STAGING = "1";
     const out = applyEnvOverrides(base);
     expect(base.autorun.staging?.enabled).toBe(false); // untouched
     expect(out.autorun.staging?.codePrefixes).not.toBe(base.autorun.staging?.codePrefixes); // deep-cloned
   });
 
-  // ── BLOCO REMOVIDO (2026-08-05): o interruptor USM_AUTORUN_SANDBOX não existe mais ───────────────
+  // ── BLOCO REMOVIDO (2026-08-05): o interruptor AGILEHARNESS_AUTORUN_SANDBOX não existe mais ───────────────
   // Estas provas cobriam o master switch da camada fail-open (`runner/sandbox.ts`), que saiu junto com
   // o pouso do F0. Não é redundância removida: os dois contratos eram OPOSTOS — aquela camada declarava
   // "must never, by itself, fail a run", e a do F0 RECUSA quando não consegue conter. Manter as duas era
   // garantir que um dia alguém confiasse na que deixa passar.
   //
   // Risco da remoção, medido antes: o flag nascia `enabled: false`, nenhum board o ligava, e
-  // `USM_AUTORUN_SANDBOX` estava AUSENTE do ambiente do serviço em produção. A camada estava inerte.
+  // `AGILEHARNESS_AUTORUN_SANDBOX` estava AUSENTE do ambiente do serviço em produção. A camada estava inerte.
 
   // --- scheduler (story-scheduler-lanes-recursos) -----------------------------------
   it("the scheduler lane caps + thresholds pass through unchanged when no env is set", () => {
@@ -283,38 +283,38 @@ describe("applyEnvOverrides", () => {
 
   it("does not mutate the input scheduler object", () => {
     const base = fileSettings();
-    process.env.USM_AUTORUN_LANE_HEAVY_MAX = "9";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MAX = "9";
     applyEnvOverrides(base);
     expect(base.autorun.scheduler.lanes.heavy.maxConcurrent).toBe(3); // untouched
   });
 
-  it("USM_AUTORUN_LANE_LIGHT_MAX / _LANE_HEAVY_MAX override the lane caps (env beats the file)", () => {
-    process.env.USM_AUTORUN_LANE_LIGHT_MAX = "8";
-    process.env.USM_AUTORUN_LANE_HEAVY_MAX = "2";
+  it("AGILEHARNESS_AUTORUN_LANE_LIGHT_MAX / _LANE_HEAVY_MAX override the lane caps (env beats the file)", () => {
+    process.env.AGILEHARNESS_AUTORUN_LANE_LIGHT_MAX = "8";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MAX = "2";
     const out = applyEnvOverrides(fileSettings()).autorun.scheduler.lanes;
     expect(out.light.maxConcurrent).toBe(8);
     expect(out.heavy.maxConcurrent).toBe(2);
   });
 
   it("an invalid lane cap (0 / non-numeric) is ignored — file value kept", () => {
-    process.env.USM_AUTORUN_LANE_LIGHT_MAX = "0";
+    process.env.AGILEHARNESS_AUTORUN_LANE_LIGHT_MAX = "0";
     expect(applyEnvOverrides(fileSettings()).autorun.scheduler.lanes.light.maxConcurrent).toBe(7);
-    process.env.USM_AUTORUN_LANE_LIGHT_MAX = "abc";
+    process.env.AGILEHARNESS_AUTORUN_LANE_LIGHT_MAX = "abc";
     expect(applyEnvOverrides(fileSettings()).autorun.scheduler.lanes.light.maxConcurrent).toBe(7);
   });
 
-  it("USM_AUTORUN_RAM_FREE_MB / _LOAD_AVG_1 override the thresholds (0 and fractional allowed)", () => {
-    process.env.USM_AUTORUN_RAM_FREE_MB = "0"; // 0 is a VALID threshold (never block on RAM)
-    process.env.USM_AUTORUN_LOAD_AVG_1 = "4.25"; // fractional load is valid
+  it("AGILEHARNESS_AUTORUN_RAM_FREE_MB / _LOAD_AVG_1 override the thresholds (0 and fractional allowed)", () => {
+    process.env.AGILEHARNESS_AUTORUN_RAM_FREE_MB = "0"; // 0 is a VALID threshold (never block on RAM)
+    process.env.AGILEHARNESS_AUTORUN_LOAD_AVG_1 = "4.25"; // fractional load is valid
     const out = applyEnvOverrides(fileSettings()).autorun.scheduler.thresholds;
     expect(out.ramFreeMb).toBe(0);
     expect(out.loadAvg1).toBe(4.25);
   });
 
   it("an invalid threshold (negative / non-numeric) is ignored — file value kept", () => {
-    process.env.USM_AUTORUN_RAM_FREE_MB = "-1";
+    process.env.AGILEHARNESS_AUTORUN_RAM_FREE_MB = "-1";
     expect(applyEnvOverrides(fileSettings()).autorun.scheduler.thresholds.ramFreeMb).toBe(250);
-    process.env.USM_AUTORUN_LOAD_AVG_1 = "nope";
+    process.env.AGILEHARNESS_AUTORUN_LOAD_AVG_1 = "nope";
     expect(applyEnvOverrides(fileSettings()).autorun.scheduler.thresholds.loadAvg1).toBe(5.5);
   });
 
@@ -327,11 +327,11 @@ describe("applyEnvOverrides", () => {
     expect(out.heavy.cpuQuota).toBe(300);
   });
 
-  it("USM_AUTORUN_LANE_{LIGHT,HEAVY}_{MEMORY_MAX,CPU_QUOTA} override the quotas (env beats the file)", () => {
-    process.env.USM_AUTORUN_LANE_LIGHT_MEMORY_MAX = "1G";
-    process.env.USM_AUTORUN_LANE_LIGHT_CPU_QUOTA = "50";
-    process.env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX = "16G";
-    process.env.USM_AUTORUN_LANE_HEAVY_CPU_QUOTA = "400";
+  it("AGILEHARNESS_AUTORUN_LANE_{LIGHT,HEAVY}_{MEMORY_MAX,CPU_QUOTA} override the quotas (env beats the file)", () => {
+    process.env.AGILEHARNESS_AUTORUN_LANE_LIGHT_MEMORY_MAX = "1G";
+    process.env.AGILEHARNESS_AUTORUN_LANE_LIGHT_CPU_QUOTA = "50";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX = "16G";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_CPU_QUOTA = "400";
     const out = applyEnvOverrides(fileSettings()).autorun.scheduler.lanes;
     expect(out.light.memoryMax).toBe("1G");
     expect(out.light.cpuQuota).toBe(50);
@@ -340,8 +340,8 @@ describe("applyEnvOverrides", () => {
   });
 
   it("an invalid quota (empty memoryMax / 0 cpuQuota) is ignored — file value kept (no silent disable)", () => {
-    process.env.USM_AUTORUN_LANE_LIGHT_MEMORY_MAX = "   ";
-    process.env.USM_AUTORUN_LANE_LIGHT_CPU_QUOTA = "0";
+    process.env.AGILEHARNESS_AUTORUN_LANE_LIGHT_MEMORY_MAX = "   ";
+    process.env.AGILEHARNESS_AUTORUN_LANE_LIGHT_CPU_QUOTA = "0";
     const out = applyEnvOverrides(fileSettings()).autorun.scheduler.lanes.light;
     expect(out.memoryMax).toBe("2G"); // blank ignored
     expect(out.cpuQuota).toBe(100); // 0 ignored
@@ -349,7 +349,7 @@ describe("applyEnvOverrides", () => {
 
   it("does not mutate the input lane quota object", () => {
     const base = fileSettings();
-    process.env.USM_AUTORUN_LANE_HEAVY_MEMORY_MAX = "32G";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MEMORY_MAX = "32G";
     applyEnvOverrides(base);
     expect(base.autorun.scheduler.lanes.heavy.memoryMax).toBe("8G"); // untouched
   });
@@ -357,8 +357,8 @@ describe("applyEnvOverrides", () => {
   it("an EMPTY/whitespace threshold env reads as unset (file value kept, NOT coerced to 0)", () => {
     // Regression guard: Number("") === 0 would otherwise turn an empty var into a real 0 override,
     // silently disabling RAM gating (ramFreeMb→0) or freezing the heavy lane (loadAvg1→0 blocks all).
-    process.env.USM_AUTORUN_RAM_FREE_MB = "";
-    process.env.USM_AUTORUN_LOAD_AVG_1 = "   ";
+    process.env.AGILEHARNESS_AUTORUN_RAM_FREE_MB = "";
+    process.env.AGILEHARNESS_AUTORUN_LOAD_AVG_1 = "   ";
     const out = applyEnvOverrides(fileSettings()).autorun.scheduler.thresholds;
     expect(out.ramFreeMb).toBe(250); // file value, not 0
     expect(out.loadAvg1).toBe(5.5); // file value, not 0
@@ -583,30 +583,30 @@ describe("coerceRunnerSettings — mergeGate (story-1k7els)", () => {
 });
 
 describe("maxTurnsResumeMax — the bounded max-turns resume cap knob (story-9s52tu HALF B)", () => {
-  const ORIGINAL = process.env.USM_AUTORUN_MAXTURNS_RESUME_MAX;
+  const ORIGINAL = process.env.AGILEHARNESS_AUTORUN_MAXTURNS_RESUME_MAX;
   afterAll(() => {
-    if (ORIGINAL === undefined) delete process.env.USM_AUTORUN_MAXTURNS_RESUME_MAX;
-    else process.env.USM_AUTORUN_MAXTURNS_RESUME_MAX = ORIGINAL;
+    if (ORIGINAL === undefined) delete process.env.AGILEHARNESS_AUTORUN_MAXTURNS_RESUME_MAX;
+    else process.env.AGILEHARNESS_AUTORUN_MAXTURNS_RESUME_MAX = ORIGINAL;
   });
   beforeEach(() => {
-    delete process.env.USM_AUTORUN_MAXTURNS_RESUME_MAX;
+    delete process.env.AGILEHARNESS_AUTORUN_MAXTURNS_RESUME_MAX;
   });
 
   it("defaults to 2 when unset", () => {
     expect(maxTurnsResumeMax()).toBe(2);
   });
   it("honors a positive override (floored)", () => {
-    process.env.USM_AUTORUN_MAXTURNS_RESUME_MAX = "4.9";
+    process.env.AGILEHARNESS_AUTORUN_MAXTURNS_RESUME_MAX = "4.9";
     expect(maxTurnsResumeMax()).toBe(4);
   });
   it("allows 0 (disable auto-resume — the first max-turns settle escalates straight to a failure)", () => {
-    process.env.USM_AUTORUN_MAXTURNS_RESUME_MAX = "0";
+    process.env.AGILEHARNESS_AUTORUN_MAXTURNS_RESUME_MAX = "0";
     expect(maxTurnsResumeMax()).toBe(0);
   });
   it("falls back to the default on garbage / negative input (never a degenerate cap)", () => {
-    process.env.USM_AUTORUN_MAXTURNS_RESUME_MAX = "nonsense";
+    process.env.AGILEHARNESS_AUTORUN_MAXTURNS_RESUME_MAX = "nonsense";
     expect(maxTurnsResumeMax()).toBe(2);
-    process.env.USM_AUTORUN_MAXTURNS_RESUME_MAX = "-3";
+    process.env.AGILEHARNESS_AUTORUN_MAXTURNS_RESUME_MAX = "-3";
     expect(maxTurnsResumeMax()).toBe(2);
   });
 });
@@ -614,7 +614,7 @@ describe("maxTurnsResumeMax — the bounded max-turns resume cap knob (story-9s5
 // ── ADR-063 (4b) loop-guard cap + (4a) per-card budget knobs ──────────────────────────────────────
 describe("noProgressMax — the same-column-no-progress loop-guard cap (ADR-063 4b)", () => {
   beforeEach(() => {
-    delete process.env.USM_AUTORUN_NO_PROGRESS_MAX;
+    delete process.env.AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX;
   });
 
   it("defaults to 3 (a dormant-but-ON circuit breaker)", () => {
@@ -629,28 +629,28 @@ describe("noProgressMax — the same-column-no-progress loop-guard cap (ADR-063 
     expect(coerceRunnerSettings({ autorun: { noProgressMax: -2 } }).autorun.noProgressMax).toBe(3);
   });
 
-  it("USM_AUTORUN_NO_PROGRESS_MAX overrides the file value (env wins)", () => {
-    process.env.USM_AUTORUN_NO_PROGRESS_MAX = "9";
+  it("AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX overrides the file value (env wins)", () => {
+    process.env.AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX = "9";
     expect(applyEnvOverrides(fileSettings()).autorun.noProgressMax).toBe(9);
   });
 
-  it("USM_AUTORUN_NO_PROGRESS_MAX=0 DISABLES the guard (env beats the file)", () => {
-    process.env.USM_AUTORUN_NO_PROGRESS_MAX = "0";
+  it("AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX=0 DISABLES the guard (env beats the file)", () => {
+    process.env.AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX = "0";
     expect(applyEnvOverrides(fileSettings()).autorun.noProgressMax).toBe(0);
   });
 
   it("unset keeps the file value (7); an EMPTY var reads as unset (NOT coerced to 0 by Number(''))", () => {
     expect(applyEnvOverrides(fileSettings()).autorun.noProgressMax).toBe(7); // file value
-    process.env.USM_AUTORUN_NO_PROGRESS_MAX = "   ";
+    process.env.AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX = "   ";
     expect(applyEnvOverrides(fileSettings()).autorun.noProgressMax).toBe(7); // blank ignored, not 0
-    process.env.USM_AUTORUN_NO_PROGRESS_MAX = "nope";
+    process.env.AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX = "nope";
     expect(applyEnvOverrides(fileSettings()).autorun.noProgressMax).toBe(7); // garbage ignored
   });
 });
 
 describe("cardBudgetUSD — the opt-in per-card lifetime $ backstop (ADR-063 4a)", () => {
   beforeEach(() => {
-    delete process.env.USM_AUTORUN_CARD_BUDGET_USD;
+    delete process.env.AGILEHARNESS_AUTORUN_CARD_BUDGET_USD;
   });
 
   it("DEFAULT is undefined = DISABLED (no behaviour change unless opted in)", () => {
@@ -665,37 +665,37 @@ describe("cardBudgetUSD — the opt-in per-card lifetime $ backstop (ADR-063 4a)
     expect(coerceRunnerSettings({ autorun: { cardBudgetUSD: "x" } }).autorun.cardBudgetUSD).toBeUndefined();
   });
 
-  it("USM_AUTORUN_CARD_BUDGET_USD (positive float) enables it over an absent file value", () => {
-    process.env.USM_AUTORUN_CARD_BUDGET_USD = "20.5";
+  it("AGILEHARNESS_AUTORUN_CARD_BUDGET_USD (positive float) enables it over an absent file value", () => {
+    process.env.AGILEHARNESS_AUTORUN_CARD_BUDGET_USD = "20.5";
     expect(applyEnvOverrides(fileSettings()).autorun.cardBudgetUSD).toBe(20.5);
   });
 
   it("unset / blank / ≤0 leaves the file value untouched (never silently freezes a card)", () => {
     expect(applyEnvOverrides(fileSettings()).autorun.cardBudgetUSD).toBeUndefined(); // file has none
-    process.env.USM_AUTORUN_CARD_BUDGET_USD = "0";
+    process.env.AGILEHARNESS_AUTORUN_CARD_BUDGET_USD = "0";
     expect(applyEnvOverrides(fileSettings()).autorun.cardBudgetUSD).toBeUndefined(); // 0 ignored
-    process.env.USM_AUTORUN_CARD_BUDGET_USD = "";
+    process.env.AGILEHARNESS_AUTORUN_CARD_BUDGET_USD = "";
     expect(applyEnvOverrides(fileSettings()).autorun.cardBudgetUSD).toBeUndefined(); // blank ignored
   });
 });
 
 describe("activeEnvOverrides — the ADR-063 knobs surface when set", () => {
   beforeEach(() => {
-    delete process.env.USM_AUTORUN_NO_PROGRESS_MAX;
-    delete process.env.USM_AUTORUN_CARD_BUDGET_USD;
+    delete process.env.AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX;
+    delete process.env.AGILEHARNESS_AUTORUN_CARD_BUDGET_USD;
   });
 
   it("neither knob appears when unset", () => {
     const out = activeEnvOverrides();
-    expect(out).not.toContain("USM_AUTORUN_NO_PROGRESS_MAX");
-    expect(out).not.toContain("USM_AUTORUN_CARD_BUDGET_USD");
+    expect(out).not.toContain("AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX");
+    expect(out).not.toContain("AGILEHARNESS_AUTORUN_CARD_BUDGET_USD");
   });
 
   it("both appear once set (so the UI can flag them)", () => {
-    process.env.USM_AUTORUN_NO_PROGRESS_MAX = "5";
-    process.env.USM_AUTORUN_CARD_BUDGET_USD = "12";
+    process.env.AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX = "5";
+    process.env.AGILEHARNESS_AUTORUN_CARD_BUDGET_USD = "12";
     const out = activeEnvOverrides();
-    expect(out).toContain("USM_AUTORUN_NO_PROGRESS_MAX");
-    expect(out).toContain("USM_AUTORUN_CARD_BUDGET_USD");
+    expect(out).toContain("AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX");
+    expect(out).toContain("AGILEHARNESS_AUTORUN_CARD_BUDGET_USD");
   });
 });

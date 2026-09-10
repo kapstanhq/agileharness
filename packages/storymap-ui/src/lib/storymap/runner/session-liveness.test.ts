@@ -77,17 +77,17 @@ describe("publishEmbargoTtlMs — a janela do embargo é MENOR que a da reaper, 
   });
 
   it("o operador ajusta pelo env", () => {
-    expect(publishEmbargoTtlMs({ USM_PUBLISH_EMBARGO_TTL_MS: "60000" })).toBe(60_000);
+    expect(publishEmbargoTtlMs({ AGILEHARNESS_PUBLISH_EMBARGO_TTL_MS: "60000" })).toBe(60_000);
   });
 
   it("lixo / zero / negativo caem no default — a guarda nunca é desligada por acidente", () => {
     for (const v of ["", "abc", "0", "-1"]) {
-      expect(publishEmbargoTtlMs({ USM_PUBLISH_EMBARGO_TTL_MS: v })).toBe(PUBLISH_EMBARGO_TTL_MS);
+      expect(publishEmbargoTtlMs({ AGILEHARNESS_PUBLISH_EMBARGO_TTL_MS: v })).toBe(PUBLISH_EMBARGO_TTL_MS);
     }
   });
 
   it("TETO no TTL de liveness: quem já está MORTO para o resto do sistema não segue embargando", () => {
-    expect(publishEmbargoTtlMs({ USM_PUBLISH_EMBARGO_TTL_MS: String(SESSION_HEARTBEAT_TTL_MS * 10) })).toBe(
+    expect(publishEmbargoTtlMs({ AGILEHARNESS_PUBLISH_EMBARGO_TTL_MS: String(SESSION_HEARTBEAT_TTL_MS * 10) })).toBe(
       SESSION_HEARTBEAT_TTL_MS,
     );
   });

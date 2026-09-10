@@ -18,12 +18,12 @@ describe("agent-actions audit ledger (F5.6)", () => {
     const lines: string[] = [];
     setAgentActionSink({ append: async (l) => void lines.push(l) });
 
-    await appendAgentAction({ actor: "STORYMAP_MCP_TOKEN_ORCH", board: "acme", tool: "move_card", cls: "write-board", disposition: "auto", outcome: "executed" });
+    await appendAgentAction({ actor: "AGILEHARNESS_MCP_TOKEN_ORCH", board: "acme", tool: "move_card", cls: "write-board", disposition: "auto", outcome: "executed" });
     await appendAgentAction({ board: "acme", tool: "deploy", cls: "deploy", disposition: "ask", outcome: "pending", approvalId: "apr-1" });
 
     expect(lines).toHaveLength(2);
     const first = JSON.parse(lines[0]) as AgentAction;
-    expect(first).toMatchObject({ v: 1, tool: "move_card", cls: "write-board", disposition: "auto", outcome: "executed", actor: "STORYMAP_MCP_TOKEN_ORCH" });
+    expect(first).toMatchObject({ v: 1, tool: "move_card", cls: "write-board", disposition: "auto", outcome: "executed", actor: "AGILEHARNESS_MCP_TOKEN_ORCH" });
     expect(typeof first.at).toBe("string");
     const second = JSON.parse(lines[1]) as AgentAction;
     expect(second).toMatchObject({ outcome: "pending", approvalId: "apr-1" });
@@ -42,7 +42,7 @@ describe("agent-actions audit ledger (F5.6)", () => {
     const lines: string[] = [];
     setAgentActionSink({ append: async (l) => void lines.push(l) });
 
-    void appendAgentAction({ actor: "STORYMAP_MCP_TOKEN_ORCH", board: "acme", cardId: "story-xfleex", tool: "move_card", cls: "write-board", disposition: "auto", outcome: "executed" });
+    void appendAgentAction({ actor: "AGILEHARNESS_MCP_TOKEN_ORCH", board: "acme", cardId: "story-xfleex", tool: "move_card", cls: "write-board", disposition: "auto", outcome: "executed" });
     void appendAgentAction({ board: "acme", cardId: "story-eqpdtz", tool: "update_card", cls: "write-board", disposition: "auto", outcome: "executed" });
     expect(lines).toHaveLength(0); // ainda em voo — é exatamente a corrida que o flush fecha
 
@@ -53,14 +53,14 @@ describe("agent-actions audit ledger (F5.6)", () => {
 
 describe("readAgentActions — janela + legado (WS-12.1)", () => {
   let dir: string;
-  const prev = process.env.STORYMAP_RUNNER_STATE_DIR;
+  const prev = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
   const T0 = Date.parse("2026-07-16T15:00:00Z");
   const line = (over: Record<string, unknown>) =>
     JSON.stringify({ v: 1, at: new Date(T0).toISOString(), tool: "move_card", cls: "write-board", disposition: "auto", outcome: "executed", ...over }) + "\n";
 
   beforeAll(async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "ledger-"));
-    process.env.STORYMAP_RUNNER_STATE_DIR = dir;
+    process.env.AGILEHARNESS_RUNNER_STATE_DIR = dir;
     await fs.writeFile(
       path.join(dir, "agent-actions.jsonl"),
       line({ at: new Date(T0 - 60_000).toISOString(), board: "acme", cardId: "antes" }) +
@@ -72,8 +72,8 @@ describe("readAgentActions — janela + legado (WS-12.1)", () => {
     );
   });
   afterAll(async () => {
-    if (prev === undefined) delete process.env.STORYMAP_RUNNER_STATE_DIR;
-    else process.env.STORYMAP_RUNNER_STATE_DIR = prev;
+    if (prev === undefined) delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+    else process.env.AGILEHARNESS_RUNNER_STATE_DIR = prev;
     await fs.rm(dir, { recursive: true, force: true });
   });
 
@@ -90,8 +90,8 @@ describe("readAgentActions — janela + legado (WS-12.1)", () => {
 
   it("ledger ausente ⇒ [] (a atribuição degrada, nunca lança)", async () => {
     const missing = path.join(dir, "vazio");
-    process.env.STORYMAP_RUNNER_STATE_DIR = missing;
+    process.env.AGILEHARNESS_RUNNER_STATE_DIR = missing;
     await expect(readAgentActions()).resolves.toEqual([]);
-    process.env.STORYMAP_RUNNER_STATE_DIR = dir;
+    process.env.AGILEHARNESS_RUNNER_STATE_DIR = dir;
   });
 });

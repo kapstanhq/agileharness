@@ -5,7 +5,7 @@
 //   1. o adotante INVENTA um segredo memorizável para essa URL (ataque de dicionário/adivinhação);
 //   2. a instalação nasce com a porta ARMADA sem ninguém ter pedido — o default sempre-aberto que a
 //      geração automática no boot criava, contradizendo a garantia escrita no header da route
-//      ("refused outright unless STORYMAP_MCP_TOKEN is set");
+//      ("refused outright unless AGILEHARNESS_MCP_TOKEN is set");
 //   3. o boot ROTACIONA o token que o operador declarou, matando a autonomia que ele já tinha
 //      (a URL do conector vira 404 nu no restart) — remoção de capacidade, o oposto do mandato;
 //   4. o token declarado é APROVADO no boot com espaço sobrando e RECUSADO em toda requisição,
@@ -31,16 +31,16 @@ let prevStateDir: string | undefined;
 let prevToken: string | undefined;
 
 beforeEach(() => {
-  prevStateDir = process.env.STORYMAP_RUNNER_STATE_DIR;
+  prevStateDir = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
   prevToken = process.env[MCP_TOKEN_ENV];
   stateDir = mkdtempSync(path.join(tmpdir(), "ah-mcp-token-"));
-  process.env.STORYMAP_RUNNER_STATE_DIR = stateDir;
+  process.env.AGILEHARNESS_RUNNER_STATE_DIR = stateDir;
   delete process.env[MCP_TOKEN_ENV];
 });
 
 afterEach(() => {
-  if (prevStateDir === undefined) delete process.env.STORYMAP_RUNNER_STATE_DIR;
-  else process.env.STORYMAP_RUNNER_STATE_DIR = prevStateDir;
+  if (prevStateDir === undefined) delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+  else process.env.AGILEHARNESS_RUNNER_STATE_DIR = prevStateDir;
   if (prevToken === undefined) delete process.env[MCP_TOKEN_ENV];
   else process.env[MCP_TOKEN_ENV] = prevToken;
   vi.restoreAllMocks();

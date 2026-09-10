@@ -123,7 +123,7 @@ export function CopilotConfigPanel({
               (<code className="font-mono">run-free</code>) e apagar dados (<code className="font-mono">destructive</code>){" "}
               <b>nunca</b> são automáticos — o kernel recusa. Escolher um estado aqui NÃO torna nenhum board autônomo
               sozinho: cada board começa em <b>Chat</b> e o tick ainda exige o token{" "}
-              <code className="font-mono">STORYMAP_MCP_TOKEN_ORCH</code> no ambiente do serviço.
+              <code className="font-mono">AGILEHARNESS_MCP_TOKEN_ORCH</code> no ambiente do serviço.
             </p>
           </div>
         </div>
@@ -136,7 +136,7 @@ export function CopilotConfigPanel({
             label="Jido global"
             value={armed ? "ligado" : "desligado"}
             tone={armed ? "ok" : "muted"}
-            hint={s.enabled.origin === "env-override" ? "definido por STORYMAP_ORCH_ENABLED (env)" : "settings.yaml"}
+            hint={s.enabled.origin === "env-override" ? "definido por AGILEHARNESS_ORCH_ENABLED (env)" : "settings.yaml"}
           />
           <Stat label="Estado deste board" value={TIER_META[tier].label} tone={tier === "chat" ? "muted" : "ok"} />
           <Stat

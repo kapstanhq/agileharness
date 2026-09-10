@@ -461,7 +461,7 @@ describe("board integrity — toolkit declarativo (WS3 F2)", () => {
 // (read the board's deploy.surfaces), and the self-deploy publish (runs deploy.surfaces[].deployCmd). These
 // two lints keep them from silently drifting apart — the "two config homes" risk the design flagged.
 describe("board integrity — superfícies deployáveis (deploy.surfaces, story-zr1cmf)", () => {
-  const SELF_DEPLOY_PACKAGE = "packages/storymap-ui"; // deploy.ts STORYMAP_PACKAGE — the ONLY self-deploy path
+  const SELF_DEPLOY_PACKAGE = "packages/storymap-ui"; // deploy.ts TOOL_PACKAGE_REL — the ONLY self-deploy path
   const norm = (p: string) => `${p.replace(/\/+$/, "")}/`;
 
   it("todo surface.prefix está coberto por staging.codePrefixes (classificação → stage acompanha a promoção)", async () => {

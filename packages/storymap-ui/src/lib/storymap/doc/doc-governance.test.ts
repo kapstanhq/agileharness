@@ -5,7 +5,7 @@
 // `.md` — a proposta é aprovada, o operador vê "sucesso", e o documento não muda. Um write fantasma
 // é pior que uma recusa, porque ninguém vai procurar o defeito.
 //
-// Escreve em disco de propósito (raiz temporária via `STORYMAP_TARGET`): a pergunta é justamente
+// Escreve em disco de propósito (raiz temporária via `AGILEHARNESS_TARGET`): a pergunta é justamente
 // "os bytes aterrissaram no arquivo que a tela lê?", e nenhum teste puro pode respondê-la.
 
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
@@ -15,18 +15,18 @@ import path from "node:path";
 
 const RAIZ = mkdtempSync(path.join(tmpdir(), "prd-gov-"));
 const BOARD = "acme";
-const ANTERIOR = process.env.STORYMAP_TARGET;
+const ANTERIOR = process.env.AGILEHARNESS_TARGET;
 
 beforeAll(() => {
   // Uma raiz que satisfaz ROOT_MARKERS (`storymap/boards`) — o mesmo degrau que o README manda usar.
   mkdirSync(path.join(RAIZ, "storymap", "boards", BOARD), { recursive: true });
   writeFileSync(path.join(RAIZ, "storymap", "boards", BOARD, "board.yaml"), `id: ${BOARD}\nname: Acme\n`, "utf8");
-  process.env.STORYMAP_TARGET = RAIZ;
+  process.env.AGILEHARNESS_TARGET = RAIZ;
 });
 
 afterAll(() => {
-  if (ANTERIOR === undefined) delete process.env.STORYMAP_TARGET;
-  else process.env.STORYMAP_TARGET = ANTERIOR;
+  if (ANTERIOR === undefined) delete process.env.AGILEHARNESS_TARGET;
+  else process.env.AGILEHARNESS_TARGET = ANTERIOR;
   rmSync(RAIZ, { recursive: true, force: true });
 });
 

@@ -3,7 +3,7 @@
 // `oss-secret-hygiene.test.ts` mede a cerca DENTRO do repositório extraído. É o guarda certo para a
 // pergunta "o artefato publicado protege a si mesmo?" — e ele não tem como responder a outra
 // pergunta, que só existe desde que a ferramenta passou a operar árvore alheia: "o REPOSITÓRIO DO
-// ADOTANTE fica protegido?". Sob `STORYMAP_TARGET`, `storymap/.runner/` nasce lá, e lá não há
+// ADOTANTE fica protegido?". Sob `AGILEHARNESS_TARGET`, `storymap/.runner/` nasce lá, e lá não há
 // `.gitignore` nenhum da nossa parte.
 //
 // MEDIDO NUM ADOTANTE REAL (teste de adoção, 2026-08-21): um clone virgem de um app Next.js de

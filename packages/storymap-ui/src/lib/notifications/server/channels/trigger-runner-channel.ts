@@ -22,7 +22,7 @@
 //
 // CONFIG — the runner reads its settings from lib/storymap/runner/config.ts:
 // hardcoded defaults < storymap/settings.yaml < process.env (ENV always wins).
-// The master switch is `autorun.enabled` (settings.yaml) OR USM_AUTORUN=0 (env);
+// The master switch is `autorun.enabled` (settings.yaml) OR AGILEHARNESS_AUTORUN=0 (env);
 // both are evaluated LIVE per event, so toggling in the Config panel takes effect
 // without a restart. Per-column model/effort/maxTurns come from board.yaml. The
 // spawn engine itself lives in lib/storymap/runner/engine.ts (shared singleton).

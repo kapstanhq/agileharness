@@ -214,7 +214,7 @@ export function problemasDeNegacao(
 /**
  * Os NOMES dos arquivos de credencial do harness, dentro do state dir.
  *
- * ⚠ Só os nomes: o DIRETÓRIO vem de `runnerStateDir()`, que honra `STORYMAP_RUNNER_STATE_DIR` — um knob
+ * ⚠ Só os nomes: o DIRETÓRIO vem de `runnerStateDir()`, que honra `AGILEHARNESS_RUNNER_STATE_DIR` — um knob
  * documentado no `.env.example` e usado pelo próprio setup de teste. A primeira versão desta lista
  * concatenava o literal `storymap/.runner/...` à raiz, e uma revisão pegou: com o env declarado, a
  * negação apontava para arquivos inexistentes enquanto as credenciais reais viviam em outro lugar —
@@ -625,7 +625,7 @@ export function buildSandboxSettings(opts: SandboxSettingsOpts): Record<string, 
       files: [
         ...(opts.denyRead ?? DEFAULT_DENY_READ),
         // As credenciais do PRÓPRIO harness, resolvidas a partir do state dir REAL (que honra
-        // STORYMAP_RUNNER_STATE_DIR) — ver a nota em HARNESS_CREDENTIAL_FILES. Ausente ⇒ a lista some,
+        // AGILEHARNESS_RUNNER_STATE_DIR) — ver a nota em HARNESS_CREDENTIAL_FILES. Ausente ⇒ a lista some,
         // que é o caso dos testes puros de forma.
         ...(opts.credentialsDir ? harnessCredentialPaths(opts.credentialsDir) : []),
       ].map((p) => ({ path: p, mode: "deny" })),
@@ -1161,7 +1161,7 @@ function assertContainmentReachedTokens(posture: AutonomyPosture, tokens: readon
     });
     // ── UM ÚNICO --settings, E APONTANDO PARA ESTA POSTURA ────────────────────────────────────────
     // Verificar PRESENÇA não é verificar EFEITO: um segundo `--settings` vindo de `extraArgs`
-    // (`USM_AUTORUN_EXTRA_ARGS`, config do operador) VENCE no parsing e o portão passaria verde. Por
+    // (`AGILEHARNESS_AUTORUN_EXTRA_ARGS`, config do operador) VENCE no parsing e o portão passaria verde. Por
     // isso conta-se a ocorrência e compara-se o valor EFETIVO (o último), não a mera presença.
     const ocorrencias = ocorrenciasDaFlag(tokens, "--settings");
     if (ocorrencias === 0) {
@@ -1175,7 +1175,7 @@ function assertContainmentReachedTokens(posture: AutonomyPosture, tokens: readon
     if (ocorrencias !== 1) {
       throw new Error(
         `[autonomy] mais de um --settings no comando: o último vence no parsing, então a fronteira ` +
-          `efetiva não é a que esta postura montou. Verifique extraArgs (USM_AUTORUN_EXTRA_ARGS). Run ABORTADO.`,
+          `efetiva não é a que esta postura montou. Verifique extraArgs (AGILEHARNESS_AUTORUN_EXTRA_ARGS). Run ABORTADO.`,
       );
     }
     if (valorDaFlag(tokens, "--settings") !== posture.settingsFile) {

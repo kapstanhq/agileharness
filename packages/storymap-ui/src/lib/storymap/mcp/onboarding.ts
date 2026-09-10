@@ -2,7 +2,7 @@
 // without orientation the consuming agent (Claude on the phone) often can't tell which
 // tool to use or how the board works. Two layers fix that, following MCP best practice:
 //
-//   1. SERVER INSTRUCTIONS (STORYMAP_MCP_INSTRUCTIONS) — passed to createMcpHandler and
+//   1. SERVER INSTRUCTIONS (MCP_INSTRUCTIONS) — passed to createMcpHandler and
 //      returned in the `initialize` response, so EVERY client sees them automatically,
 //      before any tool call. Kept short: the mental model + the rules + a pointer.
 //   2. The `mcp_onboarding` TOOL (ONBOARDING_GUIDE) — the full manual (tool groups + flow
@@ -25,7 +25,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { defineTool } from "./register";
 
 /** Short, always-on mental model + rules. Loaded via the MCP initialize handshake. */
-export const STORYMAP_MCP_INSTRUCTIONS = [
+export const MCP_INSTRUCTIONS = [
   "AgileHarness MCP — você controla o AgileHarness: um board de User Story Mapping (Jeff Patton) que",
   "é a FONTE DA VERDADE de produto DESTE repositório. Cada app dele tem",
   "um board; os cards percorrem um PIPELINE com GATES e AUTORUN — ao entrar em certos status,",

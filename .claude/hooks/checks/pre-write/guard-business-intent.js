@@ -1,6 +1,6 @@
 // Check: guard-business-intent — enforces the business-intent authorship guard.
 //
-// Applies ONLY to autorun runs (identified by STORYMAP_AUTORUN_RUN_ID in the env
+// Applies ONLY to autorun runs (identified by AGILEHARNESS_AUTORUN_RUN_ID in the env
 // the engine injects). A human editing via the notebook or the UI is NEVER blocked.
 //
 // When a run tries to write to a board.yaml and the write CHANGES a top-level field
@@ -142,9 +142,9 @@ module.exports = {
   name: 'guard-business-intent',
   test(input) {
     try {
-      // AC3: only applies to autorun runs — the engine injects STORYMAP_AUTORUN_RUN_ID.
+      // AC3: only applies to autorun runs — the engine injects AGILEHARNESS_AUTORUN_RUN_ID.
       // A human session or the UI never has this env → lenient-allow immediately.
-      const runId = process.env.STORYMAP_AUTORUN_RUN_ID;
+      const runId = process.env.AGILEHARNESS_AUTORUN_RUN_ID;
       if (!runId) return null;
 
       const filePath = input && input.tool_input && input.tool_input.file_path;

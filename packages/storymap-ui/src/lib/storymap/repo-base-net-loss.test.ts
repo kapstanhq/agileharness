@@ -88,7 +88,7 @@ let erros: string[];
 let avisos: string[];
 
 beforeEach(async () => {
-  delete process.env.STORYMAP_FRONTMATTER_MAX_BYTES;
+  delete process.env.AGILEHARNESS_FRONTMATTER_MAX_BYTES;
   erros = [];
   avisos = [];
   const junta = (destino: string[]) => (...args: unknown[]) =>

@@ -124,18 +124,18 @@ describe("evaluateAutorunOnEntry — the shared autorun kernel", () => {
     vi.mocked(readBoardConfig).mockResolvedValue(config);
     vi.mocked(readCards).mockResolvedValue([card({ status: "desenvolver", storyType: "bug" })]);
 
-    // A suíte roda com STORYMAP_HEADROOM_URL=off (vitest.setup.ts, hermeticidade). Aqui removemos o
+    // A suíte roda com AGILEHARNESS_HEADROOM_URL=off (vitest.setup.ts, hermeticidade). Aqui removemos o
     // kill switch DE PROPÓSITO: sem NENHUMA declaração — nem env, nem `headroom` no board — o valor
     // resolvido tem de ser `null`, e é o que o kernel repassa (auditoria de extração, 2026-08-19: o
     // default deixou de ser um endereço de loopback embutido, que na máquina de quem instala ou não
     // responde ou responde por ser outra coisa). A COBERTURA de quem tem o sidecar continua vindo da
     // declaração — é o caso irmão logo abaixo que prova o repasse.
-    const savedKillSwitch = process.env.STORYMAP_HEADROOM_URL;
-    delete process.env.STORYMAP_HEADROOM_URL;
+    const savedKillSwitch = process.env.AGILEHARNESS_HEADROOM_URL;
+    delete process.env.AGILEHARNESS_HEADROOM_URL;
     try {
       await evaluateAutorunOnEntry("b", "c");
     } finally {
-      if (savedKillSwitch !== undefined) process.env.STORYMAP_HEADROOM_URL = savedKillSwitch;
+      if (savedKillSwitch !== undefined) process.env.AGILEHARNESS_HEADROOM_URL = savedKillSwitch;
     }
 
     expect(mockRunSkill).toHaveBeenCalledTimes(1);
@@ -166,7 +166,7 @@ describe("evaluateAutorunOnEntry — the shared autorun kernel", () => {
     vi.mocked(readBoardConfig).mockResolvedValue(config);
     vi.mocked(readCards).mockResolvedValue([card({ status: "desenvolver", storyType: "bug" })]);
 
-    vi.stubEnv("STORYMAP_HEADROOM_URL", HEADROOM_SUGGESTED_URL);
+    vi.stubEnv("AGILEHARNESS_HEADROOM_URL", HEADROOM_SUGGESTED_URL);
     try {
       await evaluateAutorunOnEntry("b", "c");
     } finally {
@@ -363,7 +363,7 @@ describe("evaluateAutorunOnEntry — the shared autorun kernel", () => {
     expect((mockRunSkill.mock.calls[0][4] as { noProgressRuns?: number }).noProgressRuns).toBe(0);
   });
 
-  it("USM_AUTORUN_NO_PROGRESS_MAX-style cap of 0 DISABLES the guard (runs even at a high count)", async () => {
+  it("AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX-style cap of 0 DISABLES the guard (runs even at a high count)", async () => {
     const config = cfg([{ id: "qa-automatizado", name: "QA", trigger: "harness-qa", autorun: true }]);
     vi.mocked(readBoardConfig).mockResolvedValue(config);
     vi.mocked(readCards).mockResolvedValue([card({ status: "qa-automatizado", storyType: "user" })]);

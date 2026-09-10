@@ -25,8 +25,8 @@ import path from "node:path";
 
 // ── O ALVO — mesma classe, mesmo argumento, e agora com um vetor MEDIDO ─────────────────────────
 //
-// `findRepoRoot()` (paths.ts) honra `STORYMAP_TARGET`, e o env ATRAVESSA para o worker do vitest —
-// medido em 2026-08-27: com `STORYMAP_TARGET=<outro repo> bunx vitest run`, `process.env` dentro da
+// `findRepoRoot()` (paths.ts) honra `AGILEHARNESS_TARGET`, e o env ATRAVESSA para o worker do vitest —
+// medido em 2026-08-27: com `AGILEHARNESS_TARGET=<outro repo> bunx vitest run`, `process.env` dentro da
 // prova traz o valor. Isso significa que `board-base-pipeline` fotografaria os boards DAQUELE repo,
 // e um `vitest -u` gravaria o retrato deles num `.snap` deste.
 //
@@ -44,15 +44,16 @@ import path from "node:path";
 // justamente quem não lembra de tirá-lo. As provas que PRECISAM de um alvo o declaram em CÓDIGO,
 // com save/restore (flat-repo-layout, product-deploy, target-secret-fence e outras já fazem assim),
 // e continuam funcionando: o `setupFiles` roda ANTES do módulo de prova.
-delete process.env.STORYMAP_TARGET;
+delete process.env.AGILEHARNESS_TARGET;
+delete process.env.STORYMAP_TARGET; // a grafia legada (env-aliases.ts) atravessa do mesmo jeito
 
 const PREFIXO = "storymap-runner-state-";
 // O caminho é capturado AQUI e é ele que o teardown remove — nunca o valor do env na hora da limpeza.
 // Não é preciosismo: várias provas (agent-actions, token-bootstrap, prefs-store, split-integration…)
-// reapontam `STORYMAP_RUNNER_STATE_DIR` para temporários próprios, e uma que não restaurasse o valor
+// reapontam `AGILEHARNESS_RUNNER_STATE_DIR` para temporários próprios, e uma que não restaurasse o valor
 // faria a limpeza apagar o diretório DE OUTREM. O setup só responde pelo que o setup criou.
 const MEU_DIRETORIO = mkdtempSync(path.join(tmpdir(), PREFIXO));
-process.env.STORYMAP_RUNNER_STATE_DIR = MEU_DIRETORIO;
+process.env.AGILEHARNESS_RUNNER_STATE_DIR = MEU_DIRETORIO;
 
 // BEST-EFFORT, e literalmente: esta limpeza NUNCA pode reprovar uma prova. Um `rmSync` que lançasse
 // dentro do `afterAll` viraria falha de suíte — e uma suíte vermelha aqui reprova todo merge-back
@@ -76,7 +77,7 @@ afterAll(() => {
 // depender de o `headroom-proxy.service` estar de pé na máquina que roda a suíte. Um teste unitário
 // não pode ter opinião sobre isso. Usa o kill switch documentado, não um guard de "estou em teste"
 // dentro do código de produção; quem quer provar o default o remove localmente (autorun-eval.test.ts).
-process.env.STORYMAP_HEADROOM_URL = "off";
+process.env.AGILEHARNESS_HEADROOM_URL = "off";
 
 // O BINÁRIO DO CLAUDE, DECLARADO NA SUÍTE — mesmo princípio da linha acima (2026-08-26).
 //

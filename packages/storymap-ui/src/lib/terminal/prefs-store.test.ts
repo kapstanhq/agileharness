@@ -4,19 +4,19 @@ import os from "node:os";
 import path from "node:path";
 import { loadPrefs, prunePrefs, setPref } from "./prefs-store";
 
-// prefs-store persists into runnerStateDir(), which honors STORYMAP_RUNNER_STATE_DIR — so we redirect
+// prefs-store persists into runnerStateDir(), which honors AGILEHARNESS_RUNNER_STATE_DIR — so we redirect
 // it to a throwaway dir per test and never touch the live runner state.
 let dir: string;
 let prevEnv: string | undefined;
 
 beforeEach(() => {
-  prevEnv = process.env.STORYMAP_RUNNER_STATE_DIR;
+  prevEnv = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
   dir = mkdtempSync(path.join(os.tmpdir(), "termprefs-"));
-  process.env.STORYMAP_RUNNER_STATE_DIR = dir;
+  process.env.AGILEHARNESS_RUNNER_STATE_DIR = dir;
 });
 afterEach(() => {
-  if (prevEnv === undefined) delete process.env.STORYMAP_RUNNER_STATE_DIR;
-  else process.env.STORYMAP_RUNNER_STATE_DIR = prevEnv;
+  if (prevEnv === undefined) delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+  else process.env.AGILEHARNESS_RUNNER_STATE_DIR = prevEnv;
   rmSync(dir, { recursive: true, force: true });
 });
 

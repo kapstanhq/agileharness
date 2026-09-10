@@ -48,7 +48,7 @@ const ENVS_TOCADAS = [
   "AGILEHARNESS_ALLOW_PUBLIC_BIND",
   "NODE_ENV",
   "PORT",
-  "STORYMAP_MCP_TOKEN",
+  "AGILEHARNESS_MCP_TOKEN",
   // O boot carrega os arquivos .env (main.ts, topo). Este arquivo não é sobre isso, e um `.env.local`
   // na máquina de quem roda a suíte mudaria o cenário — a marca do @next/env neutraliza a leitura.
   "__NEXT_PROCESSED_ENV",
@@ -85,7 +85,7 @@ beforeAll(async () => {
   process.env[TOKEN_ENV] = ADIVINHAVEL;
   delete process.env.AGILEHARNESS_DEV;
   delete process.env.AGILEHARNESS_ALLOW_PUBLIC_BIND;
-  delete process.env.STORYMAP_MCP_TOKEN;
+  delete process.env.AGILEHARNESS_MCP_TOKEN;
   // Nada de arquivo .env neste cenário: o ambiente é o que está escrito acima, e só. A ORDEM do
   // carregamento tem arquivos próprios (`boot-env-order.test.ts`, `boot-refuses-weak-mcp-token.test.ts`).
   process.env.__NEXT_PROCESSED_ENV = "true";
@@ -164,15 +164,15 @@ describe("auditBind — quem pode ficar de frente para a rede", () => {
 
   it("token do MCP adivinhável ⇒ reprova (essas tools spawnam claude com skip-permissions)", () => {
     // O piso de `mcp/auth.ts` é 24 chars e não olha entropia: um token de tutorial autentica hoje.
-    const a = mod.auditBind(aberto({ STORYMAP_MCP_TOKEN: ADIVINHAVEL }));
-    expect(a.failures.join("\n")).toContain("STORYMAP_MCP_TOKEN");
+    const a = mod.auditBind(aberto({ AGILEHARNESS_MCP_TOKEN: ADIVINHAVEL }));
+    expect(a.failures.join("\n")).toContain("AGILEHARNESS_MCP_TOKEN");
   });
 
   it("qualquer TIER de token do MCP entra na auditoria, não só o primário", () => {
     // `settings.yaml` pode declarar N tokens escopados (`mcpTokens[].tokenEnv`). Auditar só o
     // primário deixaria o escopado `write` — que move card, enfileira run e abre worktree — de fora.
-    const a = mod.auditBind(aberto({ STORYMAP_MCP_TOKEN_ORCH: ADIVINHAVEL }));
-    expect(a.failures.join("\n")).toContain("STORYMAP_MCP_TOKEN_ORCH");
+    const a = mod.auditBind(aberto({ AGILEHARNESS_MCP_TOKEN_ORCH: ADIVINHAVEL }));
+    expect(a.failures.join("\n")).toContain("AGILEHARNESS_MCP_TOKEN_ORCH");
   });
 
   it("token do MCP AUSENTE não é falha — a superfície fica fechada, não aberta", () => {
@@ -181,7 +181,7 @@ describe("auditBind — quem pode ficar de frente para a rede", () => {
     // só normaliza e julga o que a env carrega). Sem env declarada a porta não existe — exigir que
     // ela exista não fecharia porta nenhuma, só obrigaria configuração. Enquanto o boot GERAVA um
     // token, esta afirmação estava aposentada: toda instalação nascia com a superfície armada.
-    const a = mod.auditBind(aberto({ STORYMAP_MCP_TOKEN: undefined }));
+    const a = mod.auditBind(aberto({ AGILEHARNESS_MCP_TOKEN: undefined }));
     expect(a.failures).toEqual([]);
     expect(a.weaknesses).toEqual([]);
   });
@@ -251,7 +251,7 @@ describe("o override — o dono pode assumir o risco, mas nunca em silêncio", (
   });
 
   it("só o literal exato arma o override — nada de 'true', 'yes', 'on' ou espaço sobrando", () => {
-    // Mesma postura de `STORYMAP_ENGINE=on`: armar por acidente de digitação seria pior que não ter
+    // Mesma postura de `AGILEHARNESS_ENGINE=on`: armar por acidente de digitação seria pior que não ter
     // válvula, porque o aviso continuaria saindo e ninguém saberia que a guarda foi desligada.
     for (const valor of ["true", "yes", "on", "0", "", " 1", "1 ", "sim"]) {
       expect(

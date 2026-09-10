@@ -28,9 +28,9 @@ import { findRepoRoot } from "@/lib/storymap/paths";
 import { engineArmedDecision, type EngineArmedVerdict } from "./engine-armed";
 
 /** Liga o `git push` do board-data. Ausente/qualquer-outro-valor ⇒ DESLIGADO. */
-export const BOARD_AUTOPUSH_ENV = "STORYMAP_BOARD_AUTOPUSH";
+export const BOARD_AUTOPUSH_ENV = "AGILEHARNESS_BOARD_AUTOPUSH";
 /** Desliga o commit automático do board-data. Ausente ⇒ LIGADO (é o valor do produto). */
-export const BOARD_AUTOCOMMIT_ENV = "STORYMAP_BOARD_AUTOCOMMIT";
+export const BOARD_AUTOCOMMIT_ENV = "AGILEHARNESS_BOARD_AUTOCOMMIT";
 
 type EnvLike = Record<string, string | undefined>;
 
@@ -45,8 +45,8 @@ export function boardDataAutoCommitAllowed(env: EnvLike = process.env): boolean 
 /**
  * Empurrar o board para o `origin`. Default DESLIGADO — ligar exige o literal `1`.
  *
- * O literal exato (e não "truthy") é a mesma disciplina do `STORYMAP_ENGINE=on`: habilitar escrita num
- * remoto de terceiro não pode ser consequência de um typo (`STORYMAP_BOARD_AUTOPUSH=no` ligando a
+ * O literal exato (e não "truthy") é a mesma disciplina do `AGILEHARNESS_ENGINE=on`: habilitar escrita num
+ * remoto de terceiro não pode ser consequência de um typo (`AGILEHARNESS_BOARD_AUTOPUSH=no` ligando a
  * coisa por ser string não-vazia é exatamente o acidente que a régua frouxa produz).
  */
 export function boardDataAutoPushAllowed(env: EnvLike = process.env): boolean {
@@ -64,7 +64,7 @@ export function boardDataWriterDecision(
   env: EnvLike = process.env,
   gitIsDirectory: boolean | null = null,
 ): EngineArmedVerdict {
-  return engineArmedDecision({ flag: env.STORYMAP_ENGINE, gitIsDirectory });
+  return engineArmedDecision({ flag: env.AGILEHARNESS_ENGINE, gitIsDirectory });
 }
 
 let memo: EngineArmedVerdict | null = null;

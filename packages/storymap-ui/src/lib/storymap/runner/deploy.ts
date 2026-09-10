@@ -58,13 +58,13 @@ export {
   type DeployCommandVerdict,
 } from "./deploy-command-guard";
 
-const STORYMAP_PACKAGE = "packages/storymap-ui";
+const TOOL_PACKAGE_REL = "packages/storymap-ui";
 const DEPLOY_UNIT = "storymap-deploy"; // fixed → idempotent (a second deploy while running is a no-op)
 const SYSTEMD_RUN_TIMEOUT_MS = 30_000;
 // WS1.1 — the env var the settle webhook secret is read from. Imported into the transient unit via
 // `systemd-run --setenv=NAME` (no value → systemd copies it from THIS service's env) so it never appears
-// in the command line. The service already carries STORYMAP_MCP_TOKEN (same token /api/runner/* validate).
-const WEBHOOK_TOKEN_ENV = "STORYMAP_MCP_TOKEN";
+// in the command line. The service already carries AGILEHARNESS_MCP_TOKEN (same token /api/runner/* validate).
+const WEBHOOK_TOKEN_ENV = "AGILEHARNESS_MCP_TOKEN";
 // Base URL the detached unit POSTs the settle back to — THIS service, loopback. Overridable for a non-default port.
 const DEFAULT_SELF_URL = "http://127.0.0.1:3008";
 
@@ -421,7 +421,7 @@ export async function deployBoard(opts: {
       // fronteira divergiam: para o parser `"…"` é agrupamento LITERAL, mas o `bash -lc` que executa do outro
       // lado EXPANDE `$VAR` e EXECUTA `$(…)` dentro de aspas duplas. Com a string crua, um alvo autorizado
       // bastava para rodar payload como root (`vercel deploy --msg "$(curl … | sh)"`) e para vazar segredo do
-      // serviço para dentro de um argumento (`"$STORYMAP_MCP_TOKEN"`). Citando palavra por palavra, o shell
+      // serviço para dentro de um argumento (`"$AGILEHARNESS_MCP_TOKEN"`). Citando palavra por palavra, o shell
       // recebe exatamente a argv que foi autorizada — o comando declarado roda igual, sem expansão nenhuma.
       const authorizedCommand = quoteArgv(verdict.argv);
       const job = registry.start(opts.board, ctx, { kind: "shell", command: authorizedCommand });
@@ -478,7 +478,7 @@ export async function deployBoard(opts: {
     };
   }
 
-  if (boardPackage === STORYMAP_PACKAGE) {
+  if (boardPackage === TOOL_PACKAGE_REL) {
     // ── A RÉGUA DO SELF-DEPLOY: "este board É a ferramenta que está rodando" ────────────────────────
     // Antes ela era "o caminho do pacote tem este nome", e as duas leituras coincidiam enquanto a
     // ferramenta morava DENTRO do repositório que ela opera. Elas divergem no instante em que o serviço
@@ -544,7 +544,7 @@ export async function deployBoard(opts: {
       toolPackageDir: pacoteDaFerramenta,
       board: opts.board,
       cardId: opts.cardId,
-      webhookBase: process.env.STORYMAP_SELF_URL || DEFAULT_SELF_URL,
+      webhookBase: process.env.AGILEHARNESS_SELF_URL || DEFAULT_SELF_URL,
       tokenEnvName: WEBHOOK_TOKEN_ENV,
       logPath: `${repoRoot}/storymap/.runner/self-deploy.log`,
       postBuildCommands,
@@ -556,7 +556,7 @@ export async function deployBoard(opts: {
     const setenv = armed ? ` --setenv=${WEBHOOK_TOKEN_ENV}` : "";
     // reset-failed clears a prior one-shot unit's exit state so the name is reusable; --collect GC's it after.
     // The bash -c argument is POSIX single-quoted (NOT JSON) so the outer shell never expands the script's
-    // own `$PF`/`$STATUS`/`$STORYMAP_MCP_TOKEN`/`$(...)` — those are the INNER bash's to resolve.
+    // own `$PF`/`$STATUS`/`$AGILEHARNESS_MCP_TOKEN`/`$(...)` — those are the INNER bash's to resolve.
     const cmd = `systemctl reset-failed ${DEPLOY_UNIT} 2>/dev/null; systemd-run --collect --unit ${DEPLOY_UNIT}${setenv} bash -c ${shSingleQuote(script)}`;
     try {
       await exec(cmd, { cwd: pacoteDaFerramenta, timeout: SYSTEMD_RUN_TIMEOUT_MS });

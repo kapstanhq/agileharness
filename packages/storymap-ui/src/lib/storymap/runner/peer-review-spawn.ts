@@ -12,8 +12,8 @@
 //   1. THE ISOLATION — a fresh temp dir, a token-stripped env AND, desde F0 (ADR-067), a POSTURA de autonomia.
 //      The reviewer runs in a temp dir that is NOT a checkout of anything, so it cannot read or write
 //      stage/main/board FILES on disk. But "not in a repo" is not the whole story: the service env holds a scoped
-//      MCP token (STORYMAP_MCP_TOKEN_ORCH), and a shell with localhost could otherwise curl the board's MCP
-//      surface with it. So runReviewer ALSO strips every STORYMAP_MCP_TOKEN* from the child env (the reviewer
+//      MCP token (AGILEHARNESS_MCP_TOKEN_ORCH), and a shell with localhost could otherwise curl the board's MCP
+//      surface with it. So runReviewer ALSO strips every AGILEHARNESS_MCP_TOKEN* from the child env (the reviewer
 //      needs zero MCP). E nem as duas juntas continham o SHELL: o spawn comprava autonomia plena com bypass de
 //      permissão, e esta superfície é alcançável EM BANDA — um agente autônomo já contido chama
 //      `request_peer_review` e daí nascia um agente NÃO contido, como root, sobre conteúdo que o próprio
@@ -188,13 +188,13 @@ export function buildPeerReviewContextNote(req: PeerReviewRequest): string {
 }
 
 /** The reviewer's spawn env: the service env sanitized ({@link sanitizeSpawnEnv}) MINUS every MCP token. The
- *  reviewer needs ZERO MCP — and sanitizeSpawnEnv drops only the FULL token, so the scoped STORYMAP_MCP_TOKEN_ORCH
- *  would otherwise ride in and hand a skip-permissions shell the orch surface. Stripping ALL STORYMAP_MCP_TOKEN*
+ *  reviewer needs ZERO MCP — and sanitizeSpawnEnv drops only the FULL token, so the scoped AGILEHARNESS_MCP_TOKEN_ORCH
+ *  would otherwise ride in and hand a skip-permissions shell the orch surface. Stripping ALL AGILEHARNESS_MCP_TOKEN*
  *  here closes that (the reviewer reads proponent-influenceable content — it must not be an injection vector into
  *  board writes). PURE — exported so the credential-free invariant is unit-tested without a spawn. */
 export function buildReviewerEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env = sanitizeSpawnEnv(source);
-  for (const k of Object.keys(env)) if (k.startsWith("STORYMAP_MCP_TOKEN")) delete env[k];
+  for (const k of Object.keys(env)) if (k.startsWith("AGILEHARNESS_MCP_TOKEN")) delete env[k];
   return env;
 }
 
@@ -371,7 +371,7 @@ async function runReviewer(
   // A contenção do revisor tem TRÊS camadas, e a terceira é nova: (1) o tempdir — não é checkout de
   // nada, então não alcança stage/main/board no disco; (2) o env sem NENHUM token MCP (buildReviewerEnv:
   // sanitizeSpawnEnv derruba só o token FULL, e o serviço também carrega o SCOPED
-  // STORYMAP_MCP_TOKEN_ORCH, que entregaria a superfície orch a um shell) — o revisor lê conteúdo que o
+  // AGILEHARNESS_MCP_TOKEN_ORCH, que entregaria a superfície orch a um shell) — o revisor lê conteúdo que o
   // PROPONENTE escreveu, então não pode ser vetor de injeção para escrita no board; e (3) a POSTURA, que
   // é o que finalmente contém o SHELL. As duas primeiras nunca o continham: elas escolhiam onde ele
   // estava e o que ele sabia, não o que ele podia executar.

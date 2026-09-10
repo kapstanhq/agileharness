@@ -62,7 +62,7 @@ export async function subscribeToPush(): Promise<PushState> {
     publicKey: string | null;
   };
   if (!publicKey) {
-    console.warn("[web-push] o servidor não tem VAPID configurado (STORYMAP_VAPID_PUBLIC_KEY)");
+    console.warn("[web-push] o servidor não tem VAPID configurado (AGILEHARNESS_VAPID_PUBLIC_KEY)");
     return "unsubscribed";
   }
 

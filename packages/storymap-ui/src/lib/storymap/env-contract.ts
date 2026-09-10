@@ -16,6 +16,8 @@
 // É PURO de propósito (recebe o env, não o lê): a suíte exercita a ausência sem tocar no ambiente do
 // processo, e o mesmo cálculo serve ao preflight e a qualquer chamador futuro.
 
+import { resolverAliasesDeEnv } from "./env-aliases";
+
 export interface ChaveDoContrato {
   /** o NOME da variável — nunca o valor, que é segredo. */
   chave: string;
@@ -31,14 +33,14 @@ export interface ChaveDoContrato {
  */
 export const CONTRATO_DE_ENV: readonly ChaveDoContrato[] = [
   {
-    chave: "STORYMAP_MCP_TOKEN",
+    chave: "AGILEHARNESS_MCP_TOKEN",
     desliga:
       "o settle do self-deploy não autentica de volta no serviço — o card que disparou o deploy fica " +
       "preso em Publicando até o watchdog escalar",
     silenciosa: true,
   },
   {
-    chave: "STORYMAP_VAPID_PUBLIC_KEY",
+    chave: "AGILEHARNESS_VAPID_PUBLIC_KEY",
     desliga:
       "a notificação push para no celular do operador, e a rota de VAPID passa a devolver publicKey " +
       "null — ele não consegue nem re-assinar. Gerar um par NOVO invalida as inscrições antigas em vez " +
@@ -46,7 +48,7 @@ export const CONTRATO_DE_ENV: readonly ChaveDoContrato[] = [
     silenciosa: true,
   },
   {
-    chave: "STORYMAP_VAPID_PRIVATE_KEY",
+    chave: "AGILEHARNESS_VAPID_PRIVATE_KEY",
     desliga: "o par de VAPID fica incompleto e o canal de push não arma (o gate exige as duas chaves)",
     silenciosa: true,
   },
@@ -56,7 +58,7 @@ export const CONTRATO_DE_ENV: readonly ChaveDoContrato[] = [
     silenciosa: true,
   },
   {
-    chave: "STORYMAP_BOARD_AUTOPUSH",
+    chave: "AGILEHARNESS_BOARD_AUTOPUSH",
     desliga:
       "o push do board-data para o origin do alvo desliga — e a leitura exige o literal \"1\", então " +
       "um valor plausível como \"true\" desliga do mesmo jeito",
@@ -71,14 +73,20 @@ export interface ChaveFaltante extends ChaveDoContrato {
 
 /**
  * As chaves do contrato que este ambiente não sustenta. PURA: recebe o env, nunca o lê do processo.
- * `STORYMAP_BOARD_AUTOPUSH` é opt-in por desenho, então ausência dela NÃO é falta — só é reportada
+ * `AGILEHARNESS_BOARD_AUTOPUSH` é opt-in por desenho, então ausência dela NÃO é falta — só é reportada
  * quando está presente com um valor que o leitor recusa (o caso que engana).
  */
-export function chavesFaltantes(env: Record<string, string | undefined>): ChaveFaltante[] {
+export function chavesFaltantes(envBruto: Record<string, string | undefined>): ChaveFaltante[] {
+  // O env julgado pode ser o de OUTRO processo (`/proc/<pid>/environ` do serviço vivo, lido pelo
+  // diagnóstico) e vir na grafia legada — um serviço que declara `STORYMAP_MCP_TOKEN` sustenta o
+  // contrato tanto quanto um que declara `AGILEHARNESS_MCP_TOKEN`. A ponte roda numa CÓPIA: esta
+  // função continua pura, e o chamador nunca vê o seu objeto mudar.
+  const env: Record<string, string | undefined> = { ...envBruto };
+  resolverAliasesDeEnv(env);
   const out: ChaveFaltante[] = [];
   for (const c of CONTRATO_DE_ENV) {
     const bruto = env[c.chave];
-    if (c.chave === "STORYMAP_BOARD_AUTOPUSH") {
+    if (c.chave === "AGILEHARNESS_BOARD_AUTOPUSH") {
       // opt-in: ausente é uma escolha legítima. Presente-e-não-"1" é a armadilha.
       if (bruto !== undefined && bruto.trim() !== "" && bruto.trim() !== "1") {
         out.push({ ...c, motivo: "vazia" });

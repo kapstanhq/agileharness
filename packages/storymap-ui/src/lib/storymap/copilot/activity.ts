@@ -168,7 +168,7 @@ export function tickOutcomeText(
     case "skipped-running":
       return { kind: "stood-down", text: "Já estou rodando neste board — não abri um segundo Jido." };
     case "skipped-spawn-failed":
-      return { kind: "error", text: "Não consegui iniciar: falta o token do orquestrador (STORYMAP_MCP_TOKEN_ORCH) no serviço." };
+      return { kind: "error", text: "Não consegui iniciar: falta o token do orquestrador (AGILEHARNESS_MCP_TOKEN_ORCH) no serviço." };
     case "skipped-spawn-broken":
       // A mensagem NOMEIA o defeito e a causa. O antecessor deste estado dizia "parei por budget" — verdadeiro
       // no contador, falso na causa — e por isso 19 crashes seguidos passaram um dia inteiro sem investigação.

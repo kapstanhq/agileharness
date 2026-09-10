@@ -144,7 +144,7 @@ export interface BranchGcDeps {
   deleteBranch: (branch: string) => Promise<boolean>;
   /** epoch ms now (injected for determinism). */
   now: number;
-  /** default TRUE: log the plan, delete NOTHING. Flip via USM_BRANCH_GC_ENABLED (see instrumentation). */
+  /** default TRUE: log the plan, delete NOTHING. Flip via AGILEHARNESS_BRANCH_GC_ENABLED (see instrumentation). */
   dryRun: boolean;
   harvestAfterDays?: number;
   staleAfterDays?: number;

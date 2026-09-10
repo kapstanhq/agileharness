@@ -52,7 +52,7 @@ import { MCP_LEVELS, type McpLevel } from "@/lib/storymap/types";
 /**
  * Os tiers LEGADOS que estas 4 rotas aceitam: SÓ o token primário do operador (nível `full`).
  *
- * É exatamente o conjunto de hoje (`isMcpTokenValid(secret, process.env.STORYMAP_MCP_TOKEN)`), e o
+ * É exatamente o conjunto de hoje (`isMcpTokenValid(secret, process.env.AGILEHARNESS_MCP_TOKEN)`), e o
  * default de `legacyMcpTokenTiers()` NÃO serve aqui: ele inclui os escopados de `settings.mcpTokens`,
  * e adotá-lo faria um token `ro` do settings passar a abrir `/pulse` e um `orch` a POSTar nos
  * webhooks — ALARGAMENTO silencioso de quem entra, decisão que não é desta mudança. Quem quiser uma

@@ -21,13 +21,13 @@ function pick(sessions: GcSession[], entries: GcTrainEntry[] = [], liveTmux: str
 describe("sessionGcGraceMs — env knob", () => {
   it("defaults when unset / empty / garbage / non-positive (never off)", () => {
     expect(sessionGcGraceMs({})).toBe(SESSION_GC_GRACE_MS);
-    expect(sessionGcGraceMs({ USM_SESSION_GC_GRACE_MS: "" })).toBe(SESSION_GC_GRACE_MS);
-    expect(sessionGcGraceMs({ USM_SESSION_GC_GRACE_MS: "abc" })).toBe(SESSION_GC_GRACE_MS);
-    expect(sessionGcGraceMs({ USM_SESSION_GC_GRACE_MS: "0" })).toBe(SESSION_GC_GRACE_MS);
-    expect(sessionGcGraceMs({ USM_SESSION_GC_GRACE_MS: "-1" })).toBe(SESSION_GC_GRACE_MS);
+    expect(sessionGcGraceMs({ AGILEHARNESS_SESSION_GC_GRACE_MS: "" })).toBe(SESSION_GC_GRACE_MS);
+    expect(sessionGcGraceMs({ AGILEHARNESS_SESSION_GC_GRACE_MS: "abc" })).toBe(SESSION_GC_GRACE_MS);
+    expect(sessionGcGraceMs({ AGILEHARNESS_SESSION_GC_GRACE_MS: "0" })).toBe(SESSION_GC_GRACE_MS);
+    expect(sessionGcGraceMs({ AGILEHARNESS_SESSION_GC_GRACE_MS: "-1" })).toBe(SESSION_GC_GRACE_MS);
   });
   it("parses a positive integer (ms)", () => {
-    expect(sessionGcGraceMs({ USM_SESSION_GC_GRACE_MS: "3600000" })).toBe(3_600_000);
+    expect(sessionGcGraceMs({ AGILEHARNESS_SESSION_GC_GRACE_MS: "3600000" })).toBe(3_600_000);
   });
   it("is 2× the liveness TTL by default", () => {
     expect(SESSION_GC_GRACE_MS).toBe(2 * SESSION_HEARTBEAT_TTL_MS);

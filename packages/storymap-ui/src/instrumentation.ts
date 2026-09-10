@@ -33,7 +33,7 @@ async function registerImpl(): Promise<void> {
 
   // 0−−−−) A CERCA DO ALVO, antes de QUALQUER segredo existir. `ensureAuthSecrets` (logo abaixo)
   //        escreve `auth-token` e `session-secret` dentro de `<alvo>/storymap/.runner/`, e sob
-  //        `STORYMAP_TARGET` esse alvo é o repositório de outra pessoa. A regra de ignore precisa
+  //        `AGILEHARNESS_TARGET` esse alvo é o repositório de outra pessoa. A regra de ignore precisa
   //        estar posta ANTES do primeiro byte, senão existe um instante em que o segredo está no
   //        disco e descoberto. Sonda antes de escrever: em repositório já coberto (umbrella, repo
   //        extraído) isto não encosta em disco nenhum.
@@ -75,7 +75,7 @@ async function registerImpl(): Promise<void> {
   // 0−−) O PORTÃO. Tudo daqui para baixo AGE sobre o repositório compartilhado — escreve o
   //      service.lock, remove worktree com `git worktree remove --force`, recupera o merge train
   //      (merge/push no mesmo `.git`), respawna runs, arma a fila que DEPLOYA e o tick que gasta.
-  //      Antes disto, nada disso tinha gate: `USM_AUTORUN=0` cobre 4 dos ~15 efeitos e NÃO cobre nem
+  //      Antes disto, nada disso tinha gate: `AGILEHARNESS_AUTORUN=0` cobre 4 dos ~15 efeitos e NÃO cobre nem
   //      o reaper nem o train. Subir um servidor de dentro de um worktree — o que se faz para validar
   //      UI, e o que o dogfood do harness-qa faz por desenho — armava um SEGUNDO motor sobre o repo do
   //      serviço de produção (2026-07-23: quatro worktrees de sessão vivos declarados mortos).
@@ -109,7 +109,7 @@ async function registerImpl(): Promise<void> {
       return null; // `.git` ausente/ilegível ⇒ o veredito abaixo trata como inerte (caso legítimo)
     }
   })();
-  const engineGate = engineArmedDecision({ flag: process.env.STORYMAP_ENGINE, gitIsDirectory });
+  const engineGate = engineArmedDecision({ flag: process.env.AGILEHARNESS_ENGINE, gitIsDirectory });
   if (!engineGate.armed) {
     console.warn(engineInertWarning(engineGate.reason));
     return;
@@ -308,9 +308,9 @@ async function registerImpl(): Promise<void> {
   //      está vivo, renovar os claims, liberar os de quem morreu) era efeito colateral de alguém LISTAR.
   //      Sem ninguém polando: heartbeat envelhecendo sob um agente que está trabalhando (e a varredura
   //      julga árvore por heartbeat), e card de sessão morta reservado até o TTL de 60min. Timer unref'd;
-  //      a sonda de tmux é fail-closed (não sei ⇒ não julgo ninguém). USM_FLEET_RECONCILE_MS (<=0 desliga).
+  //      a sonda de tmux é fail-closed (não sei ⇒ não julgo ninguém). AGILEHARNESS_FLEET_RECONCILE_MS (<=0 desliga).
   const fleetMs = (() => {
-    const raw = Number(process.env.USM_FLEET_RECONCILE_MS);
+    const raw = Number(process.env.AGILEHARNESS_FLEET_RECONCILE_MS);
     return Number.isFinite(raw) ? raw : 60_000;
   })();
   if (fleetMs > 0) {
@@ -341,7 +341,7 @@ async function registerImpl(): Promise<void> {
   //      can be days away. This re-runs the SAME recovery on an interval, GATED on idleness (engine has
   //      no run in flight AND the merge train has no live entry) so it never fights the train nor runs
   //      reconcileWorktrees (a git subprocess) while work is active. Timer is unref'd (never holds the
-  //      process open). Env USM_AUTORUN_RECOVERY_SWEEP_MS (<=0 disables).
+  //      process open). Env AGILEHARNESS_AUTORUN_RECOVERY_SWEEP_MS (<=0 disables).
   const sweepMs = recoverySweepIntervalMs();
   if (sweepMs > 0) {
     // OBSERVABILIDADE do sweep — o subsistema que morreu em SILÊNCIO.
@@ -399,7 +399,7 @@ async function registerImpl(): Promise<void> {
         // blind to both cherry-pick and stage inheritance and so harvested nothing (23 branches piled up).
         // dryRun defaults OFF now (the classifier is proven safe: it only deletes SUPERSEDED verdicts, and
         // an estimated base can only OVER-report work, so a "superseded" verdict is trustworthy even when
-        // estimated). Escape hatch: USM_BRANCH_GC_ENABLED=0 restores observe-only.
+        // estimated). Escape hatch: AGILEHARNESS_BRANCH_GC_ENABLED=0 restores observe-only.
         runBranchGc: async () => {
           const [
             { runBranchGc, appendBranchGcJournal, makeAgeDaysOf },
@@ -506,7 +506,7 @@ async function registerImpl(): Promise<void> {
               return r.code === "landed";
             },
             now,
-            dryRun: process.env.USM_BRANCH_GC_ENABLED === "0",
+            dryRun: process.env.AGILEHARNESS_BRANCH_GC_ENABLED === "0",
             journal: appendBranchGcJournal,
             advisedThisRun: branchGcAdvised,
           });
@@ -957,7 +957,7 @@ async function registerImpl(): Promise<void> {
   // 2.6) WS8 (F7) — the board COPILOTO/orchestrator TICK. In-process, re-arming, unref'd (mirrors the
   //      recovery sweep). Per tick it does a ZERO-TOKEN pre-check (the board's ACTIONABLE cockpit) and, when
   //      there's work + budget + no lease, spawns the storymap-orchestrator skill to act gate-respecting. An
-  //      idle board costs nothing (no LLM spawn). STORYMAP_ORCH_ENABLED=0/1.
+  //      idle board costs nothing (no LLM spawn). AGILEHARNESS_ORCH_ENABLED=0/1.
   //
   //      O timer é armado SEMPRE (não mais só quando `enabled`): o gate de enabled vive DENTRO do tick
   //      (buildTickDeps re-lê settings a cada ciclo e runOrchestratorTick devolve [] na hora quando desligado,

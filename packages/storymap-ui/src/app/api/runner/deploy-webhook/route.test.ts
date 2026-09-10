@@ -48,13 +48,13 @@ describe("POST /api/runner/deploy-webhook (G1 — durable deploy callback)", () 
   let prevStateDir: string | undefined;
   let stateDir = "";
   beforeEach(() => {
-    prev = process.env.STORYMAP_MCP_TOKEN;
-    process.env.STORYMAP_MCP_TOKEN = TOKEN;
+    prev = process.env.AGILEHARNESS_MCP_TOKEN;
+    process.env.AGILEHARNESS_MCP_TOKEN = TOKEN;
     // Rastro de auth + registro de handles em dir de teste: o forense do serviço vivo não é lugar de
     // linha de teste.
-    prevStateDir = process.env.STORYMAP_RUNNER_STATE_DIR;
+    prevStateDir = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
     stateDir = mkdtempSync(path.join(tmpdir(), "deploy-webhook-auth-"));
-    process.env.STORYMAP_RUNNER_STATE_DIR = stateDir;
+    process.env.AGILEHARNESS_RUNNER_STATE_DIR = stateDir;
     resetPerimeterState();
     resetQueryDeprecationNotice();
   });
@@ -63,10 +63,10 @@ describe("POST /api/runner/deploy-webhook (G1 — durable deploy callback)", () 
     await flushHandleTouches();
     resetPerimeterState();
     resetQueryDeprecationNotice();
-    if (prev === undefined) delete process.env.STORYMAP_MCP_TOKEN;
-    else process.env.STORYMAP_MCP_TOKEN = prev;
-    if (prevStateDir === undefined) delete process.env.STORYMAP_RUNNER_STATE_DIR;
-    else process.env.STORYMAP_RUNNER_STATE_DIR = prevStateDir;
+    if (prev === undefined) delete process.env.AGILEHARNESS_MCP_TOKEN;
+    else process.env.AGILEHARNESS_MCP_TOKEN = prev;
+    if (prevStateDir === undefined) delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+    else process.env.AGILEHARNESS_RUNNER_STATE_DIR = prevStateDir;
     // DEPOIS dos flushes: rastro de auth e registro de handles ainda escrevem aqui.
     rmSync(stateDir, { recursive: true, force: true });
   });

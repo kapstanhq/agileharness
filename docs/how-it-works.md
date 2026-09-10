@@ -324,7 +324,7 @@ better to say so on the front page than to have you find out after a four-minute
 
 **The engine spawns `claude` for every step that works.** Not a library, not an API client — the
 CLI, as a child process, once per run. The binary's *path* is configurable
-(`USM_AUTORUN_CLAUDE_BIN`); its *protocol* is not. There is no provider interface to implement,
+(`AGILEHARNESS_AUTORUN_CLAUDE_BIN`); its *protocol* is not. There is no provider interface to implement,
 because there is no second provider.
 
 ### What the coupling actually is

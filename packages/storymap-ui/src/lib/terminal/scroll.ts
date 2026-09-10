@@ -57,12 +57,12 @@ export function isScrollAction(x: unknown): x is ScrollAction {
 
 /** Conservative default: a line that is nothing but indentation and `> ` — the prompt shape both a
  *  bare shell (`PS1`-agnostic) and the Claude TUI leave behind. Operators override per box with
- *  `STORYMAP_TERM_PROMPT_PATTERN`; it is read PER CALL so the knob takes effect without a rebuild. */
+ *  `AGILEHARNESS_TERM_PROMPT_PATTERN`; it is read PER CALL so the knob takes effect without a rebuild. */
 const DEFAULT_PROMPT_PATTERN = "^ *> ";
 
 /** Server-owned allowlist — the ONLY place a tmux search pattern can come from. */
 function promptPattern(): string {
-  const fromEnv = process.env.STORYMAP_TERM_PROMPT_PATTERN;
+  const fromEnv = process.env.AGILEHARNESS_TERM_PROMPT_PATTERN;
   return fromEnv && fromEnv.trim() ? fromEnv : DEFAULT_PROMPT_PATTERN;
 }
 

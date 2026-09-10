@@ -501,7 +501,7 @@ até a parada final `revisao`. Num board conservador as colunas de design/códig
 
 A skill também roda em modo **pull** quando você a chama (`/harness-enrich …`, `/harness run`).
 
-- **Master switch:** o channel se registra a menos que `USM_AUTORUN=0` — ponha em
+- **Master switch:** o channel se registra a menos que `AGILEHARNESS_AUTORUN=0` — ponha em
   `packages/storymap-ui/.env.local` (o Next carrega no runtime; env de shell nem sempre sobrevive
   ao hop turbo → next dev no Windows). Requer **SSE ativo** (aba do board aberta) + `claude` no PATH.
 - **Permissões:** `harness-do`/`harness-review` (código+testes) e `harness-enrich` (edita o card in place) rodam com
@@ -513,10 +513,10 @@ A skill também roda em modo **pull** quando você a chama (`/harness-enrich …
 - **Config (Fase A+):** o painel **Configuração** (`/board/<id>/config`) edita `storymap/settings.yaml`
   (kill switch, paralelismo, watchdogs, modelo/effort fallback); a policy por coluna
   (`model`/`effort`/`maxTurns`/`costGuard`) fica no `board.yaml`. Precedência: defaults <
-  `settings.yaml` < env (`USM_*` sempre vence). Vars: `USM_AUTORUN` (=0 desliga), `USM_AUTORUN_MAX`,
-  `USM_AUTORUN_TIMEOUT_MS`, `USM_AUTORUN_TIMEOUT_DO_MS`, `USM_AUTORUN_CLAUDE_BIN`,
-  `USM_AUTORUN_EXTRA_ARGS`, `USM_AUTORUN_NO_STREAM` (=1 dropa o stream-json do console, mantém resume),
-  `USM_AUTORUN_OPEN_TERMINAL` (=1 habilita "abrir terminal" do card).
+  `settings.yaml` < env (`AGILEHARNESS_AUTORUN_*` sempre vence). Vars: `AGILEHARNESS_AUTORUN` (=0 desliga), `AGILEHARNESS_AUTORUN_MAX`,
+  `AGILEHARNESS_AUTORUN_TIMEOUT_MS`, `AGILEHARNESS_AUTORUN_TIMEOUT_DO_MS`, `AGILEHARNESS_AUTORUN_CLAUDE_BIN`,
+  `AGILEHARNESS_AUTORUN_EXTRA_ARGS`, `AGILEHARNESS_AUTORUN_NO_STREAM` (=1 dropa o stream-json do console, mantém resume),
+  `AGILEHARNESS_AUTORUN_OPEN_TERMINAL` (=1 habilita "abrir terminal" do card).
 - **Terminal ao vivo (Fase B):** o spawn usa `--output-format stream-json --verbose --session-id <uuidv5>`;
   o card ganha um console read-only (ícone 🖥) e um botão para copiar `claude --resume <id>` (assumir a run).
 

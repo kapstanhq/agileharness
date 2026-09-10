@@ -42,7 +42,7 @@ export interface IngestBinding {
 }
 
 /**
- * Parse the operator's relay tokens (env `STORYMAP_FEEDBACK_INGEST_TOKENS`), formatted
+ * Parse the operator's relay tokens (env `AGILEHARNESS_FEEDBACK_INGEST_TOKENS`), formatted
  * `board:token,board2:token2`. Empty/absent ⇒ the lane does not exist.
  *
  * Malformed entries are DROPPED rather than half-honoured (fail closed): a bad board slug, a token

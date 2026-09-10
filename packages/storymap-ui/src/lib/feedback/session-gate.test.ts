@@ -62,7 +62,7 @@ describe("/api/feedback/shot — same-origin exige a sessão do operador nos DOI
   afterEach(() => {
     delete process.env.AGILEHARNESS_SESSION_SECRET;
     delete process.env.AGILEHARNESS_AUTH_TOKEN;
-    delete process.env.STORYMAP_FEEDBACK_INGEST_TOKENS;
+    delete process.env.AGILEHARNESS_FEEDBACK_INGEST_TOKENS;
   });
   const sameOrigin = { origin: "http://board.local", host: "board.local", "sec-fetch-site": "same-origin" };
   it("POST same-origin SEM sessão ⇒ 401 antes de decodificar a imagem", async () => {
@@ -102,7 +102,7 @@ describe("/api/feedback/shot — same-origin exige a sessão do operador nos DOI
   it("o relay (token, sem cookie, sem sessão na env) continua entrando pela própria lane", async () => {
     delete process.env.AGILEHARNESS_SESSION_SECRET;
     delete process.env.AGILEHARNESS_AUTH_TOKEN;
-    process.env.STORYMAP_FEEDBACK_INGEST_TOKENS = "acme:token-de-repasse-do-app-0001";
+    process.env.AGILEHARNESS_FEEDBACK_INGEST_TOKENS = "acme:token-de-repasse-do-app-0001";
     const { POST } = await import("@/app/api/feedback/shot/route");
     const res = await POST(
       new Request("http://board.local/api/feedback/shot", {

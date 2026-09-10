@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerStorymapTools } from "./tools";
 import { registerDevTools } from "./dev-tools";
-import { ONBOARDING_GUIDE, STORYMAP_MCP_INSTRUCTIONS, registerOnboarding } from "./onboarding";
+import { ONBOARDING_GUIDE, MCP_INSTRUCTIONS, registerOnboarding } from "./onboarding";
 import { registerResources } from "./resources";
 import { GOVERNANCE_ARTIFACTS } from "@/lib/storymap/types";
 import { CANVAS_BLOCK_KEYS } from "@/lib/storymap/canvas-blocks";
@@ -327,7 +327,7 @@ describe("story-j23byv — o pino de proveniência da superfície de instrução
     // revisão de diff, porque o cliente a mostra como "política do servidor".
     const src = SOURCES.get("onboarding.ts")!;
     const forasteiras: string[] = [];
-    for (const texto of [STORYMAP_MCP_INSTRUCTIONS, ONBOARDING_GUIDE]) {
+    for (const texto of [MCP_INSTRUCTIONS, ONBOARDING_GUIDE]) {
       for (const linha of texto.split("\n")) {
         if (!linha.trim()) continue;
         if (!src.includes(linha) && !src.includes(JSON.stringify(linha).slice(1, -1)))

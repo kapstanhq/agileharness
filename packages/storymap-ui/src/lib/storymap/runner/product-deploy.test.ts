@@ -537,7 +537,7 @@ describe.runIf(manifestDoDono === null)("sem o manifesto do dono, o gate do rost
 // publicaria `touchesComposedFace` com todas as respostas iguais a `false` e chamaria isso de coberto:
 // verde que mede a ausência do dado, não o comportamento do código.
 //
-// Então o motor é apontado para uma raiz de FIXTURE (`STORYMAP_TARGET`) com um manifesto sintético — apps
+// Então o motor é apontado para uma raiz de FIXTURE (`AGILEHARNESS_TARGET`) com um manifesto sintético — apps
 // e SDK de nomes neutros, que o repo público pode ler sem herdar o vocabulário do dono. As mesmas
 // propriedades dos casos umbrella-only, agora exercitadas nas duas árvores.
 describe("touchesComposedFace — a SEMÂNTICA do casamento, contra um manifesto de FIXTURE (as duas árvores)", () => {
@@ -560,7 +560,7 @@ describe("touchesComposedFace — a SEMÂNTICA do casamento, contra um manifesto
   beforeAll(() => {
     raiz = mkdtempSync(path.join(tmpdir(), "ah-face-fixture-"));
     // `turbo.json` é um dos ROOT_MARKERS que `findRepoRoot()` exige de um alvo DECLARADO — sem ele o
-    // STORYMAP_TARGET é recusado (e é bom que seja: a validação existe para um typo não virar raiz).
+    // AGILEHARNESS_TARGET é recusado (e é bom que seja: a validação existe para um typo não virar raiz).
     writeFileSync(path.join(raiz, "turbo.json"), "{}\n", "utf8");
     mkdirSync(path.join(raiz, path.dirname(MANIFESTO_REL)), { recursive: true });
     writeFileSync(path.join(raiz, MANIFESTO_REL), JSON.stringify(FIXTURE, null, 2), "utf8");
@@ -574,15 +574,15 @@ describe("touchesComposedFace — a SEMÂNTICA do casamento, contra um manifesto
       `version: 1\ndeploy:\n  composedFace:\n    target: face-fixture\n    recipe: publica-face\n    manifest: ${MANIFESTO_REL}\n`,
       "utf8",
     );
-    alvoAnterior = process.env.STORYMAP_TARGET;
-    process.env.STORYMAP_TARGET = raiz;
+    alvoAnterior = process.env.AGILEHARNESS_TARGET;
+    process.env.AGILEHARNESS_TARGET = raiz;
     resetRepoRootCache();
     resetComposedFaceManifestCache();
   });
 
   afterAll(() => {
-    if (alvoAnterior === undefined) delete process.env.STORYMAP_TARGET;
-    else process.env.STORYMAP_TARGET = alvoAnterior;
+    if (alvoAnterior === undefined) delete process.env.AGILEHARNESS_TARGET;
+    else process.env.AGILEHARNESS_TARGET = alvoAnterior;
     resetRepoRootCache();
     resetComposedFaceManifestCache();
     rmSync(raiz, { recursive: true, force: true });

@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 // estava nessa condição hoje: a ferramenta apontava para o diretório PAI e apagava branch lá.
 //
 // Três regras substituem o palpite:
-//   1. `STORYMAP_TARGET` explícito vence tudo (é o degrau que F1 promove a registro de targets).
+//   1. `AGILEHARNESS_TARGET` explícito vence tudo (é o degrau que F1 promove a registro de targets).
 //   2. Senão, sobe procurando um MARCADOR. `turbo.json` sozinho não serve — é Turborepo, ausente na
 //      esmagadora maioria dos repositórios. `.git` é o marcador universal, e vale como ARQUIVO também
 //      (num worktree linkado `.git` é um arquivo, não um diretório).
@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 // O TERCEIRO MARCADOR (`storymap/boards`) e por que ele é seguro. Quem baixa o ZIP do repositório —
 // e não clona — não tem `.git`; o artefato publicado também não tem `turbo.json` (a régua corta a infra
 // do monorepo). Resultado MEDIDO: a ferramenta não subia, e a saída que o próprio erro sugeria
-// (`STORYMAP_TARGET=$PWD`, exatamente o que o README manda) TAMBÉM falhava, porque o caminho declarado
+// (`AGILEHARNESS_TARGET=$PWD`, exatamente o que o README manda) TAMBÉM falhava, porque o caminho declarado
 // é cobrado do mesmo marcador. O primeiro contato do adotante era um beco.
 //
 // `storymap/boards` é o marcador NATURAL desta ferramenta: é a árvore sobre a qual ela opera. E não
@@ -49,7 +49,7 @@ export class RepoRootUnresolvedError extends Error {
       `[storymap] raiz de repositório não resolvida a partir de ${from}. ` +
         `Procurei por ${ROOT_MARKERS.join(" ou ")} subindo ${searched.length} nível(is): ` +
         `${searched.join(", ")}. ` +
-        `Declare a raiz explicitamente em STORYMAP_TARGET, ou rode a partir de um checkout git.`,
+        `Declare a raiz explicitamente em AGILEHARNESS_TARGET, ou rode a partir de um checkout git.`,
     );
     this.name = "RepoRootUnresolvedError";
   }
@@ -67,7 +67,7 @@ export function findRepoRoot(): string {
 
   // (1) Declaração explícita vence. Validada: um alvo declarado e inexistente é erro, nunca um silêncio
   // que degrada para a busca — senão um typo no env volta a resolver para o diretório errado.
-  const declared = process.env.STORYMAP_TARGET?.trim();
+  const declared = process.env.AGILEHARNESS_TARGET?.trim();
   if (declared) {
     const abs = path.resolve(declared);
     // Validado como DIRETÓRIO, não só "existe": um arquivo regular passava e era memoizado como raiz
@@ -75,7 +75,7 @@ export function findRepoRoot(): string {
     // dezenas de chamadas depois.
     //
     // ⚠ E validado como RAIZ, não só como diretório (segundo achado, mais grave). "Existe" deixava
-    // passar `STORYMAP_TARGET=/root/meu-monorepo/packages` — um diretório real, que virava
+    // passar `AGILEHARNESS_TARGET=/root/meu-monorepo/packages` — um diretório real, que virava
     // `cachedRoot`, e a partir dali `instrumentation.ts` e `recovery.ts` rodam `git branch -D` e
     // `git worktree remove --force` com cwd nesse caminho. O git resolve para CIMA: as operações
     // atingiriam o repositório PAI. Ou seja, o caminho DECLARADO — a porta que o próprio arquivo chama
@@ -83,7 +83,7 @@ export function findRepoRoot(): string {
     // marcador acabara de fechar, sem nem o silêncio ser o mesmo: aqui o operador acha que declarou.
     // Exigir o mesmo marcador dos dois caminhos é o que torna a declaração uma promessa verificada.
     if (!existsSync(abs) || !statSync(abs).isDirectory() || !ROOT_MARKERS.some((m) => hasMarker(abs, m))) {
-      throw new RepoRootUnresolvedError(`STORYMAP_TARGET=${declared}`, [abs]);
+      throw new RepoRootUnresolvedError(`AGILEHARNESS_TARGET=${declared}`, [abs]);
     }
     cachedRoot = abs;
     return abs;
@@ -110,7 +110,7 @@ export function findRepoRoot(): string {
 
 // ── A RAIZ DA FERRAMENTA — a irmã de findRepoRoot(), e a pergunta que ela NÃO responde ───────────────
 //
-// `findRepoRoot()` responde "onde mora o código do USUÁRIO" e obedece a `STORYMAP_TARGET`. Existe uma
+// `findRepoRoot()` responde "onde mora o código do USUÁRIO" e obedece a `AGILEHARNESS_TARGET`. Existe uma
 // segunda pergunta, que ninguém estava fazendo: "onde mora o código que está RODANDO?". Hoje as duas
 // respostas coincidem — a ferramenta vive dentro do repositório que ela opera — e por isso todo
 // chamador que as confunde passa calado. Elas divergem no instante em que o serviço passa a rodar de um
@@ -147,7 +147,7 @@ export class ToolRootUnresolvedError extends Error {
         `Procurei um package.json com name="${TOOL_PACKAGE_NAME}" subindo ${searched.length} nível(is): ` +
         `${searched.join(", ")}. ` +
         `Declare-a explicitamente em AGILEHARNESS_TOOL_ROOT (o diretório do PACOTE), ou rode a ferramenta ` +
-        `de um checkout íntegro. Atenção: STORYMAP_TARGET NÃO serve aqui — ele declara o ALVO.`,
+        `de um checkout íntegro. Atenção: AGILEHARNESS_TARGET NÃO serve aqui — ele declara o ALVO.`,
     );
     this.name = "ToolRootUnresolvedError";
   }
@@ -171,7 +171,7 @@ function packageNameAt(dir: string): string | null {
 
 /**
  * O diretório do PACOTE da ferramenta que está rodando — o que se reconstrói e se reinicia.
- * NUNCA obedece a `STORYMAP_TARGET`: apontar o alvo para outro lugar não muda qual código está no ar.
+ * NUNCA obedece a `AGILEHARNESS_TARGET`: apontar o alvo para outro lugar não muda qual código está no ar.
  */
 export function findToolPackageDir(): string {
   if (cachedToolPackageDir) return cachedToolPackageDir;
@@ -312,14 +312,14 @@ export function settingsPath(): string {
  * Ephemeral runner state dir (the durable run journal, the orchestrator budget, the audit + activity ledgers).
  * Gitignored.
  *
- * `STORYMAP_RUNNER_STATE_DIR` REDIRECTS it — and the test setup ALWAYS sets it to a temp dir. Without that,
+ * `AGILEHARNESS_RUNNER_STATE_DIR` REDIRECTS it — and the test setup ALWAYS sets it to a temp dir. Without that,
  * every suite that exercised a module touching this dir wrote into the LIVE state of the running service:
  * `guard.test.ts` fixtures (board "acme", card "c1") landed in the real copilot activity journal, so the
  * operator's own audit trail carried invented entries — a ledger you cannot trust is worse than no ledger.
  * Reading the env per call (not once at module load) keeps it honest under vitest's module reuse.
  */
 export function runnerStateDir(): string {
-  const override = process.env.STORYMAP_RUNNER_STATE_DIR?.trim();
+  const override = process.env.AGILEHARNESS_RUNNER_STATE_DIR?.trim();
   if (override) return path.resolve(override);
   return path.join(storymapDir(), ".runner");
 }

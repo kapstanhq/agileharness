@@ -22,11 +22,11 @@
 //  • INGEST (F6, the DEFAULT path for a product app) — a relay running in the app's OWN backend posts
 //    here with a board-scoped token (`x-ah-ingest`). The browser never holds a board credential and
 //    the board never has to be reachable from the public internet. Collapsed to TRIAGE-ONLY, with the
-//    board taken from the token. Ships OFF (no `STORYMAP_FEEDBACK_INGEST_TOKENS` ⇒ 401).
+//    board taken from the token. Ships OFF (no `AGILEHARNESS_FEEDBACK_INGEST_TOKENS` ⇒ 401).
 //  • EMBED, cross-origin (F5, the fallback for an app with NO backend) — the browser talks to the
 //    board directly. Opens ONLY when the Origin is on the operator's allowlist AND the request carries
 //    a valid board-issued nonce, and is likewise collapsed to TRIAGE-ONLY. Ships OFF: no
-//    `STORYMAP_FEEDBACK_EMBED_ORIGINS` ⇒ the lane does not exist.
+//    `AGILEHARNESS_FEEDBACK_EMBED_ORIGINS` ⇒ the lane does not exist.
 // Both untrusted lanes are RATE-LIMITED: every accepted batch spawns a triage agent, so an unbounded
 // caller is an unbounded bill.
 // The catalog (/destinations) and the shot store are NOT part of this — they stay same-origin-only
@@ -84,9 +84,9 @@ const deps: SinkDeps = {
   },
   sendToTerminal: async (input) => {
     // Ships OFF — the terminal round-trip drives a real tmux session, so it stays behind an explicit
-    // opt-in (like the codebase's other risky capabilities). Enable with STORYMAP_FEEDBACK_TERMINAL=1.
-    if (process.env.STORYMAP_FEEDBACK_TERMINAL !== "1") {
-      return { ok: false, error: "round-trip de terminal desligado (defina STORYMAP_FEEDBACK_TERMINAL=1 para ligar)" };
+    // opt-in (like the codebase's other risky capabilities). Enable with AGILEHARNESS_FEEDBACK_TERMINAL=1.
+    if (process.env.AGILEHARNESS_FEEDBACK_TERMINAL !== "1") {
+      return { ok: false, error: "round-trip de terminal desligado (defina AGILEHARNESS_FEEDBACK_TERMINAL=1 para ligar)" };
     }
     // SERVER-SIDE re-enforcement of the picker's exclusion (SAME predicate → they agree by
     // construction): NEVER paste into the MASTER orchestrator (`claude*`, which drives autorun
@@ -108,7 +108,7 @@ const deps: SinkDeps = {
  *  non-"simple"). Answered ONLY for an allowlisted origin; anything else gets a bare 403 with no
  *  allow-headers, so the browser blocks the real request before it is ever sent. */
 export async function OPTIONS(request: Request): Promise<Response> {
-  const allowed = parseEmbedOrigins(process.env.STORYMAP_FEEDBACK_EMBED_ORIGINS);
+  const allowed = parseEmbedOrigins(process.env.AGILEHARNESS_FEEDBACK_EMBED_ORIGINS);
   const origin = request.headers.get("origin");
   if (origin && allowed.includes(safeOrigin(origin))) {
     return new Response(null, { status: 204, headers: embedCorsHeaders(safeOrigin(origin)) });
@@ -126,8 +126,8 @@ function safeOrigin(raw: string): string {
 
 export async function POST(request: Request): Promise<Response> {
   const access = classifyIntake(request.headers, {
-    embedOrigins: parseEmbedOrigins(process.env.STORYMAP_FEEDBACK_EMBED_ORIGINS),
-    resolveIngestBoard: makeIngestResolver(parseIngestTokens(process.env.STORYMAP_FEEDBACK_INGEST_TOKENS)),
+    embedOrigins: parseEmbedOrigins(process.env.AGILEHARNESS_FEEDBACK_EMBED_ORIGINS),
+    resolveIngestBoard: makeIngestResolver(parseIngestTokens(process.env.AGILEHARNESS_FEEDBACK_INGEST_TOKENS)),
   });
   if (access.kind === "reject") {
     return Response.json({ ok: false, error: access.error }, { status: access.status });

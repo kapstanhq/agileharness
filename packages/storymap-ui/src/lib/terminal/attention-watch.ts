@@ -41,12 +41,12 @@ import {
 } from "./attention";
 
 /** Intervalo entre amostras. Curto o bastante para o prompt não esfriar, longo para não pesar. */
-const POLL_MS = Math.max(2_000, Number(process.env.STORYMAP_TERMINAL_WATCH_SECONDS ?? 6) * 1_000);
+const POLL_MS = Math.max(2_000, Number(process.env.AGILEHARNESS_TERMINAL_WATCH_SECONDS ?? 6) * 1_000);
 
 /** Teto de sessões amostradas por ciclo — um `capture-pane` cada. Protege a máquina de uma máquina
  *  cheia de tmux: acima disso o vigia prefere as sessões com atividade mais RECENTE, e AVISA no log
  *  quantas ficaram de fora (um retrato incompleto se parece com "ninguém esperando"). */
-const MAX_WATCHED = Math.max(1, Number(process.env.STORYMAP_TERMINAL_WATCH_MAX ?? 12));
+const MAX_WATCHED = Math.max(1, Number(process.env.AGILEHARNESS_TERMINAL_WATCH_MAX ?? 12));
 
 /** A campainha da página do terminal (o `idle` empurrado ao celular) vale enquanto a aba renova. */
 const QUIET_PUSH_TTL_MS = 30 * 60_000;
@@ -218,7 +218,7 @@ async function tick(): Promise<void> {
       if (dropped > 0) {
         console.warn(
           `[terminal-attention] ${sessions.length} sessões tmux e o teto é ${MAX_WATCHED}: ${dropped} fora do retrato ` +
-            `(as de atividade mais antiga). Suba STORYMAP_TERMINAL_WATCH_MAX se isso for o normal desta máquina.`,
+            `(as de atividade mais antiga). Suba AGILEHARNESS_TERMINAL_WATCH_MAX se isso for o normal desta máquina.`,
         );
       }
     }

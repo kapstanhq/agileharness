@@ -35,8 +35,8 @@ describe("empurrar é distribuição — nasce DESLIGADO", () => {
   });
 
   it("[ATAQUE] valores 'truthy' que NÃO são o literal não ligam — inclusive os que parecem negar", () => {
-    // A disciplina do STORYMAP_ENGINE=on aplicada aqui: com uma régua frouxa (`!!valor`), escrever
-    // `STORYMAP_BOARD_AUTOPUSH=no` LIGARIA a escrita num remoto de terceiro, por ser string não-vazia.
+    // A disciplina do AGILEHARNESS_ENGINE=on aplicada aqui: com uma régua frouxa (`!!valor`), escrever
+    // `AGILEHARNESS_BOARD_AUTOPUSH=no` LIGARIA a escrita num remoto de terceiro, por ser string não-vazia.
     for (const v of ["no", "false", "off", "true", "yes", "0", "sim"]) {
       expect(boardDataAutoPushAllowed({ [BOARD_AUTOPUSH_ENV]: v }), `"${v}" não pode ligar`).toBe(false);
     }
@@ -61,7 +61,7 @@ describe("motor INERTE não versiona — a mesma régua do boot, não uma segund
   });
 
   it("o desligamento explícito do motor vence até no checkout canônico", () => {
-    expect(boardDataWriterDecision({ STORYMAP_ENGINE: "off" }, true).armed).toBe(false);
+    expect(boardDataWriterDecision({ AGILEHARNESS_ENGINE: "off" }, true).armed).toBe(false);
   });
 });
 

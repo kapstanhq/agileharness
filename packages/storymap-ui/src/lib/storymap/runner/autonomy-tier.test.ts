@@ -83,7 +83,7 @@ describe("(2) o teto por board é TETO — nunca promove", () => {
   });
 
   it("ATAQUE (typo do operador): declarar `full` num board NÃO dá shell a quem hoje só edita o card", () => {
-    // harness-plan roda em acceptEdits hoje. Se o teto promovesse, um `USM_AUTORUN_TIER_CAP=full` teria
+    // harness-plan roda em acceptEdits hoje. Se o teto promovesse, um `AGILEHARNESS_AUTORUN_TIER_CAP=full` teria
     // acabado de conceder Bash irrestrito a 4 skills que nunca o tiveram — em nome de um "piso".
     expect(tierOf("harness-plan")).toBe("write");
     expect(permissionArgs("harness-plan", "full")).toEqual(["--permission-mode", "acceptEdits"]);
@@ -91,26 +91,26 @@ describe("(2) o teto por board é TETO — nunca promove", () => {
   });
 
   it("o teto POR BOARD vence o global; o global vale para os outros boards", () => {
-    const env = { USM_AUTORUN_TIER_CAP: "write", USM_AUTORUN_TIER_CAP_NEST: "full" };
+    const env = { AGILEHARNESS_AUTORUN_TIER_CAP: "write", AGILEHARNESS_AUTORUN_TIER_CAP_NEST: "full" };
     expect(resolveTierCap(env, "nest")).toBe("full");
     expect(resolveTierCap(env, "storymap")).toBe("write");
     expect(resolveTierCap(env, "borough-ai")).toBe("write"); // slug com `-` → chave com `_`
-    expect(resolveTierCap({ "USM_AUTORUN_TIER_CAP_BOROUGH_AI": "ro" }, "borough-ai")).toBe("ro");
+    expect(resolveTierCap({ "AGILEHARNESS_AUTORUN_TIER_CAP_BOROUGH_AI": "ro" }, "borough-ai")).toBe("ro");
   });
 
   it("um board fora do charset de slug não consulta chave nenhuma (nada de env montada por nome sujo)", () => {
-    expect(resolveTierCap({ "USM_AUTORUN_TIER_CAP_../../ETC": "ro" }, "../../etc")).toBeNull();
+    expect(resolveTierCap({ "AGILEHARNESS_AUTORUN_TIER_CAP_../../ETC": "ro" }, "../../etc")).toBeNull();
   });
 
   it("ATAQUE ao contrário — um teto ESCRITO ERRADO não congela o pipeline em read-only, mas GRITA", () => {
     resetAutonomyWarnings();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      expect(resolveTierCap({ USM_AUTORUN_TIER_CAP: "writ" }, "nest")).toBeNull();
+      expect(resolveTierCap({ AGILEHARNESS_AUTORUN_TIER_CAP: "writ" }, "nest")).toBeNull();
       // Teto inválido ⇒ NENHUM teto ⇒ o tier declarado da skill (`full`), cujas flags são acceptEdits
       // desde F0. O que este teste protege é o fail-OPEN deliberado do teto: um typo não congela o
       // pipeline em read-only. Isso continua valendo, e a postura de `full` segue sendo a de topo.
-      expect(permissionArgs("harness-do", resolveTierCap({ USM_AUTORUN_TIER_CAP: "writ" }, "nest"))).toEqual([
+      expect(permissionArgs("harness-do", resolveTierCap({ AGILEHARNESS_AUTORUN_TIER_CAP: "writ" }, "nest"))).toEqual([
         "--permission-mode",
         "acceptEdits",
       ]);
@@ -118,7 +118,7 @@ describe("(2) o teto por board é TETO — nunca promove", () => {
       expect(String(warn.mock.calls[0]?.[0])).toContain("NENHUM teto aplicado");
       // e grita UMA vez por valor, não uma por run (um typo não vira enxurrada de journal)
       const before = warn.mock.calls.length;
-      resolveTierCap({ USM_AUTORUN_TIER_CAP: "writ" }, "nest");
+      resolveTierCap({ AGILEHARNESS_AUTORUN_TIER_CAP: "writ" }, "nest");
       expect(warn.mock.calls.length).toBe(before);
     } finally {
       warn.mockRestore();
@@ -297,13 +297,13 @@ describe("(5) isolamento de rede: capacidade OPT-IN nascendo DESLIGADA e ADMITIN
 
   it("DEFAULT OFF: sem o knob não há declaração — nem uma chave a mais no env do filho", () => {
     expect(resolveEgressDeclaration({})).toBeNull();
-    expect(resolveEgressDeclaration({ USM_AUTORUN_EGRESS_ALLOW: "   " })).toBeNull();
+    expect(resolveEgressDeclaration({ AGILEHARNESS_AUTORUN_EGRESS_ALLOW: "   " })).toBeNull();
   });
 
   it("declarada, a allowlist é parseada e o processo AVISA que ninguém a aplica", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const d = resolveEgressDeclaration({ USM_AUTORUN_EGRESS_ALLOW: "api.anthropic.com, *.github.com" });
+      const d = resolveEgressDeclaration({ AGILEHARNESS_AUTORUN_EGRESS_ALLOW: "api.anthropic.com, *.github.com" });
       expect(d).toEqual({ allow: ["api.anthropic.com", "*.github.com"], enforced: false });
       expect(String(warn.mock.calls[0]?.[0])).toContain("NÃO APLICADA");
     } finally {
@@ -315,7 +315,7 @@ describe("(5) isolamento de rede: capacidade OPT-IN nascendo DESLIGADA e ADMITIN
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const d = resolveEgressDeclaration({
-        USM_AUTORUN_EGRESS_ALLOW: "ok.example.com,evil.com/;curl$(id),\"quoted\"",
+        AGILEHARNESS_AUTORUN_EGRESS_ALLOW: "ok.example.com,evil.com/;curl$(id),\"quoted\"",
       });
       expect(d?.allow).toEqual(["ok.example.com"]);
     } finally {

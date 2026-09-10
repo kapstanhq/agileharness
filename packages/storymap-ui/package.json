@@ -1,6 +1,6 @@
 {
   "name": "storymap-ui",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "private": true,
   "description": "Board agêntico de User Story Mapping (Jeff Patton) com autorun. Roda em PRODUÇÃO como serviço systemd de longa duração (entrypoint próprio dist/ah-server.mjs, não next start) e publica uma superfície MCP alcançável pela internet cujas tools spawnam agentes com permissões desligadas nesta máquina. Leia SECURITY.md antes de expor.",
   "scripts": {
@@ -9,14 +9,14 @@
     "gen-icons": "bun scripts/gen-icons.ts",
     "gen-splash": "bun scripts/gen-splash.ts",
     "build": "next build && bun run build:server",
-    "build:server": "bun build src/server/main.ts --target=node --format=esm --external next --outfile ${STORYMAP_SERVER_OUT:-dist/ah-server.mjs}",
+    "build:server": "bun build src/server/main.ts --target=node --format=esm --external next --outfile ${AGILEHARNESS_SERVER_OUT:-dist/ah-server.mjs}",
     "start": "node dist/ah-server.mjs",
     "lint": "next lint --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:unit": "vitest run",
     "test:watch": "vitest",
-    "build:staged": "STORYMAP_DIST_DIR=.next-staging STORYMAP_SERVER_OUT=dist/ah-server.staged.mjs bun run build"
+    "build:staged": "AGILEHARNESS_DIST_DIR=.next-staging AGILEHARNESS_SERVER_OUT=dist/ah-server.staged.mjs bun run build"
   },
   "dependencies": {
     "@blocknote/core": "0.52.1",

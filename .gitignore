@@ -24,7 +24,7 @@
 # Enumerar variante por variante DEIXA BURACO — e aqui o buraco é definitivo, porque ESTE é o
 # `.gitignore` que VIAJA e vira a raiz do repo público (o da raiz do umbrella não vai). MEDIDO:
 # `.env.development`, `.env.staging` e `.env.dev` eram stageados pelo primeiro `git add -A` do repo
-# extraído — o commit único que É o artefato publicado, com `STORYMAP_MCP_TOKEN` dentro. E não é
+# extraído — o commit único que É o artefato publicado, com `AGILEHARNESS_MCP_TOKEN` dentro. E não é
 # hipotético: `@next/env` (loadEnvConfig, src/server/main.ts) LÊ `.env.<ambiente>` — com
 # AGILEHARNESS_DEV=1 isso é `.env.development` —, então é um arquivo que o produto pede ao adotante.
 # Qualquer `.env.<algo>` é segredo por default; o que é DOCUMENTO (sem valores) volta por negação.

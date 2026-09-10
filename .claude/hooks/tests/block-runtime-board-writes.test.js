@@ -11,7 +11,7 @@
 //
 // Cobre:
 //   AC1 — sessão de agente + board-data do checkout do serviço → BLOQUEADO (msg prescritiva)
-//   AC1 — run sancionado (STORYMAP_AUTORUN_RUN_ID) → LIBERADO  (G3: a lane light vive disto)
+//   AC1 — run sancionado (AGILEHARNESS_AUTORUN_RUN_ID) → LIBERADO  (G3: a lane light vive disto)
 //   AC1 — worktree de sessão / código / lacre → conforme a política
 //   AC3 — sem service.lock, ou lock stale (pid morto / pid reciclado) → NO-OP
 
@@ -75,7 +75,7 @@ function clearLock() {
 }
 function run(filePath, env = {}) {
   const saved = { ...process.env };
-  delete process.env.STORYMAP_AUTORUN_RUN_ID; // o test runner pode estar DENTRO de um run
+  delete process.env.AGILEHARNESS_AUTORUN_RUN_ID; // o test runner pode estar DENTRO de um run
   Object.assign(process.env, env);
   try {
     return check.test({ tool_name: 'Write', tool_input: { file_path: filePath, content: 'x' } });
@@ -99,7 +99,7 @@ test('AC1 — sessão de agente escrevendo card do checkout do SERVIÇO → bloq
 
 test('AC1/G3 — run SANCIONADO do engine (marcador no env) → liberado [a lane light inteira depende disto]', () => {
   writeLock(LIVE_PID);
-  assert.equal(run(CARD, { STORYMAP_AUTORUN_RUN_ID: '550e8400-e29b-41d4-a716-446655440000' }), null);
+  assert.equal(run(CARD, { AGILEHARNESS_AUTORUN_RUN_ID: '550e8400-e29b-41d4-a716-446655440000' }), null);
 });
 
 test('AC1 — sidecar (plans/) do checkout do serviço também é board-data → bloqueado', () => {

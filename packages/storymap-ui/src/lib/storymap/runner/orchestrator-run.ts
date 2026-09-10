@@ -48,10 +48,10 @@ export const TICK_LEASE_TTL_MS = 20 * 60_000;
  * a misattribution que o WS-12 existe para fechar. Sem o token o tick nem spawna (undefined ⇒ nada a atribuir).
  */
 function orchLedgerActor(): string | undefined {
-  const token = process.env.STORYMAP_MCP_TOKEN_ORCH?.trim();
+  const token = process.env.AGILEHARNESS_MCP_TOKEN_ORCH?.trim();
   if (!token) return undefined;
   const hit = (loadRunnerConfig().mcpTokens ?? []).find((t) => process.env[t.tokenEnv]?.trim() === token);
-  return hit?.tokenEnv ?? "STORYMAP_MCP_TOKEN_ORCH";
+  return hit?.tokenEnv ?? "AGILEHARNESS_MCP_TOKEN_ORCH";
 }
 
 /**
@@ -185,7 +185,7 @@ export function buildTickDeps(overrideBoards?: ActiveBoard[], reason?: string): 
       const started = await spawnOrchestrator(board, mode, {
         claudeBin: resolvedClaudeBin({ name: loadRunnerConfig().autorun.claudeBin }),
         // tick usa o token SCOPED do orquestrador (não o full). Ausente ⇒ spawnOrchestrator pula (inerte, seguro).
-        token: process.env.STORYMAP_MCP_TOKEN_ORCH,
+        token: process.env.AGILEHARNESS_MCP_TOKEN_ORCH,
         reason: spawnReason,
         // o run TERMINOU: cobra o custo REAL no budget do dia, guarda o resumo do que ele fez, solta o lease,
         // e ATRIBUI o streak anti-noop por TENTATIVA (WS-12) — tudo num único read-modify-write do estado.

@@ -154,9 +154,9 @@ orchestrator:
     cooldownMinutes: 5
     enabled: true
 mcpTokens:
-  - tokenEnv: STORYMAP_MCP_TOKEN_ORCH
+  - tokenEnv: AGILEHARNESS_MCP_TOKEN_ORCH
     level: orch
-  - tokenEnv: STORYMAP_MCP_TOKEN_RO
+  - tokenEnv: AGILEHARNESS_MCP_TOKEN_RO
     level: ro
 
 # Publicação — o canário de FIDELIDADE que roda depois de um deploy de rosto bem-sucedido:

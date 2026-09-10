@@ -4,7 +4,7 @@
 // cliente e apagava o ponteiro, mas um turno/tick da sessão descartada AINDA EM VOO re-gravava o ponteiro nela
 // (writeCopilotSessionPointer no início, recordCopilotTurnUsage no fim) — então um hard-refresh / aba anônima
 // (cliente novo, sem o guard em memória) re-hidratava o histórico "limpo". A correção é um TOMBSTONE durável que
-// todo escritor respeita. Estes testes exercitam as FUNÇÕES REAIS contra o fs isolado (STORYMAP_RUNNER_STATE_DIR
+// todo escritor respeita. Estes testes exercitam as FUNÇÕES REAIS contra o fs isolado (AGILEHARNESS_RUNNER_STATE_DIR
 // aponta p/ um tempdir via vitest.setup) — o mesmo caminho que roda em produção, não um mock.
 
 import { describe, it, expect } from "vitest";

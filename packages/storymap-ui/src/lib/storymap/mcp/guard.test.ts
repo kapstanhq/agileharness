@@ -51,7 +51,7 @@ import { runWithMcpActor } from "./actor";
 import { emptyOrchestratorState } from "@/lib/storymap/runner/orchestrator-state";
 import type { OrchestratorPolicy } from "@/lib/storymap/types";
 
-const scoped = <T>(fn: () => Promise<T>) => runWithMcpActor({ level: "write", tokenEnv: "STORYMAP_MCP_TOKEN_ORCH" }, fn);
+const scoped = <T>(fn: () => Promise<T>) => runWithMcpActor({ level: "write", tokenEnv: "AGILEHARNESS_MCP_TOKEN_ORCH" }, fn);
 const policy = (over: Partial<OrchestratorPolicy> = {}): OrchestratorPolicy => ({ mode: "autonomous", ...over });
 
 beforeEach(() => {

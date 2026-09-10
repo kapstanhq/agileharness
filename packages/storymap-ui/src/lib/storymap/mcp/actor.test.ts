@@ -9,8 +9,8 @@ describe("mcp actor (F5.1) — AsyncLocalStorage identity", () => {
   });
 
   it("propagates the actor through the sync + async chain", async () => {
-    await runWithMcpActor({ level: "write", tokenEnv: "STORYMAP_MCP_TOKEN_ORCH" }, async () => {
-      expect(currentMcpActor()).toEqual({ level: "write", tokenEnv: "STORYMAP_MCP_TOKEN_ORCH" });
+    await runWithMcpActor({ level: "write", tokenEnv: "AGILEHARNESS_MCP_TOKEN_ORCH" }, async () => {
+      expect(currentMcpActor()).toEqual({ level: "write", tokenEnv: "AGILEHARNESS_MCP_TOKEN_ORCH" });
       expect(isScopedActor()).toBe(true);
       expect(transitionActorLabel()).toBe("run:orch");
       // survives an await (the ALS store rides the async chain)
@@ -22,7 +22,7 @@ describe("mcp actor (F5.1) — AsyncLocalStorage identity", () => {
   });
 
   it("a `full` operator token is NOT a scoped actor (the guard must not gate the human)", () => {
-    runWithMcpActor({ level: "full", tokenEnv: "STORYMAP_MCP_TOKEN" }, () => {
+    runWithMcpActor({ level: "full", tokenEnv: "AGILEHARNESS_MCP_TOKEN" }, () => {
       expect(isScopedActor()).toBe(false);
       expect(transitionActorLabel()).toBe("human");
     });

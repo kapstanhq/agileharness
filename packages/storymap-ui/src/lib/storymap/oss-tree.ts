@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 
 /**
  * A raiz, resolvida a partir da LOCALIZAÇÃO DESTA FONTE — não por `findRepoRoot()`.
- * De propósito: `findRepoRoot()` obedece a `STORYMAP_TARGET`, e casos que apontam o alvo para um
+ * De propósito: `findRepoRoot()` obedece a `AGILEHARNESS_TARGET`, e casos que apontam o alvo para um
  * diretório de teste fariam este módulo medir a árvore errada. A pergunta "de que árvore este arquivo
  * faz parte?" só tem uma resposta honesta, e ela é o caminho do próprio arquivo.
  */

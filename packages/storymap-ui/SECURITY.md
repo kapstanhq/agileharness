@@ -77,7 +77,7 @@ Não há sessão no servidor para invalidar, e ainda assim a revogação é real
   obrigar restart nem rotação do segredo primário: `--list-mcp-handles` mostra, e
   `--revoke-mcp-handle <id>` invalida **no request seguinte**. Um handle vazado (e ele vaza — veja o
   capítulo de logs no threat model) se apaga sem derrubar o serviço nem os agentes.
-- **Rotação do token MCP primário** (`STORYMAP_MCP_TOKEN` e tiers) exige restart e reconfiguração de
+- **Rotação do token MCP primário** (`AGILEHARNESS_MCP_TOKEN` e tiers) exige restart e reconfiguração de
   todo conector. Gere com `node dist/ah-server.mjs --generate-mcp-token`; nada gera um por conta
   própria (um bootstrap automático rotacionava a credencial de produção em silêncio a cada restart —
   removido).

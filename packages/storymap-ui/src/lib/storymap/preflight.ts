@@ -117,7 +117,7 @@ export interface PreflightProbes {
    */
   boardsNaRaiz?: readonly string[];
   /**
-   * O motor está declaradamente INERTE (`STORYMAP_ENGINE=off`)? Um motor inerte NÃO escreve
+   * O motor está declaradamente INERTE (`AGILEHARNESS_ENGINE=off`)? Um motor inerte NÃO escreve
    * `service.lock` — por desenho —, e é o lock que a detecção de serviço vivo lê. Sem esta sonda o
    * relatório cobra um serviço que a própria postura segura proíbe existir.
    */
@@ -176,7 +176,7 @@ export function runPreflight(probes: PreflightProbes = {}): PreflightReport {
   //
   // TRÊS CATEGORIAS, e não duas. A terceira nasceu de uma armadilha CIRCULAR medida em 2026-08-28,
   // numa simulação de adoção: o item mandava «suba o serviço e meça de novo», o adotante subia — na
-  // ÚNICA postura segura para uma instância nova, `STORYMAP_ENGINE=off` — e continuava `degraded`.
+  // ÚNICA postura segura para uma instância nova, `AGILEHARNESS_ENGINE=off` — e continuava `degraded`.
   // A causa é estrutural: a detecção de serviço vivo lê o `service.lock`, e o motor inerte declara
   // que NÃO o escreve. Pior: o próprio serviço de produção imprime a mesma queixa no boot dele,
   // porque o preflight roda antes de o motor armar. Um item que ninguém consegue satisfazer não é
@@ -191,7 +191,7 @@ export function runPreflight(probes: PreflightProbes = {}): PreflightReport {
             status: "ok",
             observed: `${rotuloDoEnv} — motor INERTE por declaração, e um motor inerte não escreve service.lock`,
             remedy:
-              "não há serviço vivo para medir, e isso é o ESPERADO nesta postura (`STORYMAP_ENGINE=off`) — " +
+              "não há serviço vivo para medir, e isso é o ESPERADO nesta postura (`AGILEHARNESS_ENGINE=off`) — " +
               "não uma pendência. Quando você ARMAR o motor, meça de novo: aí o relatório passa a falar do " +
               "PATH que o unit fixa, que é o veredito que decide se os agentes sobem.",
           }
@@ -380,7 +380,7 @@ export function runPreflight(probes: PreflightProbes = {}): PreflightReport {
   // O SINAL É DERIVADO, nunca um nome: a raiz não tem board de produto — só os que o artefato JÁ
   // TRAZ como fixture. Um monorepo que hospeda a ferramenta e tem os boards dele continua `ok`
   // (é o caso legítimo); um clone recém-baixado, não.
-  const semAlvoDeclarado = !(env.STORYMAP_TARGET ?? "").trim();
+  const semAlvoDeclarado = !(env.AGILEHARNESS_TARGET ?? "").trim();
   // ── O CONTRATO DE AMBIENTE ────────────────────────────────────────────────────────────────────────
   // As chaves load-bearing chegam pelo `.env.local` da WorkingDirectory. Trocá-la — o cutover da
   // inversão — deixa o arquivo para trás, e cada consumidor degrada SOZINHO e em silêncio: o settle do
@@ -537,9 +537,9 @@ export function runPreflight(probes: PreflightProbes = {}): PreflightReport {
           observed: `${raiz} — e ela só tem os boards que o próprio AgileHarness traz (${[...(boards ?? [])].sort().join(", ")})`,
           remedy:
             "esta raiz parece ser o CHECKOUT DA FERRAMENTA, não o seu produto: nenhum board seu existe aqui, " +
-            "e nenhum `STORYMAP_TARGET` foi declarado. Registrar agora criaria um board PARA O AGILEHARNESS, e " +
+            "e nenhum `AGILEHARNESS_TARGET` foi declarado. Registrar agora criaria um board PARA O AGILEHARNESS, e " +
             "todo passo seguinte sucederia contra a árvore errada. Se o seu repositório é outro, declare-o: " +
-            "`STORYMAP_TARGET=/caminho/absoluto/da/raiz` (a RAIZ, nunca um subdiretório). Se você está mesmo " +
+            "`AGILEHARNESS_TARGET=/caminho/absoluto/da/raiz` (a RAIZ, nunca um subdiretório). Se você está mesmo " +
             "construindo o AgileHarness, isto é o esperado e pode seguir.",
         }
       : raiz
@@ -551,7 +551,7 @@ export function runPreflight(probes: PreflightProbes = {}): PreflightReport {
           observed: "não resolvida",
           remedy:
             `nenhum marcador de raiz encontrado (${ROOT_MARKERS.join(", ")}). Rode a partir de um checkout, ` +
-            "ou declare a raiz em `STORYMAP_TARGET` — e ela precisa ser a RAIZ, não um subdiretório.",
+            "ou declare a raiz em `AGILEHARNESS_TARGET` — e ela precisa ser a RAIZ, não um subdiretório.",
         },
   );
 
@@ -635,7 +635,7 @@ export function runPreflight(probes: PreflightProbes = {}): PreflightReport {
   // ── A SUPERFÍCIE MCP ──────────────────────────────────────────────────────────────────────────
   // FECHADA é uma postura VÁLIDA, não uma configuração faltando: sem token o endpoint responde 404
   // nu, e `token-bootstrap.ts` documenta que nada gera um no boot de propósito. Por isso `ok`.
-  const temToken = Object.keys(env).some((k) => k.startsWith("STORYMAP_MCP_TOKEN") && (env[k] ?? "").trim());
+  const temToken = Object.keys(env).some((k) => k.startsWith("AGILEHARNESS_MCP_TOKEN") && (env[k] ?? "").trim());
   checks.push({
     id: "mcp.surface",
     title: "a superfície MCP",

@@ -11,13 +11,13 @@
 // ── A DECISÃO DE PRECEDÊNCIA, E POR QUE ELA NÃO É "UM TERCEIRO CANAL" ──────────────────────────
 //
 // Antes disto existiam dois canais — `settings.yaml` `autorun.claudeBin` e a env
-// `USM_AUTORUN_CLAUDE_BIN` — e eles diziam A MESMA COISA: "esta string é o argv0". `config.ts` já
+// `AGILEHARNESS_AUTORUN_CLAUDE_BIN` — e eles diziam A MESMA COISA: "esta string é o argv0". `config.ts` já
 // colapsa o segundo no primeiro, então no ponto de leitura sempre houve um valor só. Acrescentar uma
 // terceira forma de dizer o mesmo seria defeito, não conserto.
 //
 // O conserto é fazer os canais dizerem coisas DIFERENTES, que é o que eles já queriam dizer:
 //
-//   · `autorun.claudeBin` (⊕ `USM_AUTORUN_CLAUDE_BIN`) = **o NOME**. QUAL executável procurar.
+//   · `autorun.claudeBin` (⊕ `AGILEHARNESS_AUTORUN_CLAUDE_BIN`) = **o NOME**. QUAL executável procurar.
 //     É PORTÁTIL: `claude` é o valor correto em toda máquina do mundo, e é exatamente por isso que
 //     ele pode continuar viajando verbatim no `settings.yaml` publicado.
 //
@@ -30,7 +30,7 @@
 //
 // ── COMPATIBILIDADE, MEDIDA E PRESERVADA ──────────────────────────────────────────────────────
 //
-// Hoje `USM_AUTORUN_CLAUDE_BIN=/opt/claude-canary` FUNCIONA, porque `spawn` aceita argv0 absoluto.
+// Hoje `AGILEHARNESS_AUTORUN_CLAUDE_BIN=/opt/claude-canary` FUNCIONA, porque `spawn` aceita argv0 absoluto.
 // Quebrar isso seria remover capacidade de quem já configurou certo. Então um NOME que chega absoluto
 // é tratado como ENDEREÇO — e passa a valer para ele a mesma checagem de existência fail-closed.
 // Preserva toda configuração que funciona hoje, e para de aceitar em silêncio uma que não funciona.
@@ -42,7 +42,7 @@ import { HOST_TOOL_ENV, type HostToolResolution, resolveHostTool } from "./host-
 
 export interface ClaudeBinInput {
   /**
-   * `settings.autorun.claudeBin` — que já É o colapso de `settings.yaml` ⊕ `USM_AUTORUN_CLAUDE_BIN`
+   * `settings.autorun.claudeBin` — que já É o colapso de `settings.yaml` ⊕ `AGILEHARNESS_AUTORUN_CLAUDE_BIN`
    * feito por `config.ts`. Ausente ⇒ `"claude"`.
    *
    * Este módulo NÃO lê `loadRunnerConfig()` sozinho, de propósito: `preflight.ts` precisa chamá-lo
@@ -83,7 +83,7 @@ export function resolveClaudeBinVerdict(input: ClaudeBinInput = {}): HostToolRes
         ok: false,
         refusal:
           `o binário do Claude Code foi declarado como "${nome}" (por \`autorun.claudeBin\` no ` +
-          `\`storymap/settings.yaml\`, ou pela env \`USM_AUTORUN_CLAUDE_BIN\`) mas não existe nesta ` +
+          `\`storymap/settings.yaml\`, ou pela env \`AGILEHARNESS_AUTORUN_CLAUDE_BIN\`) mas não existe nesta ` +
           `máquina. Corrija a declaração, ou apague-a e deixe o nome nu \`claude\` ser procurado no ` +
           `PATH — e, se o PATH do serviço não o alcança, declare o endereço em \`${varName}\`.`,
       };

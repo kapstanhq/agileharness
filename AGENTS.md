@@ -85,7 +85,7 @@ This is not hypothetical. In an adoption test, an agent about to install the too
 already had `AgileHarness` tools in its environment, wired to a **different** installation. Had it
 followed the example below to the letter, it would have created its board inside a third party's
 production repository. If the root isn't yours: stop, and bring up your own instance with
-`STORYMAP_TARGET`.
+`AGILEHARNESS_TARGET`.
 
 ## Register a new app
 
@@ -93,7 +93,7 @@ production repository. If the root isn't yours: stop, and bring up your own inst
 register_board({ id: "store", name: "Aurora Books" })
 ```
 
-Requires a `full`-level credential (see above) and, under `STORYMAP_TARGET`, requires
+Requires a `full`-level credential (see above) and, under `AGILEHARNESS_TARGET`, requires
 `storymap/boards/_base/board.yaml` to exist in the target's tree — copy it once from the tool's
 repository. Without it the call is **refused**, and the refusal says exactly this.
 

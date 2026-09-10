@@ -22,7 +22,7 @@
 //   2. ENDPOINT SEMPRE-ARMADO. Gerar no boot faz TODA instalação nascer com a superfície MCP
 //      EXISTINDO — e torna FALSA a garantia escrita no header de
 //      `api/usm/[secret]/[transport]/route.ts`: "Authentication is refused outright unless
-//      STORYMAP_MCP_TOKEN is set ... so the endpoint can never be accidentally left open". Numa
+//      AGILEHARNESS_MCP_TOKEN is set ... so the endpoint can never be accidentally left open". Numa
 //      superfície cujas tools spawnam `claude --dangerously-skip-permissions`, o default tem de ser
 //      FECHADO: sem env não há porta (404 nu, `isMcpTokenValid` é fail-closed contra ausente).
 //      Quem quer a porta DECLARA a env — e para não ter de inventar um segredo, pede um gerado:
@@ -46,7 +46,7 @@ import { secretWeakness, weaknessAdvice, type SecretWeakness } from "@/lib/story
 import { runnerStateDir } from "@/lib/storymap/paths";
 
 /** A env var que segura o token PRIMÁRIO (nível `full`) — a que a route resolve antes de qualquer outra. */
-export const MCP_TOKEN_ENV = "STORYMAP_MCP_TOKEN";
+export const MCP_TOKEN_ENV = "AGILEHARNESS_MCP_TOKEN";
 
 /** Onde o token gerado fica REGISTRADO a 0600 (gitignorado). Não é o que arma a porta — a env é. */
 export function mcpTokenFile(): string {

@@ -101,9 +101,9 @@ export const FRONTMATTER_MAX_NODES_DEFAULT = 20_000; // ~36× o maior documento 
  *  restart do módulo, e o teste precisa poder apertá-lo sem recarregar o arquivo. */
 export function frontmatterLimits(): { maxBytes: number; maxDepth: number; maxNodes: number } {
   return {
-    maxBytes: positiveEnv("STORYMAP_FRONTMATTER_MAX_BYTES", FRONTMATTER_MAX_BYTES_DEFAULT),
-    maxDepth: positiveEnv("STORYMAP_FRONTMATTER_MAX_DEPTH", FRONTMATTER_MAX_DEPTH_DEFAULT),
-    maxNodes: positiveEnv("STORYMAP_FRONTMATTER_MAX_NODES", FRONTMATTER_MAX_NODES_DEFAULT),
+    maxBytes: positiveEnv("AGILEHARNESS_FRONTMATTER_MAX_BYTES", FRONTMATTER_MAX_BYTES_DEFAULT),
+    maxDepth: positiveEnv("AGILEHARNESS_FRONTMATTER_MAX_DEPTH", FRONTMATTER_MAX_DEPTH_DEFAULT),
+    maxNodes: positiveEnv("AGILEHARNESS_FRONTMATTER_MAX_NODES", FRONTMATTER_MAX_NODES_DEFAULT),
   };
 }
 

@@ -36,7 +36,7 @@ export const MUTATING_RISK_CLASSES: ReadonlySet<RiskClass> = new Set<RiskClass>(
   // ADR-065 — `session` is deliberately ABSENT. It is not an attempt at a board ITEM: the fleet's worktree
   // lifecycle acts on a session, not a card. Counting it would also actively BREAK this mechanism, because
   // `actor` here is the tokenEnv — which the copiloto tick and every fleet session SHARE (both hold
-  // STORYMAP_MCP_TOKEN_ORCH). A fleet agent's `worktree_submit` inside a tick's window would then be credited
+  // AGILEHARNESS_MCP_TOKEN_ORCH). A fleet agent's `worktree_submit` inside a tick's window would then be credited
   // to the TICK as `anyMutation`, suppressing the no-op bump for a tick that genuinely did nothing.
 ]);
 

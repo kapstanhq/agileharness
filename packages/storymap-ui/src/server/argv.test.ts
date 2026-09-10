@@ -52,7 +52,7 @@ describe("classificarArgv — argumento desconhecido NUNCA vira boot", () => {
     for (const f of FLAGS_CONHECIDAS) expect(t, `ajuda sem ${f.flag}`).toContain(f.flag);
     expect(t).toContain("--help");
     expect(t).toContain("AGILEHARNESS_PORT");
-    expect(t).toContain("STORYMAP_TARGET");
+    expect(t).toContain("AGILEHARNESS_TARGET");
   });
 });
 

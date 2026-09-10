@@ -892,7 +892,7 @@ describePosix("integrateSplit (real git) — WS-2: o train grava o recibo de cad
     // operator's live activity journal: "a ledger you cannot trust is worse than no ledger").
     stateDir = path.join(tmpRoot, "runner-state");
     await fsp.mkdir(stateDir, { recursive: true });
-    process.env.STORYMAP_RUNNER_STATE_DIR = stateDir;
+    process.env.AGILEHARNESS_RUNNER_STATE_DIR = stateDir;
 
     await fsp.mkdir(path.join(mainRepo, "storymap", "boards", "testboard", "cards"), { recursive: true });
     await fsp.mkdir(path.join(mainRepo, "packages", "app"), { recursive: true });
@@ -920,7 +920,7 @@ describePosix("integrateSplit (real git) — WS-2: o train grava o recibo de cad
   });
 
   afterAll(async () => {
-    delete process.env.STORYMAP_RUNNER_STATE_DIR;
+    delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
     await exec(`git worktree remove ${JSON.stringify(path.join(tmpRoot, "main-stage"))} --force`, {
       cwd: mainRepo,
     }).catch(() => {});

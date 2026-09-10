@@ -444,12 +444,12 @@ describePosix("branchWorkLandedBySplit + recibo (WS-2) — o recibo prova, a aus
   });
 
   afterAll(async () => {
-    delete process.env.STORYMAP_RUNNER_STATE_DIR;
+    delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
     await fsp.rm(tmpRoot, { recursive: true, force: true });
   });
 
   beforeEach(async () => {
-    process.env.STORYMAP_RUNNER_STATE_DIR = stateDir;
+    process.env.AGILEHARNESS_RUNNER_STATE_DIR = stateDir;
     await fsp.rm(path.join(stateDir, "landings.jsonl"), { force: true });
   });
 

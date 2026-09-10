@@ -39,7 +39,7 @@ import {
 import { recordCopilotTurnUsage, writeCopilotSessionPointer } from "./session-store";
 import { resolvedClaudeBin } from "../runner/claude-bin";
 
-const DEFAULT_TIMEOUT_MS = Number(process.env.USM_COPILOT_TIMEOUT_MS) || 600_000;
+const DEFAULT_TIMEOUT_MS = Number(process.env.AGILEHARNESS_COPILOT_TIMEOUT_MS) || 600_000;
 /** Uma entrada `LIVE` órfã além disto (o teto do turno + folga) é ignorada e removida por hasLiveCopilotTurn —
  *  backstop de TTL p/ que nem um processo zumbi segure o 409 indefinidamente até o restart do serviço. */
 const LIVE_TTL_MS = DEFAULT_TIMEOUT_MS + 60_000;
@@ -330,7 +330,7 @@ export async function runCopilotTurn(
   // O TOKEN É FUNÇÃO DO ESTADO — é isto que torna o estado `chat` read-only DE VERDADE. Antes o chat montava
   // SEMPRE o token full do operador e o único guardrail era a persona: o TIER_META admitia, por escrito, que "o
   // chat continua com poder total". Agora o estado `chat` monta o token `ro` (settings.mcpTokens →
-  // STORYMAP_MCP_TOKEN_RO), e o filtro server-side por nível (mcp/register.ts levelAllows) simplesmente NÃO
+  // AGILEHARNESS_MCP_TOKEN_RO), e o filtro server-side por nível (mcp/register.ts levelAllows) simplesmente NÃO
   // REGISTRA as tools de escrita: elas não existem na superfície daquele run, então não há o que a persona
   // precise resistir. Fora do `chat`, segue o token full — Copiloto/Autônomo agem por desenho.
   //
@@ -343,7 +343,7 @@ export async function runCopilotTurn(
   // Fail-CLOSED no nível read-only: sem o token `ro` provisionado, degradar para o full reabriria em silêncio
   // exatamente o que este bloco fecha. Melhor rodar SEM MCP (o CLI degrada; o operador vê o aviso
   // `mcp-unavailable`) do que rodar com mais poder do que o estado/propósito promete.
-  const token = (mcpLevel === "ro" ? process.env.STORYMAP_MCP_TOKEN_RO : process.env.STORYMAP_MCP_TOKEN)?.trim();
+  const token = (mcpLevel === "ro" ? process.env.AGILEHARNESS_MCP_TOKEN_RO : process.env.AGILEHARNESS_MCP_TOKEN)?.trim();
   let mcpConfigPath: string | undefined;
   if (token) {
     mcpConfigPath = path.join(dir, "mcp.json");
@@ -388,7 +388,7 @@ export async function runCopilotTurn(
         if (child.pid) reg.setPid(helperId, child.pid);
 
         if (!mcpConfigPath) {
-          onEvent({ kind: "frame", level: "system", code: "mcp-unavailable", text: "⚠ MCP storymap indisponível (sem STORYMAP_MCP_TOKEN) — só tools nativas" });
+          onEvent({ kind: "frame", level: "system", code: "mcp-unavailable", text: "⚠ MCP storymap indisponível (sem AGILEHARNESS_MCP_TOKEN) — só tools nativas" });
         }
 
         let stderr = "";

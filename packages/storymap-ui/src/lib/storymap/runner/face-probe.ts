@@ -116,7 +116,7 @@ export function resolveCanaryVerdict(
         refusal:
           `deploy.canaryCommand do board recusado — ${refusal}. O canário roda como root a partir de uma ` +
           `linha de board-data: declare-o como receita versionada (just <receita>) ou no canal do operador ` +
-          `(settings.yaml deploy.canaryCommand / STORYMAP_DEPLOY_CANARY_COMMAND)`,
+          `(settings.yaml deploy.canaryCommand / AGILEHARNESS_DEPLOY_CANARY_COMMAND)`,
       };
     }
     return { command: quoteArgv(argv) as AuthorizedCanaryCommand, source: "board", refusal: null };

@@ -138,7 +138,7 @@ function extrairPacote(): string {
   // exatamente o buraco que o `.gitignore` da RAIZ já tinha fechado e este, o único que VIAJA,
   // não. MEDIDO: as três eram stageadas no commit inicial que É o artefato publicado.
   for (const variante of [".env.development", ".env.staging", ".env.dev"]) {
-    writeFileSync(path.join(dest, variante), `STORYMAP_MCP_TOKEN=${SEGREDO_FALSO}\n`);
+    writeFileSync(path.join(dest, variante), `AGILEHARNESS_MCP_TOKEN=${SEGREDO_FALSO}\n`);
   }
   mkdirSync(path.join(dest, "storymap", ".runner"), { recursive: true });
   writeFileSync(path.join(dest, "storymap", ".runner", "auth-token"), `${SEGREDO_FALSO}\n`);
