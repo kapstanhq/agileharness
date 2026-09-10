@@ -126,10 +126,10 @@ bump da **nossa** dependência declarada — quem prendia a versão era o interv
 `gray-matter` — e foi aceito COM mitigação e prazo (2026-10-31), com disposição VEX `affected`.
 
 **Re-medido (2026-09-10, v0.2.2):** o mesmo intervalo resolve hoje para **`js-yaml@3.15.2`**, que
-carrega a correção (3.15.0). O advisory saiu do relatório de SCA; as duas disposições `affected`
-seguem no `vex-dispositions.json`, que o gate lista como obsoletas a cada rodada — a suíte de
-supply-chain usa o arquivo real como teste de produtor e recusa um arquivo vazio, então limpá-las
-pede antes um refactor dessa suíte para fixtures. O que **permanece**, e é regra deste documento, é o
+carrega a correção (3.15.0). O advisory saiu do relatório de SCA e as duas disposições `affected`
+saíram do `vex-dispositions.json` com as outras dez que o gate listava como obsoletas — a lista está
+vazia, e quem prova que o gate continua funcionando é a fixture da suíte de supply-chain (seis
+disposições sintéticas, uma por verificador). O que **permanece**, e é regra deste documento, é o
 chokepoint: o teto de bytes/profundidade/nós antes do parser **limita** o custo de um documento
 hostil e **não elimina** a classe de CPU desproporcional em YAML — um documento dentro dos tetos ainda
 pode custar mais do que parece. O teto é ajustável pelo operador (`STORYMAP_FRONTMATTER_MAX_*`);

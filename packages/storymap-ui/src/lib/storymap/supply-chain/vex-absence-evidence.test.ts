@@ -25,6 +25,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { ADVISORIES_DA_FIXTURE, ARQUIVOS_DA_FIXTURE, EVIDENCIA_MORTA, STATEMENTS_DA_FIXTURE } from "./vex-fixture";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../../../../", import.meta.url));
 const GATE = path.join(REPO_ROOT, "scripts/security/vex-gate.mjs");
@@ -224,19 +225,15 @@ describe("path_absent — provar que um diretório inteiro não existe", () => {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 /**
- * O ARQUIVO REAL. Aqui não há fixture: são as disposições versionadas.
+ * O PRODUTOR: a fixture, e o arquivo real medido pelas mesmas regras.
  *
- * Este bloco JÁ FOI um censo literal dos 21 advisories de `next@14.2.35` — uma lista de GHSAs escrita à
- * mão, que existia para transformar "escrevi disposições para o next" em "escrevi para TODAS". Ela morreu
- * em 2026-08-25 com o que media: a subida para o `next@15.5.21` tirou os 21 do fecho, as disposições
- * viraram MUDAS (não casam com advisory nenhum, não calam nada, e o `vex-gate` passou a listá-las sob
- * "disposições OBSOLETAS") e foram removidas.
- *
- * A lição está no formato do que ficou. Um guarda pinado no estado em que foi escrito protege enquanto o
- * estado durar e depois vira ou ruído ou mentira — e a EXAUSTIVIDADE que aquele censo prometia é, de
- * qualquer forma, do gate com relatório na mão (`undisposed`/`escalated`), não de um teste offline. O que
- * um teste offline pode cobrar, e cobra aqui, é a QUALIDADE de cada disposição que existir, seja de que
- * pacote for.
+ * Este bloco JÁ FOI um censo literal dos 21 advisories de `next@14.2.35`, depois um conjunto de guardas
+ * sobre o arquivo real — que pressupunha o arquivo nunca vazio. Em 2026-09-10 o estado honesto virou a
+ * lista vazia (as 12 disposições saíram com o próprio fecho), e um guarda que recusa o estado honesto
+ * ensina a mentir. O sujeito passou a ser a FIXTURE (`vex-fixture.ts`): seis disposições sintéticas,
+ * uma por verificador implementado, re-verificadas pelo gate real. Os invariantes de qualidade rodam
+ * sobre `real ∪ fixture` — a fixture garante que eles nunca ficam verdes por vacuidade, e uma
+ * disposição real, quando existir, é cobrada exatamente como elas.
  */
 type Statement = {
   vulnerability: string;
@@ -251,41 +248,69 @@ type Statement = {
   evidence?: { kind: string }[];
 };
 
-const disposicoes = (): Statement[] =>
+const reais = (): Statement[] =>
   (JSON.parse(readFileSync(DISPOSICOES, "utf8")) as { statements: Statement[] }).statements;
+const todas = (): Statement[] => [...reais(), ...(STATEMENTS_DA_FIXTURE as unknown as Statement[])];
 
-describe("PRODUTOR: as disposições REAIS do arquivo versionado", () => {
-  it("o arquivo TEM disposições — vazio passaria todos os casos abaixo de graça", () => {
-    const todas = disposicoes();
-    expect(todas.length, "o arquivo de disposições esvaziou — nada abaixo mediu coisa alguma").toBeGreaterThan(0);
+/** O gate COMPLETO (com relatório) sobre a fixture, numa árvore de mentira — opcionalmente mutada. */
+function gateDaFixture(overrides: Record<string, string> = {}, advisorySummaryDe?: { id: string; summary: string }) {
+  const raiz = bancada({ ...ARQUIVOS_DA_FIXTURE, ...overrides });
+  const advisories = ADVISORIES_DA_FIXTURE.map((a) =>
+    advisorySummaryDe && a.id === advisorySummaryDe.id ? { ...a, summary: advisorySummaryDe.summary } : a,
+  );
+  const relatorio = {
+    target: "fixture@1.0.0",
+    closure: { total: 10, runtime: 5, devOnly: 5 },
+    vulnerableComponents: [...new Set(advisories.flatMap((a) => a.components))].sort(),
+    advisories: advisories.map((a) => ({ kev: false, epss: 0.001, ...a })),
+    failedBatches: [],
+    kevCatalogAvailable: true,
+    lockfileDrift: [],
+    installDrift: [],
+  };
+  const relFile = path.join(raiz, "osv.json");
+  const vexFile = path.join(raiz, "vex.json");
+  writeFileSync(relFile, JSON.stringify(relatorio), "utf8");
+  writeFileSync(vexFile, JSON.stringify({ statements: STATEMENTS_DA_FIXTURE }), "utf8");
+  try {
+    const out = execFileSync(process.execPath, [GATE, "--report", relFile, "--vex", vexFile, "--root", raiz, "--json"], {
+      encoding: "utf8",
+    });
+    return { code: 0, v: JSON.parse(out) as Veredito & { expiredStatements?: unknown[]; undisposed?: unknown[] } };
+  } catch (e) {
+    const err = e as { status?: number; stdout?: string };
+    return { code: err.status ?? -1, v: err.stdout ? (JSON.parse(err.stdout) as Veredito) : null };
+  }
+}
+
+describe("PRODUTOR: a fixture cobre o gate inteiro, e o arquivo real é medido pelas mesmas regras", () => {
+  it("a fixture não é vácuo: tem os dois status, e toda disposição fixa a versão no purl", () => {
+    const fx = STATEMENTS_DA_FIXTURE;
+    expect(fx.some((st) => st.status === "affected"), "fixture sem `affected`").toBe(true);
+    expect(fx.some((st) => st.status === "not_affected"), "fixture sem `not_affected`").toBe(true);
     // Toda disposição vale para o par (advisory, purl COM VERSÃO). Um produto sem versão suprimiria o
-    // pacote INTEIRO, para sempre — inclusive advisory que ainda nem existe.
-    for (const st of todas) {
+    // pacote INTEIRO, para sempre — inclusive advisory que ainda nem existe. Vale para real e fixture.
+    for (const st of todas()) {
       expect(st.products.length, `${st.vulnerability} sem produto`).toBeGreaterThan(0);
       for (const purl of st.products) {
-        // Pacote com ESCOPO tem `@` no NOME (`pkg:npm/@hono/node-server@1.19.14`): a versão é o que vem
-        // depois do ÚLTIMO `@`, e uma régua que assume um `@` só reprova metade do ecossistema npm.
-        expect(purl, `${st.vulnerability}: ${purl} não fixa versão`).toMatch(
-          /^pkg:npm\/(@[^/@]+\/)?[^/@]+@[^@]+$/,
-        );
+        // Pacote com ESCOPO tem `@` no NOME (`pkg:npm/@org/pkg@1.0.0`): a versão é o que vem depois do
+        // ÚLTIMO `@`, e uma régua que assume um `@` só reprova metade do ecossistema npm.
+        expect(purl, `${st.vulnerability}: ${purl} não fixa versão`).toMatch(/^pkg:npm\/(@[^/@]+\/)?[^/@]+@[^@]+$/);
       }
     }
   });
 
-  it("toda `affected` traz mitigação e um PRAZO posterior à revisão que a escreveu", () => {
-    // `caveat` NÃO entra na régua, e a ausência dele aqui é deliberada: o gate exige `mitigation` e
-    // `expiresAt` para uma `affected`, nunca `caveat`. Todas as 21 do next traziam um, e generalizar o
-    // censo daquele bloco cobraria de 12 disposições uma convenção de autoria de outro autor — 11
-    // ficariam vermelhas, e o conserto seria inventar caveat ou baixar a régua. O que a `affected`
-    // precisa dizer (até quando isto vale) já está no `expiresAt`.
-    const afetadas = disposicoes().filter((st) => st.status === "affected");
-    expect(afetadas.length, "nenhuma `affected` — o arquivo teria virado otimismo").toBeGreaterThan(0);
+  it("toda `affected` (real ∪ fixture) traz mitigação e um PRAZO posterior à revisão que a escreveu", () => {
+    // `caveat` NÃO entra na régua, de propósito: o gate exige `mitigation` e `expiresAt` para uma
+    // `affected`, nunca `caveat`. O que a `affected` precisa dizer (até quando isto vale) já está no
+    // `expiresAt`.
+    const afetadas = todas().filter((st) => st.status === "affected");
+    expect(afetadas.length, "nenhuma `affected` — nem na fixture").toBeGreaterThan(0);
     for (const st of afetadas) {
       expect(st.mitigation?.trim().length ?? 0, `${st.vulnerability} sem mitigação`).toBeGreaterThan(8);
       expect(st.expiresAt, `${st.vulnerability} sem prazo`).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      // A régua é o par (revisão, prazo), não uma data fixa: prazo ANTERIOR à revisão é sem sentido, e
-      // comparar com "hoje" faria a suíte ficar vermelha por passagem do tempo em vez de por defeito —
-      // vencimento é do gate, que reprova com o relatório na mão.
+      // A régua é o par (revisão, prazo), não uma data fixa: comparar com "hoje" faria a suíte ficar
+      // vermelha por passagem do tempo em vez de por defeito — vencimento é do gate, com relatório.
       expect(st.reviewedAt, `${st.vulnerability} sem data de revisão`).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       expect(
         Date.parse(`${st.expiresAt}T23:59:59Z`),
@@ -294,7 +319,7 @@ describe("PRODUTOR: as disposições REAIS do arquivo versionado", () => {
     }
   });
 
-  it("toda `not_affected` traz justificativa do vocabulário OpenVEX E evidência re-executável", () => {
+  it("toda `not_affected` (real ∪ fixture) traz justificativa do vocabulário OpenVEX E evidência re-executável", () => {
     const VOCAB = new Set([
       "component_not_present",
       "vulnerable_code_not_present",
@@ -302,49 +327,57 @@ describe("PRODUTOR: as disposições REAIS do arquivo versionado", () => {
       "vulnerable_code_cannot_be_controlled_by_adversary",
       "inline_mitigations_already_exist",
     ]);
-    const imunes = disposicoes().filter((st) => st.status === "not_affected");
-    expect(imunes.length, "nenhuma `not_affected` — nada foi julgado por alcance").toBeGreaterThan(0);
+    const imunes = todas().filter((st) => st.status === "not_affected");
+    expect(imunes.length, "nenhuma `not_affected` — nem na fixture").toBeGreaterThan(0);
     for (const st of imunes) {
       expect(VOCAB.has(st.justification ?? ""), `${st.vulnerability}: justificativa fora do vocabulário`).toBe(true);
       expect(st.evidence?.length ?? 0, `${st.vulnerability}: afirmar não é provar`).toBeGreaterThan(0);
     }
   });
 
-  it("todo verificador IMPLEMENTADO é exercitado — pelo arquivo real ou por um caso desta suíte", () => {
-    // A forma nº 1 de defeito desta casa é capacidade declarada com zero produtores. A régua tem DOIS
-    // sentidos aceitáveis porque a ferramenta é PUBLICADA: um `kind` que este repositório não usa hoje
-    // continua sendo contrato para quem adota (ele escreve as disposições DELE), e o que prova que ele
-    // funciona são os casos acima. O que não pode existir é verificador que ninguém exercita em lugar
-    // nenhum — foi o que quase aconteceu com `code_absent`/`tree_absent`/`path_absent` quando o bloco do
-    // next saiu levando os únicos usos reais deles.
+  it("todo verificador IMPLEMENTADO no gate tem UMA disposição na fixture — e nenhum a mais", () => {
+    // A forma nº 1 de defeito desta casa é capacidade declarada com zero produtores. Um `kind` novo no
+    // gate sem disposição na fixture reprova aqui; um `kind` na fixture que o gate não implementa
+    // reprova na entrada do próprio gate (o caso abaixo).
     const fonteDoGate = readFileSync(GATE, "utf8");
     const corpo = /const VERIFICADORES = \{([\s\S]*?)\n\};/.exec(fonteDoGate);
     expect(corpo, "não achei `const VERIFICADORES = {…}` no gate — a régua ficaria sem sujeito").toBeTruthy();
-    const implementados = [...(corpo as RegExpExecArray)[1].matchAll(/^  ([a-z_]+)\(ev, ctx\)/gm)].map((m) => m[1]);
+    const implementados = [...(corpo as RegExpExecArray)[1].matchAll(/^  ([a-z_]+)\(ev, ctx\)/gm)].map((m) => m[1]).sort();
     expect(implementados.length, "nenhum verificador lido — o extrator quebrou").toBeGreaterThan(2);
-
-    const noArquivoReal = new Set(disposicoes().flatMap((st) => (st.evidence ?? []).map((e) => e.kind)));
-    const estaSuite = readFileSync(fileURLToPath(import.meta.url), "utf8");
-    const semExercicio = implementados
-      .filter((kind) => !noArquivoReal.has(kind) && !estaSuite.includes(`kind: "${kind}"`))
-      .sort();
-    expect(
-      semExercicio,
-      "verificador que nem o arquivo real usa nem esta suíte exercita: ou ganha um caso, ou sai do gate",
-    ).toEqual([]);
+    const naFixture = [...new Set(STATEMENTS_DA_FIXTURE.flatMap((st) => st.evidence.map((e) => String(e.kind))))].sort();
+    expect(naFixture, "verificador sem disposição na fixture (ou fixture com kind que o gate não tem)").toEqual(implementados);
+    expect(Object.keys(EVIDENCIA_MORTA).sort(), "verificador sem receita de evidência morta").toEqual(implementados);
   });
 
-  it("MATAR a evidência de uma disposição REAL reprova o gate REAL", () => {
-    // Não é fixture: são as disposições versionadas, medidas contra uma árvore em que alguém passou a
-    // importar `express` dentro de `packages/storymap-ui/src`. A entrada do GHSA-v422-hmwv-36x6 afirma
-    // exatamente que ninguém ali importa — então ela tem de morrer, nomeando o motivo.
-    const raiz = bancada({
-      "packages/storymap-ui/src/rota-nova.ts": 'import express from "express";\nexport const app = express();\n',
-    });
-    const r = verificar(raiz, [], DISPOSICOES);
-    expect(r.code, "evidência morta tem de REPROVAR").toBe(2);
-    const morta = r.v?.staleStatements.find((st) => st.vulnerability === "GHSA-v422-hmwv-36x6");
-    expect(morta, "a disposição do express tinha de aparecer como DESATUALIZADA").toBeTruthy();
-    expect(morta?.reason).toContain("express");
+  it("a fixture RE-VERIFICA limpa pelo gate REAL, com relatório — a fixture não mente", () => {
+    const r = gateDaFixture();
+    expect(r.code, JSON.stringify(r.v)).toBe(0);
+    expect(r.v?.staleStatements).toEqual([]);
+    expect(r.v?.invalidStatements).toEqual([]);
+    expect(r.v?.notAffected?.length ?? 0).toBe(5);
+  });
+
+  it("MATAR a evidência de CADA verificador, um por vez, reprova o gate REAL nomeando o que morreu", () => {
+    for (const [kind, morte] of Object.entries(EVIDENCIA_MORTA)) {
+      const st = STATEMENTS_DA_FIXTURE.find((x) => x.evidence.some((e) => e.kind === kind));
+      expect(st, `sem disposição para ${kind}`).toBeTruthy();
+      const r = gateDaFixture(
+        morte.arquivos ?? {},
+        morte.advisorySummary ? { id: st!.vulnerability, summary: morte.advisorySummary } : undefined,
+      );
+      expect(r.code, `${kind}: evidência morta tem de REPROVAR`).toBe(2);
+      const morta = r.v?.staleStatements.find((x) => x.vulnerability === st!.vulnerability);
+      expect(morta, `${kind}: a disposição tinha de aparecer como DESATUALIZADA`).toBeTruthy();
+      expect(morta?.reason, `${kind}: o motivo não nomeia o que morreu`).toMatch(morte.nomeia);
+      // e SÓ ela morreu — a mutação é cirúrgica, senão o teste não distingue verificadores.
+      expect(r.v?.staleStatements.length, `${kind}: mais de uma disposição morreu`).toBe(1);
+    }
+  });
+
+  it("o arquivo REAL re-verifica pelo gate — vazio é o estado honesto quando nenhum advisory pede disposição", () => {
+    const r = verificar(REPO_ROOT, [], DISPOSICOES);
+    expect(r.code, JSON.stringify(r.v)).toBe(0);
+    expect(r.v?.staleStatements).toEqual([]);
+    expect(r.v?.invalidStatements).toEqual([]);
   });
 });
