@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { probeStackHealth, QA_STACK_TARGET, type StackHealthDeps } from "./stack-health";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { soDoUmbrella } from "@/lib/storymap/oss-tree";
 
 /** fetch fake that returns a Response with the given status. */
 function fetchOk(status = 200): typeof fetch {
@@ -122,31 +121,8 @@ describe("probeStackHealth", () => {
 });
 
 describe("QA_STACK_TARGET (ADR-063 Fase 1b contract mirror)", () => {
-  // `skipIf` NO LUGAR DO `return` ANTECIPADO. O arquivo que este caso lê é infra do DONO e não viaja
-  // na extração: na árvore extraída o corpo saía sem asserção nenhuma, e "passou" e "não mediu nada"
-  // eram a mesma linha verde — no repositório onde a suíte é o CI de estreia. Com
-  // `expect.requireAssertions` a omissão passou a reprovar, que é o instrumento funcionando: ele não
-  // sabe distinguir ausência deliberada de ausência esquecida, e a diferença tem de estar escrita.
-  it.skipIf(!soDoUmbrella("scripts/ops/qa-stack/contract.json"))(
-    "stays in sync with scripts/ops/qa-stack/contract.json (the stable contract)",
-    () => {
-    // `scripts/ops/**` é operação do ecossistema do dono e a régua o exclui inteiro. Este espelho
-    // existe para os DOIS lados não divergirem NESTA casa; no artefato só viaja o lado do motor, e
-    // é ele que os casos de parse continuam cobrindo. Ausência no umbrella = regressão ⇒ lança.
-    // The preset is a MIRROR of the repo contract — if either side drifts,
-    // harness-qa's pre-boot gate probes the wrong stack. Repo root: this file
-    // lives at packages/storymap-ui/src/lib/storymap/runner/.
-    const req = createRequire(import.meta.url);
-    const contract = req(
-      path.resolve(__dirname, "../../../../../..", "scripts/ops/qa-stack/contract.json"),
-    );
-    expect(QA_STACK_TARGET.unit).toBe("qa-emulator.service");
-    expect(QA_STACK_TARGET.url).toBe(`http://127.0.0.1:${contract.ports.emulatorHub}/emulators`);
-    expect(QA_STACK_TARGET.seededProbeUrl).toBe(
-      `http://127.0.0.1:${contract.ports.firestore}/v1/projects/${contract.project}/databases/(default)/documents/profiles/seed-active-001`,
-    );
-    },
-  );
+  // O espelho com `scripts/ops/qa-stack/contract.json` saiu com a segunda árvore (issue #1): esse
+  // contrato é operação do repositório de origem; aqui o preset é a única fonte, coberta pelos parses.
 
   it("probes healthy against a live-shaped stack (unit active, hub 200, seed doc 200)", async () => {
     const r = await probeStackHealth(QA_STACK_TARGET, deps());

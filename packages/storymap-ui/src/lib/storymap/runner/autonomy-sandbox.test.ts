@@ -8,7 +8,6 @@
 
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { findRepoRoot, runnerStateDir } from "@/lib/storymap/paths";
-import { soDoUmbrella } from "@/lib/storymap/oss-tree";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1162,33 +1161,9 @@ describe("(6) LINT DE DÍVIDA — varre TODO o src, casa OS DOIS sinais, e a lis
     // e não pode apontar para um símbolo morto
     expect(engineSrc, "o engine aponta para um identificador que não existe mais").not.toMatch(/DIVIDA_IS_SANDBOX/);
     expect(engineSrc).toMatch(/DIVIDA_FLAG/);
-    // ── E O ADR TAMBÉM (achado de revisão) ─────────────────────────────────────────────────────────
-    // A amarra cobria README e engine e deixava de fora o ADR — que é o artefato de DECISÃO da fase, o
-    // documento que um contribuidor abre para saber o que ficou pendente. Ele divergiu na primeira
-    // rodada seguinte: dizia "7 superfícies" e listava como prioridade de F1 justamente a que já havia
-    // migrado. Um registro de pendências errado é pior que ausente — ele afirma trabalho que não existe.
-    //
-    // ⚠ O ADR é o ÚNICO dos três portadores que NÃO viaja na extração OSS (`docs/` inteiro fica: leva o
-    // plano OSS, os business-models e medições contra o host do dono — caminho do checkout, kernel,
-    // serviço como root). Considerou-se negá-lo na régua para que viajasse; recusado porque sanear 595
-    // linhas de prosa de medição não é operação mecânica, e o cabeçalho dele aponta para um plano que
-    // também não viaja. O laço que este caso protege — "a prosa concorda com a lista derivada" — segue
-    // cobrado no artefato pelos DOIS portadores acima, que são os que um contribuidor de fora lê.
-    const adrPath = soDoUmbrella("docs/adr/ADR-067-sondas-f0-multitarget.md");
-    if (adrPath) {
-      const adr = readFileSync(adrPath, "utf8");
-      const linhaDivida = adr.split("\n").find((l) => l.startsWith("| A flag perigosa fora do autorun"));
-      expect(linhaDivida, "o ADR perdeu a linha de dívida da flag").toBeTruthy();
-      expect(linhaDivida, `o ADR precisa dizer ${DIVIDA_FLAG.length} superfícies`).toMatch(
-        new RegExp(`\\*\\*${DIVIDA_FLAG.length} superf[ií]cies\\*\\*`),
-      );
-      // e não pode listar como pendente uma superfície que já saiu da dívida
-      for (const migrada of ["mcp/dev-tools.ts"]) {
-        expect(linhaDivida, `o ADR ainda trata ${migrada} como pendente`).not.toMatch(
-          new RegExp(`Prioridade[^|]*${migrada.replace("/", "\\/")}`),
-        );
-      }
-    }
+    // O terceiro portador (o ADR-067 do repositório de origem) nunca esteve nesta árvore; o laço
+    // "prosa concorda com a lista derivada" é cobrado aqui pelos dois portadores que existem: o README
+    // do runner e o comentário de dívida do engine.
   });
 });
 

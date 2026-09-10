@@ -5,7 +5,7 @@
 // pelo caminho e vê se o achado volta) e a classificava como ponto cego ESTRUTURAL — "não existe texto para
 // varrer, e nenhuma ação do operador muda isso". Mas ali o texto EXISTE: foram as REGRAS que decidiram não
 // olhar. Efeito medido: um `AKIA…` plantado em `scripts/git-hooks/scan-secrets.mjs` — arquivo que VIAJA para
-// o repo público, porque o `.ossignore` o re-inclui explicitamente — não produzia achado nenhum e o gate
+// o repo público, porque a antiga lista de extração o re-incluía explicitamente — não produzia achado nenhum e o gate
 // liberava com exit 0, INCLUSIVE com `--fail-on-unscanned`. Era o único caminho cego do artefato, e
 // justamente aquele onde um segredo ficaria mais invisível: quem lê o diff vê um arquivo de padrões.
 //

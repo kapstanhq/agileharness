@@ -28,7 +28,6 @@ import { describe, expect, it } from "vitest";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 
-import { soDoUmbrella } from "@/lib/storymap/oss-tree";
 import { PUBLIC_ROUTES } from "@/lib/auth/public-routes";
 import { signSession, verifySession } from "@/lib/auth/session";
 
@@ -579,27 +578,8 @@ describe("(6) o .env.example é o CATÁLOGO que o README promete — e a promess
  * para que a próxima divergência REPROVE em vez de virar semanas de estimativa sobre areia.
  */
 describe("(7) o plano de extração e a árvore não podem divergir sobre a contenção (F0)", () => {
-  const PLANO_DOC = "docs/plans/agileharness-oss/09-plano-multirepo-e-extracao.md";
-
-  /**
-   * O plano NÃO viaja (docs/ inteiro fica: cita a VPS do dono). Este bloco tem duas metades e só
-   * UMA depende dele:
-   *   · ler o documento (o F0 executado está descrito? as exceções estão NOMEADAS?) — umbrella
-   *   · varrer a ÁRVORE (quem emite a flag, cada injeção de IS_SANDBOX tem gate?) — VIAJA, e segue
-   *     incondicional no artefato, porque é ela que pega um emissor NOVO.
-   *
-   * `soDoUmbrella` é a porta honesta: no umbrella a ausência LANÇA (a regressão que o guarda existe
-   * para pegar), no extraído devolve null e grita no console dizendo o que deixou de ser medido.
-   * Não é `if (!existe) return` — esse não distingue "não devia estar aqui" de "sumiu".
-   */
-  function plano(): string | null {
-    const abs = soDoUmbrella(PLANO_DOC);
-    if (!abs) return null;
-    const txt = readFileSync(abs, "utf8");
-    if (txt.trim().length === 0) throw new Error(`${PLANO_DOC} está vazio.`);
-    return txt;
-  }
-
+  // A metade que lia o PLANO de extração (um documento do repositório de origem) saiu com a segunda
+  // árvore (issue #1). O que fica é a metade que varre a ÁRVORE — a que pega um emissor novo.
   /** Todo .ts de PRODUÇÃO sob src/ (o que viaja e o que roda; testes ficam de fora). */
   function fontesDeProducao(): string[] {
     const achados: string[] = [];
@@ -659,44 +639,7 @@ describe("(7) o plano de extração e a árvore não podem divergir sobre a cont
     "lib/storymap/smart-capture/claude.ts",
   ] as const;
 
-  // `skipIf` NO LUGAR DO `return`: o plano é doc do umbrella e não viaja. Na árvore extraída o corpo
-  // saía sem asserção, e verde-por-omissão é indistinguível de verde-por-conferência.
-  it.skipIf(!plano())("o documento descreve o F0 que foi EXECUTADO, não um que ninguém construiu", () => {
-    const doc = plano()!;
-    cobre(doc, [
-      {
-        oQue: "a contenção por namespace do SO, que é o F0 real",
-        padrao: /netns|namespace de PID|bwrap|sandbox-runtime/i,
-        porque: "sem isto o documento descreve uma fase que não foi feita e omite a que foi",
-      },
-      {
-        oQue: "o egresso por allowlist com casamento por host EXATO",
-        padrao: /host exato/i,
-        porque: "quem escreve a lista precisa saber que example.com não concede www.example.com",
-      },
-      {
-        oQue: "a quinta chave obrigatória neste host",
-        padrao: /enableWeakerNestedSandbox/,
-        porque: "omiti-la faz a jaula não subir E toda chamada Bash morrer — é a pegadinha da postura",
-      },
-      {
-        oQue: "que IS_SANDBOX=1 NÃO é sandbox, e sim o bypass da trava de root do CLI",
-        padrao: /IS_SANDBOX=1\*\*? ?\*\*?não é um sandbox|não é um sandbox/i,
-        porque: "foi a leitura invertida que produziu um aceite pedindo a remoção de algo que mata todo run",
-      },
-    ]);
-  });
-
-  it("os três caminhos fora da jaula estão NOMEADOS no plano — e são exatamente os que a árvore tem", () => {
-    const doc = plano();
-    // METADE 1 — o documento. Só no umbrella; no artefato o plano não viaja.
-    if (doc) {
-      for (const caminho of EXCECOES_ASSINADAS) {
-        const base = path.basename(caminho);
-        expect(doc, `o plano não nomeia a exceção ${base} — exceção não escrita é pendência esquecida`).toContain(base);
-      }
-    }
-
+  it("os caminhos fora da jaula são EXATAMENTE os assinados — a árvore não ganha um emissor novo em silêncio", () => {
     // METADE 2 — a ÁRVORE. INCONDICIONAL nas duas: é ela que pega um emissor novo, e o artefato
     // precisa dela mais que o umbrella (lá o revisor tem o plano; aqui só tem esta asserção).
     const emitem = arquivosComCodigoCasando(/--dangerously-skip-permissions/);

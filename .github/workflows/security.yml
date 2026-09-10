@@ -1,9 +1,8 @@
 # SCA + SBOM + VEX do repositório OSS do AgileHarness.
 #
-# DUAS CÓPIAS, DE PROPÓSITO: a fonte revisada é `oss/ci/workflows/` e a extração instala a cópia
-# executável em `.github/workflows/` (o GitHub só roda o que está lá). Edite os DOIS lados no mesmo
-# commit — o extrator e a suíte comparam byte a byte e reprovam a divergência. No monorepo de origem
-# não existe `.github/workflows/`: lá o CI é local, por decisão registrada.
+# ÚNICA CÓPIA: este diretório é a fonte que o GitHub executa e a que a suíte lê (a issue #1 aposentou a
+# cópia revisada em `oss/`). `scripts/security/lint-workflows.mjs` e os testes de supply-chain cobram
+# ESTE arquivo diretamente.
 #
 # O agendamento semanal NÃO é redundante com o gatilho de PR: advisory novo aparece sem ninguém tocar no
 # código. Sem o `schedule`, um repositório sem commits parece seguro por inércia — e é exatamente assim que

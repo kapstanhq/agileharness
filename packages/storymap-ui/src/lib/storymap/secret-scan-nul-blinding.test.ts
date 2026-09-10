@@ -259,11 +259,8 @@ describe("`--fail-on-unscanned` distingue ponto cego ESTRUTURAL de ACIDENTAL (st
     // "✓ snapshot liberado para publicação" incluindo arquivos que ele MESMO declara não ter varrido.
     // Confiança falsa exatamente no momento irreversível — pior que gate nenhum.
     //
-    // Este caso lia o `justfile` direto — e o justfile NÃO viaja na extração, enquanto este arquivo
-    // viaja. No repo público ele morria em ENOENT, e a "correção" óbvia (tolerar a ausência) deixaria o
-    // artefato publicado sem NENHUMA cobrança da flag no produtor que ele de fato usa: o passo do
-    // workflow em oss/ci/workflows/ci.yml. `produtoresDaPublicacao()` enumera os produtores DA ÁRVORE,
-    // então aqui o umbrella passa a cobrar os DOIS e o repo extraído continua cobrando o dele.
+    // `produtoresDaPublicacao()` enumera cada passo de `.github/workflows/*.yml` que invoca o gate; é de
+    // cada um deles que a flag é cobrada — o produtor real, não um nome fixo.
     const produtores = produtoresDaPublicacao(REPO_ROOT);
     expect(
       produtores.length,

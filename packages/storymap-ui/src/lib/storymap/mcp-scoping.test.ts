@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
 
-import { soDoUmbrella } from "@/lib/storymap/oss-tree";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { findRepoRoot } from "./paths";
@@ -23,23 +22,8 @@ function readJson(rel: string): { mcpServers?: Record<string, unknown> } {
 }
 
 describe("MCP scoping — chrome-devtools is per-column, not global (story-ju8wh2)", () => {
-  // `skipIf` NO LUGAR DO `return` ANTECIPADO. O arquivo que este caso lê é infra do DONO e não viaja
-  // na extração: na árvore extraída o corpo saía sem asserção nenhuma, e "passou" e "não mediu nada"
-  // eram a mesma linha verde — no repositório onde a suíte é o CI de estreia. Com
-  // `expect.requireAssertions` a omissão passou a reprovar, que é o instrumento funcionando: ele não
-  // sabe distinguir ausência deliberada de ausência esquecida, e a diferença tem de estar escrita.
-  it.skipIf(!soDoUmbrella(".mcp.json"))("root .mcp.json does NOT declare a global chrome-devtools server", () => {
-    // O `.mcp.json` da raiz é config DESTE checkout e não viaja. A propriedade aqui é NEGATIVA
-    // ("a raiz não declara um chrome-devtools global"), e num repo sem o arquivo ela seria
-    // verdadeira por VACUIDADE — verde medindo zero. `soDoUmbrella` distingue os dois mundos: no
-    // umbrella a ausência LANÇA (é a regressão que este caso pega), no artefato devolve null e
-    // grita no console dizendo onde a propriedade continua coberta (capability-contract.test.ts,
-    // pelo escopo por coluna do board.yaml).
-    const root = readJson(".mcp.json");
-    expect(root.mcpServers).toBeTruthy();
-    expect(Object.keys(root.mcpServers ?? {})).not.toContain("chrome-devtools");
-  });
-
+  // O caso sobre o `.mcp.json` da raiz saiu com a segunda árvore (issue #1): esse arquivo era config do
+  // checkout de origem e nunca existiu aqui. O escopo por coluna é cobrado por capability-contract.test.ts.
   it("the dedicated storymap/qa-mcp.json DOES provide chrome-devtools (for the visual sweep)", () => {
     const qa = readJson(QA_MCP_REL);
     expect(qa.mcpServers).toBeTruthy();

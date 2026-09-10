@@ -1,7 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
-import { soDoUmbrella } from "@/lib/storymap/oss-tree";
 import {
   parseFaceGateFail,
   faceGateReason,
@@ -123,30 +122,5 @@ describe("AC4 — the fio: gate verdict → DeployFailureDetail.reason → the c
   });
 });
 
-describe("cross-language contract — the marker cannot drift silently", () => {
-  // `skipIf` NO LUGAR DO `return` ANTECIPADO: o emissor não viaja (o comentário abaixo explica por
-  // quê), então na árvore extraída este corpo saía SEM asserção nenhuma — e "passou" e "não mediu
-  // nada" eram a mesma linha verde. Pulado é uma terceira coisa, e o vitest sabe dizê-la.
-  it.skipIf(
-    !soDoUmbrella("scripts/deploy/lib/turbo-failure.mjs") || !soDoUmbrella("scripts/deploy/predeploy-face-gate.mjs"),
-  )("predeploy-face-gate.mjs emits the EXACT marker this module greps", () => {
-    // The emitter is .mjs and the reader is .ts: no compiler links them. A silent rename on either side
-    // would make every face veto anonymous again — which is the bug WS-11.2 exists to fix.
-    //
-    // ⚠ O EMISSOR NÃO VIAJA. `scripts/deploy/**` publica os produtos do dono (a face composta mosaico.app)
-    // e a régua o exclui; o LEITOR (face-gate-detail.ts) viaja com o runner. Considerou-se fazer o par
-    // .mjs viajar — recusado: `predeploy-face-gate.mjs` fala de mosaico.app por dentro, e um repo público
-    // que carrega o gate de deploy de um produto alheio ganha código morto de origem confusa.
-    // No artefato o marcador continua coberto pelos 12 casos acima, que exercitam o LADO do leitor
-    // (parse, marcador duplicado, verdict truncado, ausência de pacote) — o que deixa de ser medido lá
-    // é só o pino contra o emissor, que lá não existe. `soDoUmbrella` LANÇA se ele sumir DAQUI.
-    const libPath = soDoUmbrella("scripts/deploy/lib/turbo-failure.mjs");
-    const gatePath = soDoUmbrella("scripts/deploy/predeploy-face-gate.mjs");
-
-    const lib = readFileSync(libPath!, "utf8");
-    expect(lib).toContain(`FACE_GATE_FAIL_MARKER = '${FACE_GATE_FAIL_MARKER}'`);
-
-    const gate = readFileSync(gatePath!, "utf8");
-    expect(gate).toContain("formatFaceGateFail");
-  });
-});
+// O pino contra o EMISSOR do marcador (`scripts/deploy/**` do repositório de origem) saiu com a segunda
+// árvore (issue #1): aqui só existe o LEITOR, e os casos acima exercitam o lado dele por inteiro.

@@ -3,7 +3,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { ROOT_MARKERS, findRepoRoot } from "@/lib/storymap/paths";
-import { arvore } from "@/lib/storymap/oss-tree";
 
 // OS QUATRO DOCUMENTOS DA RAIZ DO ARTEFATO — o que o visitante do repositório público lê antes de
 // qualquer código. Este guarda nasceu cobrindo UM deles (`oss-readme-truth.test.ts`, onda 3) e o
@@ -49,9 +48,6 @@ describe("os documentos da RAIZ do artefato dizem a verdade sobre o código", ()
     const vazios = DOCS.filter((d) => d.texto.length < 500).map((d) => d.nome);
     expect(vazios.join(", "), "documento da raiz publicada ausente ou vazio — um guarda que lê string vazia fica verde de graça").toBe("");
     expect(DOCS).toHaveLength(4);
-    if (arvore() === "umbrella") {
-      for (const d of DOCS) expect(d.caminho).toContain(`${path.sep}oss${path.sep}`);
-    }
   });
 
   it("[CLASSE] nenhum deles cita uma porta de loopback que não seja a default do servidor", () => {
@@ -110,30 +106,13 @@ describe("os documentos da RAIZ do artefato dizem a verdade sobre o código", ()
 
   it("[CLASSE] toda IMAGEM citada por um documento da raiz existe na árvore", () => {
     // O README público é uma galeria: dezoito capturas, e a lista muda toda vez que a interface muda.
-    // `oss-exclusion-list.test.ts` fixa o DIRETÓRIO (`oss/docs/screenshots/`) de propósito — um pino
-    // por arquivo viraria atrito e faria alguém publicar a foto velha. O efeito colateral é que
-    // ninguém media o outro lado: uma captura RENOMEADA ou REMOVIDA deixa o README apontando para o
-    // vazio, e o sintoma só aparece no navegador de quem clonou. Foi o que quase aconteceu ao
-    // aposentar `09-positioning.png` (a tela virou o PRD): bastava errar o nome novo para a galeria
-    // ficar com um buraco, com a suíte inteira verde.
-    //
-    // A resolução imita a EXTRAÇÃO, porque é ela que decide onde o caminho aponta no repo publicado:
-    // lá `oss/docs/` já virou `docs/` e o resto da árvore (packages/, storymap/) já está na raiz.
-    // Aqui, o mesmo caminho precisa do prefixo `oss/` — e o discriminador é o mesmo que
-    // `caminhoDoDoc` usa, para as duas árvores medirem a mesma propriedade.
-    //
-    // A régua é a ÁRVORE RASTREADA, não o disco. `*.png` está no `.gitignore` deste monorepo, então
-    // uma captura nova existe em disco e é INVISÍVEL para a extração (que mede o que o git rastreia)
-    // — o arquivo está lá, o README aponta certo, e o artefato publicado sai com o buraco. Medir
-    // `existsSync` aqui seria medir o vizinho do que importa: passaria verde enquanto
-    // `oss-github-mount` reprova no destino. `git add -f` é o conserto.
+    // Uma captura RENOMEADA ou REMOVIDA deixa o README apontando para o vazio, e o sintoma só aparece no
+    // navegador de quem clonou. A régua é a ÁRVORE RASTREADA, não o disco: uma captura só em disco é
+    // invisível para quem clona. `git add -f` é o conserto.
     const REL = /!\[[^\]]*\]\(([^)\s]+)\)|\b(?:src|srcset)="([^"\s]+)"/g;
     const IMAGEM = /\.(png|jpe?g|svg|gif|webp)$/i;
     const raiz = findRepoRoot();
-    const noUmbrella = existsSync(path.join(raiz, "oss", "README.md"));
-
-    const resolve = (ref: string): string =>
-      noUmbrella && ref.startsWith("docs/") ? `oss/${ref}` : ref;
+    const resolve = (ref: string): string => ref;
 
     const rastreados = new Set(
       execFileSync("git", ["ls-files", "-z"], { cwd: raiz, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })

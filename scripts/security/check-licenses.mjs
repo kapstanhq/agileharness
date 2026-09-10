@@ -147,7 +147,7 @@ function main() {
   // Sem isto, um fecho VAZIO produzia "✓ licenças aprovadas / 0 pacotes de terceiros" e exit 0.
   // Medido em 2026-08-06 num worktree sem `bun install`: veredito verde sobre ZERO pacote lido.
   //
-  // Por que aqui e não só no teste: `oss/ci/workflows/ci.yml:43` invoca este script COMO PASSO
+  // Por que aqui e não só no teste: `.github/workflows/ci.yml` invoca este script COMO PASSO
   // PRÓPRIO, antes do typecheck e da suíte — e o piso `toBeGreaterThan(300)` mora no teste, que roda
   // depois e noutro passo. Ou seja, o portão publicado podia dizer VERDE tendo medido NADA, no eixo
   // que esta casa marcou como sem desfazer (licença de terceiro num artefato já distribuído).

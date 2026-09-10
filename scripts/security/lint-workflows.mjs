@@ -50,7 +50,7 @@
 // 5 herda a MESMA postura: raiz sem `packageManager` legível vira `toolchain-mismatch`, porque "não consegui
 // comparar" nunca pode sair como "confere".
 //
-// Uso: node scripts/security/lint-workflows.mjs [--dir oss/ci/workflows] [--root .] [--json]
+// Uso: node scripts/security/lint-workflows.mjs [--dir .github/workflows] [--root .] [--json]
 // Saída: 0 aprovado · 2 REPROVADO · 1 erro de uso.
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
@@ -58,7 +58,7 @@ import { fileURLToPath } from "node:url";
 import yaml from "js-yaml";
 
 const RAIZ = fileURLToPath(new URL("../../", import.meta.url));
-const DIR_PADRAO = "oss/ci/workflows";
+const DIR_PADRAO = ".github/workflows";
 
 /** Contextos cujo valor um ESTRANHO escolhe e que IDENTIFICAM o código do PR — a base da lista (ver a regra 1
  *  no cabeçalho): `github.event.*` (texto e refs do PR), `github.head_ref` (nome do branch do PR),

@@ -451,7 +451,6 @@ is the attack.
 | [`storymap/README.md`](./storymap/README.md) | the canonical schema: cards, gates, pipeline |
 | [`storymap/frameworks.md`](./storymap/frameworks.md) | the built-in product frameworks (RICE, KANO, funnel) |
 | [`storymap/settings.yaml`](./storymap/settings.yaml) | every configuration key, commented |
-| [`.ossignore`](./.ossignore) | what was left out of the extraction, and why |
 
 <a id="project-status"></a>
 

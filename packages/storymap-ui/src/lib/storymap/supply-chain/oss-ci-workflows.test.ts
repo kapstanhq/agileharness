@@ -22,21 +22,20 @@
 // corte. No UMBRELLA, `.github/workflows/` não pode existir: o dono deletou os 5 workflows de propósito
 // (c5c2f0013, 461 deleções) e o CI daqui é LOCAL — recriá-los aqui reverteria uma decisão dele por efeito
 // colateral. No repositório EXTRAÍDO é o contrário, e por um fato mecânico: o GitHub só executa o que está em
-// `.github/workflows/`. Enquanto os workflows só viajavam como `oss/ci/`, o artefato publicado nascia com o
+// `.github/workflows/`. Enquanto os workflows viviam numa cópia revisada fora dali, o repositório publicado nascia com o
 // TEXTO de cinco portões e ZERO portões ligados (medido: `git ls-tree -r --name-only HEAD | grep -c
 // '^\.github/'` = 0) — pior que não ter CI, porque quem adota confia na prosa que viaja junto. Quem monta é a
-// etapa 4c do `oss/extract.sh`, e é dela que o teste de produtor deste diretório cobra o efeito.
+// montagem em `.github/` — hoje a única cópia, e é dela que o teste de produtor cobra o efeito.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { arvore } from "../oss-tree";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../../../../", import.meta.url));
 const LINTER = path.join(REPO_ROOT, "scripts/security/lint-workflows.mjs");
-const ARTEFATO = path.join(REPO_ROOT, "oss/ci");
+const ARTEFATO = path.join(REPO_ROOT, ".github");
 const WORKFLOWS = path.join(ARTEFATO, "workflows");
 
 let dirs: string[] = [];
@@ -354,9 +353,9 @@ jobs:
 /**
  * Todo caminho que os `run:` de um workflow invocam, separado em ENTRADA (tem de existir antes) e
  * SAÍDA (o próprio passo escreve). Sem parser de YAML de propósito: a regra do escalar em bloco é a
- * indentação, e é a mesma que `oss-tree.ts` já usa para achar o produtor do gate de segredo.
+ * indentação, e é a mesma que `oss-tree.ts` usa para achar o produtor do gate de segredo.
  *
- * POR QUE ISTO EXISTE AQUI e não só no `oss/extract.sh`: são dois MOMENTOS diferentes da mesma
+ * POR QUE ISTO EXISTE AQUI: são dois MOMENTOS diferentes da mesma
  * derivação, e o extrator não viaja. Lá a pergunta é "o artefato nasce com o CI ligado?"; aqui é "um
  * PR desta árvore acabou de deixar o CI chamando o que não existe?" — a pergunta que só o repositório
  * publicado, onde há PR de estranho, consegue fazer. A fonte das duas é o mesmo texto do workflow.
@@ -405,51 +404,16 @@ function caminhosInvocados(dirWorkflows: string): { entradas: Map<string, string
   return { entradas, saidas };
 }
 
-/**
- * O ÚNICO caminho invocado cuja existência depende de QUAL árvore é esta.
- *
- * No umbrella ele NÃO pode existir: o dono deletou os 5 workflows de GitHub Actions de propósito
- * (c5c2f0013, 461 deleções) e o CI daqui é LOCAL (`just validate-all`, o `vitest run` do merge train).
- * No artefato ele TEM de existir montado: o GitHub só executa o que está em `.github/workflows/`, e
- * `oss/ci/` viajar não liga nada — foi assim que o repositório publicado nasceu com o texto de cinco
- * portões e zero portões ligados. Quem o monta é a etapa 4c do `oss/extract.sh`.
- */
 const SO_NO_ARTEFATO = ".github/workflows";
-
-describe("o artefato de CI deste repositório", () => {
-  it("o `.github/` desta árvore é o que ESTA árvore deve ter (vazio no umbrella, montado no artefato)", () => {
-    const dir = path.join(REPO_ROOT, SO_NO_ARTEFATO);
-    const montados = existsSync(dir) ? readdirSync(dir).filter((f) => /\.ya?ml$/.test(f)).sort() : [];
-    const doArtefato = readdirSync(WORKFLOWS)
-      .filter((f) => /\.ya?ml$/.test(f))
-      .sort();
-    // Anti-vácuo: com zero workflow em oss/ci/ os dois ramos abaixo ficariam verdes sem medir nada —
-    // o do umbrella comparando [] com [], o do artefato comparando [] com [].
-    expect(doArtefato.length, "oss/ci/workflows sem nenhum workflow — o artefato de CI sumiu").toBeGreaterThan(0);
-
-    if (arvore() === "umbrella") {
-      expect(
-        montados,
-        "o CI deste monorepo é LOCAL; workflows vivem em oss/ci/workflows como ARTEFATO para o repo extraído",
-      ).toEqual([]);
-    } else {
-      expect(
-        montados,
-        "o artefato publicado precisa dos workflows em .github/workflows — sem isso o GitHub não executa " +
-          "portão nenhum, e o README que viaja junto descreve os portões em detalhe (pior que não ter CI)",
-      ).toEqual(doArtefato);
-      // E o conteúdo, não só o conjunto: são DUAS cópias do mesmo arquivo (a montagem copia, não move,
-      // porque `produtoresDaPublicacao()` varre `oss/ci/workflows/` nas duas árvores). Duas cópias que
-      // divergem publicam um CI revisado e outro EXECUTADO — e o que roda é sempre o de `.github/`.
-      for (const f of doArtefato) {
-        expect(
-          readFileSync(path.join(dir, f), "utf8"),
-          `.github/workflows/${f} divergiu de oss/ci/workflows/${f} — edite os dois no mesmo commit`,
-        ).toBe(readFileSync(path.join(WORKFLOWS, f), "utf8"));
-      }
-    }
+describe("o CI deste repositório", () => {
+  it("os workflows vivem em .github/workflows — a única cópia — e há pelo menos um", () => {
+    // Até a issue #1 havia DUAS cópias (uma revisada em `oss/`, uma montada aqui) e um teste que as
+    // comparava byte a byte. A cópia revisada saiu; o que o GitHub executa é o que a suíte lê.
+    expect(existsSync(WORKFLOWS), ".github/workflows ausente — o GitHub não executa portão nenhum").toBe(true);
+    const montados = readdirSync(WORKFLOWS).filter((f) => /\.ya?ml$/.test(f));
+    expect(montados.length, "nenhum workflow em .github/workflows — o CI sumiu").toBeGreaterThan(0);
+    expect(existsSync(path.join(REPO_ROOT, "oss")), "a cópia revisada em oss/ voltou — a árvore é uma só").toBe(false);
   });
-
   it("todo caminho que os workflows invocam existe nesta árvore", () => {
     // O defeito que este caso fecha, medido no artefato de referência: o passo
     // `node scripts/security/lint-workflows.mjs --dir .github/workflows` tinha METADE conferida — o
@@ -468,34 +432,13 @@ describe("o artefato de CI deste repositório", () => {
       .map(([p, onde]) => `${p} (invocado em ${[...new Set(onde)].join(", ")})`);
     expect(ausentes, "workflow chamando caminho inexistente = gate que nunca reprova, verde por não medir").toEqual([]);
 
-    // E o caminho condicional, cobrado nos DOIS sentidos — é ele que faz este caso discriminar em vez
-    // de concordar: no umbrella a ausência é a decisão do dono; no artefato a presença é o CI ligado.
-    const existeAqui = existsSync(path.join(REPO_ROOT, SO_NO_ARTEFATO));
-    expect(existeAqui, `${SO_NO_ARTEFATO} nesta árvore (${arvore()})`).toBe(arvore() === "extraido");
   });
 
-  it("o artefato existe, está sob oss/ci/ e passa o próprio linter", () => {
-    expect(existsSync(WORKFLOWS), "oss/ci/workflows ausente").toBe(true);
+  it("os workflows passam o próprio linter", () => {
+    expect(existsSync(WORKFLOWS), ".github/workflows ausente").toBe(true);
     const r = lint(WORKFLOWS);
     expect(r.code, `o artefato de CI reprovou o próprio linter: ${JSON.stringify(r.v?.findings)}`).toBe(0);
     expect(r.v.scanned).toBeGreaterThan(0);
-  });
-
-  it("o README deste diretório fala com quem CLONA o repositório publicado", () => {
-    // Ele viaja. A versão anterior abria com "estes arquivos NÃO devem ser copiados para `.github/` deste
-    // monorepo" — uma instrução endereçada ao DONO que, do outro lado do corte, vira instrução ERRADA: lá o
-    // `.github/` é justamente o que faz o CI existir. Um documento que viaja tem de ser verdadeiro no destino.
-    const readme = readFileSync(path.join(ARTEFATO, "README.md"), "utf8");
-    for (const destino of [".github/workflows", ".github/dependabot.yml", ".github/CODEOWNERS"]) {
-      expect(readme, `o README não documenta para onde vai ${destino}`).toContain(destino);
-    }
-    // A duplicação (`oss/ci/` + `.github/`) é visível para quem clona e precisa vir explicada, com a regra de
-    // edição — senão o adotante muda um lado e descobre pelo vermelho.
-    expect(readme, "o README não explica a regra de edição dos dois lados").toMatch(/DOIS lados|dois lados/);
-    // E não pode carregar de volta a decisão INTERNA do repositório de origem: o sha `c5c2f0013` não
-    // significa nada para quem clonou, e a decisão que ele registra (Actions aposentadas no umbrella) vale
-    // só de cá. Onde ela é COBRADA é neste arquivo de teste, que é onde um agente esbarra nela.
-    expect(readme, "o README publicado cita um commit do repositório de origem").not.toContain("c5c2f0013");
   });
 
   it("PRODUTOR: o CI do repo OSS chama os gates que esta sessão construiu", () => {
@@ -544,12 +487,11 @@ describe("o artefato de CI deste repositório", () => {
     }
   });
 
-  it("nenhum gate do CI carrega a régua de EXTRAÇÃO — do lado do artefato o corte JÁ aconteceu", () => {
-    // `.ossignore` é a régua do CORTE. Reaplicá-la no repositório publicado SUBTRAI da varredura
-    // arquivos que sobreviveram a ela, e a subtração é INVISÍVEL: `--fail-on-unscanned` reprova o ponto
+  it("nenhum gate do CI recorta a árvore com lista de exclusão — tudo que está aqui se publica", () => {
+    // Uma lista de exclusão SUBTRAI da varredura arquivos que estão no repositório, e a subtração é INVISÍVEL: `--fail-on-unscanned` reprova o ponto
     // cego ACIDENTAL (teto de bytes, não-regular, só no índice), nunca a exclusão deliberada.
     //
-    // MEDIDO no artefato em 2026-08-21: 10 dos 1236 rastreados ficavam fora — `.github/` inteiro, o
+    // MEDIDO em 2026-08-21, quando a régua da extração ainda era reaplicada aqui: 10 dos 1236 rastreados ficavam fora — `.github/` inteiro, o
     // `.gitignore`, os quatro documentos de raiz e o golden gerado no destino. Uma chave `AKIA…` colada
     // em `.github/workflows/` saía EXIT 0 com a régua e EXIT 2 sem ela.
     const textos = readdirSync(WORKFLOWS)
@@ -567,38 +509,14 @@ describe("o artefato de CI deste repositório", () => {
         .filter((l) => !/^\s*#/.test(l))
         .join("\n");
     for (const t of textos) {
-      expect(executavel(t), "um gate do CI do artefato voltou a carregar a régua de extração").not.toMatch(
-        /--exclude-from\s+\.ossignore/,
+      expect(executavel(t), "um gate do CI voltou a recortar a árvore com uma lista de exclusão").not.toMatch(
+        /--exclude-from/,
       );
     }
     // O que NÃO pode sumir junto com ela: sem estes dois o gate deixa de ser fail-closed.
     expect(textos.join("\n")).toContain("--tracked-only");
     expect(textos.join("\n")).toContain("--fail-on-unscanned");
 
-    // A RAZÃO, derivada da PRÓPRIA régua em vez de escrita à mão: ela exclui o diretório que contém os
-    // workflows que este teste acabou de ler. No dia em que deixar de excluir, esta linha cai e a
-    // proibição acima volta a ser discutível — com dado, não por memória.
-    const excluidoPelaRegua = (p: string): boolean => {
-      try {
-        execFileSync(
-          "git",
-          ["-c", `core.excludesFile=${path.join(REPO_ROOT, ".ossignore")}`, "check-ignore", "--no-index", "-q", p],
-          { cwd: REPO_ROOT, stdio: "pipe" },
-        );
-        return true;
-      } catch (e) {
-        // `check-ignore` devolve 1 para "não casou" e 128 para ERRO (opção desconhecida, régua ausente).
-        // Tratar os dois como "não casou" foi exatamente como esta régua se mediu com um instrumento
-        // quebrado e leu 12 exclusões como zero. Erro tem de estourar, não virar um verde.
-        const status = (e as { status?: number }).status;
-        if (status === 1) return false;
-        throw new Error(`git check-ignore falhou (status ${status}) — instrumento quebrado, não resposta`);
-      }
-    };
-    expect(
-      excluidoPelaRegua(`${SO_NO_ARTEFATO}/ci.yml`),
-      "a régua deixou de excluir .github/ — reveja se a proibição acima ainda se justifica",
-    ).toBe(true);
   });
 
   it("o artefato traz Dependabot e CODEOWNERS (entrada no branch, não cerimônia de deploy)", () => {
@@ -621,7 +539,6 @@ describe("o linter é auto-contido", () => {
   it("os arquivos do artefato não carregam bytes de credencial (o gate de snapshot já os cobre)", () => {
     // Redundância intencional e barata: o artefato de CI é justamente onde um segredo de exemplo tende a
     // ser colado "só para testar".
-    mkdirSync(path.join(REPO_ROOT, "oss/ci"), { recursive: true });
     const textos = readdirSync(WORKFLOWS).map((f) => readFileSync(path.join(WORKFLOWS, f), "utf8"));
     for (const t of textos) {
       expect(t).not.toMatch(/AKIA[0-9A-Z]{16}/);

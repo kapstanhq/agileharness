@@ -1,6 +1,6 @@
 # Donos de código do AgileHarness. Este arquivo é a ORIGEM; a extração monta a cópia em
 # `.github/CODEOWNERS`, byte a byte igual (o extrator recusa a divergência). Contexto e convenção
-# da montagem: `oss/ci/README.md`.
+# fonte única (a issue #1 aposentou a cópia revisada em `oss/`).
 #
 # Aqui o CODEOWNERS é gate de ENTRADA NO BRANCH, não cerimônia de deploy: combinado com proteção de branch
 # ("require review from Code Owners"), ele garante que um PR que mexe na SUPERFÍCIE DE SEGURANÇA não entre
@@ -39,7 +39,6 @@
 /SECURITY.md                                            @kapstanhq/maintainers
 /CONTRIBUTING.md                                        @kapstanhq/maintainers
 # A régua do corte para OSS: ela decide o que é publicado. Um `!` a mais publica o que ficou de fora.
-/.ossignore                                             @kapstanhq/maintainers
 
 # ── PROMPT-AS-CODE: instrução que um agente autônomo EXECUTA na máquina de quem adotou ────────────────
 # Isto não é texto. Uma skill é o programa que o agente headless roda com a permissão do CLI desligada;

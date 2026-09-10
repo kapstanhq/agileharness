@@ -6,7 +6,7 @@ import { boardConfigPath, boardsDir } from "./paths";
  * O SUJEITO das provas que precisam de um board REAL no disco.
  *
  * O problema que este módulo resolve. Os boards de produto do dono NÃO viajam na extração OSS — a
- * régua `.ossignore` os corta, e isso é decisão de projeto, não acidente. Mas ~40 provas desta suíte
+ * eles ficaram no repositório de origem, e isso é decisão de projeto, não acidente. Mas ~40 provas desta suíte
  * liam esses boards PELO NOME. No repositório extraído elas viravam ENOENT, e as travas anti-vácuo
  * (`expect(n).toBeGreaterThan(0)`) reprovavam por não ter o que medir — que é o comportamento certo
  * delas.
@@ -45,7 +45,7 @@ export function assertFixturePresent(id: string): string {
     throw new Error(
       `[board-fixture] o board de teste "${id}" não está em ${boardConfigPath(id)}. ` +
         `Ele é o SUJEITO da suíte e tem de viajar na extração — confira a negação ` +
-        `\`!/storymap/boards/${id}/\` no .ossignore antes de mexer nos testes.`,
+        `\`!/storymap/boards/${id}/\` na árvore antes de mexer nos testes.`,
     );
   }
   return id;

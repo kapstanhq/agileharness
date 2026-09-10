@@ -24,8 +24,8 @@ import yaml from "js-yaml";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../../../../", import.meta.url));
 const LINTER = path.join(REPO_ROOT, "scripts/security/lint-workflows.mjs");
-const WORKFLOWS = path.join(REPO_ROOT, "oss/ci/workflows");
-const DEPENDABOT = path.join(REPO_ROOT, "oss/ci/dependabot.yml");
+const WORKFLOWS = path.join(REPO_ROOT, ".github/workflows");
+const DEPENDABOT = path.join(REPO_ROOT, ".github/dependabot.yml");
 
 const SHA = "a1b2c3d4e5f6071829304a5b6c7d8e9f00112233";
 

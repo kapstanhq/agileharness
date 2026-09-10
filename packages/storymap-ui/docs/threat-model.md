@@ -55,7 +55,7 @@ chokepoint de parse de frontmatter; e a régua única de proveniência no merge 
 | Env do processo vaza para o filho | `sanitizeSpawnEnv` como chokepoint das superfícies de spawn, com lint | `runner/*-spawn.ts` | toda superfície nova usa o chokepoint |
 | Ação destrutiva de agente sem rastro | guard *fail-closed* + risk matrix + ledger `agent-actions` | `src/lib/storymap/mcp/guard.ts` | o ledger é auditoria, **não** autorização |
 | Redirect aberto no portão | `Location` sai da origem **declarada** (`AGILEHARNESS_PUBLIC_URL`), nunca de header do pedido | `middleware.ts` | a env está declarada em deploy (ver R8) |
-| Segredo do dono no primeiro commit público | `.ossignore` (denylist total) + varredura de segredos, ambos cobrados por teste contra a árvore real | `oss-*.test.ts` | a extração consome a lista pelo git |
+| Segredo do dono no primeiro commit público | renascimento sem histórico (um commit) + varredura de segredos, ambos cobrados por teste contra a árvore real | `oss-*.test.ts` | a extração consome a lista pelo git |
 
 ## O que o sistema NÃO protege
 

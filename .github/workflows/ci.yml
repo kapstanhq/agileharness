@@ -1,9 +1,8 @@
 # CI do repositório OSS do AgileHarness.
 #
-# DUAS CÓPIAS, DE PROPÓSITO: a fonte revisada é `oss/ci/workflows/` e a extração instala a cópia
-# executável em `.github/workflows/` (o GitHub só roda o que está lá). Edite os DOIS lados no mesmo
-# commit — o extrator e a suíte comparam byte a byte e reprovam a divergência. No monorepo de origem
-# não existe `.github/workflows/`: lá o CI é local, por decisão registrada.
+# ÚNICA CÓPIA: este diretório é a fonte que o GitHub executa e a que a suíte lê (a issue #1 aposentou a
+# cópia revisada em `oss/`). `scripts/security/lint-workflows.mjs` e os testes de supply-chain cobram
+# ESTE arquivo diretamente.
 #
 # `pull_request` (e NUNCA `pull_request_target`): PR de fork roda SEM acesso a secrets. É a diferença entre
 # um CI que testa código de estranho e um CI que ENTREGA as credenciais do repositório a ele.
@@ -133,7 +132,7 @@ jobs:
       # Varre a ÁRVORE rastreada — não o índice — com `--fail-on-unscanned`, para que um ponto cego
       # ACIDENTAL reprove em vez de sair como "liberado".
       #
-      # SEM `--exclude-from .ossignore`, ao contrário do alvo `just oss-snapshot-gate` do umbrella, e a
+      # SEM lista de exclusão: a árvore inteira é o que se publica (a régua de corte saiu com a issue #1), e a
       # diferença é o ponto todo: aquela régua é a do CORTE, e do lado de cá o corte JÁ ACONTECEU. Aplicá-la
       # aqui subtrai da varredura arquivos que sobreviveram a ela — e a subtração é INVISÍVEL, porque
       # `--fail-on-unscanned` só reprova o ponto cego acidental (teto de bytes, não-regular), nunca a

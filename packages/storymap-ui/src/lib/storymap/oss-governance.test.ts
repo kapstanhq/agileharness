@@ -38,12 +38,10 @@
 
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { arvore } from "./oss-tree";
 
 /** A raiz do repositório, resolvida pela LOCALIZAÇÃO DESTA FONTE (não por cwd nem por env). */
 const RAIZ = path.resolve(fileURLToPath(new URL("../../../../../", import.meta.url)));
@@ -69,64 +67,19 @@ function git(args: readonly string[]): string {
 /**
  * Testemunhas FORA da árvore-ferramenta. Uma varredura amputada em `packages/storymap-ui` satisfaz o
  * piso por construção (o piso é derivado da mesma árvore) e não seria pega por ele; estas três
- * viajam por decisão da régua e somem juntas quando a varredura está apontada para o lugar errado.
+ * moram fora dela e somem juntas quando a varredura está apontada para o lugar errado.
  */
-const TESTEMUNHAS_EXTERNAS = ["LICENSE", ".ossignore", "storymap/boards/_base/board.yaml"] as const;
+const TESTEMUNHAS_EXTERNAS = ["LICENSE", ".github/CODEOWNERS", "storymap/boards/_base/board.yaml"] as const;
 
 /**
- * Veredito da RÉGUA (`/.ossignore`) sobre caminhos ARBITRÁRIOS — inclusive os que o git ainda não
- * rastreia. Mesmo motor de casamento do corte de verdade (o git), num repositório descartável com a
- * régua plantada como `.gitignore`. É a técnica que `oss-exclusion-list.test.ts` usa para avaliar
- * segredo não-rastreado; aqui ela serve ao caso simétrico, o documento recém-escrito.
- */
-function cortadosPelaRegua(caminhos: readonly string[]): Set<string> {
-  const probe = mkdtempSync(path.join(tmpdir(), "ah-regua-governanca-"));
-  try {
-    execFileSync("git", ["init", "-q", probe]);
-    cpSync(path.join(RAIZ, ".ossignore"), path.join(probe, ".gitignore"));
-    let saida = "";
-    try {
-      saida = execFileSync("git", ["check-ignore", "--no-index", "--stdin", "-v", "-n"], {
-        cwd: probe,
-        input: caminhos.join("\n"),
-        encoding: "utf8",
-      });
-    } catch (e) {
-      // `check-ignore` sai 1 quando nenhum caminho casa; a saída ainda vale.
-      saida = String((e as { stdout?: string }).stdout ?? "");
-    }
-    const cortados = new Set<string>();
-    for (const linha of saida.split("\n").filter(Boolean)) {
-      const [descricao, alvo] = linha.split("\t");
-      if (descricao == null || alvo == null) continue;
-      // `::` = nenhum padrão casou ⇒ VIAJA. E um padrão de NEGAÇÃO casa mas significa "viaja" — sem
-      // esta leitura, um arquivo RE-INCLUÍDO seria reportado como cortado.
-      const padrao = descricao.split(":").slice(2).join(":");
-      if (descricao !== "::" && !padrao.startsWith("!")) cortados.add(alvo);
-    }
-    return cortados;
-  } finally {
-    rmSync(probe, { recursive: true, force: true });
-  }
-}
-
-/**
- * O conjunto que CHEGA ao repositório publicado, medido na árvore em que este teste está rodando.
+ * O conjunto que CHEGA ao repositório publicado: o rastreado inteiro — a árvore é uma só desde a issue
+ * #1. Nunca uma segunda lista de arquivos: duas listas são duas verdades, e a que apodrece falha calada.
  *
- * · No umbrella é `git ls-files` menos o que a régua (`/.ossignore`) corta — o MESMO comando
- *   canônico que a régua documenta e que `oss/extract.sh` executa. Nunca uma segunda lista de
- *   arquivos: duas listas são duas verdades, e a que apodrece falha calada.
- * · No artefato extraído é o rastreado inteiro — ali o corte já aconteceu, e reaplicar a régua
- *   mediria um segundo corte que ninguém faz.
- *
- * A ÚNICA EXTENSÃO, e ela é estreita e declarada: um documento da tabela `GOVERNANCA` que já existe
- * em disco mas ainda não foi commitado conta como viajante SE — e só se — a régua o deixa passar. O
- * defeito que este guarda caça é a régua que corta e a extração que não realoca, não o commit que
- * falta; um guarda que fica vermelho enquanto o autor escreve o arquivo é desligado no primeiro dia,
- * e desligado ele não pega nem o defeito de verdade. Quem cobra o commit é o portão de publicação,
- * que roda sobre a árvore rastreada.
+ * A ÚNICA EXTENSÃO, estreita e declarada: um documento da tabela `GOVERNANCA` que já existe em disco
+ * mas ainda não foi commitado conta como viajante. Um guarda que fica vermelho enquanto o autor escreve
+ * o arquivo é desligado no primeiro dia; quem cobra o commit é o portão de publicação.
  */
-function conjuntoQueViaja(): { viajam: string[]; rastreados: string[]; onde: "umbrella" | "extraido" } {
+function conjuntoQueViaja(): { viajam: string[]; rastreados: string[] } {
   const rastreados = git(["ls-files"]).split("\n").filter(Boolean);
   if (rastreados.length < PISO_DE_ARQUIVOS) {
     throw new Error(
@@ -150,51 +103,24 @@ function conjuntoQueViaja(): { viajam: string[]; rastreados: string[]; onde: "um
     );
   }
 
-  const onde = arvore(RAIZ);
-
-  const naoCommitados = GOVERNANCA.map((d) => (onde === "umbrella" ? d.origem : d.destino)).filter(
+  const naoCommitados = GOVERNANCA.map((d) => d.destino).filter(
     (rel) => !rastreados.includes(rel) && existsSync(path.join(RAIZ, rel)),
   );
-  const extras =
-    naoCommitados.length === 0
-      ? []
-      : (() => {
-          const cortados = onde === "umbrella" ? cortadosPelaRegua(naoCommitados) : new Set<string>();
-          const passam = naoCommitados.filter((p) => !cortados.has(p));
-          for (const p of passam) {
-            console.warn(
-              `⚠ [oss-governance] "${p}" ainda não está commitado; a régua o deixa passar, então ele é ` +
-                "medido como viajante. O commit é cobrado pelo portão de publicação, não aqui.",
-            );
-          }
-          return passam;
-        })();
-
-  if (onde === "extraido") return { viajam: [...rastreados, ...extras], rastreados, onde };
-
-  const ignorados = new Set(
-    git(["ls-files", "--cached", "--ignored", `--exclude-from=${path.join(RAIZ, ".ossignore")}`])
-      .split("\n")
-      .filter(Boolean),
-  );
-  const viajam = [...rastreados.filter((p) => !ignorados.has(p)), ...extras];
-  if (viajam.length < PISO_DE_ARQUIVOS) {
-    throw new Error(
-      `apenas ${viajam.length} arquivos viajariam (piso ${PISO_DE_ARQUIVOS}): ou a régua passou a cortar ` +
-        "a ferramenta, ou o `--exclude-from` não foi aplicado. Os dois invalidam tudo abaixo.",
+  for (const p of naoCommitados) {
+    console.warn(
+      `⚠ [oss-governance] "${p}" ainda não está commitado; é medido como viajante. O commit é cobrado ` +
+        "pelo portão de publicação, não aqui.",
     );
   }
-  return { viajam, rastreados, onde };
+  return { viajam: [...rastreados, ...naoCommitados], rastreados };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
-// OS TRÊS DOCUMENTOS, e o endereço de cada um dos dois lados do corte
+// OS TRÊS DOCUMENTOS que o GitHub lê
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 interface DocDeGovernanca {
   /** Onde ele FICA no repositório publicado — o caminho que o GitHub lê. */
   readonly destino: string;
-  /** Onde ele MORA no umbrella; a extração o move/copia para `destino`. */
-  readonly origem: string;
   /** O que se perde quando ele não chega. Aparece na mensagem de falha. */
   readonly porque: string;
 }
@@ -202,42 +128,27 @@ interface DocDeGovernanca {
 const GOVERNANCA: readonly DocDeGovernanca[] = [
   {
     destino: "SECURITY.md",
-    origem: "oss/SECURITY.md",
     porque:
       "sem ela na RAIZ o GitHub não abre a aba Security nem o botão de reporte privado, e quem achar " +
       "uma falha nesta ferramenta abre issue PÚBLICO por falta de canal declarado",
   },
   {
     destino: "CONTRIBUTING.md",
-    origem: "oss/CONTRIBUTING.md",
     porque:
       "é o que o GitHub linka no formulário de PR e de issue; sem ele o primeiro contribuidor descobre " +
       "sozinho, e errando, que a verificação de tela desta base só vale em build de produção",
   },
   {
     destino: ".github/CODEOWNERS",
-    origem: "oss/ci/CODEOWNERS",
     porque:
       "é o que transforma 'require review from Code Owners' em revisor de verdade; fora de `.github/` " +
       "ele é um arquivo de texto que ninguém executa",
   },
 ];
 
-/**
- * Caminhos do ARTEFATO que a extração monta a partir de outro endereço do umbrella. Sem este mapa,
- * uma regra do CODEOWNERS que aponta para `/.github/` seria lida como MORTA no umbrella (onde o
- * diretório não existe, e não existe de propósito — o dono apagou os workflows daqui) e este guarda
- * reprovaria a regra certa.
- */
-const DESTINO_PARA_ORIGEM: ReadonlyMap<string, string> = new Map<string, string>([
-  ...GOVERNANCA.map((d) => [d.destino, d.origem] as [string, string]),
-  // A etapa 4c do `extract.sh` monta o `.github/` do destino a partir de `oss/ci/`.
-  [".github/", "oss/ci/"],
-]);
-
-/** O caminho deste documento NA ÁRVORE em que o teste roda. */
-function caminhoAqui(doc: DocDeGovernanca, onde: "umbrella" | "extraido"): string {
-  return onde === "umbrella" ? doc.origem : doc.destino;
+/** O caminho deste documento na árvore. */
+function caminhoAqui(doc: DocDeGovernanca): string {
+  return doc.destino;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -381,10 +292,9 @@ function casa(padrao: string, caminho: string): boolean {
 }
 
 /** Os caminhos DESTA árvore que uma regra do artefato cobre. */
-function alcanceNestaArvore(padrao: string, viajam: readonly string[], onde: "umbrella" | "extraido"): string[] {
+function alcanceNestaArvore(padrao: string, viajam: readonly string[]): string[] {
   const alvo = padrao === "*" ? "" : padrao.slice(1);
-  const traduzido = onde === "umbrella" ? (DESTINO_PARA_ORIGEM.get(alvo) ?? alvo) : alvo;
-  const comoPadrao = traduzido === "" ? "*" : `/${traduzido}`;
+  const comoPadrao = alvo === "" ? "*" : `/${alvo}`;
   return viajam.filter((p) => casa(comoPadrao, p));
 }
 
@@ -447,14 +357,10 @@ function censoDePromptAsCode(viajam: readonly string[]): Map<string, string[]> {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 describe("governança que o GitHub realmente lê — os três documentos CHEGAM ao artefato", () => {
   it("SECURITY.md, CONTRIBUTING.md e .github/CODEOWNERS estão no conjunto que viaja", () => {
-    const { viajam, onde } = conjuntoQueViaja();
+    const { viajam } = conjuntoQueViaja();
     const conjunto = new Set(viajam);
-    const faltando = GOVERNANCA.filter((d) => !conjunto.has(caminhoAqui(d, onde))).map((d) =>
-      onde === "umbrella"
-        ? `• ${d.destino} — a fonte \`${d.origem}\` NÃO viaja. A régua corta \`/oss/*\`; falta a ` +
-          `negação \`!/${d.origem}\` no .ossignore. Sem ela a etapa 4b(iv)/4c do extract.sh não ` +
-          `encontra o arquivo no destino e o artefato nasce sem ele. ${d.porque}`
-        : `• ${d.destino} — ausente do repositório publicado. ${d.porque}`,
+    const faltando = GOVERNANCA.filter((d) => !conjunto.has(caminhoAqui(d))).map(
+      (d) => `• ${d.destino} — ausente do repositório publicado. ${d.porque}`,
     );
     expect(faltando.join("\n"), "documento de governança que não chega ao repositório publicado").toBe("");
   });
@@ -478,7 +384,7 @@ describe("governança que o GitHub realmente lê — os três documentos CHEGAM 
   });
 
   it("[ATAQUE] nenhum documento que viaja carrega marcador de preenchimento pendente", () => {
-    const { viajam, onde } = conjuntoQueViaja();
+    const { viajam } = conjuntoQueViaja();
     const infracoes: Infracao[] = [];
     for (const rel of viajam.filter(ehDocumento)) {
       const abs = path.join(RAIZ, rel);
@@ -487,7 +393,7 @@ describe("governança que o GitHub realmente lê — os três documentos CHEGAM 
     }
     expect(
       infracoes.map((i) => `• ${i.arquivo}:${i.linha} [${i.marcador}] ${i.texto}`).join("\n"),
-      `marcador de pendência em documento publicado (árvore: ${onde}). O conserto é DECIDIR e escrever a ` +
+      `marcador de pendência em documento publicado. O conserto é DECIDIR e escrever a ` +
         "decisão — nunca afrouxar a régua nem isentar o arquivo",
     ).toBe("");
   });
@@ -509,10 +415,9 @@ describe("governança que o GitHub realmente lê — os três documentos CHEGAM 
   });
 
   it("a política não publica endereço de e-mail nenhum — a ausência é a decisão", () => {
-    const { onde } = conjuntoQueViaja();
     const doc = GOVERNANCA.find((d) => d.destino === "SECURITY.md");
     if (doc == null) throw new Error("a política saiu da tabela de governança");
-    const texto = readFileSync(path.join(RAIZ, caminhoAqui(doc, onde)), "utf8");
+    const texto = readFileSync(path.join(RAIZ, caminhoAqui(doc)), "utf8");
     const email = texto.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.(com|org|net|dev|io|ai|br)\b/i);
     expect(
       email?.[0] ?? "",
@@ -522,20 +427,11 @@ describe("governança que o GitHub realmente lê — os três documentos CHEGAM 
   });
 
   it("todo ponteiro relativo dos documentos de governança existe NO ARTEFATO", () => {
-    const { viajam, onde } = conjuntoQueViaja();
-    // Os documentos de `oss/` são escritos em coordenadas do ARTEFATO (é a convenção do
-    // `oss/README.md`, que já linka `./AGENTS.md`). Conferir o link contra o umbrella acusaria a
-    // convenção certa; o que se confere é se o alvo CHEGA lá.
-    // Um alvo escrito em coordenadas do artefato tem, no umbrella, o endereço de ORIGEM — é o que
-    // este mapa devolve; no artefato ele é identidade e a tradução some sozinha.
-    const origemDe =
-      onde === "umbrella"
-        ? new Map(GOVERNANCA.map((d) => [d.destino, d.origem] as [string, string]))
-        : new Map<string, string>();
+    const { viajam } = conjuntoQueViaja();
     const quebrados: string[] = [];
     let conferidos = 0;
     for (const doc of GOVERNANCA) {
-      const abs = path.join(RAIZ, caminhoAqui(doc, onde));
+      const abs = path.join(RAIZ, caminhoAqui(doc));
       if (!existsSync(abs)) continue;
       const texto = readFileSync(abs, "utf8");
       for (const m of texto.matchAll(/\]\(([^)#\s]+)\)/g)) {
@@ -543,11 +439,7 @@ describe("governança que o GitHub realmente lê — os três documentos CHEGAM 
         if (alvo == null || /^[a-z]+:/i.test(alvo)) continue; // http(s), mailto: não são caminho
         conferidos++;
         const noArtefato = alvo.replace(/^\.\//, "");
-        const equivalente = origemDe.get(noArtefato) ?? noArtefato;
-        const existe =
-          viajam.includes(noArtefato) ||
-          viajam.includes(equivalente) ||
-          viajam.some((p) => p.startsWith(`${noArtefato}/`));
+        const existe = viajam.includes(noArtefato) || viajam.some((p) => p.startsWith(`${noArtefato}/`));
         if (!existe) quebrados.push(`• ${doc.destino} → ${alvo} (não chega ao artefato)`);
       }
     }
@@ -558,19 +450,19 @@ describe("governança que o GitHub realmente lê — os três documentos CHEGAM 
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 describe("CODEOWNERS — dono que existe, regra que casa, e nada de ilusão de revisão", () => {
-  function codeowners(): { texto: string; regras: Regra[]; viajam: string[]; onde: "umbrella" | "extraido" } {
-    const { viajam, onde } = conjuntoQueViaja();
+  function codeowners(): { texto: string; regras: Regra[]; viajam: string[] } {
+    const { viajam } = conjuntoQueViaja();
     const doc = GOVERNANCA.find((d) => d.destino === ".github/CODEOWNERS");
     if (doc == null) throw new Error("o CODEOWNERS saiu da tabela de governança");
-    const abs = path.join(RAIZ, caminhoAqui(doc, onde));
+    const abs = path.join(RAIZ, caminhoAqui(doc));
     if (!existsSync(abs)) {
       throw new Error(
-        `${caminhoAqui(doc, onde)} não existe. Sem o arquivo, toda asserção abaixo passaria por não ter ` +
+        `${caminhoAqui(doc)} não existe. Sem o arquivo, toda asserção abaixo passaria por não ter ` +
           "o que medir — que é exatamente o estado que ele existe para impedir.",
       );
     }
     const texto = readFileSync(abs, "utf8");
-    return { texto, regras: lerRegras(texto), viajam, onde };
+    return { texto, regras: lerRegras(texto), viajam };
   }
 
   it("[ATAQUE] todo dono citado no arquivo — inclusive em comentário — está na lista declarada", () => {
@@ -600,20 +492,11 @@ describe("CODEOWNERS — dono que existe, regra que casa, e nada de ilusão de r
   });
 
   it("[ATAQUE] nenhuma regra é morta: todo caminho tem sobrevivente no artefato", () => {
-    const { regras, viajam, onde } = codeowners();
+    const { regras, viajam } = codeowners();
     expect(regras.length, "CODEOWNERS sem regra nenhuma").toBeGreaterThan(1);
     const mortas = regras
-      .filter((r) => r.padrao !== "*" && alcanceNestaArvore(r.padrao, viajam, onde).length === 0)
-      .map((r) => {
-        // A tradução aparece na mensagem: sem ela, uma regra viva no artefato mas cuja FONTE a régua
-        // corta lê-se como "escrevi o caminho errado", e o conserto vai para o lugar errado.
-        const alvo = r.padrao.slice(1);
-        const origem = onde === "umbrella" ? DESTINO_PARA_ORIGEM.get(alvo) : undefined;
-        return origem == null
-          ? `• linha ${r.linha}: ${r.padrao}`
-          : `• linha ${r.linha}: ${r.padrao} — nesta árvore ele nasce de \`${origem}\`, que NÃO viaja ` +
-            `(falta a negação \`!/${origem}\` no .ossignore). A regra não está errada; o transporte é que não existe`;
-      });
+      .filter((r) => r.padrao !== "*" && alcanceNestaArvore(r.padrao, viajam).length === 0)
+      .map((r) => `• linha ${r.linha}: ${r.padrao}`);
     expect(
       mortas.join("\n"),
       "regra apontando para caminho sem nenhum arquivo no repositório publicado. O GitHub ignora a regra e " +
@@ -623,14 +506,14 @@ describe("CODEOWNERS — dono que existe, regra que casa, e nada de ilusão de r
   });
 
   it("o medidor de regra morta sabe reprovar — um caminho sabidamente ausente mede ZERO", () => {
-    const { viajam, onde } = codeowners();
+    const { viajam } = codeowners();
     // Controle: sem isto, "nenhuma regra morta" poderia significar que o casador aprova qualquer coisa.
-    expect(alcanceNestaArvore("/nao-existe-neste-repositorio/", viajam, onde)).toEqual([]);
-    expect(alcanceNestaArvore("/packages/", viajam, onde).length).toBeGreaterThan(0);
+    expect(alcanceNestaArvore("/nao-existe-neste-repositorio/", viajam)).toEqual([]);
+    expect(alcanceNestaArvore("/packages/", viajam).length).toBeGreaterThan(0);
   });
 
   it("[ATAQUE] todo prompt-as-code que viaja tem revisor NOMEADO, não só o `*` do piso", () => {
-    const { regras, viajam, onde } = codeowners();
+    const { regras, viajam } = codeowners();
     const censo = censoDePromptAsCode(viajam);
 
     // (a) o censo não é ficção: família declarada sem sobrevivente é declaração morta, e faria a
@@ -656,7 +539,7 @@ describe("CODEOWNERS — dono que existe, regra que casa, e nada de ilusão de r
     // (c) a cobertura: cada arquivo precisa de uma regra que NÃO seja o `*`.
     const explicitas = regras.filter((r) => r.padrao !== "*");
     const descobertos = todos
-      .filter((p) => !explicitas.some((r) => alcanceNestaArvore(r.padrao, [p], onde).length > 0))
+      .filter((p) => !explicitas.some((r) => alcanceNestaArvore(r.padrao, [p]).length > 0))
       .slice(0, 20);
     expect(
       descobertos.join("\n"),

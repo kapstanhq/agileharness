@@ -49,7 +49,6 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 // `arvore` colide com o construtor de árvore-de-mentira deste arquivo — o alias é para não
 // sombrear o discriminador de árvore, que é outra coisa.
-import { arvore as classificaArvore, substituicoesDaPublicacao } from "./oss-tree";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../../../", import.meta.url));
 const LICENSE = path.join(REPO_ROOT, "LICENSE");
@@ -303,18 +302,23 @@ function arvore(alvo: Manifesto, instalados: Record<string, Manifesto>): string 
   return raiz;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// O fecho como ele será PUBLICADO — não como está instalado AQUI
-// ─────────────────────────────────────────────────────────────────────────────
-// As duas coisas coincidiram até o Next 14 e divergiram no 15, por desenho (ver
-// `substituicoesDaPublicacao` em `oss-tree.ts`, que carrega o porquê inteiro). Toda medição sobre a
-// árvore REAL passa por aqui; as árvores de mentira abaixo chamam `fechoPublicado` cru, porque nelas
-// não há publicação nenhuma a simular.
-const SUBSTITUIDOS = (): ReadonlySet<string> => new Set(substituicoesDaPublicacao(REPO_ROOT).keys());
+// ─────────────────────────────────────────────────
+// O fecho como ele está INSTALADO AQUI é o fecho publicado
+// ─────────────────────────────────────────────────
+// Não há extração a simular desde a issue #1: o override que remove um pacote do fecho vive nos
+// `overrides` do package.json desta raiz e o disco já o reflete. A medição sobre a árvore real é
+// integral; as árvores de mentira abaixo chamam `fechoPublicado` cru.
+/** Os overrides `npm:` do package.json da raiz — o que a publicação troca por um stub. */
+function substituicoesDoManifesto(): Map<string, string> {
+  const raiz = JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8")) as { overrides?: Record<string, string> };
+  return new Map(Object.entries(raiz.overrides ?? {}).filter(([, v]) => v.startsWith("npm:")));
+}
+const SUBSTITUIDOS = (): ReadonlySet<string> => new Set<string>();
 const fechoDoArtefato = () => fechoPublicado(REPO_ROOT, PKG_REL, SUBSTITUIDOS());
 
-// O conjunto REVISADO: a isenção é um buraco na medição, então ela não pode crescer sozinha. Uma
-// remoção nova em `DA_EXTRACAO` reprova aqui até alguém escrevê-la nesta linha — de propósito.
+// O conjunto REVISADO: um override `npm:` é um buraco na medição de licença (o pacote real deixa de
+// ser medido), então ele não pode crescer sozinho. Um override novo reprova aqui até alguém escrevê-lo
+// nesta linha — de propósito.
 const SUBSTITUICOES_REVISADAS = ["sharp"];
 
 describe("LICENSE Apache-2.0 aplicada antes do primeiro push público (story-a3331a)", () => {
@@ -377,67 +381,23 @@ describe("gate de copyleft sobre o fecho REALMENTE publicado (story-a3331a)", ()
     expect(naoOpcionaisAusentes, "dep não-opcional ausente do disco: o gate não pode afirmar a licença dela").toEqual([]);
   });
 
-  it("a substituição que a publicação aplica é EXATAMENTE a revisada — remoção nova exige revisão", () => {
-    const nomes = [...substituicoesDaPublicacao(REPO_ROOT).keys()].sort();
-    if (classificaArvore(REPO_ROOT) === "extraido") {
-      // No artefato não há nada a simular: o override já está no `package.json` publicado e o disco É o
-      // fecho publicado. Isentar aqui subtrairia do gate justamente a única medição que vale.
-      expect(nomes, "o artefato mede o fecho de verdade — ele não pode isentar nada").toEqual([]);
-      return;
-    }
+  it("os overrides `npm:` do manifesto são EXATAMENTE os revisados — override novo exige revisão", () => {
+    const nomes = [...substituicoesDoManifesto().keys()].sort();
     expect(
       nomes,
-      "mudou o conjunto de pacotes que a extração REMOVE do fecho. Cada nome aí deixa de ser medido " +
-        "pelo gate de licença NESTA árvore, então isto é revisão e não detalhe: confirme o motivo em " +
-        "oss/extract.sh (`DA_EXTRACAO`) e escreva o nome novo em SUBSTITUICOES_REVISADAS.",
+      "mudou o conjunto de pacotes que o package.json troca por stub. Cada nome aí deixa de ser medido pelo " +
+        "gate de licença, então isto é revisão e não detalhe: confirme o motivo no `overrides` da raiz e " +
+        "escreva o nome novo em SUBSTITUICOES_REVISADAS.",
     ).toEqual(SUBSTITUICOES_REVISADAS);
   });
-
-  it("[ATAQUE] a isenção não é decorativa — sem ela o fecho medido AQUI tem o copyleft que ela remove", () => {
-    if (classificaArvore(REPO_ROOT) === "extraido") {
-      expect(SUBSTITUIDOS().size, "no artefato não há isenção a exercitar").toBe(0);
-      return;
-    }
-    const semIsencao = fechoPublicado(REPO_ROOT, PKG_REL).pacotes;
-    const comIsencao = fechoDoArtefato().pacotes;
-
-    // Uma isenção que não subtrai nada é buraco sem sujeito: fica aberta, ninguém percebe, e no dia em
-    // que passar a cobrir alguma coisa já cobre em silêncio.
-    const proibidosSemIsencao = [...semIsencao.entries()]
-      .filter(([, pkg]) => classificaExpressao(pkg.spdx) === "proibida")
-      .map(([chave]) => chave)
-      .sort();
-    expect(
-      proibidosSemIsencao,
-      "a isenção não subtrai copyleft nenhum. Ou o next parou de arrastar o sharp — e aí ela virou " +
-        "buraco sem dono, para REMOVER de oss/extract.sh — ou o fecho parou de ser medido.",
-    ).not.toEqual([]);
-
-    // …e o que ela subtrai TEM de incluir esse copyleft. Sem isto, (a) poderia estar apontando para uma
-    // proibida que a isenção nem alcança, e o gate seguiria vermelho por outro motivo, calado.
-    const removidos = [...semIsencao.keys()].filter((chave) => !comIsencao.has(chave));
-    expect(
-      proibidosSemIsencao.filter((chave) => !removidos.includes(chave)),
-      "sobrou copyleft-forte no fecho publicado que a isenção NÃO remove",
-    ).toEqual([]);
-    // A ESTREITEZA não se prova aqui, e não por preguiça: ela é estrutural. Um pacote alcançável por
-    // outro caminho continua sendo alcançado pela travessia, então a substituição só pode derrubar o
-    // que dependia SÓ do substituído. Conferir isso contra uma segunda travessia da mesma árvore seria
-    // reescrever a implementação e compará-la consigo mesma. Quem prova o mecanismo é a árvore de
-    // mentira mais abaixo, onde o "compartilhado" é plantado de propósito.
-  });
-
   it("[ATAQUE] enquanto o `sharp` viajar como STUB, ninguém pode importar `next/image`", () => {
     // A ÚNICA precondição do override, virada trava. O `sharp` é apontado para um stub porque o
     // otimizador de imagem é a única coisa que ele serve e este produto não usa `next/image` em lugar
     // nenhum. No dia em que alguém importar, o otimizador falha EM RUNTIME, no artefato publicado, com
     // um erro que não nomeia o override — o pior formato possível: longe daqui, tarde, e sem pista.
     //
-    // A pergunta é "o sharp chega ao destino como stub?", e ela tem DUAS fontes porque a resposta mora
-    // em lugares diferentes nas duas árvores: no umbrella, no extrator; no ARTEFATO, já materializada
-    // nos `overrides` do package.json. Perguntar só ao extrator desligaria a trava exatamente na árvore
-    // onde o stub de fato roda.
-    const doExtrator = substituicoesDaPublicacao(REPO_ROOT).has("sharp");
+    // A resposta mora nos `overrides` do package.json da raiz — o único lugar, desde a issue #1.
+    const doExtrator = false;
     const raiz = JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8")) as {
       overrides?: Record<string, string>;
     };
@@ -477,7 +437,7 @@ describe("gate de copyleft sobre o fecho REALMENTE publicado (story-a3331a)", ()
     expect(
       usos,
       "`next/image` importado enquanto o `sharp` viaja como stub: no artefato publicado o otimizador " +
-        "não tem binário e falha em runtime. Ou remova o import, ou remova o override em oss/extract.sh " +
+        "não tem binário e falha em runtime. Ou remova o import, ou remova o override do package.json da raiz " +
         "(`DA_EXTRACAO`) — e aí reabra a questão da LGPL que ele mantém fora do fecho.",
     ).toEqual([]);
   });
@@ -597,25 +557,11 @@ describe("NOTICE atribui os MPL-2.0 que a ferramenta redistribui (story-a3331a)"
 // gerador de SBOM descreve como o componente publicado — saía sem `license`, enquanto o CONTRIBUTING
 // promete que pacote sem licença reprova. O valor tem de ser o MESMO derivado do arquivo LICENSE que
 // viajou: um `"license"` digitado à mão que não corresponda ao arquivo é pior que ausente.
-describe("a extração declara a licença no manifesto do PACOTE, não só no da raiz", () => {
-  const extractSh = (() => {
-    const noUmbrella = path.resolve(process.cwd(), "../../oss/extract.sh");
-    return existsSync(noUmbrella) ? readFileSync(noUmbrella, "utf8") : null;
-  })();
-
-  it.skipIf(extractSh === null)("o extrator escreve `pkg.license` a partir do mesmo `licSpdx` da raiz", () => {
-    const src = extractSh!;
-    expect(src.length).toBeGreaterThan(1000);
-    expect(src, "o manifesto do pacote precisa receber a licença derivada").toMatch(/pkg\.license\s*=\s*licSpdx/);
-    // e o valor continua DERIVADO do arquivo, não digitado
-    expect(src).toMatch(/LIC_SPDX="Apache-2\.0"/);
-    const idxDeriva = src.indexOf("LIC_SPDX=\"Apache-2.0\"");
-    const idxUso = src.indexOf("pkg.license = licSpdx");
-    expect(idxDeriva, "a derivação precisa vir antes do uso").toBeLessThan(idxUso);
-  });
-
-  it.skipIf(extractSh !== null)("no artefato, o manifesto do pacote JÁ carrega a licença", () => {
-    const pkg = JSON.parse(readFileSync(path.join(process.cwd(), "package.json"), "utf8")) as { license?: string };
-    expect(pkg.license, "o pacote publicado precisa declarar a própria licença").toBe("Apache-2.0");
+describe("a licença está declarada no manifesto do PACOTE, não só no da raiz", () => {
+  it("o `license` do pacote é o MESMO SPDX derivado do arquivo LICENSE da raiz", () => {
+    const raiz = JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8")) as { license?: string };
+    const pkg = JSON.parse(readFileSync(path.join(REPO_ROOT, PKG_REL, "package.json"), "utf8")) as { license?: string };
+    expect(raiz.license).toBe("Apache-2.0");
+    expect(pkg.license, "pacote sem licença no manifesto — é o que o CONTRIBUTING promete reprovar").toBe(raiz.license);
   });
 });

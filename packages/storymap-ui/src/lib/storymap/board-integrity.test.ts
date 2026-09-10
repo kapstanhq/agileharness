@@ -382,7 +382,7 @@ describe("board integrity — toolkit declarativo (WS3 F2)", () => {
   // (WARN se faltar — advisory).
   //
   // POR QUE ESTE TESTE OLHA PARA A ÁRVORE ANTES DE COBRAR. `.claude/agents/` é do repo CONSUMIDOR,
-  // por decisão escrita na régua .ossignore ("as lentes de review são do repo consumidor — o board só
+  // por decisão escrita na antiga lista de extração ("as lentes de review são do repo consumidor — o board só
   // declara o tier"): é exatamente ela que a indireção id→agent do `_base` existe para permitir.
   // Logo há DOIS tipos de checkout, e o invariante verdadeiro é diferente em cada um:
   //   • checkout que TRAZ as lentes (este monorepo) ⇒ toda declaração resolve. WARN vazio.

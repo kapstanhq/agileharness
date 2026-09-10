@@ -5,7 +5,7 @@ import path from "node:path";
 import { readBoardConfig, listBoards } from "./repo";
 import { GOVERNANCE_ARTIFACTS } from "./types";
 import { expectedBoardIds } from "./board-fixture";
-import { arvore, OSS_TREE_ROOT } from "./oss-tree";
+import { OSS_TREE_ROOT } from "./oss-tree";
 import type { BoardConfig } from "./types";
 
 // Fields edited LIVE through the strategy bancada / save_persona / save_system (governance artifacts +
@@ -42,40 +42,16 @@ function redactVolatile(cfg: BoardConfig): Record<string, unknown> {
 // Regenerate (vitest -u) ONLY for an INTENDED pipeline change, and explain it in the diff — a
 // surprise snapshot diff here means a board's resolved pipeline drifted.
 
-// ── O GOLDEN NÃO VIAJA, E ISSO É DECISÃO ────────────────────────────────────────────────────────────
+// ── O GOLDEN É DESTA ÁRVORE ───────────────────────────────────────────────────────────────────
 //
-// O arquivo `__snapshots__/board-base-pipeline.test.ts.snap` fotografa a config RESOLVIDA de TODO
-// board DESTA árvore — o que, nesta casa, inclui os quatro boards privados do dono. Ele viajava na
-// extração e republicava o conteúdo deles por uma porta que nenhum guarda olhava (o `agnostic-lint`
-// pula `__snapshots__|\.snap$` por construção). A régua agora o corta (`__snapshots__/` no
-// `.ossignore`), e quem cobra a classe inteira por CONTEÚDO é `oss-identity-hygiene.test.ts`.
-//
-// O efeito colateral tem de ser tratado AQUI, e não com um `existsSync(...) return` genérico: no
-// repositório extraído, `CI=true` faz o vitest RECUSAR escrever o golden que falta — medido, o teste
-// reprova com "Snapshot … mismatched". Um golden é a linha de base DA ÁRVORE QUE O GEROU; a linha de
-// base do repo adotante é a árvore DELE, e enquanto ninguém a tirar lá não há o que comparar.
-//
-// A condição é ESTREITA de propósito, e é o que a impede de virar interruptor de desligar:
-//   · exige `arvore() === "extraido"` — dois sinais independentes que TÊM de discordar, senão lança;
-//   · no umbrella ela é SEMPRE falsa, então apagar o golden daqui continua reprovando (a cobertura
-//     desta casa não é trocada por nada);
-//   · e some sozinha assim que a extração regenerar a linha de base no destino.
+// `__snapshots__/board-base-pipeline.test.ts.snap` fotografa a config RESOLVIDA de todo board desta
+// árvore — só os boards de demonstração, desde que a ferramenta é desenvolvida aqui (issue #1 aposentou
+// a segunda árvore em que ele podia faltar). Sem golden o caso REPROVA, de propósito.
 const CAMINHO_DO_GOLDEN = fileURLToPath(
   new URL("./__snapshots__/board-base-pipeline.test.ts.snap", import.meta.url),
 );
-const semLinhaDeBase = arvore() === "extraido" && !existsSync(CAMINHO_DO_GOLDEN);
-if (semLinhaDeBase) {
-  // GRITA, como `oss-tree.ts` faz com todo guarda umbrella-only: quem roda a suíte no artefato tem
-  // de saber o que deixou de ser medido — silêncio aqui é o mesmo que portão verde por vacuidade.
-  console.warn(
-    "[board-base-pipeline] o golden do pipeline NÃO foi medido: esta árvore é o repositório extraído " +
-      `e não há linha de base em ${CAMINHO_DO_GOLDEN}. O guarda volta sozinho quando a extração (ou ` +
-      "um `vitest -u` local) tirar a primeira fotografia DESTA árvore.",
-  );
-}
-
 describe("board resolved config — golden snapshot (byte-identical across the _base extraction)", () => {
-  it.skipIf(semLinhaDeBase)("resolves every live board deterministically", async () => {
+  it("resolves every live board deterministically", async () => {
     const boards = (await listBoards()).sort((a, b) => a.id.localeCompare(b.id));
     // Os boards de fixture são PISO incondicional; os privados do dono entram quando a árvore os
     // tem (o repositório extraído não os tem — por decisão de projeto, não por acidente).

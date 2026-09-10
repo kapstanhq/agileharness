@@ -1,6 +1,6 @@
 # Robô de dependências do AgileHarness. Este arquivo é a ORIGEM; a extração monta a cópia em
 # `.github/dependabot.yml`, byte a byte igual (o extrator recusa a divergência). Contexto e convenção
-# da montagem: `oss/ci/README.md`.
+# fonte única (a issue #1 aposentou a cópia revisada em `oss/`).
 #
 # O ecossistema `github-actions` é o mais importante aqui, e é o mais esquecido: os workflows pinam action
 # por SHA (tag é mutável, logo pinar é obrigatório), mas SHA pinado NÃO recebe correção sozinho. Sem alguém

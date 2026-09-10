@@ -3,7 +3,6 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { findRepoRoot } from "@/lib/storymap/paths";
-import { SO_DO_UMBRELLA, arvore } from "@/lib/storymap/oss-tree";
 
 // UMA SKILL NÃO PODE MANDAR RODAR UM COMANDO QUE A ÁRVORE DELA NÃO TEM.
 //
@@ -25,9 +24,8 @@ import { SO_DO_UMBRELLA, arvore } from "@/lib/storymap/oss-tree";
 
 const ROOT = findRepoRoot();
 const SKILLS = path.join(ROOT, ".claude", "skills");
-const OSSIGNORE = path.join(ROOT, ".ossignore");
 
-/** Os executáveis que a régua NÃO deixa viajar, mapeados do arquivo que os define. */
+/** Os executáveis que NÃO existem neste repositório (o `justfile` era do repositório de origem). */
 const EXECUTAVEL_QUE_NAO_VIAJA: Record<string, string> = { justfile: "just" };
 
 /**
@@ -63,16 +61,10 @@ function skillsNaArvore(): string[] {
     .filter((rel) => existsSync(path.join(ROOT, rel)));
 }
 
-/** As skills que VIAJAM: as da árvore menos as que a régua exclui (no artefato, a régua já não corta nada). */
+/** As skills publicadas são TODAS as da árvore — a segunda árvore saiu (issue #1). */
 function skillsQueViajam(): string[] {
-  const todas = skillsNaArvore();
-  if (!existsSync(OSSIGNORE)) return todas;
-  const excluidas = new Set(
-    git(["ls-files", "--cached", "--ignored", `--exclude-from=${OSSIGNORE}`]).split("\n").filter(Boolean),
-  );
-  return todas.filter((rel) => !excluidas.has(rel));
+  return skillsNaArvore();
 }
-
 /** As invocações de `<exe> <algo>` nas duas notações canônicas de comando. */
 function invocacoes(md: string, exe: string): string[] {
   const achadas: string[] = [];
@@ -95,11 +87,6 @@ function invocacoes(md: string, exe: string): string[] {
 }
 
 describe("comando de skill × o que a árvore publicada contém", () => {
-  it("PREMISSA: a régua declara que o justfile não viaja (senão este guarda não tem o que cobrar)", () => {
-    expect(Object.keys(SO_DO_UMBRELLA)).toContain("justfile");
-    expect(SO_DO_UMBRELLA.justfile).toMatch(/não viaja|exclui/i);
-  });
-
   /** Quantas invocações não-portáveis cada skill que viaja ainda tem. */
   function contagemPorSkill(): Map<string, string[]> {
     const porSkill = new Map<string, string[]>();
@@ -166,13 +153,4 @@ describe("comando de skill × o que a árvore publicada contém", () => {
     expect(invocacoes(md, "just")).toEqual(["just advance-card acme story-1", "just advance-card"]);
   });
 
-  // `skipIf`, não um `return` mudo: a suíte roda com `requireAssertions`, e um caso que sai sem
-  // afirmar nada é REPROVADO — de propósito. No artefato não há o que cortar (o corte já aconteceu),
-  // e um pulo EXPLÍCITO aparece no relatório, enquanto um return silencioso viraria verde de graça.
-  it.skipIf(arvore(ROOT) !== "umbrella")(
-    "NÃO-VACUIDADE (umbrella): a régua está de fato cortando skills — senão 'o que viaja' seria tudo",
-    () => {
-      expect(skillsNaArvore().length).toBeGreaterThan(skillsQueViajam().length);
-    },
-  );
 });

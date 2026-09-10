@@ -128,7 +128,7 @@ function arquivosRastreados(raiz) {
 }
 
 /**
- * Quais destes arquivos uma LISTA DE EXCLUSÃO tira do snapshot — na extração OSS, `/.ossignore` (a lista
+ * Quais destes arquivos uma LISTA DE EXCLUSÃO tira do snapshot — `--exclude-from <arquivo>` (a lista
  * executável do que NÃO viaja: nela a raiz inteira sai e só a ferramenta volta por negação).
  *
  * Por que isto existe: sem escopo, o gate rodado a partir do monorepo mede uma árvore que NÃO é o
@@ -345,7 +345,7 @@ function caminhoEhCego(arquivo) {
  * não pula, e mapeia-se o achado de volta para o caminho real.
  *
  * O que isto IMPEDE, medido: um `AKIA…` plantado em `scripts/git-hooks/scan-secrets.mjs` — arquivo que
- * VIAJA para o repo público (`.ossignore` o re-inclui explicitamente) — não produzia nenhum achado e o
+ * VIAJA para o repo público (a antiga lista de extração o re-incluía explicitamente) — não produzia nenhum achado e o
  * gate o liberava como "ponto cego ESTRUTURAL", inclusive com `--fail-on-unscanned`. Sob o rótulo, o
  * mesmo byte bloqueia com exit 2. Era o único arquivo cego do snapshot de publicação, e era exatamente
  * o arquivo onde um segredo ficaria mais invisível.
@@ -549,7 +549,7 @@ scan-snapshot-secrets — GATE DO SNAPSHOT DE PUBLICAÇÃO
   Rodar o gate antes de corrigir as regras produz um verde que não significa nada.
 
 Como rodar (está LIGADO — os dois alvos existem no justfile)
-  just oss-snapshot-gate        o gate da PUBLICAÇÃO: mede só o que a lista de extração (/.ossignore)
+  (passo oss-snapshot-gate)     o gate da PUBLICAÇÃO no CI: mede a árvore rastreada inteira (a lista de exclusão
                                 deixa viajar — é o passo do runbook antes do primeiro push público
   just scan-snapshot-secrets    o baseline da ÁRVORE INTEIRA deste checkout (inclui o que não viaja)
 
@@ -563,7 +563,7 @@ Opções
   --json                 relatório estruturado em stdout (para CI)
   --allowlist <arquivo>  padrão: <raiz>/${ALLOWLIST_PADRAO}
   --exclude-from <arq>   restringe o snapshot ao que a lista deixa viajar (sintaxe de .gitignore, avaliada
-                         pelo git). Na extração OSS: /.ossignore. Sem isto, rodado a partir do monorepo o
+                         pelo git). Opcional: nesta árvore tudo que existe é o que se publica. Sem isto, num monorepo o
                          gate mede uma árvore que NÃO é o artefato — e reprova por credencial de pacote
                          que nunca vai a público. O relatório SEMPRE diz quando houve escopo.
   --tracked-only         varre só o conteúdo RASTREADO — o que a extração copia (SHA congelado). Use junto
@@ -630,8 +630,8 @@ function imprimeTexto(rel) {
     l.push('  1) É segredo DE VERDADE → ROTACIONE a credencial (quem tem esta árvore já a tem) e tire o');
     l.push('     valor do snapshot. Não existe reconhecer segredo real aqui.');
     l.push('  2) É segredo real, mas o arquivo NÃO VIAJA no artefato publicado (outro pacote, dado do');
-    l.push('     dono) → exclua o caminho na lista de extração (/.ossignore) e rode com');
-    l.push('     `--exclude-from /.ossignore`, que mede o snapshot em vez da árvore inteira.');
+    l.push('     dono) → exclua o caminho numa lista de exclusão e rode com');
+    l.push('     `--exclude-from <lista>`, que mede o snapshot em vez da árvore inteira.');
     l.push('  3) É FALSO-POSITIVO (delimitador em .env.example, chave pública) → reconheça em');
     l.push(`     ${rel.allowlist} com motivo — UMA entrada por ocorrência:`);
     l.push('');

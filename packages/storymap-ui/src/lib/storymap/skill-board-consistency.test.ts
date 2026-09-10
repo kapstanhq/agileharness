@@ -151,7 +151,7 @@ const skillDirs = readdirSync(SKILLS_DIR).filter(
 describe("skill ↔ board consistency", () => {
   // O invariante que este teste guarda é `inheritPipeline`, e ele NÃO é sobre três boards nomeados.
   // A versão anterior cravava `acme`/`storymap`/`orbit` — dado de produto do dono, que a régua
-  // .ossignore corta e que portanto não existe no repo OSS extraído (lá isto era ENOENT). Trocar os
+  // a antiga lista de extração cortava e que portanto não existe neste repositório (lá isto era ENOENT). Trocar os
   // nomes pela CLASSIFICAÇÃO (`inheritPipeline: false` ou não, lido do próprio yaml) prova a mesma
   // coisa em qualquer árvore e sobre TODOS os boards, não sobre três — no monorepo continua cobrindo
   // acme/storymap/orbit, e cobre os fixtures demo/demo-legado por cima.

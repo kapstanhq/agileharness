@@ -44,7 +44,7 @@ storymap/.runner/
 # `git add -A` do repo novo — `id_rsa`, `keystore.p12`, `certs/bundle.pfx`,
 # `config/service-account.json` e `sa/serviceAccount.json` eram todos stageáveis.
 #
-# É a MESMA assimetria que o .ossignore já documenta ter consertado nele, uma camada abaixo: lá a
+# É a MESMA assimetria que a antiga lista de extração documentava ter consertado, uma camada abaixo: lá a
 # régua era estritamente mais fraca que a cerca de dentro; aqui a cerca que VIAJA (esta, a única que
 # vira a raiz do repo público) era estritamente mais fraca que a régua. As três linhas acima cobriam
 # PEM e `.key` e paravam aí, enquanto o material de chave real chega em `.p12`/`.pfx` (keystore
