@@ -204,7 +204,7 @@ export async function middleware(req: NextRequest): Promise<NextResponse> {
   // caía no deny-por-default e devolvia `307 → /login`. O cliente lê um redirect para uma tela de
   // login como "existe um serviço de login OAuth aqui", tenta registrar um client, falha, e
   // apresenta ao operador "Não foi possível registrar no serviço de login" — sem NUNCA chegar ao
-  // endpoint MCP. A prova é a ausência: zero requisições a `/api/usm` no log do proxy durante as
+  // endpoint MCP. A prova é a ausência: zero requisições a `/api/mcp` no log do proxy durante as
   // tentativas, e o handle recém-cunhado com "último uso nunca".
   //
   // Não publicamos nenhum documento `.well-known`. A resposta honesta é 404, e é ela que faz o

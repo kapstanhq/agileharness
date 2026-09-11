@@ -53,7 +53,7 @@ const EXPECTED_PUBLIC = [
   "/api/runner/events",
   "/api/runner/pulse",
   "/api/runner/test-webhook",
-  "/api/usm/[secret]/[transport]",
+  "/api/mcp/[secret]/[transport]",
   "/login",
 ].sort();
 

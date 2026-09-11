@@ -398,7 +398,7 @@ describe("perímetro do terminal — a superfície que entrega SHELL", () => {
     expect(JSON.stringify(linhas)).not.toContain(forjado.slice(0, 24));
   });
 
-  it("ATAQUE: origem já trancada por martelar /api/usm NÃO pivota para o shell", async () => {
+  it("ATAQUE: origem já trancada por martelar /api/mcp NÃO pivota para o shell", async () => {
     // O balde é UM por origem para o perímetro INTEIRO justamente para o atacante não rotacionar de
     // superfície e multiplicar o orçamento. Enquanto o terminal ficou fora dele, a superfície mais
     // valiosa do sistema era o refúgio de quem já estava trancado nas outras seis.
@@ -430,7 +430,7 @@ describe("perímetro do terminal — a superfície que entrega SHELL", () => {
     // O desfecho PROIBIDO, declarado em letras no topo de `lib/auth/auth-audit.ts` (seção ORDEM): o
     // balde é UM por origem, e há três instalações em que o atacante e o dono dividem a MESMA chave —
     // self-host sem proxy (todo mundo cai em `sem-proxy`), NAT compartilhado (escritório, celular) e
-    // CDN na frente do Caddy. Nessas, `/api/usm` é uma superfície de MÁQUINA: qualquer anônimo a
+    // CDN na frente do Caddy. Nessas, `/api/mcp` é uma superfície de MÁQUINA: qualquer anônimo a
     // martela SEM credencial nenhuma e tranca a chave compartilhada por até 60 minutos.
     //
     // Se a trava for consultada ANTES de comparar o cookie, esse anônimo DESLIGA o terminal do dono —

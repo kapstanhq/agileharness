@@ -63,7 +63,7 @@ async function effectiveHeaders(pathname: string): Promise<Map<string, string>> 
 }
 
 /** As superfícies que o operador realmente abre — página, board, terminal, e a rota de máquina. */
-const PATHS = ["/", "/login", "/board/storymap", "/board/storymap/inbox", "/terminal", "/api/usm/abc/sse"];
+const PATHS = ["/", "/login", "/board/storymap", "/board/storymap/inbox", "/terminal", "/api/mcp/abc/sse"];
 
 describe("cabeçalhos de segurança do perímetro web", () => {
   it("clickjacking: nenhuma superfície pode ser emoldurada por outro site", async () => {
@@ -78,7 +78,7 @@ describe("cabeçalhos de segurança do perímetro web", () => {
   });
 
   it("o Referer não pode carregar a URL do painel para fora", async () => {
-    // ATAQUE: a superfície MCP tem o SEGREDO NO PATH (`/api/usm/<token>/<transport>`). Qualquer
+    // ATAQUE: a superfície MCP tem o SEGREDO NO PATH (`/api/mcp/<token>/<transport>`). Qualquer
     // navegação a partir de um documento nosso que mande `Referer` entrega esse path a quem receber
     // o clique — e o painel renderiza conteúdo autoral (cards, wireframes html), que pode ter link.
     for (const p of PATHS) {

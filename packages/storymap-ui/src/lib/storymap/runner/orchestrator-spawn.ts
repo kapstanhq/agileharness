@@ -1,8 +1,8 @@
 // orchestrator-spawn.ts — WS8 (F7) — the IO that launches ONE copiloto run: a headless
-// `claude -p "/storymap-orchestrator <board> <mode> --tick"` wired to the AgileHarness MCP surface. Board-level
+// `claude -p "/harness-orchestrator <board> <mode> --tick"` wired to the AgileHarness MCP surface. Board-level
 // (no card worktree, no merge train) — the copiloto reads the board over MCP and acts gate-respecting.
 //
-// The AgileHarness MCP server is the running service's own HTTP endpoint (/api/usm/<token>/<transport>), so the
+// The AgileHarness MCP server is the running service's own HTTP endpoint (/api/mcp/<token>/<transport>), so the
 // spawn mounts an on-the-fly config pointing there. O token é o SCOPED do orquestrador
 // (AGILEHARNESS_MCP_TOKEN_ORCH, nível `write`) — NÃO o token full do operador. Fail-open: sem token ⇒ SKIP com log
 // (o Jido não age sem as tools, mas o tick nunca quebra). Detached + unref'd so the run outlives the tick
@@ -34,7 +34,7 @@ import type { OrchestratorMode } from "@/lib/storymap/types";
 export function buildOrchestratorMcpConfig(token: string, port: number): string {
   return JSON.stringify({
     mcpServers: {
-      storymap: { type: "http", url: `http://localhost:${port}/api/usm/${token}/mcp` },
+      storymap: { type: "http", url: `http://localhost:${port}/api/mcp/${token}/mcp` },
     },
   });
 }
@@ -151,7 +151,7 @@ export function parseOrchestratorResult(raw: string): { costUSD: number; summary
 /** O prompt do run. `reason` (o evento que acordou o Jido) entra como CONTEXTO — argv é um array (sem
  *  shell), então não há injeção; ainda assim achatamos aspas/quebras p/ o prompt ficar legível. PURA. */
 export function buildOrchestratorPrompt(board: string, mode: OrchestratorMode, reason?: string): string {
-  const base = `/storymap-orchestrator ${board} ${mode} --tick`;
+  const base = `/harness-orchestrator ${board} ${mode} --tick`;
   const clean = reason
     ?.replace(/[\n\r"]+/g, " ")
     .replace(/\s+/g, " ") // colapsa o que sobrou (senão o motivo chega ao agente cheio de espaços duplos)

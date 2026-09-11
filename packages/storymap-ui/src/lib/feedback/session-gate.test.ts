@@ -58,11 +58,15 @@ describe("/api/feedback/shot — same-origin exige a sessão do operador nos DOI
   beforeEach(() => {
     process.env.AGILEHARNESS_SESSION_SECRET = SECRET;
     process.env.AGILEHARNESS_AUTH_TOKEN = TOKEN;
+    // A lane same-origin escreve no board PRÓPRIO desta instalação; sem ele declarado a rota recusa
+    // (503) antes de decodificar imagem — ver lib/storymap/self-board.ts.
+    process.env.AGILEHARNESS_SELF_BOARD = "um-board";
   });
   afterEach(() => {
     delete process.env.AGILEHARNESS_SESSION_SECRET;
     delete process.env.AGILEHARNESS_AUTH_TOKEN;
     delete process.env.AGILEHARNESS_FEEDBACK_INGEST_TOKENS;
+    delete process.env.AGILEHARNESS_SELF_BOARD;
   });
   const sameOrigin = { origin: "http://board.local", host: "board.local", "sec-fetch-site": "same-origin" };
   it("POST same-origin SEM sessão ⇒ 401 antes de decodificar a imagem", async () => {
@@ -88,6 +92,21 @@ describe("/api/feedback/shot — same-origin exige a sessão do operador nos DOI
       }),
     );
     expect(res.status).toBe(400);
+  });
+  it("COM sessão mas SEM board próprio ⇒ 503, e a imagem nem é decodificada", async () => {
+    delete process.env.AGILEHARNESS_SELF_BOARD;
+    const cookie = `${SESSION_COOKIE}=${await signSession({ sessionSecret: SECRET, operatorToken: TOKEN })}`;
+    const { POST } = await import("@/app/api/feedback/shot/route");
+    const res = await POST(
+      new Request("http://board.local/api/feedback/shot", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...sameOrigin, cookie },
+        // dataUrl VÁLIDA de propósito: se a recusa viesse depois da decodificação, esta passaria
+        body: JSON.stringify({ dataUrl: "data:image/png;base64,iVBORw0KGgo=" }),
+      }),
+    );
+    expect(res.status).toBe(503);
+    expect(((await res.json()) as { error: string }).error).toContain("AGILEHARNESS_SELF_BOARD");
   });
   it("GET same-origin SEM sessão ⇒ 401 (ninguém lê um screenshot do operador sem estar logado)", async () => {
     const { GET } = await import("@/app/api/feedback/shot/route");

@@ -28,7 +28,7 @@
 // gate no proxy, não havia onde fazer essa checagem; agora há, e é fail-closed (sem `Origin`, nega).
 //
 // ── O PERÍMETRO: a superfície que entrega SHELL entra na MESMA trava (story-m9jflb) ────────────
-// A onda que criou `lib/auth/auth-audit.ts` instrumentou SEIS superfícies self-auth (`/api/usm`, as
+// A onda que criou `lib/auth/auth-audit.ts` instrumentou SEIS superfícies self-auth (`/api/mcp`, as
 // 4 do runner, o login) e deixou de fora justamente esta. O que isso significava: um atacante
 // martelando cookie forjado contra a rota que dá um SHELL não era contado, não era trancado e não
 // aparecia no forense — a superfície mais valiosa do sistema era o refúgio de quem já estava trancado
@@ -37,7 +37,7 @@
 // durável e respondem 429 quando a origem está trancada.
 //
 // ── A ORDEM: a credencial é COMPARADA primeiro, e só então a trava decide ──────────────────────
-// O que esta ordem IMPEDE: que a trava vire a ARMA. `/api/usm` é superfície de MÁQUINA — qualquer
+// O que esta ordem IMPEDE: que a trava vire a ARMA. `/api/mcp` é superfície de MÁQUINA — qualquer
 // anônimo a martela SEM apresentar credencial e tranca a chave por até 60 min —, e a chave é
 // COMPARTILHADA nas três instalações em que atacante e dono coincidem (self-host sem proxy, todos em
 // `sem-proxy`; NAT de escritório/celular; CDN na frente do Caddy). Um pre-check de trava ANTES do

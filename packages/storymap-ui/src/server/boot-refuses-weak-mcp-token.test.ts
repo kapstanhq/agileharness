@@ -9,7 +9,7 @@
 // afirmativo — "Auto-checagem: OK" sobre uma porta aberta com credencial de tutorial. Um controle
 // que emite PASS FALSO é pior que controle nenhum, e é exatamente isto que este arquivo impede.
 //
-// A superfície em jogo: as tools de `/api/usm/<token>/mcp` spawnam `claude
+// A superfície em jogo: as tools de `/api/mcp/<token>/mcp` spawnam `claude
 // --dangerously-skip-permissions` NESTA máquina. Custo de autonomia da guarda: ZERO — ela só decide
 // se a PORTA pode existir de frente para a rede, nunca o que o agente pode fazer depois de entrar.
 

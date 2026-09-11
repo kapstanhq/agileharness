@@ -1,9 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { computeStepRollups, stepLabel, runStatusLabel, stepProgress, GATE_ICON, classifyTools, expectedCapabilities, stepCapabilities } from "./step-rollup";
 import type { BoardConfig, Card, StatusDef } from "./types";
 import type { TelemetryRecord } from "./runner/telemetry";
 import type { Transition } from "./runner/transitions";
 import type { RunOutcome } from "./runner/journal";
+
+// O dev-server é capacidade do board PRÓPRIO da instalação (lib/storymap/self-board.ts). A fixture
+// usa o id "storymap", então declará-lo aqui é o que faz o cenário de dogfood existir.
+beforeEach(() => { process.env.AGILEHARNESS_SELF_BOARD = "storymap"; });
+afterEach(() => { delete process.env.AGILEHARNESS_SELF_BOARD; });
 
 /** A minimal forward pipeline (a slice of the canonical _base order). */
 function config(over: Partial<BoardConfig> = {}): BoardConfig {

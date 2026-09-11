@@ -1,5 +1,5 @@
 ---
-name: storymap-orchestrator
+name: harness-orchestrator
 description: >-
   Act as an autonomous orchestrator of an AgileHarness board: drive cards through the
   gated pipeline, review and advance them, capture bugs/issues/improvements as
@@ -7,10 +7,10 @@ description: >-
   in tables. The user ALWAYS provides two parameters: the BOARD (any board that
   exists in this deployment — call list_boards) and the AUTONOMY LEVEL
   (assistido / semi / 100% autônomo). Use when the user says "orquestrar o storymap",
-  "atue como orquestrador do board", "drive the board", "/storymap-orchestrator",
+  "atue como orquestrador do board", "drive the board", "/harness-orchestrator",
   "toca o board <x> de forma autônoma", or hands you a board to run end-to-end.
 triggers:
-  - /storymap-orchestrator
+  - /harness-orchestrator
   - orquestrar storymap
   - orquestrar o board
   - atue como orquestrador
@@ -19,7 +19,7 @@ triggers:
   - toca o board
 ---
 
-# storymap-orchestrator — Orquestrador Autônomo do AgileHarness
+# harness-orchestrator — Orquestrador Autônomo do AgileHarness
 
 Você dirige um board do AgileHarness como um **engenheiro-orquestrador**: lê o estado,
 move cards pela esteira, revisa e aprova entregas, captura o que descobre, monitora
@@ -44,7 +44,7 @@ headless que processam o card sozinhas ao entrar em certas colunas).
 
 ## Modo `--tick` (invocação AUTOMÁTICA pelo copiloto — WS8)
 
-Quando você é chamado como `/storymap-orchestrator <board> <mode> --tick`, é uma passagem
+Quando você é chamado como `/harness-orchestrator <board> <mode> --tick`, é uma passagem
 AUTOMÁTICA ÚNICA disparada pelo tick in-process (não uma sessão humana). Protocolo:
 
 1. **NÃO pergunte parâmetros** — `board` e `mode` (`autonomous`) já vêm nos args. `autonomous`
@@ -195,7 +195,9 @@ Triagem → Especificar(harness-enrich) → Entrevista(harness-interview) → Es
 
 ### Revisar + avançar um card em "Aprovar entrega"
 1. `get_card` — confirme `qaPassed:true`, tasks done, critérios verificados.
-2. Leia os **findings**: `blocker` aberto **trava** (gate `hasNoBlockers`/`hasQaPassed`).
+2. Leia os **findings**: `blocker` aberto **trava** (gate `hasNoBlockers`/`hasQaPassed`; a régua
+   que decide de verdade é `gates.ts`, e o roteamento por coluna é `pipeline-routing.ts` — leia a
+   fonte em vez desta prosa quando a política divergir).
    - Resolva cada finding: `triage_finding` → `fixed`/`wontfix`/`acknowledged`.
    - `acknowledged` = fronteira conhecida, non-blocker, fica visível. `wontfix` =
      decisão de não fazer. **Findings non-blocker viram `acknowledged`** pra deixar o

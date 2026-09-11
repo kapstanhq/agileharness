@@ -112,7 +112,7 @@ export function InicioScreen({
       clearTimeout(t);
       t = setTimeout(() => router.refresh(), 400);
     };
-    es.addEventListener("storymap", refresh as EventListener);
+    es.addEventListener("agileharness", refresh as EventListener);
     return () => {
       clearTimeout(t);
       es.close();

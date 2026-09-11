@@ -4,7 +4,7 @@
 //
 // AUTH [CRÍTICO — não regredir]: esta rota é segura SÓ porque cai no catch-all `basic_auth` do Caddy (behind
 // TLS). `/api/copilot/*` DEVE permanecer sob o catch-all — NUNCA adicionar um matcher dedicado fora do auth
-// (só `/api/usm/*` fica fora do basic_auth, por design). Mesma fronteira de confiança do board.
+// (só `/api/mcp/*` fica fora do basic_auth, por design). Mesma fronteira de confiança do board.
 
 import {
   boardScope,

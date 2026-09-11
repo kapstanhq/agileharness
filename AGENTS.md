@@ -6,12 +6,12 @@ You probably got here through an MCP server. This file is the short route; the f
 > **Talking to the server by hand?** It's JSON-RPC 2.0 over HTTP POST, and the response comes back as
 > `text/event-stream` (lines prefixed with `data: `), so send
 > `Accept: application/json, text/event-stream`. It is *stateless*: it returns no `Mcp-Session-Id` and
-> there is no session to keep. The address is `/api/usm/<credential>/mcp`, and this line works
+> there is no session to keep. The address is `/api/mcp/<credential>/mcp`, and this line works
 > (`$AH` is the credential — the next section covers how the operator issues one and why its LEVEL
 > changes what you can do):
 >
 > ```bash
-> curl -s "http://127.0.0.1:${AGILEHARNESS_PORT:-3008}/api/usm/$AH/mcp" \
+> curl -s "http://127.0.0.1:${AGILEHARNESS_PORT:-3008}/api/mcp/$AH/mcp" \
 >   -H 'content-type: application/json' \
 >   -H 'accept: application/json, text/event-stream' \
 >   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \

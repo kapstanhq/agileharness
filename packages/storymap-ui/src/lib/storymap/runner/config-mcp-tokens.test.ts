@@ -1,5 +1,5 @@
 // story-6h3ioj — o ATAQUE: `mcpTokens` do settings.yaml diz QUAL env var segura um token MCP e QUE
-// nível de autoridade ele recebe, e `resolveActor` (app/api/usm/[secret]/[transport]/route.ts)
+// nível de autoridade ele recebe, e `resolveActor` (app/api/mcp/[secret]/[transport]/route.ts)
 // devolve o nível declarado. Quem conseguir escrever settings.yaml — um agente com escrita no repo,
 // um PR de terceiro num fork OSS, um settings.yaml editado à mão — concedia a si mesmo `full`
 // (todas as tools, incluindo shell e deploy) apontando para QUALQUER variável de ambiente, ou
@@ -248,7 +248,7 @@ describe("ARMADILHA DE BOOT: credencial válida que chega DEPOIS do primeiro loa
 // (`_ORCH`, `_RO`, e qualquer `mcpTokens[].tokenEnv` declarado) ainda tinham.
 describe("PERDA DE CAPACIDADE: espaço sobrando na env do tier ESCOPADO", () => {
   /**
-   * O que a route.ts faz por requisição (`app/api/usm/[secret]/[transport]/route.ts:46-47`): resolve a
+   * O que a route.ts faz por requisição (`app/api/mcp/[secret]/[transport]/route.ts:46-47`): resolve a
    * config EFETIVA e SÓ DEPOIS compara byte-a-byte contra `process.env`. A ordem é o que dá à camada
    * ENV a chance de normalizar antes de alguém comparar — reproduzida aqui para o teste medir o
    * desfecho REAL (autentica ou 404), não a forma da config.

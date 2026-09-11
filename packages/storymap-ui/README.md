@@ -37,7 +37,7 @@ run produziu.
 >   comprometimento não é "a conta de um app", é a máquina inteira; e o sandbox **não** reduz o das quatro;
 > - **serve um shell interativo por WebSocket** (`/terminal` → `/ttyd/*`), autenticado pela mesma
 >   sessão do painel;
-> - **publica um endpoint MCP alcançável pela internet** (`/api/usm/<token>/mcp`) — é assim que um
+> - **publica um endpoint MCP alcançável pela internet** (`/api/mcp/<token>/mcp`) — é assim que um
 >   conector Claude chega às tools, e as tools são as de cima.
 >
 > Nada disso é efeito colateral a consertar: é **o produto**. O que existe para ser bem feito é o
@@ -131,7 +131,7 @@ com o porquê de cada default.
 |---|---|---|
 | Painel, Server Actions e `/api/*` | middleware + cookie de sessão (`SameSite=Lax`), **nega por default** | as exceções vivem numa lista única (`src/lib/auth/public-routes.ts`), cobrada por teste de exaustividade |
 | `/login`, `/api/auth`, `/api/health`, assets do PWA | nada (alcançável antes de existir sessão) | o login se autentica pelo token do operador |
-| `/api/usm/<token>/mcp` | token no path, comparado *timing-safe*, com piso de entropia | canal dos agentes headless, que não têm navegador nem cookie |
+| `/api/mcp/<token>/mcp` | token no path, comparado *timing-safe*, com piso de entropia | canal dos agentes headless, que não têm navegador nem cookie |
 | `/api/runner/*` | *shared secret* próprio | webhooks e SSE do runner, chamados em `127.0.0.1` |
 | `/terminal` e `/ttyd/*` (HTTP e WS) | mesma sessão do painel **+** checagem de `Origin` | o ttyd fica preso em loopback, alcançável só por este processo |
 

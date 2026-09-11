@@ -5,7 +5,7 @@
 //
 // ── O DANO, MEDIDO ────────────────────────────────────────────────────────────────────────────
 //
-// Hoje a credencial VIAJA NO PATH: `/api/usm/<segredo>/mcp`. Consequência medida (story-u4yf1i):
+// Hoje a credencial VIAJA NO PATH: `/api/mcp/<segredo>/mcp`. Consequência medida (story-u4yf1i):
 // **174 gravações do token em texto claro** — 168 no journal do Caddy, 6 em `/var/log/syslog*` e
 // rotacionados — de 2026-06-06 a 2026-07-29, produzidas pelo logger de ERRO DEFAULT do Caddy, que
 // registra o URI inteiro. Nenhuma misconfiguração: um token no path é um token que vaza em todo log

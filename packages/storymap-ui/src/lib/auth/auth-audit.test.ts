@@ -215,7 +215,7 @@ describe("ATAQUE: transformar o rastro numa fonte de vazamento ou num enchimento
   it("a URL inteira passada como superfície tem a credencial REDIGIDA antes de tocar o disco", async () => {
     // A armadilha real: a URL É a credencial hoje. Um chamador que passe `req.url` gravaria o
     // token no NOSSO ledger forense — o mesmo defeito do log de erro do Caddy, dentro de casa.
-    const url = `https://ah.example/api/usm/${TENTADO}/mcp?secret=${TENTADO}`;
+    const url = `https://ah.example/api/mcp/${TENTADO}/mcp?secret=${TENTADO}`;
     recordAuthFailure({
       headers: fromIp("192.0.2.11"),
       surface: url,
@@ -228,7 +228,7 @@ describe("ATAQUE: transformar o rastro numa fonte de vazamento ou num enchimento
     for (let i = 0; i + 4 <= TENTADO.length; i++) {
       expect(bruto.includes(TENTADO.slice(i, i + 4))).toBe(false);
     }
-    expect(redactCredentialFromSurface(url)).toBe("/api/usm/<redigido>/mcp");
+    expect(redactCredentialFromSurface(url)).toBe("/api/mcp/<redigido>/mcp");
   });
 
   it("um atacante trancado não gera uma linha por tentativa (rastro estrangulado, com contagem)", async () => {
@@ -847,7 +847,7 @@ describe("ATAQUE: inventar uma superfície nova a cada tentativa para afogar o f
     // um self-host configurou à mão, ou o chute do atacante — passava inteiro para o arquivo.
     recordAuthFailure({
       headers: fromIp("198.51.100.42"),
-      surface: "/api/usm/hunter2/mcp",
+      surface: "/api/mcp/hunter2/mcp",
       via: "path",
       reason: "desconhecida",
       now: 1,
@@ -1000,7 +1000,7 @@ describe("as duas superfícies do TERMINAL vivem no MESMO vocabulário do perím
   });
 
   it("o terminal compartilha o balde: trancado nas outras seis, o SHELL não dá tentativa extra", async () => {
-    // A rotação de superfície, medida ponta a ponta. Sete falhas em `/api/usm`; a oitava vai pelo
+    // A rotação de superfície, medida ponta a ponta. Sete falhas em `/api/mcp`; a oitava vai pelo
     // GATEWAY. Com balde próprio ela seria a primeira dele — 401, mais uma tentativa de graça contra a
     // superfície que entrega SHELL. Compartilhando o balde ela ESTOURA o teto e sai 429.
     const ip = "198.51.100.62";

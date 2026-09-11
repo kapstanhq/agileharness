@@ -3,6 +3,7 @@
 // and returns a compact status the UI can render without knowing anything about the VPS.
 
 import { readBoardConfig } from "@/lib/storymap/repo";
+import { selfBoardId } from "@/lib/storymap/self-board";
 import { probeHeadroomCached, resolveHeadroomUrl } from "@/lib/storymap/runner/headroom";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +21,10 @@ export type HeadroomStatus = {
 
 export async function GET(): Promise<Response> {
   try {
-    const config = await readBoardConfig("storymap");
+    // Sem board próprio declarado, resta o env (`AGILEHARNESS_HEADROOM_URL`), que vence a config do
+    // board de qualquer forma — ver resolveHeadroomUrl.
+    const proprio = selfBoardId();
+    const config = proprio ? await readBoardConfig(proprio) : null;
     const url = resolveHeadroomUrl(config, process.env);
     if (!url) {
       return Response.json({ configured: false, url: null, alive: false } satisfies HeadroomStatus);

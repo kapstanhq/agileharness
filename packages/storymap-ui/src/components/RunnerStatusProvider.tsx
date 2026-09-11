@@ -172,7 +172,7 @@ export function RunnerStatusProvider({ children }: { children: React.ReactNode }
   useEffect(() => {
     const es = sharedEventSource("/api/notifications/stream");
 
-    es.addEventListener("storymap", (ev) => {
+    es.addEventListener("agileharness", (ev) => {
       let event: AgileHarnessEvent;
       try {
         event = JSON.parse((ev as MessageEvent).data) as AgileHarnessEvent;

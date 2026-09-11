@@ -52,7 +52,7 @@ const CSP_REPORT_ONLY = [
  *
  * • `Referrer-Policy: no-referrer` — impede que a URL da página vaze para um terceiro no header
  *   `Referer` quando o operador clica num link externo. Aqui isso não é higiene abstrata: a
- *   superfície MCP tem o segredo NO PATH (`/api/usm/<token>/<transport>`), e o default do navegador
+ *   superfície MCP tem o segredo NO PATH (`/api/mcp/<token>/<transport>`), e o default do navegador
  *   (`strict-origin-when-cross-origin`) já não manda o path para fora — mas manda para outra página
  *   da MESMA origem, e o AgileHarness renderiza conteúdo autoral (cards, wireframes html). Sem
  *   referrer nenhum, nada disso tem como reconstruir a URL de quem o carregou.
@@ -203,7 +203,7 @@ const nextConfig = {
     // Smart capture lets the user attach context images (downscaled client-side, but a few of them
     // still exceed the 1MB default Server Action body limit). Bump it so the capture POST doesn't 413.
     serverActions: { bodySizeLimit: "10mb" },
-    // The remote MCP route (app/api/usm/[secret]/[transport]) imports `mcp-handler`
+    // The remote MCP route (app/api/mcp/[secret]/[transport]) imports `mcp-handler`
     // (CommonJS, pulls in `redis`). Bundling that graph alongside our runner engine
     // — which imports `node:child_process` — makes the Next 14 webpack choke with
     // `UnhandledSchemeError: Reading from "node:child_process"`. Externalizing these

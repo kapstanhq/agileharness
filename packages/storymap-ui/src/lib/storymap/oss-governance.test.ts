@@ -527,7 +527,7 @@ describe("CODEOWNERS — dono que existe, regra que casa, e nada de ilusão de r
     expect(todos.length, "o censo de prompt-as-code mediu quase nada").toBeGreaterThanOrEqual(20);
 
     // (b) o censo de skills, dito em voz alta: 23 diretórios medidos em 2026-08-19 (21 `harness-*`,
-    //     `harness-triage-shared` e `storymap-orchestrator`). A régua é do DIRETÓRIO, então a skill nº 24
+    //     `harness-triage-shared` e `harness-orchestrator`). A régua é do DIRETÓRIO, então a skill nº 24
     //     nasce coberta — o número aqui é piso de sanidade, não a lista.
     const dirsDeSkill = new Set(
       (censo.get("skills do pipeline") ?? [])

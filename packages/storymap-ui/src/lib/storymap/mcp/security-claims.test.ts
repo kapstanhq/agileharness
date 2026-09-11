@@ -36,7 +36,7 @@ const srcDir = path.resolve(mcpDir, "../../..");
 
 const AUTH_FILE = path.join(mcpDir, "auth.ts");
 const BOOTSTRAP_FILE = path.join(mcpDir, "token-bootstrap.ts");
-const ROUTE_REL = path.join("api", "usm", "[secret]", "[transport]", "route.ts");
+const ROUTE_REL = path.join("api", "mcp", "[secret]", "[transport]", "route.ts");
 const ROUTE_FILE = path.join(srcDir, "app", ROUTE_REL);
 const LINT_FILE = path.join(srcDir, "app", "safe-methods-readonly.test.ts");
 

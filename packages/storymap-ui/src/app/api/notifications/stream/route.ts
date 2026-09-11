@@ -49,7 +49,7 @@ export async function GET(): Promise<Response> {
       };
 
       const send = (event: AgileHarnessEvent) => {
-        if (!safeEnqueue(`event: storymap\ndata: ${JSON.stringify(event)}\n\n`)) cleanup();
+        if (!safeEnqueue(`event: agileharness\ndata: ${JSON.stringify(event)}\n\n`)) cleanup();
       };
       const sendRunner = (snapshot: RunnerSnapshot) => {
         if (!safeEnqueue(`event: runner\ndata: ${JSON.stringify(snapshot)}\n\n`)) cleanup();

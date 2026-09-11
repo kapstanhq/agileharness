@@ -13,6 +13,7 @@
 // the actual move gates — with a run-summary/outcome fallback for any skill the spec doesn't name.
 
 import { GATES, hasNarrative } from "./gates";
+import { selfBoardId } from "./self-board";
 import { terminalStatusIds } from "./views";
 import { liveOpenBlockers } from "./runner/findings";
 import { hasUiSurface } from "./gate-core";
@@ -86,7 +87,8 @@ function capabilityOfToolConfig(tc: ToolConfigDef | undefined): Capability | nul
  *  AND the legacy `mcpConfig` regex (boards not yet migrated), so the step-trail markers survive the
  *  _base migration. Board-agnostic. The QA visual-sweep capabilities (browser + dev-server) apply ONLY to
  *  USER stories (a non-user story is exempt from QA, so it legitimately uses neither → no false anomaly);
- *  the dev-server is dogfood-only (board "storymap"). Pure. */
+ *  the dev-server applies only to the board this installation declares as its OWN (selfBoardId()) —
+ *  it is the dogfood surface, and pinning our board id here made the rule true on one machine. Pure. */
 export function expectedCapabilities(
   step: StatusDef | null | undefined,
   boardId: string,
@@ -111,7 +113,7 @@ export function expectedCapabilities(
   const mc = step.mcpConfig ?? "";
   if (/graphify/i.test(mc)) caps.add("graphify");
   if ((/qa-mcp/i.test(mc) || /chrome|playwright/i.test(mc)) && (!isQa || userStory)) caps.add("browser");
-  if (isQa && userStory && boardId === "storymap") caps.add("devServer");
+  if (isQa && userStory && boardId === selfBoardId()) caps.add("devServer");
   return caps;
 }
 

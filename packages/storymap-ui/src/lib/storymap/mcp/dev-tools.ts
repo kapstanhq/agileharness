@@ -115,7 +115,7 @@ const pexec = promisify(execFile);
 const sessionDeps = (): SessionWorktreeDeps => defaultSessionDeps();
 
 /** The port the AgileHarness MCP is served on — the SAME default the copiloto's spawn uses (orchestrator-spawn).
- *  The session mounts `http://localhost:<port>/api/usm/<token>/mcp`, i.e. this very service. */
+ *  The session mounts `http://localhost:<port>/api/mcp/<token>/mcp`, i.e. this very service. */
 const SERVICE_PORT = Number(process.env.PORT) || 3008;
 
 /**

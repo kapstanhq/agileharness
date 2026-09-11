@@ -127,9 +127,9 @@ describe("scan-secrets — o token do PRÓPRIO produto vazando nu", () => {
     ["atribuído por nome", `AGILEHARNESS_MCP_TOKEN=${OPERATOR_TOKEN}`],
     ["em negrito num doc", `**Operator token:** \`${OPERATOR_TOKEN}\``],
     ["numa linha de bloco de código", `  ${OPERATOR_TOKEN}`],
-    ["num path de URL", `curl https://ah.example.dev/api/usm/${OPERATOR_TOKEN}/mcp`],
-    ["num parâmetro de query", `curl 'https://ah.example.dev/api/usm/mcp?secret=${OPERATOR_TOKEN}'`],
-    ["nos args JSON do mcp-remote", `{ "args": ["mcp-remote", "https://ah.example.dev/api/usm/mcp", "--header", "${OPERATOR_TOKEN}"] }`],
+    ["num path de URL", `curl https://ah.example.dev/api/mcp/${OPERATOR_TOKEN}/mcp`],
+    ["num parâmetro de query", `curl 'https://ah.example.dev/api/mcp/mcp?secret=${OPERATOR_TOKEN}'`],
+    ["nos args JSON do mcp-remote", `{ "args": ["mcp-remote", "https://ah.example.dev/api/mcp/mcp", "--header", "${OPERATOR_TOKEN}"] }`],
   ];
 
   it.each(FORMAS)("o valor literal do token %s é BLOQUEADO", (_forma, line) => {
@@ -155,7 +155,7 @@ describe("scan-secrets — o token do PRÓPRIO produto vazando nu", () => {
   });
 
   it("um token de alta entropia num path de URL é pego por FORMA", () => {
-    const res = scanLine("docs/operacao/onboarding.md", "curl https://ah.example.dev/api/usm/Xt4Bq9WnPmLc7ZrVs2HkDyGf5JuAe1Rk3TnQiOb/mcp"); // pragma: allowlist secret
+    const res = scanLine("docs/operacao/onboarding.md", "curl https://ah.example.dev/api/mcp/Xt4Bq9WnPmLc7ZrVs2HkDyGf5JuAe1Rk3TnQiOb/mcp"); // pragma: allowlist secret
     expect(res.code).toBe(BLOCKED);
     expect(res.findings?.some((f) => f.rule === "naked-high-entropy-token")).toBe(true);
   });
@@ -186,7 +186,7 @@ describe("scan-secrets — precisão das regras novas", () => {
 
   it("um UUID de sessão em crase/URL não é achado (o repo é cheio deles)", () => {
     expect(scanLine("docs/adr/ADR-065.md", "o worktree `agent-b38597ce-3ef1-4805-bca8-0a1f5ed1d520` é efêmero").code).toBe(0);
-    expect(scanLine("docs/adr/ADR-065.md", "GET /api/usm/session/b38597ce-3ef1-4805-bca8-0a1f5ed1d520/status").code).toBe(0);
+    expect(scanLine("docs/adr/ADR-065.md", "GET /api/mcp/session/b38597ce-3ef1-4805-bca8-0a1f5ed1d520/status").code).toBe(0);
   });
 
   it("um identificador SCREAMING_SNAKE longo em crase não é achado", () => {
@@ -292,9 +292,9 @@ describe("Forma 3 — o handle/token MCP do próprio produto", () => {
     // O nome que o PRODUTO usa não termina em TOKEN/KEY/SECRET, então ENV_ASSIGN não o vê.
     ["o nome que o produto usa (…_HANDLE)", `export const AGILEHARNESS_MCP_HANDLE = "${HANDLE}";`],
     ["valor nu entre aspas, sem palavra-chave", `export const X = "${HANDLE}";`],
-    ["handle dentro da URL do conector", `const u = "https://ah.example/api/usm/${HANDLE}/mcp";`],
-    ["a mesma URL em comentário de doc", `// exemplo: https://ah.example/api/usm/${HANDLE}/mcp`],
-    ["token CRU na URL de um .mcp.json", `{"url":"https://ah.example/api/usm/${TOKEN_43}/mcp"}`],
+    ["handle dentro da URL do conector", `const u = "https://ah.example/api/mcp/${HANDLE}/mcp";`],
+    ["a mesma URL em comentário de doc", `// exemplo: https://ah.example/api/mcp/${HANDLE}/mcp`],
+    ["token CRU na URL de um .mcp.json", `{"url":"https://ah.example/api/mcp/${TOKEN_43}/mcp"}`],
   ];
 
   it.each(FORMAS_REAIS)("BLOQUEIA: %s", (_nome, linha) => {
@@ -304,9 +304,9 @@ describe("Forma 3 — o handle/token MCP do próprio produto", () => {
   // O outro lado do par. Sem estes, a regra poderia ser um `return BLOCKED` disfarçado — e um gate
   // que reprova documentação honesta é um gate que alguém desliga na primeira semana.
   const CONTROLES: Array<[nome: string, linha: string]> = [
-    ["placeholder de documentação", "// veja https://ah.example/api/usm/<credencial>/mcp"],
-    ["o REDIGIDO que o filtro de log escreve", "// veja https://ah.example/api/usm/REDIGIDO/mcp"],
-    ["a rota sem credencial nenhuma", `const rota = "/api/usm/[secret]/[transport]";`],
+    ["placeholder de documentação", "// veja https://ah.example/api/mcp/<credencial>/mcp"],
+    ["o REDIGIDO que o filtro de log escreve", "// veja https://ah.example/api/mcp/REDIGIDO/mcp"],
+    ["a rota sem credencial nenhuma", `const rota = "/api/mcp/[secret]/[transport]";`],
   ];
 
   it.each(CONTROLES)("LIBERA (controle negativo): %s", (_nome, linha) => {

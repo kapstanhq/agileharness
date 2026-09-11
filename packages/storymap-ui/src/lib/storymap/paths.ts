@@ -134,7 +134,7 @@ export function findRepoRoot(): string {
 // O marcador é o `name` do package.json DESTE pacote — a auto-identificação da ferramenta, não um fato
 // sobre o usuário. Ele muda no rename de layout (Fase 5 do plano da inversão); quando mudar, a busca
 // FALHA ALTO em vez de resolver para o lugar errado, que é a única forma segura de um literal envelhecer.
-export const TOOL_PACKAGE_NAME = "storymap-ui";
+export const TOOL_PACKAGE_NAME = "agileharness-ui";
 
 /** A raiz da ferramenta não pôde ser resolvida. Carrega onde procurou, pelo mesmo motivo do irmão. */
 export class ToolRootUnresolvedError extends Error {

@@ -274,7 +274,7 @@ Checklist mínimo. Nenhum item é opcional em deploy alcançável de fora:
    `run_task`, que migrou, e a **CAPTURA**, que **não** migrou. A cadeia foi seguida e confirmada:
 
    ```
-   src/app/api/usm/[secret]/[transport]/route.ts   → runWithMcpActor(actor, …)      (credencial no PATH)
+   src/app/api/mcp/[secret]/[transport]/route.ts   → runWithMcpActor(actor, …)      (credencial no PATH)
    src/lib/storymap/mcp/tools.ts:775               → await reportIssueAction({ boardId: board, text })
    src/app/actions.ts:1347                         → await requireSession("reportIssueAction")
    src/lib/auth/action-guard.ts:308                → if (currentMcpActor() != null) return "mcp-token"

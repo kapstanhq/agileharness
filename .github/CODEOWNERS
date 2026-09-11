@@ -44,7 +44,7 @@
 # Isto não é texto. Uma skill é o programa que o agente headless roda com a permissão do CLI desligada;
 # um PR que edita `.claude/skills/**` muda comportamento executável e passa parecendo edição de prosa —
 # é a classe de mudança mais fácil de aprovar no automático e a de maior alcance. São 23 diretórios de
-# skill (21 `usm-*` + `usm-triage-shared` + `storymap-orchestrator`), mais o comando e o guia de estilo
+# skill (21 `usm-*` + `usm-triage-shared` + `harness-orchestrator`), mais o comando e o guia de estilo
 # dos assistentes: a regra é do diretório inteiro para que a skill nº 24 nasça coberta.
 /.claude/                                               @kapstanhq/maintainers
 # O pipeline declarado e os interruptores da autonomia: `boards/_base/board.yaml` diz QUAIS colunas

@@ -956,7 +956,7 @@ async function registerImpl(): Promise<void> {
 
   // 2.6) WS8 (F7) — the board COPILOTO/orchestrator TICK. In-process, re-arming, unref'd (mirrors the
   //      recovery sweep). Per tick it does a ZERO-TOKEN pre-check (the board's ACTIONABLE cockpit) and, when
-  //      there's work + budget + no lease, spawns the storymap-orchestrator skill to act gate-respecting. An
+  //      there's work + budget + no lease, spawns the harness-orchestrator skill to act gate-respecting. An
   //      idle board costs nothing (no LLM spawn). AGILEHARNESS_ORCH_ENABLED=0/1.
   //
   //      O timer é armado SEMPRE (não mais só quando `enabled`): o gate de enabled vive DENTRO do tick

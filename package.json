@@ -1,8 +1,8 @@
 {
   "name": "agileharness",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
-  "description": "AgileHarness — board agêntico de User Story Mapping com autorun.",
+  "description": "AgileHarness \u2014 board ag\u00eantico de User Story Mapping com autorun.",
   "license": "Apache-2.0",
   "workspaces": [
     "packages/storymap-ui"

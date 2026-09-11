@@ -71,7 +71,7 @@ export function QuestionsQueue({ initial, otherDemands = [] }: { initial: QueueC
       clearTimeout(t);
       t = setTimeout(() => router.refresh(), 300);
     };
-    es.addEventListener("storymap", refresh as EventListener);
+    es.addEventListener("agileharness", refresh as EventListener);
     return () => {
       clearTimeout(t);
       es.close();

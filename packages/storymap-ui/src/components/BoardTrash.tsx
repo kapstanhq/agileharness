@@ -47,7 +47,7 @@ export function useBoardTrash(boardId: string, enabled = true): BoardTrashState 
       clearTimeout(t);
       t = setTimeout(load, 400);
     };
-    es.addEventListener("storymap", onEvent as EventListener);
+    es.addEventListener("agileharness", onEvent as EventListener);
     const poll = setInterval(load, 60_000);
     return () => {
       clearTimeout(t);

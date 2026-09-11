@@ -4,7 +4,7 @@
 // para o caso em que alguém abre o bind: `AGILEHARNESS_HOST=0.0.0.0` subia CALADO, e o único sinal
 // era o log de `listen` — que imprime o host como informação neutra. Numa VPS sem firewall (o
 // incidente MEDIDO de 2026-07-27, documentado no topo de `main.ts`), o que fica na internet não é
-// "um board": é `/login` (token do operador), `/api/usm/<token>/mcp` — cujas tools spawnam
+// "um board": é `/login` (token do operador), `/api/mcp/<token>/mcp` — cujas tools spawnam
 // `claude --dangerously-skip-permissions` nesta máquina — e `/terminal` (um shell).
 //
 // Todas essas superfícies são fail-closed, então ninguém entra SEM credencial. O ataque não é a
@@ -195,7 +195,7 @@ describe("auditBind — quem pode ficar de frente para a rede", () => {
 
   it("loopback nunca RECUSA — mas a credencial fraca deixou de ser invisível", () => {
     // A topologia que este produto de fato ship é loopback + TÚNEL: a máquina viva roda com
-    // `AGILEHARNESS_HOST=127.0.0.1` e o `/api/usm/<token>/mcp` está na internet pública por desenho.
+    // `AGILEHARNESS_HOST=127.0.0.1` e o `/api/mcp/<token>/mcp` está na internet pública por desenho.
     // Uma auditoria que retornasse cedo em loopback (o que ela fazia) deixava
     // `changeme-changeme-changeme-change` passar SEM exame exatamente na configuração real. Então a
     // MEDIÇÃO passou a rodar sempre; o que continua condicionado ao bind é o VEREDITO.

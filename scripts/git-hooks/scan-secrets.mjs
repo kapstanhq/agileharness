@@ -339,7 +339,7 @@ function nakedTokenCandidates(text) {
   const push = (m) => m && out.push(m);
   // crase de markdown — o conteúdo INTEIRO tem de ser o token (um `caminho/de/arquivo` não casa)
   for (const m of text.matchAll(new RegExp(String.raw`\x60([A-Za-z0-9_-]{${NAKED_MIN_LEN},})\x60`, 'g'))) push(m[1]);
-  // segmento de path (`/api/usm/<tok>/mcp`) ou valor de query/atribuição (`?secret=<tok>`)
+  // segmento de path (`/api/mcp/<tok>/mcp`) ou valor de query/atribuição (`?secret=<tok>`)
   for (const m of text.matchAll(
     new RegExp(String.raw`[/=]([A-Za-z0-9_-]{${NAKED_MIN_LEN},})(?=[/?&#\s"'\x60,)\]}]|$)`, 'g'),
   ))

@@ -42,7 +42,7 @@ export function SystemDriftPanel({ boardId }: { boardId: string }) {
       clearTimeout(t);
       t = setTimeout(() => void load(), 2500);
     };
-    es.addEventListener("storymap", refresh as EventListener);
+    es.addEventListener("agileharness", refresh as EventListener);
     return () => {
       clearTimeout(t);
       es.close();

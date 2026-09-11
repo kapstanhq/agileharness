@@ -2,7 +2,7 @@
 // exactly on recovery-sweep.ts: a pure, DI-driven decision (`runOrchestratorTick`) + a thin re-arming timer
 // (`startOrchestratorTick`) so a slow tick never overlaps itself and the timer never keeps the process alive.
 //
-// The DECISION is deterministic and ZERO-TOKEN: the copiloto's LLM (`/storymap-orchestrator`) is spawned for
+// The DECISION is deterministic and ZERO-TOKEN: the copiloto's LLM (`/harness-orchestrator`) is spawned for
 // a board ONLY when a cheap pre-check says there is work (the human inbox has items / a card is stagnant / a
 // temporal demand fired) AND the board is `autonomous` AND no paired human holds the lease AND the daily
 // budget isn't spent. Every gate that fails SKIPS the spawn — so an idle board costs nothing. OFF by default
@@ -55,7 +55,7 @@ export interface OrchestratorTickDeps {
    *  wake por evento, o timer e N eventos podem cair na mesma janela; sem esta trava dois copilotos escreveriam
    *  no mesmo board ao mesmo tempo. Opcional (ausente ⇒ sem trava, comportamento legado). */
   runInFlight?: (board: string) => Promise<boolean> | boolean;
-  /** spawn `claude -p "/storymap-orchestrator <board> <mode> --tick"` (board-data, no worktree/train). `reason`
+  /** spawn `claude -p "/harness-orchestrator <board> <mode> --tick"` (board-data, no worktree/train). `reason`
    *  = o evento que acordou o Jido (ausente no tick periódico). Devolver `false` = o run NÃO nasceu (sem
    *  token, binário ausente): o tick então NÃO debita o budget — antes ele debitava, e um board sem token
    *  gastava os 20 ticks do dia sem nunca ter rodado nada (o estado do acme mostrava 6 ticks / $0). */

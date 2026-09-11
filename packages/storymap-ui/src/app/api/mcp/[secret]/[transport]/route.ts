@@ -171,8 +171,8 @@ const handlerCache = new Map<string, (req: Request) => Promise<Response>>();
 
 function handlerFor(secret: string, level: McpLevel): (req: Request) => Promise<Response> {
   // basePath = everything BEFORE the [transport] segment, so mcp-handler derives the
-  // streamable endpoint as `${basePath}/mcp` = /api/usm/<credencial>/mcp (what you paste).
-  const basePath = `/api/usm/${secret}`;
+  // streamable endpoint as `${basePath}/mcp` = /api/mcp/<credencial>/mcp (what you paste).
+  const basePath = `/api/mcp/${secret}`;
   const cached = handlerCache.get(basePath);
   if (cached) return cached;
   const handler = createMcpHandler(
@@ -189,7 +189,7 @@ function handlerFor(secret: string, level: McpLevel): (req: Request) => Promise<
     },
     // `instructions` ride in the MCP initialize response → every client sees the mental
     // model + rules before the first tool call (the canonical fix for "the agent feels lost").
-    { serverInfo: { name: "storymap", version: "0.3.0" }, instructions: MCP_INSTRUCTIONS },
+    { serverInfo: { name: "agileharness", version: "0.4.0" }, instructions: MCP_INSTRUCTIONS },
     // Stateless Streamable HTTP (no sessionIdGenerator) → no Redis needed; SSE is
     // disabled (removed from the MCP spec since 2025-03-26 and the source of the
     // Redis requirement we deliberately avoid).

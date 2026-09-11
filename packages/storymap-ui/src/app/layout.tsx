@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { selfBoardId } from "@/lib/storymap/self-board";
 import { Hanken_Grotesk, JetBrains_Mono, Playpen_Sans } from "next/font/google";
 import { headers } from "next/headers";
 import "./globals.css";
@@ -80,7 +81,8 @@ try {
 
 // Feedback overlay — DOGFOOD: the AgileHarness board gives visual feedback on ITSELF. The vanilla
 // snippet (public/ah-overlay.js) mounts a discreet bottom-left button on every page; unlinked
-// batches become triage cards on the `storymap` board (?ah-card=/?ah-session= override the link).
+// batches become triage cards on the board this installation declares as its own (selfBoardId();
+// ?ah-card=/?ah-session= override the link).
 // Same-origin + basic_auth → no nonce/CORS. The `theme` maps the overlay to the app's own CSS vars
 // so it matches the palette AND dark mode; the overlay core stays framework-agnostic (Fase 4 OSS).
 //
@@ -89,7 +91,9 @@ try {
 // time, WHERE the feedback goes and that "Novo item" spawns a triage agent (no more silent flash).
 // A cross-origin product embed (Nest, Fase 4) would inject its OWN copy or fall back to the neutral
 // core defaults; nothing AgileHarness-specific is baked into ah-overlay.js.
-const AH_FEEDBACK_CONFIG = {
+// FUNÇÃO e não const: o board de destino é o desta INSTALAÇÃO (env, `lib/storymap/self-board.ts`) —
+// fixá-lo num literal era fixar um board que só existe no repositório de quem desenvolve.
+const ahFeedbackConfig = (board: string) => ({
   endpoint: "/api/feedback/intake",
   // Turns on the send-step picker: [Novo item · Card · Sessão]. The card/session lists load from this
   // same-origin endpoint (board pinned server-side; the Sessão option appears only when the terminal
@@ -103,7 +107,7 @@ const AH_FEEDBACK_CONFIG = {
   // "Marcar ajuste" — verbo + objeto. O balão de conversa escrito "Feedback" lia como canal de suporte.
   icon: "jido",
   label: "Marcar ajuste",
-  link: { kind: "none", board: "storymap" },
+  link: { kind: "none" as const, board },
   producer: "agileharness-board",
   cardUrlTemplate: "/board/{board}/inbox?focus={id}",
   destinations: {
@@ -138,12 +142,15 @@ const AH_FEEDBACK_CONFIG = {
     danger: "rgb(var(--danger))",
     radius: "10px",
   },
-};
+});
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   // A rota chega pelo carimbo do middleware (lib/feedback/overlay-mount.ts) — o root layout do App
   // Router não a conhece por conta própria. Serve só para NÃO montar o overlay em rota pública.
-  const mountOverlay = shouldMountOverlay((await headers()).get(PATHNAME_HEADER));
+  // Sem board próprio declarado o overlay não tem para onde escrever: um botão que sempre falha é pior
+// que botão nenhum, então ele não monta.
+const selfBoard = selfBoardId();
+const mountOverlay = selfBoard !== null && shouldMountOverlay((await headers()).get(PATHNAME_HEADER));
 
   return (
     <html lang="pt-BR" className={`${sans.variable} ${mono.variable} ${brand.variable}`}>
@@ -157,7 +164,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         {children}
         {mountOverlay && (
           <>
-            <script dangerouslySetInnerHTML={{ __html: `window.__AH_FEEDBACK_CONFIG__=${JSON.stringify(AH_FEEDBACK_CONFIG)};` }} />
+            <script dangerouslySetInnerHTML={{ __html: `window.__AH_FEEDBACK_CONFIG__=${JSON.stringify(ahFeedbackConfig(selfBoard!))};` }} />
             <script src="/ah-overlay.js" async />
           </>
         )}

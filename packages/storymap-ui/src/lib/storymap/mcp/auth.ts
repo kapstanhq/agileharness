@@ -1,6 +1,6 @@
 // Capability-token check for the AgileHarness MCP endpoint. Pure + constant-time so it is
 // unit-testable in isolation and free of a length/timing oracle. Used by the route
-// handler (app/api/usm/[secret]/[transport]/route.ts).
+// handler (app/api/mcp/[secret]/[transport]/route.ts).
 //
 // story-7q83gx — POR QUE O PISO DAQUI É O MAIS ALTO DO SISTEMA (e não o mais baixo, como era).
 // Este é o segredo MAIS exposto do AgileHarness: o endpoint MCP está na internet pública POR

@@ -7,7 +7,7 @@
 //
 // A superfície que ele abre assim NÃO é hipótese: hoje o serviço roda como `storymap.service` no
 // systemd, com entrypoint próprio (`dist/ah-server.mjs`, não `next start`), e o endpoint
-// `/api/usm/<token>/mcp` está na internet pública POR DESENHO (é como o conector do Claude alcança
+// `/api/mcp/<token>/mcp` está na internet pública POR DESENHO (é como o conector do Claude alcança
 // as tools). Cada tool dessas spawna um agente com permissão desligada NA MÁQUINA.
 //
 // O QUE ESTE TESTE IMPEDE, então, é que o repositório volte a mentir — em qualquer das três
@@ -385,8 +385,8 @@ describe("(4) o threat model registra o que foi MEDIDO — inclusive o que joga 
 // autoriza decisões. Cada asserção abaixo amarra uma AFIRMAÇÃO do threat model ao código que a
 // sustenta — mexer no código sem mexer no doc reprova aqui.
 describe("(5) o threat model não pode apodrecer em silêncio", () => {
-  it("`/api/usm` continua FORA do portão por self-auth — é a premissa do capítulo do MCP", () => {
-    const usm = PUBLIC_ROUTES.find((r) => r.prefix === "/api/usm");
+  it("`/api/mcp` continua FORA do portão por self-auth — é a premissa do capítulo do MCP", () => {
+    const usm = PUBLIC_ROUTES.find((r) => r.prefix === "/api/mcp");
     expect(usm, "o doc afirma que o MCP se autentica pelo token no path, fora do portão de sessão").toBeDefined();
     expect(usm?.reason).toBe("self-auth");
   });

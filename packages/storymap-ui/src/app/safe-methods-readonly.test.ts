@@ -99,7 +99,7 @@ const SHARED_IMPL_EXEMPTIONS: readonly {
   premise: { requires: readonly RegExp[]; forbids: readonly RegExp[] };
 }[] = [
   {
-    file: "api/usm/[secret]/[transport]/route.ts",
+    file: "api/mcp/[secret]/[transport]/route.ts",
     reason:
       "MCP remoto: uma função só (`handle`) serve GET/POST/DELETE do Streamable HTTP, e alcança toda a " +
       "superfície de tools — spawn, deploy, delete. Fica FORA do modelo de ameaça de CSRF porque a " +
@@ -338,7 +338,7 @@ describe("métodos seguros do App Router não mutam estado", () => {
     expect(SAFE_HANDLERS).toContain("GET api/health/route.ts");
     // E enxerga o GET declarado por RE-EXPORT — a rota de maior privilégio do app (MCP remoto), que
     // por 1 forma de export não lida ficava inteira fora da varredura.
-    expect(SAFE_HANDLERS).toContain("GET api/usm/[secret]/[transport]/route.ts");
+    expect(SAFE_HANDLERS).toContain("GET api/mcp/[secret]/[transport]/route.ts");
     expect(MUTATION_MARKERS.length).toBeGreaterThan(10);
   });
 

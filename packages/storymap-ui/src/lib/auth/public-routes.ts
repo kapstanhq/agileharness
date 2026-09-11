@@ -51,7 +51,7 @@ export const PUBLIC_ROUTES: readonly PublicRoute[] = [
 
   // ── (a) a rota traz a própria autenticação ────────────────────────────────────────────────
   {
-    prefix: "/api/usm",
+    prefix: "/api/mcp",
     reason: "self-auth",
     why:
       "endpoint MCP: token no path, comparado timing-safe contra um segredo que precisa passar os 4 " +

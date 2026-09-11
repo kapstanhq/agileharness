@@ -24,6 +24,7 @@
 // board — so no token can write into a foreign board's sidecar zone.
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { selfBoardId } from "@/lib/storymap/self-board";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { checkSameOrigin, checkSameOriginJson } from "@/lib/feedback/guard";
@@ -38,8 +39,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // PINNED server-side for the board's own UI (same as the destinations catalog) — never a client-chosen
-// board, so no request can write into a foreign board's sidecar zone.
-const FEEDBACK_BOARD = "storymap";
+// board, so no request can write into a foreign board's sidecar zone. A fonte é o env desta
+// instalação (`lib/storymap/self-board.ts`); sem board próprio declarado esta lane não tem onde
+// escrever, e a rota RECUSA em vez de inventar um destino.
 
 // One batch may legitimately carry several images (one per drawn region), so this ceiling is looser
 // than the intake's — it exists to bound DISK, not to count batches. Per board, in-process.
@@ -52,7 +54,7 @@ export async function POST(request: Request): Promise<Response> {
   // same-origin — the same hazard classifyIntake closes for the batch endpoint); everything else must
   // pass the same-origin guard exactly as before.
   const ingestToken = request.headers.get(INGEST_HEADER);
-  let board = FEEDBACK_BOARD;
+  let board = selfBoardId();
   if (ingestToken) {
     const resolved = makeIngestResolver(parseIngestTokens(process.env.AGILEHARNESS_FEEDBACK_INGEST_TOKENS))(ingestToken);
     if (!resolved) {
@@ -73,6 +75,14 @@ export async function POST(request: Request): Promise<Response> {
     // operator's. Both, before a byte of image is decoded.
     if (!(await hasBoardSession(request.headers))) {
       return Response.json({ ok: false, error: SESSION_REQUIRED_ERROR }, { status: 401 });
+    }
+    // Sem board próprio declarado não há destino: recusar é a resposta honesta. A lane de repasse
+    // (acima) não passa por aqui — ela traz o board DENTRO do token.
+    if (!board) {
+      return Response.json(
+        { ok: false, error: "nenhum board próprio declarado nesta instalação (AGILEHARNESS_SELF_BOARD)" },
+        { status: 503 },
+      );
     }
   }
 

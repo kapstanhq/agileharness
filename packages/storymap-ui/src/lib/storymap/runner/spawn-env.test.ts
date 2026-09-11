@@ -125,7 +125,7 @@ describe("sanitizeSpawnEnv — nenhum tier de credencial MCP chega ao filho (sto
   // este teste cai — e é exatamente aí que a remoção passaria a custar capacidade.
   it("o mount de quem precisa de MCP não depende do env: o token é INLINADO no arquivo do --mcp-config", () => {
     const cfg = JSON.parse(buildOrchestratorMcpConfig(ORCH, 3008));
-    expect(cfg.mcpServers.storymap.url).toBe(`http://localhost:3008/api/usm/${ORCH}/mcp`);
+    expect(cfg.mcpServers.storymap.url).toBe(`http://localhost:3008/api/mcp/${ORCH}/mcp`);
   });
 
   // A régua é o PREFIXO do tier MCP — nunca "parece segredo". Um strip por palavra-chave levaria a

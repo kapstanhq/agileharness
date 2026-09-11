@@ -1,5 +1,5 @@
 // AgileHarness MCP tools — the conversational control surface for the board, exposed to
-// the Claude mobile app via a remote custom connector (see app/api/usm/[secret]/[transport]).
+// the Claude mobile app via a remote custom connector (see app/api/mcp/[secret]/[transport]).
 //
 // DESIGN: every mutating tool DELEGATES to the existing server actions (app/actions.ts),
 // so it inherits the SAME gates (checkGate), the SAME per-card write lock + fresh-disk

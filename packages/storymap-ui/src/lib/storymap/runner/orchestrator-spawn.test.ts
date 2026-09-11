@@ -207,7 +207,7 @@ describe("parseOrchestratorFailure — a CAUSA da morte (PURE)", () => {
 describe("buildOrchestratorMcpConfig — aponta o filho ao MCP AgileHarness deste serviço (PURE)", () => {
   it("monta o http endpoint com token na URL e a porta dada", () => {
     const cfg = JSON.parse(buildOrchestratorMcpConfig("tok", 3008));
-    expect(cfg.mcpServers.storymap).toEqual({ type: "http", url: "http://localhost:3008/api/usm/tok/mcp" });
+    expect(cfg.mcpServers.storymap).toEqual({ type: "http", url: "http://localhost:3008/api/mcp/tok/mcp" });
   });
 });
 
@@ -235,18 +235,18 @@ describe("parseOrchestratorResult — o custo que o budget cobra", () => {
 
 describe("buildOrchestratorPrompt — o motivo do wake vai p/ o agente", () => {
   it("sem motivo: o prompt do tick periódico", () => {
-    expect(buildOrchestratorPrompt("acme", "autonomous")).toBe("/storymap-orchestrator acme autonomous --tick");
+    expect(buildOrchestratorPrompt("acme", "autonomous")).toBe("/harness-orchestrator acme autonomous --tick");
   });
 
   it("com motivo: o evento que o acordou entra como contexto", () => {
     expect(buildOrchestratorPrompt("acme", "autonomous", "card X travou")).toBe(
-      '/storymap-orchestrator acme autonomous --tick --motivo "card X travou"',
+      '/harness-orchestrator acme autonomous --tick --motivo "card X travou"',
     );
   });
 
   it("achata aspas e quebras de linha do motivo (o prompt fica legível, argv nunca vira shell)", () => {
     const p = buildOrchestratorPrompt("acme", "autonomous", 'Blocker em "Login"\nsegunda linha');
     expect(p).not.toContain("\n");
-    expect(p).toBe('/storymap-orchestrator acme autonomous --tick --motivo "Blocker em Login segunda linha"');
+    expect(p).toBe('/harness-orchestrator acme autonomous --tick --motivo "Blocker em Login segunda linha"');
   });
 });

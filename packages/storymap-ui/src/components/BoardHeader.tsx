@@ -915,7 +915,7 @@ function useBoardDemands(boardId: string): CockpitItem[] {
       clearTimeout(t);
       t = setTimeout(load, 300);
     };
-    es.addEventListener("storymap", onEvent as EventListener);
+    es.addEventListener("agileharness", onEvent as EventListener);
     const poll = setInterval(load, 60_000);
     return () => {
       alive = false;
@@ -1519,7 +1519,7 @@ function MobileInboxTab({ boardId, active }: { boardId: string; active: boolean 
       clearTimeout(t);
       t = setTimeout(load, 300);
     };
-    es.addEventListener("storymap", onEvent as EventListener);
+    es.addEventListener("agileharness", onEvent as EventListener);
     const poll = setInterval(load, 60_000);
     return () => {
       alive = false;

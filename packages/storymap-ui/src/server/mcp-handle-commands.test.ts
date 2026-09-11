@@ -137,7 +137,7 @@ describe(`node dist/ah-server.mjs ${EMITIR}`, () => {
 
   it("imprime a URL pronta do connector e o comando de revogação — o caminho de rotação sem restart", () => {
     const saida = saidaDe(info as unknown as Espiao);
-    expect(saida).toContain(`/api/usm/${handleEmitido}/mcp`);
+    expect(saida).toContain(`/api/mcp/${handleEmitido}/mcp`);
     expect(saida).toContain(REVOGAR);
     expect(saida).toContain("sem reiniciar o serviço");
   });

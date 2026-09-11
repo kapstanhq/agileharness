@@ -98,7 +98,7 @@ export function subscribeSse(url: string, event: string, handler: Handler): () =
 
 /** Açúcar para o canal do board (o de longe mais assinado). */
 export function subscribeStorymap(handler: Handler): () => void {
-  return subscribeSse("/api/notifications/stream", "storymap", handler);
+  return subscribeSse("/api/notifications/stream", "agileharness", handler);
 }
 
 /**

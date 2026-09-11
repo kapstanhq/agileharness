@@ -18,7 +18,7 @@
 //     "sessão válida" seria uma segunda verdade, e a que apodrece. É o único chamador de quem se
 //     exige prova, porque é o único que um atacante pode tentar imitar pela rede.
 //
-//  2. AGENTE HEADLESS pelo MCP → o request entrou por `/api/usm/<token>`, cujo token foi comparado
+//  2. AGENTE HEADLESS pelo MCP → o request entrou por `/api/mcp/<token>`, cujo token foi comparado
 //     timing-safe (`lib/storymap/mcp/auth.ts`) e cuja identidade a rota publicou no AsyncLocalStorage
 //     (`lib/storymap/mcp/actor.ts`). Esse chamador NÃO tem navegador nem cookie: exigir sessão dele
 //     FECHARIA o canal dos agentes — o oposto do que este hardening quer. O crachá dele não é
@@ -52,7 +52,7 @@
 // testes de `action-guard.test.ts` produzem esse sinal chamando as funções do Next instalado.
 //
 // POR QUE NÃO reconhecemos rota self-auth pelo pathname: o middleware carimba o pathname num header
-// (`PATHNAME_HEADER`), e seria tentador liberar `/api/usm` e `/api/runner` por ele. Sob a hipótese
+// (`PATHNAME_HEADER`), e seria tentador liberar `/api/mcp` e `/api/runner` por ele. Sob a hipótese
 // que ESTE controle cobre — middleware fora do caminho — esse header passa a vir do cliente, e
 // reconhecer a rota por header seria entregar ao atacante o próprio crachá. O ALS do ator, não.
 

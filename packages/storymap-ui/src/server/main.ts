@@ -132,7 +132,7 @@ process.env.PORT = String(port);
 // bastava `AGILEHARNESS_HOST=0.0.0.0` e o serviço subia CALADO (o log de `listen` imprime o host
 // como informação neutra, sem juízo). O que esta checagem IMPEDE é a repetição silenciosa do
 // incidente medido logo acima: a porta de frente para a rede com uma credencial que dá para
-// ADIVINHAR. Nela vivem o `/login` (token do operador), o `/api/usm/<token>/mcp` — cujas tools
+// ADIVINHAR. Nela vivem o `/login` (token do operador), o `/api/mcp/<token>/mcp` — cujas tools
 // spawnam `claude --dangerously-skip-permissions` NESTA máquina — e o `/terminal` (um shell).
 //
 // Por que "adivinhar" e não "entrar sem credencial": todo portão daqui já é fail-closed (middleware,
@@ -232,7 +232,7 @@ export const REVOKE_MCP_HANDLE_FLAG = "--revoke-mcp-handle";
 
 /** O bloco de uso, impresso quando a invocação está incompleta — nunca um erro nu. */
 export const MCP_HANDLE_USAGE =
-  `  AgileHarness — handles MCP (credencial revogável para o path /api/usm/<credencial>/mcp)\n\n` +
+  `  AgileHarness — handles MCP (credencial revogável para o path /api/mcp/<credencial>/mcp)\n\n` +
   `    node dist/ah-server.mjs ${GENERATE_MCP_HANDLE_FLAG} --level <ro|write|orch|full> [--label "conector do chat web"]\n` +
   `    node dist/ah-server.mjs ${LIST_MCP_HANDLES_FLAG}\n` +
   `    node dist/ah-server.mjs ${REVOKE_MCP_HANDLE_FLAG} <id>\n\n` +
@@ -336,7 +336,7 @@ export interface BindAudit {
  *
  * A ENTROPIA das credenciais roda SEMPRE, não só com bind aberto. Motivo: a topologia REAL deste
  * produto é loopback + TÚNEL — a máquina viva tem `AGILEHARNESS_HOST=127.0.0.1` e o header de
- * `api/usm/[secret]/[transport]/route.ts` declara que o endpoint MCP está na internet pública POR
+ * `api/mcp/[secret]/[transport]/route.ts` declara que o endpoint MCP está na internet pública POR
  * DESENHO (o conector do Claude conecta da nuvem da Anthropic). Retornar cedo em loopback deixava
  * `AGILEHARNESS_AUTH_TOKEN=changeme-changeme-changeme-change` passar SEM exame justo na configuração
  * que de fato ship. O que continua condicionado ao bind aberto é só o VEREDITO (`failures` ⇒ recusa)
@@ -402,7 +402,7 @@ export function bindAuditMessage(audit: BindAudit, host: string, port: number): 
   const cabeca =
     `\n[ah-server] ⚠ BIND ABERTO — ${host}:${port} NÃO é loopback: outras máquinas alcançam este ` +
     `serviço e, sem firewall, a internet também.\n` +
-    `  Nesta porta vivem o /login (token do operador), o /api/usm/<token>/mcp (cujas tools spawnam ` +
+    `  Nesta porta vivem o /login (token do operador), o /api/mcp/<token>/mcp (cujas tools spawnam ` +
     `claude com skip-permissions nesta máquina) e o /terminal (um shell).\n`;
   if (audit.failures.length === 0) {
     return `${cabeca}  Auto-checagem: OK — toda credencial alcançável passou o teste de entropia.\n`;
@@ -420,7 +420,7 @@ export function bindAuditMessage(audit: BindAudit, host: string, port: number): 
  * O relato de LOOPBACK: a MESMA medição de entropia, sem veredito. `null` quando não há nada a dizer.
  *
  * Por que avisar num bind fechado: o bind não é o único caminho até estas credenciais. A instalação
- * real é loopback + TÚNEL, e `/api/usm/<token>/mcp` atravessa o túnel por desenho — então
+ * real é loopback + TÚNEL, e `/api/mcp/<token>/mcp` atravessa o túnel por desenho — então
  * "loopback" nunca quis dizer "inalcançável". O que este aviso IMPEDE é a credencial de tutorial
  * envelhecer em silêncio até o dia em que alguém abre a porta (ou publica o túnel) e ninguém lembra
  * que ela está lá. Aviso, e não recusa, porque em loopback quem já está na máquina já está dentro:
@@ -433,7 +433,7 @@ export function weakCredentialsMessage(audit: BindAudit): string | null {
     `\n[ah-server] ⚠ auto-checagem de credenciais REPROVOU ${audit.weaknesses.length} item(ns) — o bind está ` +
     `em loopback, então isto NÃO impede o boot:\n${lista}\n` +
     `  Vale mesmo em loopback porque o túnel/proxy que publica este serviço não passa pelo bind: o ` +
-    `/api/usm/<token>/mcp está na internet pública por desenho. Com AGILEHARNESS_HOST fora do loopback, ` +
+    `/api/mcp/<token>/mcp está na internet pública por desenho. Com AGILEHARNESS_HOST fora do loopback, ` +
     `cada item acima RECUSA o boot.\n`
   );
 }
@@ -710,7 +710,7 @@ export async function runMcpHandleCommand(argv: string[]): Promise<boolean> {
         `\n  AgileHarness — handle MCP emitido: nível ${record.level}` +
           `${record.label ? `, rótulo "${record.label}"` : ""}. Registrado em ${file} (modo 0600).\n\n` +
           `  ⚠️ Este valor aparece UMA VEZ. Use-o no lugar do token na URL do connector:\n\n` +
-          `    https://<seu-tunel>/api/usm/${handle}/mcp\n\n` +
+          `    https://<seu-tunel>/api/mcp/${handle}/mcp\n\n` +
           `  Revogar depois — vale no request SEGUINTE, sem reiniciar o serviço:\n\n` +
           `    node dist/ah-server.mjs ${REVOKE_MCP_HANDLE_FLAG} ${record.id}\n\n` +
           // ⚠️ ESTE AVISO MUDOU (2026-08-12) PORQUE ELE AVISAVA O RISCO ERRADO.
@@ -883,7 +883,7 @@ async function main(): Promise<void> {
       `\n  AgileHarness — token MCP gerado (32 bytes em base64url) e registrado em ${file} (modo 0600).\n\n` +
         `  Ponha esta linha em packages/storymap-ui/.env.local (ou no EnvironmentFile= do systemd) e reinicie:\n\n` +
         `    ${MCP_TOKEN_ENV}=${token}\n\n` +
-        `  ⚠️ É a ENV que arma a porta, não o arquivo: enquanto ela não existir, /api/usm/<token>/mcp responde\n` +
+        `  ⚠️ É a ENV que arma a porta, não o arquivo: enquanto ela não existir, /api/mcp/<token>/mcp responde\n` +
         `     404 e a superfície MCP fica FECHADA. Este token dá autonomia total sobre o repo — NUNCA o comite.\n`,
     );
     return; // o serviço NÃO sobe: isto é um comando, não um boot
@@ -947,7 +947,7 @@ async function main(): Promise<void> {
       );
       return;
     }
-    const local = `http://127.0.0.1:${porta}/api/usm/${credencial}/mcp`;
+    const local = `http://127.0.0.1:${porta}/api/mcp/${credencial}/mcp`;
     console.log(`# Claude Code, NESTA máquina:\n` + `claude mcp add --transport http agileharness ${local}\n`);
     console.log(
       `# ou, como .mcp.json do projeto:\n` +
@@ -955,7 +955,7 @@ async function main(): Promise<void> {
         "\n",
     );
     if (publica) {
-      console.log(`# Para o conector do app (precisa ser alcançável de fora):\n${publica.replace(/\/$/, "")}/api/usm/${credencial}/mcp\n`);
+      console.log(`# Para o conector do app (precisa ser alcançável de fora):\n${publica.replace(/\/$/, "")}/api/mcp/${credencial}/mcp\n`);
     } else {
       console.log(
         `# Para o conector do app, passe --url https://<seu-dominio> — o hostname do túnel não é derivável daqui.\n`,

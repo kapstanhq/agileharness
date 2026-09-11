@@ -174,7 +174,7 @@ export type AuthVia = "path" | "query" | "header" | "body" | "cookie";
  * Rodar fora do Next é um limite de RUNTIME, não um perímetro diferente.
  */
 export const PERIMETER_SURFACES = {
-  mcp: "/api/usm",
+  mcp: "/api/mcp",
   runnerEvents: "/api/runner/events",
   runnerPulse: "/api/runner/pulse",
   runnerDeployWebhook: "/api/runner/deploy-webhook",
@@ -565,7 +565,7 @@ function publicarLinha(rec: AuthFailureLine, now: number): void {
 /**
  * Reduz `raw` ao PATH e apaga qualquer segmento que possa ser credencial.
  *
- * Isto existe porque a credencial de hoje VIAJA NO PATH: `/api/usm/<token>/mcp`, e `?secret=<token>`
+ * Isto existe porque a credencial de hoje VIAJA NO PATH: `/api/mcp/<token>/mcp`, e `?secret=<token>`
  * nas rotas do runner. Um chamador que passasse `req.url` gravaria o segredo no arquivo forense —
  * exatamente o defeito do logger de erro default do Caddy, reproduzido dentro de casa. Duas regras,
  * as duas por FORMA (não por lista de rotas, que envelheceria):

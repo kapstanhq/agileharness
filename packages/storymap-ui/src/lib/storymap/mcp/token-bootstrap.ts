@@ -21,7 +21,7 @@
 //
 //   2. ENDPOINT SEMPRE-ARMADO. Gerar no boot faz TODA instalação nascer com a superfície MCP
 //      EXISTINDO — e torna FALSA a garantia escrita no header de
-//      `api/usm/[secret]/[transport]/route.ts`: "Authentication is refused outright unless
+//      `api/mcp/[secret]/[transport]/route.ts`: "Authentication is refused outright unless
 //      AGILEHARNESS_MCP_TOKEN is set ... so the endpoint can never be accidentally left open". Numa
 //      superfície cujas tools spawnam `claude --dangerously-skip-permissions`, o default tem de ser
 //      FECHADO: sem env não há porta (404 nu, `isMcpTokenValid` é fail-closed contra ausente).
@@ -76,7 +76,7 @@ export type McpTokenPosture =
  * Normaliza o token MCP da env e diz o que ele IMPLICA para a superfície. Idempotente e sem disco.
  *
  * Escreve o valor NORMALIZADO (trimado) de volta na env, e isso é correção de bug, não estética: o
- * julgamento aqui usava o valor trimado enquanto `resolveActor` (`api/usm/[secret]/[transport]/
+ * julgamento aqui usava o valor trimado enquanto `resolveActor` (`api/mcp/[secret]/[transport]/
  * route.ts`) compara byte-a-byte contra `process.env`. Um token com espaço/quebra de linha sobrando
  * — o que um `Environment=` de systemd ou um `.env` editado à mão produz — era APROVADO no boot e
  * batia 404 em toda requisição, sem log e sem pista. Uma verdade só: o que a env carrega depois
@@ -101,7 +101,7 @@ export function mcpPostureAdvice(posture: McpTokenPosture): string | null {
   if (posture.state !== "recusada") return null;
   return (
     `[mcp] ${MCP_TOKEN_ENV} RECUSADO: ${weaknessAdvice(posture.weakness)}\n` +
-    `  A superfície MCP fica FECHADA enquanto isso valer: /api/usm/<token>/mcp responde 404 e o conector não conecta.\n` +
+    `  A superfície MCP fica FECHADA enquanto isso valer: /api/mcp/<token>/mcp responde 404 e o conector não conecta.\n` +
     `  Caminho pronto:  node dist/ah-server.mjs --generate-mcp-token  (gera, grava a 0600 e imprime a linha do .env.local)\n` +
     `  Ou remova a variável do ambiente — sem ela a porta simplesmente não existe, que é o default seguro.`
   );

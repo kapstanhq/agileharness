@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 // Behavioral freeze of the auth boundary's SECOND floor. The FIRST floor is Caddy basic_auth: in prod
-// `/api/feedback/*` matches neither the PUBLIC `@mcp` (`/api/usm/*`) nor the `@pwa` asset matcher, so it
+// `/api/feedback/*` matches neither the PUBLIC `@mcp` (`/api/mcp/*`) nor the `@pwa` asset matcher, so it
 // hits the basic_auth catch-all → 401 without credentials (live spike confirmed; the Caddyfile is infra,
 // not in-repo, so it can't be frozen here). Unlike a string grep for the guard token, this INVOKES each
 // route handler with a cross-site request and asserts it is rejected (403) BEFORE any sink runs — so a

@@ -61,7 +61,7 @@ take effect in the session that registers it, but the endpoint is plain JSON-RPC
 Once you have issued a credential, call the board over `curl` in this same conversation:
 
 ```bash
-curl -s "http://127.0.0.1:${AGILEHARNESS_PORT:-3008}/api/usm/$AH/mcp" \
+curl -s "http://127.0.0.1:${AGILEHARNESS_PORT:-3008}/api/mcp/$AH/mcp" \
   -H 'content-type: application/json' \
   -H 'accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_boards","arguments":{}}}' \

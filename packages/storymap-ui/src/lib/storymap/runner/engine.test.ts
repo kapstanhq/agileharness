@@ -1676,7 +1676,7 @@ describe("buildClaudeCommand / quoteArg — shell command assembly", () => {
   it("HARDENING 1.3: an assembled command with allowedTools Tool(specifier) parses under `sh -n`", () => {
     // The regression the fix closes: an unquoted `Bash(git:*)` makes `sh -c` fail with a syntax error before
     // claude ever runs. Assemble a realistic command and assert the shell parses it (no execution).
-    const cmd = buildClaudeCommand("claude", "/storymap-orchestrator storymap manual --tick", "storymap/x", [
+    const cmd = buildClaudeCommand("claude", "/harness-orchestrator storymap manual --tick", "storymap/x", [
       "--allowedTools",
       "Bash(git:*),mcp__storymap__get_card,Read(//abs)",
       "--dangerously-skip-permissions",

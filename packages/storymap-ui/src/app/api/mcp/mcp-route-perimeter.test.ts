@@ -73,7 +73,7 @@ vi.mock("@/lib/auth/mcp-handle", async (importOriginal) => {
 
 import { PERIMETER_POLICY, authFailuresPath, flushAuthFailures, readAuthFailures, resetPerimeterState } from "@/lib/auth/auth-audit";
 import { createMcpHandle, flushHandleTouches, revokeMcpHandle, type McpCredential } from "@/lib/auth/mcp-handle";
-import { POST } from "@/app/api/usm/[secret]/[transport]/route";
+import { POST } from "@/app/api/mcp/[secret]/[transport]/route";
 
 const TOKEN_ENV = "AGILEHARNESS_MCP_TOKEN";
 
@@ -117,7 +117,7 @@ afterEach(async () => {
  */
 function chamar(credencial: string, ip: string): Promise<Response> {
   const seg = encodeURIComponent(credencial);
-  const req = new Request(`https://ah.example/api/usm/${seg}/mcp`, {
+  const req = new Request(`https://ah.example/api/mcp/${seg}/mcp`, {
     method: "POST",
     headers: { "x-forwarded-for": ip },
   });
@@ -163,7 +163,7 @@ describe("ATAQUE: usar a credencial que vazou no log de um intermediário", () =
     // rastro precisa distinguir isso de um scanner qualquer.
     const linhas = await rastro();
     expect(linhas.at(-1)).toMatchObject({
-      surface: "/api/usm",
+      surface: "/api/mcp",
       via: "path",
       reason: "handle-revogado",
       handleId: record.id,
@@ -273,7 +273,7 @@ describe("CUSTO DE AUTONOMIA: o dono não pode perder o que já tinha", () => {
       // igualdade com o tokenEnv do run — reescrevê-lo como rótulo quebraria a atribuição do copiloto.
       actor: TOKEN_ENV,
       // E o endpoint derivado da URL colada continua o mesmo, senão o conector do dono deixaria de casar.
-      basePath: `/api/usm/${TOKEN_LEGADO}`,
+      basePath: `/api/mcp/${TOKEN_LEGADO}`,
     });
   });
 
@@ -309,6 +309,6 @@ describe("ÚLTIMO PORTÃO: o piso de força vale mesmo se a resolução regredir
     expect(r.status).toBe(404);
     // E a recusa é nomeada como o que ela é — porta fechada por SETUP, não scanner. É a diferença entre
     // "estou sendo varrido" e "meu conector nunca vai funcionar", lida do mesmo arquivo.
-    expect((await rastro()).at(-1)).toMatchObject({ reason: "token-fraco", surface: "/api/usm" });
+    expect((await rastro()).at(-1)).toMatchObject({ reason: "token-fraco", surface: "/api/mcp" });
   });
 });

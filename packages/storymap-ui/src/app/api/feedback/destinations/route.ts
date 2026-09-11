@@ -13,14 +13,16 @@ import { buildEnrichedSessions } from "@/lib/terminal/enrich";
 import { sessionRunsClaude } from "@/lib/vps/tmux";
 import { isMasterSession } from "@/lib/vps/kill-guard";
 import { readCards, readBoardConfig } from "@/lib/storymap/repo";
+import { selfBoardId } from "@/lib/storymap/self-board";
 import { terminalStatusIds } from "@/lib/storymap/views";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // PINNED server-side — never a client `?board` param — so a spoofed board can't enumerate a foreign
-// board's backlog. Single-operator dogfood tool → one board.
-const FEEDBACK_BOARD = "storymap";
+// board's backlog. A FONTE é o env desta instalação (`lib/storymap/self-board.ts`), nunca um id do
+// repositório de quem desenvolve: sem board próprio declarado, o catálogo responde VAZIO em vez de
+// apontar para um board que só existe na máquina de outra pessoa.
 
 export async function GET(request: Request): Promise<Response> {
   const guard = checkSameOrigin(request.headers);
@@ -33,9 +35,10 @@ export async function GET(request: Request): Promise<Response> {
   // Cards for the picker: strip everything but the fields the projection needs (no ops-intel leaks by
   // construction) and stamp `terminal` from the board config so a closed/shipped card — a poor refine
   // target — drops out. Config read is best-effort: no config → empty terminal set → nothing extra hidden.
+  const feedbackBoard = selfBoardId();
   const [rawCards, config] = await Promise.all([
-    readCards(FEEDBACK_BOARD).catch(() => []),
-    readBoardConfig(FEEDBACK_BOARD).catch(() => null),
+    feedbackBoard ? readCards(feedbackBoard).catch(() => []) : Promise.resolve([]),
+    feedbackBoard ? readBoardConfig(feedbackBoard).catch(() => null) : Promise.resolve(null),
   ]);
   const termIds = config ? terminalStatusIds(config) : new Set<string>();
   const cards = rawCards.map((c) => ({
@@ -69,7 +72,7 @@ export async function GET(request: Request): Promise<Response> {
       }));
   }
 
-  const options = projectDestinations({ board: FEEDBACK_BOARD, cards, sessions, sessionEnabled, now: Date.now() });
+  const options = projectDestinations({ board: feedbackBoard ?? "", cards, sessions, sessionEnabled, now: Date.now() });
 
   return Response.json({ ok: true, sessionEnabled, options }, { headers: { "cache-control": "no-store" } });
 }

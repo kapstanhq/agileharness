@@ -141,7 +141,7 @@ describe("ATAQUE: configurar um segredo memorizável e publicá-lo na internet",
 
 describe("ATAQUE: aprovar no boot um token que nenhuma requisição vai aceitar", () => {
   it("o valor normalizado volta para a env — senão o boot aprova e todo request dá 404", () => {
-    // `resolveActor` (api/usm/[secret]/[transport]/route.ts) compara byte-a-byte contra process.env.
+    // `resolveActor` (api/mcp/[secret]/[transport]/route.ts) compara byte-a-byte contra process.env.
     // Um `Environment=` de systemd ou um .env editado à mão que deixe espaço/quebra de linha
     // sobrando era APROVADO aqui (o julgamento usava o valor trimado) e batia 404 em toda
     // requisição, sem log e sem pista. Uma verdade só: o que fica na env é o que autentica.

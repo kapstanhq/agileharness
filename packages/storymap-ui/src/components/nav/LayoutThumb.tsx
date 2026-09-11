@@ -81,7 +81,7 @@ function PrdThumb() {
  * User Story Mapping — o OUTLINE: ações no nível 0, passos recuados, stories mais fundo. A forma que
  * o olho tem de reconhecer é a ESCADA (a árvore), não mais a grade de células por release.
  */
-function StorymapThumb() {
+function MapaThumb() {
   const row = (indent: number, ink: Ink, w: string) => (
     <span className="flex items-center gap-1">
       {indent > 0 && <span className="block" style={{ width: indent * 6 }} />}
@@ -222,7 +222,7 @@ function KanbanThumb() {
 const THUMBS: Record<ThumbKind, () => ReactNode> = {
   canvas: CanvasThumb,
   prd: PrdThumb,
-  storymap: StorymapThumb,
+  mapa: MapaThumb,
   ideas: IdeasThumb,
   personas: PersonasThumb,
   priority: PriorityThumb,

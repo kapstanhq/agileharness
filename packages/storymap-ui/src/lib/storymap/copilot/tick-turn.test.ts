@@ -4,13 +4,13 @@ import { commandNoticeText, parseTickWake, tickWakeText } from "./tick-turn";
 // A forma REAL medida no transcript vivo do board acme (9 ocorrências na sessão cc8ca62b): o CLI expande a slash
 // command numa casca XML. É esta string que o chat imprimia numa bolha à direita, como se o operador a digitasse.
 const EXPANDED =
-  "<command-message>storymap-orchestrator</command-message>\n" +
-  "<command-name>/storymap-orchestrator</command-name>\n" +
+  "<command-message>harness-orchestrator</command-message>\n" +
+  "<command-name>/harness-orchestrator</command-name>\n" +
   "<command-args>acme autonomous --tick</command-args>";
 
 const EXPANDED_WITH_MOTIVO =
-  "<command-message>storymap-orchestrator</command-message>\n" +
-  "<command-name>/storymap-orchestrator</command-name>\n" +
+  "<command-message>harness-orchestrator</command-message>\n" +
+  "<command-name>/harness-orchestrator</command-name>\n" +
   '<command-args>acme autonomous --tick --motivo "Aprovar design em Destacar eventos de alta afinidade no feed"</command-args>';
 
 describe("parseTickWake", () => {
@@ -27,7 +27,7 @@ describe("parseTickWake", () => {
   });
 
   it("reconhece também a forma CRUA (o prompt como buildOrchestratorPrompt o monta)", () => {
-    expect(parseTickWake("/storymap-orchestrator orbit suggest --tick")).toEqual({
+    expect(parseTickWake("/harness-orchestrator orbit suggest --tick")).toEqual({
       board: "orbit",
       mode: "suggest",
     });
@@ -40,30 +40,30 @@ describe("parseTickWake", () => {
     expect(parseTickWake("por que o --tick não rodou?")).toBeNull();
   });
 
-  it("sem --tick NÃO é o relógio: um /storymap-orchestrator digitado pelo operador segue sendo fala dele", () => {
-    expect(parseTickWake("/storymap-orchestrator acme autonomous")).toBeNull();
+  it("sem --tick NÃO é o relógio: um /harness-orchestrator digitado pelo operador segue sendo fala dele", () => {
+    expect(parseTickWake("/harness-orchestrator acme autonomous")).toBeNull();
     expect(
       parseTickWake(
-        "<command-name>/storymap-orchestrator</command-name>\n<command-args>acme autonomous</command-args>",
+        "<command-name>/harness-orchestrator</command-name>\n<command-args>acme autonomous</command-args>",
       ),
     ).toBeNull();
   });
 
   // O CLI grava `<command-name>` com E sem a barra (medido em ~/.claude/projects: 60x
-  // `/storymap-orchestrator` COM barra, mas também um `<command-name>code-review</command-name>` SEM).
+  // `/harness-orchestrator` COM barra, mas também um `<command-name>code-review</command-name>` SEM).
   // Depender desse detalhe de um formato EXTERNO faria o vazamento voltar calado.
   it("tolera o nome do comando SEM a barra (o CLI grava das duas formas)", () => {
     expect(
       parseTickWake(
-        "<command-message>storymap-orchestrator</command-message>\n" +
-          "<command-name>storymap-orchestrator</command-name>\n" +
+        "<command-message>harness-orchestrator</command-message>\n" +
+          "<command-name>harness-orchestrator</command-name>\n" +
           '<command-args>acme autonomous --tick --motivo "Aprovar design em X"</command-args>',
       ),
     ).toEqual({ board: "acme", mode: "autonomous", reason: "Aprovar design em X" });
   });
 
   it("tolera a forma CRUA sem barra também", () => {
-    expect(parseTickWake("storymap-orchestrator acme autonomous --tick")).toEqual({
+    expect(parseTickWake("harness-orchestrator acme autonomous --tick")).toEqual({
       board: "acme",
       mode: "autonomous",
     });
@@ -112,10 +112,10 @@ describe("commandNoticeText — o vazamento é da classe, não do tick", () => {
     ).toBe("Comando: /model sonnet");
   });
 
-  it("um /storymap-orchestrator SEM --tick não é o relógio, mas ainda é COMANDO (nunca XML cru na bolha)", () => {
-    const raw = "<command-name>/storymap-orchestrator</command-name>\n<command-args>acme autonomous</command-args>";
+  it("um /harness-orchestrator SEM --tick não é o relógio, mas ainda é COMANDO (nunca XML cru na bolha)", () => {
+    const raw = "<command-name>/harness-orchestrator</command-name>\n<command-args>acme autonomous</command-args>";
     expect(parseTickWake(raw)).toBeNull(); // não é tick
-    expect(commandNoticeText(raw)).toBe("Comando: /storymap-orchestrator acme autonomous"); // mas é evento
+    expect(commandNoticeText(raw)).toBe("Comando: /harness-orchestrator acme autonomous"); // mas é evento
   });
 
   it("argumento gigante é capado (um comando não vira uma linha de evento infinita)", () => {

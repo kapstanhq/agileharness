@@ -1,11 +1,11 @@
 // O turno do TICK dentro da sessão compartilhada do board — como reconhecê-lo e como contá-lo ao operador.
 //
 // Desde o WS2A o tick RETOMA a mesma sessão durável que o chat lê (`--resume`), e ele acorda com um prompt que é
-// uma SLASH COMMAND: `/storymap-orchestrator <board> <mode> --tick [--motivo "…"]`. O CLI grava esse prompt no
+// uma SLASH COMMAND: `/harness-orchestrator <board> <mode> --tick [--motivo "…"]`. O CLI grava esse prompt no
 // transcript como um turno `user` — e, quando é slash command, ele o EXPANDE numa casca XML:
 //
-//   <command-message>storymap-orchestrator</command-message>
-//   <command-name>/storymap-orchestrator</command-name>
+//   <command-message>harness-orchestrator</command-message>
+//   <command-name>/harness-orchestrator</command-name>
 //   <command-args>acme autonomous --tick --motivo "Aprovar design em …"</command-args>
 //
 // O `parseTranscriptTurns` lia isso como "o humano falou" e o chat imprimia a casca CRUA numa bolha à direita,
@@ -29,14 +29,14 @@ export interface CommandInvocation {
   args: string;
 }
 
-const ORCH_COMMAND = "storymap-orchestrator";
+const ORCH_COMMAND = "harness-orchestrator";
 /** `<command-args>…</command-args>` da expansão de slash command do CLI. */
 const COMMAND_ARGS_RE = /<command-args>([\s\S]*?)<\/command-args>/;
 const COMMAND_NAME_RE = /<command-name>\s*([^<\s]+)\s*<\/command-name>/;
 
 /**
  * O nome do comando SEM a barra. O CLI grava `<command-name>` das duas formas — a medição em
- * ~/.claude/projects mostra 60 `/storymap-orchestrator` COM barra, mas também um
+ * ~/.claude/projects mostra 60 `/harness-orchestrator` COM barra, mas também um
  * `<command-name>code-review</command-name>` SEM. Comparar a string crua faria o reconhecimento depender de
  * um detalhe de formatação de um formato EXTERNO (o transcript é do CLI, não nosso) — e o preço de errar é o
  * vazamento voltar calado. Normalizar é 1 linha; descobrir de novo custa uma investigação.
@@ -47,11 +47,11 @@ const MOTIVO_RE = /--motivo\s+"([^"]*)"/;
 
 /**
  * Reconhece o prompt com que o TICK acorda, nas duas formas que o transcript pode carregar: a EXPANDIDA (casca
- * `<command-name>/<command-args>` que o CLI grava para uma slash command) e a CRUA (`/storymap-orchestrator …`).
+ * `<command-name>/<command-args>` que o CLI grava para uma slash command) e a CRUA (`/harness-orchestrator …`).
  * Devolve null para qualquer outro prompt — isto é, para tudo que o operador de fato digitou.
  *
  * Só reconhece com o marcador `--tick` presente: é ele que separa "o relógio me acordou" de um
- * `/storymap-orchestrator` que o OPERADOR tenha digitado no chat (esse é fala dele, e continua sendo bolha dele).
+ * `/harness-orchestrator` que o OPERADOR tenha digitado no chat (esse é fala dele, e continua sendo bolha dele).
  */
 export function parseTickWake(raw: string): TickWake | null {
   const s = typeof raw === "string" ? raw.trim() : "";

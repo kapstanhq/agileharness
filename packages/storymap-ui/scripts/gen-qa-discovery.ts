@@ -120,10 +120,10 @@ async function collectFiles(
 
 /**
  * Thin IO shell: read storymap-ui's app dir from disk, run the pure core, and write the
- * artifact to storymap/qa-discovery/storymap-ui.json (mkdir -p the dir).
+ * artifact to storymap/qa-discovery/agileharness-ui.json (mkdir -p the dir).
  */
 export async function main(): Promise<void> {
-  const pkg = "storymap-ui";
+  const pkg = "agileharness-ui";
   // scripts/ -> package root -> repo root.
   const pkgRoot = path.resolve(import.meta.dirname, "..");
   const repoRoot = path.resolve(pkgRoot, "..", "..");

@@ -80,7 +80,7 @@ describe("o portão nega por default", () => {
     // redirect para uma tela de login como "existe OAuth aqui", tenta registrar um client e falha
     // com "Não foi possível registrar no serviço de login" — sem NUNCA bater no endpoint MCP.
     //
-    // A prova do diagnóstico foi a AUSÊNCIA: zero requisições a `/api/usm` no log do proxy durante
+    // A prova do diagnóstico foi a AUSÊNCIA: zero requisições a `/api/mcp` no log do proxy durante
     // as tentativas, e o handle recém-cunhado marcado "último uso nunca".
     for (const p of [
       "/.well-known/oauth-protected-resource",

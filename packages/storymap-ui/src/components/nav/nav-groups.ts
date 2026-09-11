@@ -84,7 +84,7 @@ export type BoardView =
 export const THUMB_KINDS = [
   "canvas",
   "prd",
-  "storymap",
+  "mapa",
   "ideas",
   "personas",
   "priority",
@@ -155,7 +155,7 @@ export const NAV_GROUPS: NavGroup[] = [
     dot: "bg-emerald-500",
     tone: "text-emerald-700 dark:text-emerald-400",
     items: [
-      { id: "mapa", label: "User Story Mapping", href: (b) => `/board/${b}/mapa`, icon: Map, thumb: "storymap", hint: "User Story Map (Jeff Patton) em outline — ação › passo › story › entrega, um nível por vez" },
+      { id: "mapa", label: "User Story Mapping", href: (b) => `/board/${b}/mapa`, icon: Map, thumb: "mapa", hint: "User Story Map (Jeff Patton) em outline — ação › passo › story › entrega, um nível por vez" },
       { id: "ideias", label: "Ideias", href: (b) => `/board/${b}/ideias`, icon: Lightbulb, thumb: "ideas", hint: "Espaço do problema — ideias agrupando as stories" },
       // O hint dizia "RICE · KANO · funil AAARRR" — três coisas que a tela deixou de renderizar (hoje
       // ela é WSJF puro, e o contrato dela PROÍBE os quatro gráficos de classificação de voltarem).

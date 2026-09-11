@@ -13,7 +13,7 @@ medição na sua vale mais que este texto.
 Três fatos que mudam a leitura de todo o resto. Estão aqui, na primeira página, em vez de num anexo:
 
 1. **A superfície MCP está na internet pública POR DESENHO, e as tools dela spawnam
-   `claude --dangerously-skip-permissions` na máquina.** `/api/usm/<token>/mcp` precisa ser alcançável
+   `claude --dangerously-skip-permissions` na máquina.** `/api/mcp/<token>/mcp` precisa ser alcançável
    por um conector Claude hospedado fora; ele se autentica por um token no path, comparado
    *timing-safe*, com piso de entropia. **Isto não é bug — é o produto.** A consequência: essa
    credencial vale execução arbitrária como o usuário do serviço (`root`, na instalação de
@@ -140,7 +140,7 @@ apertá-lo reduz a janela e aumenta o risco de recusar dado legítimo.
 **Medido, não teórico: 174 ocorrências** do token em claro — **168** no journal do proxy reverso e
 **6** no syslog (arquivo corrente + rotação). Nenhuma misconfiguração participou disso: quem escreveu
 foi o **logger de erro padrão** do Caddy (`logger":"http.log.error"`), que registra a URI completa do
-pedido quando o upstream falha — e o token viaja **no path** (`/api/usm/<token>/mcp`).
+pedido quando o upstream falha — e o token viaja **no path** (`/api/mcp/<token>/mcp`).
 
 A lição é transferível e vale para qualquer instalação: **credencial no path vaza em toda camada** —
 log de acesso e de erro do proxy, journal do systemd, syslog, histórico de shell, `Referer`, APM.
@@ -161,7 +161,7 @@ justamente quem vazava. O bloco:
 		format filter {
 			wrap console
 			fields {
-				request>uri regexp "/api/usm/[^/]+/" "/api/usm/REDIGIDO/"
+				request>uri regexp "/api/mcp/[^/]+/" "/api/mcp/REDIGIDO/"
 			}
 		}
 	}
@@ -169,7 +169,7 @@ justamente quem vazava. O bloco:
 ```
 
 Par discriminante, upstream derrubado de propósito nas duas passadas: sem o bloco a agulha aparece
-1×; com o bloco, 0×, e a linha vira `/api/usm/REDIGIDO/`.
+1×; com o bloco, 0×, e a linha vira `/api/mcp/REDIGIDO/`.
 
 ⚠️ **A contagem cresceu entre duas medições — 168 → 169 —** e é isso que prova que o canal estava
 **armado**, não histórico: cada restart com o conector ativo re-gravava. Como o harness se
@@ -282,7 +282,7 @@ um lint que casa a própria flag, e a lista só encolhe.
 
 ⚠ **CORREÇÃO MEDIDA — "todas as quatro exigem sessão autenticada no painel" é FALSO.** São **duas** as
 superfícies alcançáveis **sem cookie de painel**: `run_task`, que migrou, e a **CAPTURA**, que não. O
-endpoint MCP público (`/api/usm/<credencial>/mcp`) monta `report_issue` e `usm_capture` (classe de risco
+endpoint MCP público (`/api/mcp/<credencial>/mcp`) monta `report_issue` e `usm_capture` (classe de risco
 `write-board` ⇒ nível `write` já basta, não é preciso o token `full`), e as duas descem por
 `reportIssueAction`/`proposeCardsAction` até `runClaudeJson`, que spawna o `claude`. O elo que a prosa
 antiga não viu: `requireSession` (`lib/auth/action-guard.ts:308`) devolve `"mcp-token"` assim que existe um

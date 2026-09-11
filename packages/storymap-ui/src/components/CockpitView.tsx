@@ -229,7 +229,7 @@ function CockpitViewInner({
     const es = sharedEventSource("/api/notifications/stream");
     let t: ReturnType<typeof setTimeout> | undefined;
     const refresh = () => { clearTimeout(t); t = setTimeout(() => router.refresh(), 300); };
-    es.addEventListener("storymap", refresh as EventListener);
+    es.addEventListener("agileharness", refresh as EventListener);
     return () => { clearTimeout(t); es.close(); };
   }, [router]);
 
@@ -468,7 +468,7 @@ function CockpitItemDetailInner({
       clearTimeout(t);
       t = setTimeout(() => router.refresh(), 300);
     };
-    es.addEventListener("storymap", refresh as EventListener);
+    es.addEventListener("agileharness", refresh as EventListener);
     return () => {
       clearTimeout(t);
       es.close();
