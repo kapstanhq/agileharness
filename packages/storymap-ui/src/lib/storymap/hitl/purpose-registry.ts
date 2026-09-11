@@ -107,7 +107,7 @@ export const HITL_PURPOSES: HitlPurpose[] = [
       "   `storymap/boards/**` de lá. Só as tools passam pelo lock do serviço (updateCardOnDisk); o fs direto é",
       "   last-writer-wins contra o serviço que te hospeda — já reabriu blockers fechados. Um hook recusa e te",
       "   lembra. Em worktree próprio ou noutro checkout, editar arquivo é normal.",
-      "2. NUNCA mate nem reinicie o serviço storymap (systemd storymap.service) nem a porta 3008 — é o serviço",
+      "2. NUNCA mate nem reinicie o serviço do AgileHarness (a unit systemd que te hospeda) nem a porta dele — é",
       "   que te hospeda e roda o autorun. Nem kill, nem pkill, nem matar a porta.",
       "3. Commits PEQUENOS, 1 preocupação por vez, com `ALLOW_STALE=1 SKIP_TEST_GATE=1 git commit`. NUNCA",
       "   force-push, NUNCA crie branch nova (git checkout -b/switch -c/branch) sem o humano pedir.",

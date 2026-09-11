@@ -189,7 +189,7 @@ function handlerFor(secret: string, level: McpLevel): (req: Request) => Promise<
     },
     // `instructions` ride in the MCP initialize response → every client sees the mental
     // model + rules before the first tool call (the canonical fix for "the agent feels lost").
-    { serverInfo: { name: "agileharness", version: "0.4.0" }, instructions: MCP_INSTRUCTIONS },
+    { serverInfo: { name: "agileharness", version: "0.4.1" }, instructions: MCP_INSTRUCTIONS },
     // Stateless Streamable HTTP (no sessionIdGenerator) → no Redis needed; SSE is
     // disabled (removed from the MCP spec since 2025-03-26 and the source of the
     // Redis requirement we deliberately avoid).

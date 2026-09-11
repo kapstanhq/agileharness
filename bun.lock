@@ -10,7 +10,7 @@
     },
     "packages/storymap-ui": {
       "name": "agileharness-ui",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "dependencies": {
         "@blocknote/core": "0.52.1",
         "@blocknote/mantine": "0.52.1",

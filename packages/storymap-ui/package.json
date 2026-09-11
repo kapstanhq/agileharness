@@ -1,6 +1,6 @@
 {
   "name": "agileharness-ui",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
   "description": "Board ag\u00eantico de User Story Mapping (Jeff Patton) com autorun. Roda em PRODU\u00c7\u00c3O como servi\u00e7o systemd de longa dura\u00e7\u00e3o (entrypoint pr\u00f3prio dist/ah-server.mjs, n\u00e3o next start) e publica uma superf\u00edcie MCP alcan\u00e7\u00e1vel pela internet cujas tools spawnam agentes com permiss\u00f5es desligadas nesta m\u00e1quina. Leia SECURITY.md antes de expor.",
   "scripts": {
