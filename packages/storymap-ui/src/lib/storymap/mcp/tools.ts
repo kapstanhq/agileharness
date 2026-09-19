@@ -88,7 +88,7 @@ import { SIDECAR_KINDS, listGovernanceDrafts, readGovernanceDraft, readStyleGuid
 import { wireframeDocTextView } from "@/lib/storymap/design-canvas";
 import { PEER_REVIEW_ENABLED } from "@/lib/storymap/copilot/tier";
 import { makePeerReviewPort, type PeerReviewRequest } from "@/lib/storymap/runner/peer-review-spawn";
-import { governanceConflicts } from "@/lib/storymap/governance";
+import { governanceConflicts, withdrawRefusal } from "@/lib/storymap/governance";
 import { checkAA } from "@/lib/storymap/style-guide";
 import { styleGuideDriftAction } from "@/app/design-actions";
 import { EFFORT_LEVELS, GOVERNANCE_ARTIFACTS, MODEL_TIERS } from "@/lib/storymap/types";
@@ -2484,18 +2484,8 @@ FORMATO DO CANVAS (Lean Canvas): um bloco NÃO é mais um paragrafão — é uma
     async ({ board, draftId }) => {
       const draft = await readGovernanceDraft(board, draftId);
       if (!draft) return fail(`Proposta não encontrada: ${draftId}`);
-      if (draft.status !== "pending") {
-        return fail(`Proposta já ${draft.status === "approved" ? "aprovada" : "rejeitada"} — nada a retirar.`);
-      }
-      // A RÉGUA, e o motivo dela. `origin.skill` é o que distingue proposta de AGENTE de proposta de
-      // HUMANO (a UI não o preenche). Sem ele, esta tool viraria um `reject_change` sem o cadeado —
-      // exatamente o que ela existe para não ser.
-      if (!draft.origin?.skill) {
-        return fail(
-          `A proposta ${draftId} não foi feita por um agente (sem \`origin.skill\`) — retirar a proposta de ` +
-            `um humano seria decidir por ele. Só o operador a resolve, no Inbox.`,
-        );
-      }
+      const recusa = withdrawRefusal(draft);
+      if (recusa) return fail(recusa);
       await writeGovernanceDraft(board, {
         ...draft,
         status: "rejected",

@@ -165,3 +165,31 @@ export function isGovernanceDraftStale(draft: GovernanceDraft, now: number = Dat
   if (!Number.isFinite(nascida)) return false;
   return now - nascida > GOVERNANCE_DRAFT_TTL_DAYS * 24 * 60 * 60 * 1000;
 }
+
+/**
+ * Pode esta proposta ser RETIRADA pelo proponente? Devolve `null` quando sim, ou a razão da recusa.
+ *
+ * PURA e separada do handler MCP de propósito: é a única propriedade de segurança de
+ * `withdraw_change`, e regra de segurança que mora inline num handler é regra que ninguém testa.
+ *
+ * As duas recusas, na ordem em que importam:
+ *  1. já DECIDIDA — não há o que retirar, e sobrescrever a decisão de alguém seria o oposto do que
+ *     esta tool faz;
+ *  2. proposta de HUMANO (sem `origin.skill`) — retirar a proposta de quem decide seria decidir por
+ *     ele. `origin.skill` é o que separa as duas origens: a UI não o preenche, `propose_change` sim.
+ *
+ * A ordem é deliberada: uma proposta de humano JÁ decidida recusa por (1), que é a informação mais
+ * útil para quem chamou.
+ */
+export function withdrawRefusal(draft: GovernanceDraft): string | null {
+  if (draft.status !== "pending") {
+    return `Proposta já ${draft.status === "approved" ? "aprovada" : "rejeitada"} — nada a retirar.`;
+  }
+  if (!draft.origin?.skill) {
+    return (
+      `A proposta ${draft.id} não foi feita por um agente (sem \`origin.skill\`) — retirar a proposta de ` +
+      `um humano seria decidir por ele. Só o operador a resolve, no Inbox.`
+    );
+  }
+  return null;
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GOVERNANCE_DRAFT_TTL_DAYS, applyGovernanceChange, coerceGovernanceDraft, draftTitle, governanceConflicts, isGovernanceDraftStale } from "./governance";
+import { GOVERNANCE_DRAFT_TTL_DAYS, applyGovernanceChange, coerceGovernanceDraft, draftTitle, governanceConflicts, isGovernanceDraftStale, withdrawRefusal } from "./governance";
 import type { BoardConfig, GovernanceDraft } from "./types";
 
 const baseConfig = (): BoardConfig => ({
@@ -261,5 +261,34 @@ describe("isGovernanceDraftStale", () => {
     // ninguém conseguiu ler uma data.
     expect(isGovernanceDraftStale(draft({ createdAt: "ontem" }), HOJE)).toBe(false);
     expect(isGovernanceDraftStale(draft({ createdAt: "" }), HOJE)).toBe(false);
+  });
+});
+
+// ── A ÚNICA propriedade de segurança de withdraw_change ──────────────────────────────────────────
+describe("withdrawRefusal — próprio × alheio, não aprovar × rejeitar", () => {
+  const d = (over: Record<string, unknown> = {}) =>
+    coerceGovernanceDraft("d1", { board: "b", status: "pending", origin: { skill: "harness-plan" }, ...over });
+
+  it("proposta de AGENTE pendente pode ser retirada", () => {
+    expect(withdrawRefusal(d())).toBeNull();
+  });
+
+  it("RECUSA proposta de humano — retirar a dele seria decidir por ele", () => {
+    // É a régua inteira: `origin.skill` é o que separa as duas origens (a UI não o preenche).
+    expect(withdrawRefusal(d({ origin: null }))).toMatch(/não foi feita por um agente/);
+    expect(withdrawRefusal(d({ origin: { cardId: "story-x" } }))).toMatch(/não foi feita por um agente/);
+    expect(withdrawRefusal(d({ origin: { skill: "" } }))).toMatch(/não foi feita por um agente/);
+  });
+
+  it("RECUSA proposta já decidida, de agente ou não", () => {
+    expect(withdrawRefusal(d({ status: "approved" }))).toMatch(/já aprovada/);
+    expect(withdrawRefusal(d({ status: "rejected" }))).toMatch(/já rejeitada/);
+    expect(withdrawRefusal(d({ status: "approved", origin: null }))).toMatch(/já aprovada/);
+  });
+
+  it("a ORDEM das recusas: decidida vence origem — é a informação mais útil para quem chamou", () => {
+    const humanaEDecidida = d({ status: "approved", origin: null });
+    expect(withdrawRefusal(humanaEDecidida)).toMatch(/já aprovada/);
+    expect(withdrawRefusal(humanaEDecidida)).not.toMatch(/não foi feita por um agente/);
   });
 });
