@@ -54,6 +54,7 @@ export function coerceGovernanceDraft(id: string, raw: unknown): GovernanceDraft
     createdAt: typeof r.createdAt === "string" ? r.createdAt : new Date().toISOString().slice(0, 10),
     decidedAt: typeof r.decidedAt === "string" ? r.decidedAt : null,
     approvedBy: typeof r.approvedBy === "string" ? r.approvedBy : null,
+    withdrawnBy: typeof r.withdrawnBy === "string" ? r.withdrawnBy : null,
   };
 }
 
@@ -131,4 +132,36 @@ export function draftTitle(draft: GovernanceDraft): string {
     seen.add(c.field ? `${c.artifact}.${c.field}` : c.artifact);
   }
   return seen.size > 0 ? [...seen].join(" + ") : "proposta";
+}
+
+// ── VALIDADE DA PROPOSTA (Inbox: pendente eterno) ────────────────────────────────────────────────
+//
+// O `ApprovalRequest` sempre teve `expiresAt`, e `listApprovalRequests` marca a vencida como
+// `expired` — por isso aprovação velha não polui o Inbox. O `GovernanceDraft` nasceu SEM nada disso:
+// uma proposta pendente ficava pendente para sempre. Somado ao fail-closed do revisor par (draft
+// vetado SEGUE pendente, de propósito) e ao fato de o proponente não poder retirá-la, cada erro de
+// um agente virava um item permanente na tela do operador.
+//
+// A validade é DERIVADA de `createdAt`, não gravada num campo novo. É o que faz ela valer para as
+// propostas que já existem — um `expiresAt` só alcançaria as futuras, e o problema é o acúmulo de
+// ontem. O preço é não dar para estender o prazo de uma proposta específica; se um dia isso for
+// preciso, o campo entra e esta função passa a preferi-lo.
+//
+// 14 dias, e não as 24h da aprovação: os dois objetos pedem coisas diferentes do humano. A aprovação
+// destrava uma AÇÃO que o agente quer executar agora — se ele não for destravado hoje, o pedido
+// perdeu o sentido. Uma proposta de governança (um PRD, o posicionamento) é para ser LIDA com calma.
+export const GOVERNANCE_DRAFT_TTL_DAYS = 14;
+
+/**
+ * A proposta está vencida? Só `pending` vence — decidida é história, e história não expira.
+ *
+ * FAIL-CLOSED de propósito: `createdAt` ilegível devolve `false`, ou seja, a proposta CONTINUA
+ * visível. O erro barato aqui é o operador ver um item a mais; o caro é uma proposta sumir da tela
+ * dele por causa de uma data que ninguém conseguiu ler.
+ */
+export function isGovernanceDraftStale(draft: GovernanceDraft, now: number = Date.now()): boolean {
+  if (draft.status !== "pending") return false;
+  const nascida = Date.parse(`${draft.createdAt}T00:00:00Z`);
+  if (!Number.isFinite(nascida)) return false;
+  return now - nascida > GOVERNANCE_DRAFT_TTL_DAYS * 24 * 60 * 60 * 1000;
 }

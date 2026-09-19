@@ -122,6 +122,10 @@ const TOOL_ANNOTATIONS: Record<string, ToolHints> = {
   // governance (story-w9n03r)
   propose_change: WRITE, // cria um GovernanceDraft para campos owner:human (positioning/businessMetric/desiredOutcome/canvas/releases/personas)
   list_pending_changes: RO, // lista GovernanceDrafts pending (leitura)
+  // RETIRAR a própria proposta pendente. WRITE (não WRITE_IDEM: a segunda chamada recusa, porque a
+  // proposta já não está pendente — a tool é de EFEITO ÚNICO por draft). O que a mantém segura não é
+  // o nível e sim a régua de `origin.skill` no handler: proposta de humano é recusada nominalmente.
+  withdraw_change: WRITE,
   // (autonomo-liberdade-humana M1, 2026-07-18) DISPARA um revisor INDEPENDENTE (spawn headless bounded) para a
   // PRÓPRIA proposta pendente — não aprova nada por si só. Hint EXEC_EXT (spawna um processo); a CLASSE de guarda
   // é `peer-review` via RISK_CLASS_EXCEPTIONS. approve_change/approve_action seguem `destructive` (o proponente
@@ -396,6 +400,10 @@ const RISK_CLASS_EXCEPTIONS: Record<string, RiskClass> = {
   // impede o tick de PROPOR uma mudança e APROVAR a si mesmo. Antes eram exceções nominais `write-board`, o que
   // era inofensivo só porque o filtro de montagem olhava o destructiveHint; agora que o filtro deriva da CLASSE,
   // uma classe cosmética as MONTARIA no nível `orch` e reabriria o self-approval. A classe agora carrega o peso.
+  // withdraw_change NÃO entra nesta lista: ela é `write-board`, derivada do preset WRITE. Retirar a
+  // PRÓPRIA proposta não decide nada por ninguém — o canônico não é tocado e a régua de `origin.skill`
+  // impede que ela alcance a proposta de um humano. Classificá-la como `destructive` a montaria só em
+  // `full` e o buraco que ela fecha continuaria aberto.
   approve_change: "destructive",
   reject_change: "destructive",
   approve_action: "destructive",

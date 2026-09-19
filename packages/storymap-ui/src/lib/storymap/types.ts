@@ -2123,6 +2123,10 @@ export interface GovernanceDraft {
    *  `"peer:<runId>"` when an independent peer reviewer approved it via request_peer_review. The proponent is
    *  NEVER here — it cannot approve its own draft; this is the audit trail of the separation. */
   approvedBy?: string | null;
+  /** QUEM retirou a proposta, quando ela saiu por `withdraw_change` em vez de por decisão humana.
+   *  `"agent"` hoje. Distinguir importa para a auditoria: uma proposta RETIRADA pelo proponente não é
+   *  a mesma coisa que uma REJEITADA por quem decide — a segunda é um "não", a primeira é um "deixa". */
+  withdrawnBy?: string | null;
 }
 
 /** autonomo-liberdade-humana M2 — the restore manifest for one soft-deleted board entry (a sidecar JSON in

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyGovernanceChange, coerceGovernanceDraft, draftTitle, governanceConflicts } from "./governance";
+import { GOVERNANCE_DRAFT_TTL_DAYS, applyGovernanceChange, coerceGovernanceDraft, draftTitle, governanceConflicts, isGovernanceDraftStale } from "./governance";
 import type { BoardConfig, GovernanceDraft } from "./types";
 
 const baseConfig = (): BoardConfig => ({
@@ -228,5 +228,38 @@ describe("draftTitle — readable label from artifact list", () => {
       createdAt: "2026-06-15",
     };
     expect(draftTitle(draft)).toBe("proposta");
+  });
+});
+
+// ── VALIDADE DA PROPOSTA (Inbox: pendente eterno) ────────────────────────────────────────────────
+describe("isGovernanceDraftStale", () => {
+  const HOJE = Date.parse("2026-09-19T12:00:00Z");
+  const draft = (over: Partial<GovernanceDraft> = {}): GovernanceDraft =>
+    coerceGovernanceDraft("d1", { board: "b", status: "pending", createdAt: "2026-09-19", ...over });
+
+  it("recém-criada NÃO vence", () => {
+    expect(isGovernanceDraftStale(draft(), HOJE)).toBe(false);
+  });
+
+  it("vence exatamente depois da janela declarada — a borda conta a partir da MEIA-NOITE", () => {
+    // `createdAt` é uma DATA (YYYY-MM-DD), então a idade é medida da meia-noite dela. Escrever a
+    // borda com um `now` no meio do dia esconderia isso e o teste mediria outra coisa.
+    const umDia = 24 * 60 * 60 * 1000;
+    const nascida = "2026-09-05";
+    const exatamenteNaJanela = Date.parse(`${nascida}T00:00:00Z`) + GOVERNANCE_DRAFT_TTL_DAYS * umDia;
+    expect(isGovernanceDraftStale(draft({ createdAt: nascida }), exatamenteNaJanela)).toBe(false);
+    expect(isGovernanceDraftStale(draft({ createdAt: nascida }), exatamenteNaJanela + 1)).toBe(true);
+  });
+
+  it("proposta DECIDIDA nunca vence — história não expira", () => {
+    expect(isGovernanceDraftStale(draft({ createdAt: "2020-01-01", status: "approved" }), HOJE)).toBe(false);
+    expect(isGovernanceDraftStale(draft({ createdAt: "2020-01-01", status: "rejected" }), HOJE)).toBe(false);
+  });
+
+  it("FAIL-CLOSED: data ilegível mantém a proposta VISÍVEL", () => {
+    // O erro barato é o operador ver um item a mais; o caro é a proposta sumir da tela dele porque
+    // ninguém conseguiu ler uma data.
+    expect(isGovernanceDraftStale(draft({ createdAt: "ontem" }), HOJE)).toBe(false);
+    expect(isGovernanceDraftStale(draft({ createdAt: "" }), HOJE)).toBe(false);
   });
 });

@@ -84,7 +84,7 @@ import { readDocAction, writeDocSectionAction } from "@/app/doc-actions";
 import { appendToVocabAction } from "@/app/vocab-actions";
 import { listDocEntries } from "@/lib/storymap/doc/doc-registry";
 import { serializeSchemaDoc } from "@/lib/storymap/doc/schema-codec";
-import { SIDECAR_KINDS, listGovernanceDrafts, readGovernanceDraft, readStyleGuide, writeSidecarByKind } from "@/lib/storymap/sidecars";
+import { SIDECAR_KINDS, listGovernanceDrafts, readGovernanceDraft, readStyleGuide, writeGovernanceDraft, writeSidecarByKind } from "@/lib/storymap/sidecars";
 import { wireframeDocTextView } from "@/lib/storymap/design-canvas";
 import { PEER_REVIEW_ENABLED } from "@/lib/storymap/copilot/tier";
 import { makePeerReviewPort, type PeerReviewRequest } from "@/lib/storymap/runner/peer-review-spawn";
@@ -2457,6 +2457,52 @@ FORMATO DO CANVAS (Lean Canvas): um bloco NÃO é mais um paragrafão — é uma
     async ({ board, draftId }) => {
       const r = await rejectGovernanceDraftAction({ boardId: board, draftId });
       return r.ok ? json({ ok: true, rejected: draftId }) : fail(r.error);
+    },
+  );
+
+  // ── Inbox: o proponente precisa conseguir RETIRAR a própria proposta ────────────────────────────
+  // `reject_change` é classe `destructive` e o kernel a clampa — de propósito: ela é a metade
+  // "decidir" do par propor/decidir, e um agente que rejeitasse o draft de um HUMANO estaria
+  // destruindo uma decisão pendente dele. Só que isso deixava um buraco: o agente não tinha como
+  // limpar a própria sujeira, e cada proposta sua vetada pelo par virava item permanente no Inbox
+  // do operador. A assimetria que importa não é aprovar × rejeitar — é PRÓPRIO × ALHEIO.
+  defineTool(server,
+    "withdraw_change",
+    {
+      title: "Retirar a própria proposta de governança",
+      description:
+        "RETIRA um GovernanceDraft pendente que foi proposto por um AGENTE (tem `origin.skill`) — o canônico " +
+        "fica inalterado e a proposta sai do Inbox, marcada como retirada no audit trail. É a função de " +
+        "zelador: quem propôs, limpa. NÃO aprova nada e NÃO alcança proposta de humano (essa só o operador " +
+        "decide, por approve_change/reject_change). Use quando a sua proposta foi vetada pelo par, ou quando " +
+        "você mesmo concluiu que ela não deve mais ser decidida.",
+      inputSchema: {
+        board: z.string(),
+        draftId: z.string().describe("id do GovernanceDraft pendente (de list_pending_changes) a retirar"),
+      },
+    },
+    async ({ board, draftId }) => {
+      const draft = await readGovernanceDraft(board, draftId);
+      if (!draft) return fail(`Proposta não encontrada: ${draftId}`);
+      if (draft.status !== "pending") {
+        return fail(`Proposta já ${draft.status === "approved" ? "aprovada" : "rejeitada"} — nada a retirar.`);
+      }
+      // A RÉGUA, e o motivo dela. `origin.skill` é o que distingue proposta de AGENTE de proposta de
+      // HUMANO (a UI não o preenche). Sem ele, esta tool viraria um `reject_change` sem o cadeado —
+      // exatamente o que ela existe para não ser.
+      if (!draft.origin?.skill) {
+        return fail(
+          `A proposta ${draftId} não foi feita por um agente (sem \`origin.skill\`) — retirar a proposta de ` +
+            `um humano seria decidir por ele. Só o operador a resolve, no Inbox.`,
+        );
+      }
+      await writeGovernanceDraft(board, {
+        ...draft,
+        status: "rejected",
+        decidedAt: new Date().toISOString().slice(0, 10),
+        withdrawnBy: "agent",
+      });
+      return json({ ok: true, withdrawn: draftId, note: "retirada pelo proponente; o canônico não foi tocado" });
     },
   );
 

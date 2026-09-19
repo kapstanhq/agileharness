@@ -161,12 +161,33 @@ const makeDraft = (id: string, overrides: Partial<GovernanceDraft> = {}): Govern
       label: "desiredOutcome",
     },
   ],
-  createdAt: "2026-06-15",
+  // RELATIVA A HOJE, e não uma data fixa: desde que a proposta pendente passou a VENCER
+  // (isGovernanceDraftStale), uma fixture de data fixa envelhece sozinha e faz estes casos medirem
+  // vencimento em vez do filtro de status que eles querem medir. Quem testa vencimento passa um
+  // `now` explícito junto de um `createdAt` explícito.
+  createdAt: new Date().toISOString().slice(0, 10),
   decidedAt: null,
   ...overrides,
 });
 
 describe("governanceItemsFromDrafts — governance drafts folded into the cockpit inbox (AC4/AC5/AC6)", () => {
+  // Inbox: proposta pendente era ETERNA. Agora vence pelo mesmo princípio que a aprovação já tinha.
+  it("proposta VENCIDA some do Inbox, mas o sidecar continua existindo", () => {
+    const agora = Date.parse("2026-09-19T12:00:00Z");
+    const velha = makeDraft("d-velha", { createdAt: "2026-01-01" });
+    const nova = makeDraft("d-nova", { createdAt: "2026-09-19" });
+    const items = governanceItemsFromDrafts([velha, nova], new Map(), "b", agora);
+    // Só a nova cobra decisão; a velha o tempo já decidiu.
+    expect(items.map((i) => i.draftId)).toEqual(["d-nova"]);
+    // E a projeção NÃO altera o draft — quem some é o ITEM, não o registro.
+    expect(velha.status).toBe("pending");
+  });
+
+  it("sem `now` explícito o comportamento é o de hoje (default = Date.now)", () => {
+    const recente = makeDraft("d-hoje", { createdAt: new Date().toISOString().slice(0, 10) });
+    expect(governanceItemsFromDrafts([recente], new Map(), "b")).toHaveLength(1);
+  });
+
   it("AC4: emits one item per PENDING draft, visible via the cockpit (lane=aprovar)", () => {
     const drafts = [makeDraft("d1"), makeDraft("d2")];
     const items = governanceItemsFromDrafts(drafts, new Map(), "b");

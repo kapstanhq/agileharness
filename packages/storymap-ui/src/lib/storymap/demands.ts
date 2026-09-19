@@ -13,7 +13,7 @@
 // from the queue snapshot — see `mergeQueueDemands` below.
 
 import { openQuestions } from "./questions";
-import { draftTitle } from "./governance";
+import { draftTitle, isGovernanceDraftStale } from "./governance";
 import { hasCanvasContent } from "./design-canvas";
 // type-only: apagado em runtime, então não cria ciclo (copilot/tier.ts não importa demands.ts) e mantém este
 // módulo puro. O TIER é a projeção canônica de (mode, riskMatrix.deploy) — ver copilot/tier.ts.
@@ -1228,10 +1228,16 @@ export function governanceItemsFromDrafts(
   drafts: GovernanceDraft[],
   conflictsByDraftId: Map<string, string[]>,
   boardId: string,
+  now: number = Date.now(),
 ): GovernanceCockpitItem[] {
   const out: GovernanceCockpitItem[] = [];
   for (const draft of drafts) {
     if (draft.status !== "pending") continue;
+    // Vencida some da tela pelo MESMO critério que já vale para a aprovação (listApprovalRequests a
+    // marca `expired` e o filtro de `pending` acima a esconde). O sidecar NÃO é apagado: continua em
+    // disco, auditável, e `list_pending_changes` segue mostrando — o que muda é só parar de cobrar
+    // uma decisão do operador que o tempo já tomou. Ver isGovernanceDraftStale.
+    if (isGovernanceDraftStale(draft, now)) continue;
     const conflicts = conflictsByDraftId.get(draft.id) ?? [];
     out.push({
       id: `gov:${draft.id}`,
