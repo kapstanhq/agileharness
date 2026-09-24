@@ -2513,6 +2513,17 @@ export interface OrchestratorSettings {
    */
   wake?: { enabled: boolean; debounceSeconds: number; cooldownMinutes: number };
   /**
+   * A CONTENÇÃO DE UM TICK — o spawn headless do copiloto autônomo (runner/orchestrator-spawn.ts). Nasceu sem
+   * teto de turnos e sem relógio: um tick que se enrolasse rodava até o TTL do lease (20min) e além, gastando
+   * sem limite dentro do orçamento DIÁRIO — que só olha o dia, não o ciclo. Três trincos independentes:
+   *  - `maxTurns`: `--max-turns` do CLI (default 40). Só positivo; lixo/0 ⇒ default.
+   *  - `maxBudgetUSD`: `--max-budget-usd` do CLI (default 4). `0` desliga (o orçamento diário segue valendo).
+   *  - `timeoutMinutes`: relógio de parede; estourou ⇒ SIGKILL (default 12, abaixo do TTL do lease). Só
+   *    positivo. Um tick morto pelo relógio ainda é COBRADO no orçamento do dia (ver applyRunResult).
+   * Disjuntor, não ritmo — o ritmo é `tickMinutes` + `budget`.
+   */
+  tick?: { maxTurns: number; maxBudgetUSD: number; timeoutMinutes: number };
+  /**
    * A matriz de risco das ações de escopo REPO (mcp/scope.ts `REPO_SCOPED_TOOLS`): a branch `stage`, a suíte,
    * o serviço, o shell da caixa. Elas não têm board dono, então a matriz de NENHUM board.yaml as governa — sem
    * esta porta, a disposição delas caía sempre em `defaultDisposition` e um `ask` virava recusa com um conselho

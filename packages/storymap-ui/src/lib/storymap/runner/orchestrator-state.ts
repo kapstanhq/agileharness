@@ -107,6 +107,13 @@ export interface OrchestratorState {
     summary?: string;
     exitCode?: number | null;
     endedAt?: string;
+    /** POR QUE o tick parou antes de terminar, quando parou por um dos trincos de contenção
+     *  (`orchestrator.tick`): `budget-cut` (o CLI cortou no --max-budget-usd), `max-turns` (--max-turns) ou
+     *  `timeout` (o relógio de parede matou o processo). Ausente ⇒ terminou por conta própria. */
+    stop?: "budget-cut" | "max-turns" | "timeout";
+    /** true quando `costUSD` é uma ESTIMATIVA (o relógio matou o processo antes de ele reportar o custo) —
+     *  cobrada pelo teto do tick, o lado seguro para um orçamento. */
+    costEstimated?: boolean;
   };
   /** per-DAY budget counters (reset when `day` rolls over). */
   budget: { day: string; ticksToday: number; costToday: number; pushesToday: number };
@@ -457,7 +464,14 @@ export function spawnBreakerOpen(state: OrchestratorState, now: number): boolean
 export function applyRunResult(
   state: OrchestratorState,
   now: number,
-  result: { costUSD?: number; summary?: string; exitCode?: number | null; failure?: string },
+  result: {
+    costUSD?: number;
+    summary?: string;
+    exitCode?: number | null;
+    failure?: string;
+    stop?: "budget-cut" | "max-turns" | "timeout";
+    costEstimated?: boolean;
+  },
 ): OrchestratorState {
   const s = rolloverBudget(state, now);
   const costUSD = Number.isFinite(result.costUSD) ? Math.max(0, result.costUSD as number) : 0;
@@ -476,17 +490,27 @@ export function applyRunResult(
   const failures = abortive
     ? { streak: (s.failures?.streak ?? 0) + 1, lastAt: new Date(now).toISOString(), reason: result.failure }
     : undefined;
+  // O trinco de um tick ANTERIOR não pode vazar para este: tira stop/costEstimated da base antes de carimbar
+  // os DESTE run (applyTick já recomeça o lastTick, mas um applyRunResult sem applyTick não pode mentir).
+  const prevTick: NonNullable<OrchestratorState["lastTick"]> = {
+    ...(s.lastTick ?? { at: new Date(now).toISOString(), outcome: "ran" as const }),
+  };
+  delete prevTick.stop;
+  delete prevTick.costEstimated;
   return {
     ...s,
     budget: { ...s.budget, ticksToday, costToday: s.budget.costToday + costUSD },
     ...(died && s.noop ? { noop: { ...s.noop, ranStreak: 0 } } : {}),
     failures: failures ?? (s.failures ? { streak: 0, lastAt: s.failures.lastAt } : undefined),
     lastTick: {
-      ...(s.lastTick ?? { at: new Date(now).toISOString(), outcome: "ran" as const }),
+      ...prevTick,
       costUSD,
       summary: result.summary,
       exitCode: result.exitCode ?? null,
       endedAt: new Date(now).toISOString(),
+      // O trinco que parou o tick (e se o custo é estimado) — sparse: só presentes quando aconteceram.
+      ...(result.stop ? { stop: result.stop } : {}),
+      ...(result.costEstimated ? { costEstimated: true } : {}),
     },
     tickLease: null, // WS-4.1: o run do tick terminou → solta SÓ o tickLease; o pairedLease (humano) é intocado
   };

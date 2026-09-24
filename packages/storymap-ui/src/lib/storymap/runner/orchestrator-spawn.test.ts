@@ -1,3 +1,6 @@
+import { EventEmitter } from "node:events";
+import { readFileSync, writeSync } from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEPLOY_AUTONOMY_ENABLED, resolutionDoctrineBlock } from "@/lib/storymap/copilot/tier";
 
@@ -15,6 +18,8 @@ import {
   parseOrchestratorFailure,
   buildOrchestratorPrompt,
   buildOrchestratorWakePrompt,
+  tickContainmentArgs,
+  type OrchestratorRunResult,
 } from "./orchestrator-spawn";
 
 describe("spawnOrchestrator — env sanitizado no spawn (1.8)", () => {
@@ -215,7 +220,8 @@ describe("buildOrchestratorMcpConfig — aponta o filho ao MCP AgileHarness dest
 describe("parseOrchestratorResult — o custo que o budget cobra", () => {
   it("lê total_cost_usd + o texto final do JSON do CLI", () => {
     const raw = JSON.stringify({ type: "result", subtype: "success", total_cost_usd: 0.1734, result: "Movi 2 cards e abri 1 aprovação." });
-    expect(parseOrchestratorResult(raw)).toEqual({ costUSD: 0.1734, summary: "Movi 2 cards e abri 1 aprovação." });
+    // O subtype vem junto desde a contenção do tick: é ele que distingue um tick CORTADO de um que quebrou.
+    expect(parseOrchestratorResult(raw)).toEqual({ costUSD: 0.1734, summary: "Movi 2 cards e abri 1 aprovação.", subtype: "success" });
   });
 
   it("tolera lixo em volta (um log solto antes do JSON) — varre de trás p/ frente", () => {
@@ -248,5 +254,109 @@ describe("buildOrchestratorPrompt — o motivo do wake vai p/ o agente", () => {
     const p = buildOrchestratorPrompt("acme", "autonomous", 'Blocker em "Login"\nsegunda linha');
     expect(p).not.toContain("\n");
     expect(p).toBe('/harness-orchestrator acme autonomous --tick --motivo "Blocker em Login segunda linha"');
+  });
+});
+
+// ── A CONTENÇÃO DO TICK (orchestrator.tick) ──────────────────────────────────────────────────────────────
+// O tick nascia sem --max-turns e sem relógio: um ciclo enrolado rodava até o TTL do lease (20min) e além,
+// gastando dentro do orçamento DIÁRIO — que olha o dia, não o ciclo. Três trincos: turnos e dinheiro no argv,
+// relógio num timer. E um tick parado por qualquer um deles AINDA precisa chegar ao budget com o seu custo.
+describe("spawnOrchestrator — a contenção do tick (turnos, dinheiro, relógio)", () => {
+  const savedEnv = { ...process.env };
+  const argsOf = () => spawnMock.mock.calls[0][1] as string[];
+  const flagValue = (args: string[], flag: string) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : null);
+  /** Um filho de mentira com o ciclo de vida que o spawn real tem: eventos + kill. */
+  function fakeChild() {
+    const child = new EventEmitter() as EventEmitter & { pid: number; unref: () => void; kill: ReturnType<typeof vi.fn> };
+    child.pid = 321;
+    child.unref = () => {};
+    child.kill = vi.fn();
+    return child;
+  }
+  beforeEach(() => {
+    spawnMock.mockReset();
+    spawnMock.mockReturnValue({ on: vi.fn(), unref: vi.fn(), pid: 123 });
+  });
+  afterEach(() => {
+    for (const k of Object.keys(process.env)) delete process.env[k];
+    Object.assign(process.env, savedEnv);
+  });
+
+  it("por default o tick nasce com --max-turns 40 e --max-budget-usd 4", async () => {
+    await spawnOrchestrator("acme", "autonomous", { claudeBin: "claude", token: "tok" });
+    expect(flagValue(argsOf(), "--max-turns")).toBe("40");
+    expect(flagValue(argsOf(), "--max-budget-usd")).toBe("4");
+  });
+
+  it("orchestrator.tick (já coagido) chega ao argv; maxBudgetUSD 0 tira só a flag de dinheiro", async () => {
+    await spawnOrchestrator("acme", "autonomous", {
+      claudeBin: "claude",
+      token: "tok",
+      tick: { maxTurns: 12, maxBudgetUSD: 1.5, timeoutMinutes: 5 },
+    });
+    expect(flagValue(argsOf(), "--max-turns")).toBe("12");
+    expect(flagValue(argsOf(), "--max-budget-usd")).toBe("1.5");
+    expect(tickContainmentArgs({ maxTurns: 12, maxBudgetUSD: 0, timeoutMinutes: 5 })).toEqual(["--max-turns", "12"]);
+    // Um maxTurns inválido que escapasse da coerção NÃO desliga o teto de turnos.
+    expect(tickContainmentArgs({ maxTurns: 0, maxBudgetUSD: 4, timeoutMinutes: 5 })).toEqual([
+      "--max-turns",
+      "40",
+      "--max-budget-usd",
+      "4",
+    ]);
+  });
+
+  it("o RELÓGIO mata o tick (SIGKILL) e o kill AINDA é cobrado — pelo teto, marcado como estimado", async () => {
+    const child = fakeChild();
+    spawnMock.mockReturnValue(child);
+    const onResult = vi.fn<(r: OrchestratorRunResult) => void>();
+    const ok = await spawnOrchestrator("acme", "autonomous", { claudeBin: "claude", token: "tok", timeoutMs: 25, onResult });
+    expect(ok).toBe(true);
+    await vi.waitFor(() => expect(child.kill).toHaveBeenCalledWith("SIGKILL"), { timeout: 2_000 });
+    child.emit("exit", null, "SIGKILL"); // o que o kill produz num processo real
+    await vi.waitFor(() => expect(onResult).toHaveBeenCalledTimes(1), { timeout: 2_000 });
+    const r = onResult.mock.calls[0][0];
+    expect(r.stop).toBe("timeout");
+    expect(r.costUSD).toBe(4); // o JSON final nunca foi escrito — cobrar 0 tornaria o budget decorativo
+    expect(r.costEstimated).toBe(true);
+    expect(r.failure).toMatch(/relógio/);
+    expect(r.exitCode).toBeNull();
+  });
+
+  it("um tick que termina ANTES do relógio desarma o timer (nenhum kill tardio num processo já morto)", async () => {
+    const child = fakeChild();
+    spawnMock.mockReturnValue(child);
+    const onResult = vi.fn<(r: OrchestratorRunResult) => void>();
+    await spawnOrchestrator("acme", "autonomous", { claudeBin: "claude", token: "tok", timeoutMs: 60, onResult });
+    child.emit("exit", 0, null);
+    await vi.waitFor(() => expect(onResult).toHaveBeenCalledTimes(1), { timeout: 2_000 });
+    await new Promise((r) => setTimeout(r, 120)); // bem depois do prazo
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(onResult.mock.calls[0][0].stop).toBeUndefined();
+  });
+
+  it("um tick CORTADO pelo --max-budget-usd é cobrado pelo custo REAL e registra o desfecho budget-cut", async () => {
+    // O `result` que o CLI escreve no corte — a MESMA gravação real do engine (CLI 2.1.281).
+    const recorded = readFileSync(
+      path.join(process.cwd(), "src/lib/storymap/runner/__fixtures__/stream-json-budget-cut.jsonl"),
+      "utf8",
+    )
+      .trim()
+      .split("\n")
+      .at(-1)!;
+    const child = fakeChild();
+    spawnMock.mockImplementation((_bin: string, _args: string[], opts: { stdio: [unknown, number, number] }) => {
+      writeSync(opts.stdio[1], recorded); // o CLI escreve o JSON final no stdout (um arquivo, no tick)
+      return child;
+    });
+    const onResult = vi.fn<(r: OrchestratorRunResult) => void>();
+    await spawnOrchestrator("acme", "autonomous", { claudeBin: "claude", token: "tok", onResult });
+    child.emit("exit", 1, null);
+    await vi.waitFor(() => expect(onResult).toHaveBeenCalledTimes(1), { timeout: 2_000 });
+    const r = onResult.mock.calls[0][0];
+    expect(r.stop).toBe("budget-cut");
+    expect(r.costUSD).toBe(0.0191536);
+    expect(r.costEstimated).toBeUndefined();
+    expect(r.failure).toMatch(/teto de custo/);
   });
 });

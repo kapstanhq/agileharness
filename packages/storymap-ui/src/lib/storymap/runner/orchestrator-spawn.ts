@@ -26,6 +26,9 @@ import { readBoardConfig } from "@/lib/storymap/repo";
 import { copilotTier, resolutionDoctrineBlock, liberdadeDoctrineBlock, stewardPlaybooksBlock, tierStance, type CopilotTier } from "@/lib/storymap/copilot/tier";
 import { resolveCopilotModelEffort } from "@/lib/storymap/copilot/model";
 import type { OrchestratorMode } from "@/lib/storymap/types";
+import { budgetFlags } from "./flags";
+import { DEFAULT_TICK_LIMITS, type TickLimits } from "./run-budget";
+import { BUDGET_CUT_SUBTYPE } from "./stream-json";
 
 /** Build the MCP config JSON that points a headless run at THIS service's AgileHarness MCP endpoint. The token is
  *  the URL `secret` segment; 6.5 — level enforcement is now REAL server-side (register.ts filters the tool
@@ -50,6 +53,12 @@ export interface OrchestratorRunResult {
   failure?: string;
   exitCode: number | null;
   durationMs: number;
+  /** O trinco de contenção que parou o tick, quando foi um deles (orchestrator.tick): o CLI cortou no
+   *  `--max-budget-usd` (`budget-cut`) ou no `--max-turns` (`max-turns`), ou o relógio o matou (`timeout`). */
+  stop?: "budget-cut" | "max-turns" | "timeout";
+  /** true quando `costUSD` é ESTIMADO — o relógio matou o processo antes de ele escrever o custo, e o tick é
+   *  cobrado pelo seu teto (o lado seguro para um orçamento: cobrar 0 foi o que tornou o budget decorativo). */
+  costEstimated?: boolean;
 }
 
 /** Quanto do texto final guardamos (a UI mostra 1 linha; o resto é ruído no JSON de estado). */
@@ -112,8 +121,8 @@ export function parseOrchestratorFailure(rawStderr: string): string | undefined 
  * {total_cost_usd, result}; toleramos lixo à volta (um log solto na frente) varrendo linha a linha de trás p/
  * frente atrás do primeiro objeto parseável. Nunca lança — saída ilegível ⇒ custo 0, sem resumo. PURA (testada).
  */
-export function parseOrchestratorResult(raw: string): { costUSD: number; summary?: string } {
-  const takeFrom = (obj: unknown): { costUSD: number; summary?: string } | null => {
+export function parseOrchestratorResult(raw: string): { costUSD: number; summary?: string; subtype?: string } {
+  const takeFrom = (obj: unknown): { costUSD: number; summary?: string; subtype?: string } | null => {
     if (!obj || typeof obj !== "object") return null;
     const o = obj as Record<string, unknown>;
     const cost = typeof o.total_cost_usd === "number" && Number.isFinite(o.total_cost_usd) ? o.total_cost_usd : undefined;
@@ -122,6 +131,9 @@ export function parseOrchestratorResult(raw: string): { costUSD: number; summary
     return {
       costUSD: Math.max(0, cost ?? 0),
       ...(text ? { summary: text.slice(0, SUMMARY_MAX) } : {}),
+      // POR QUE o CLI parou (success / error_max_budget_usd / error_max_turns / …) — é o que diz se um tick
+      // que saiu 1 foi CORTADO por um trinco de contenção ou quebrou de verdade.
+      ...(typeof o.subtype === "string" ? { subtype: o.subtype } : {}),
     };
   };
 
@@ -171,6 +183,20 @@ export interface OrchestratorSpawnDeps {
   reason?: string;
   /** best-effort: chamado quando o processo MORRE, com o custo real + o resumo. Nunca deve lançar. */
   onResult?: (result: OrchestratorRunResult) => void;
+  /** A contenção deste tick (settings.yaml `orchestrator.tick`, já coagida). Ausente ⇒ os defaults — um tick
+   *  NUNCA nasce sem teto de turnos, de dinheiro e de relógio. */
+  tick?: TickLimits;
+  /** Só para a prova: o relógio em ms (a produção usa `tick.timeoutMinutes`). */
+  timeoutMs?: number;
+}
+
+/**
+ * Os trincos do tick no argv, PURO: `--max-turns` sempre (só positivo chega aqui — a coerção garante) e
+ * `--max-budget-usd` quando o teto não foi desligado com 0. O relógio não é flag do CLI — é o timer do spawn.
+ */
+export function tickContainmentArgs(tick: TickLimits = DEFAULT_TICK_LIMITS): string[] {
+  const turns = Math.floor(tick.maxTurns) > 0 ? Math.floor(tick.maxTurns) : DEFAULT_TICK_LIMITS.maxTurns;
+  return ["--max-turns", String(turns), ...budgetFlags(tick.maxBudgetUSD)];
 }
 
 /**
@@ -230,11 +256,16 @@ export async function spawnOrchestrator(board: string, mode: OrchestratorMode, d
     // que mede contra a janela do chat (copilot-actions.ts) — mentia sempre que o tick trabalhava. Uma sessão,
     // um modelo, uma janela.
     const { model } = resolveCopilotModelEffort();
+    const tick = deps.tick ?? DEFAULT_TICK_LIMITS;
     const args = [
       "-p",
       buildOrchestratorPrompt(board, mode, deps.reason),
       "--model",
       model,
+      // A CONTENÇÃO DO TICK (orchestrator.tick). Ele nascia sem --max-turns e sem relógio: um tick enrolado
+      // rodava até o TTL do lease e além, gastando dentro do orçamento DIÁRIO — que olha o dia, não o ciclo.
+      // Turnos e dinheiro são flags do CLI; o relógio é o timer logo abaixo do spawn.
+      ...tickContainmentArgs(tick),
       // a saída estruturada é o que dá custo REAL (total_cost_usd) + o resumo final ao operador.
       "--output-format",
       "json",
@@ -302,18 +333,55 @@ export async function spawnOrchestrator(board: string, mode: OrchestratorMode, d
       env,
     });
     await Promise.all([out.close(), err.close()]); // o filho tem os SEUS descritores (dup no spawn)
-    child.on("error", (e) => console.error(`[orchestrator ${board}] spawn error:`, e.message));
+    // O RELÓGIO DO TICK — o mesmo desenho do revisor par (peer-review-spawn.ts): um timer que mata o processo
+    // com SIGKILL quando o teto de parede estoura. O `exit` que o kill produz passa pelo MESMO caminho de
+    // settle abaixo, então um tick morto pelo relógio ainda é COBRADO no orçamento do dia e ainda deixa o seu
+    // desfecho registrado — um kill que não chegasse ao budget seria a volta do "budget decorativo".
+    // `unref`: o relógio nunca segura o processo do serviço vivo por conta própria.
+    const timeoutMs = deps.timeoutMs ?? tick.timeoutMinutes * 60_000;
+    let killedByClock = false;
+    const clock = setTimeout(() => {
+      killedByClock = true;
+      console.warn(`[orchestrator ${board}] tick estourou o relógio de ${Math.round(timeoutMs / 1000)}s — SIGKILL.`);
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* já morto */
+      }
+    }, timeoutMs);
+    (clock as unknown as { unref?: () => void }).unref?.();
+    child.on("error", (e) => {
+      clearTimeout(clock);
+      console.error(`[orchestrator ${board}] spawn error:`, e.message);
+    });
     child.on("exit", (code) => {
+      clearTimeout(clock);
       void (async () => {
-        let parsed: { costUSD: number; summary?: string } = { costUSD: 0 };
+        let parsed: { costUSD: number; summary?: string; subtype?: string } = { costUSD: 0 };
         try {
           parsed = parseOrchestratorResult(await fs.readFile(outPath, "utf8"));
         } catch {
           /* saída ilegível (run morto/kill) — custo 0, sem resumo */
         }
+        // Qual trinco parou o tick. O relógio vence (foi NOSSO kill); senão, o subtype que o CLI escreveu.
+        const stop: OrchestratorRunResult["stop"] = killedByClock
+          ? "timeout"
+          : parsed.subtype === BUDGET_CUT_SUBTYPE
+            ? "budget-cut"
+            : parsed.subtype === "error_max_turns"
+              ? "max-turns"
+              : undefined;
+        // Morto pelo relógio, o CLI não escreveu o JSON final ⇒ custo desconhecido. Cobrar 0 seria mentir a favor
+        // do gasto; cobramos o TETO do tick (o máximo que o CLI deixaria gastar, a menos de um turno) e marcamos
+        // como estimado. Teto desligado (0) ⇒ não há número honesto: fica 0, com o desfecho registrado.
+        const costEstimated = killedByClock && parsed.costUSD === 0 && tick.maxBudgetUSD > 0;
+        const costUSD = costEstimated ? tick.maxBudgetUSD : parsed.costUSD;
         // a CAUSA, só quando morreu mal: um run saudável escreve ruído em stderr (progresso do MCP) que não é falha.
         let failure: string | undefined;
-        if (code !== 0) {
+        if (stop === "timeout") failure = `tick encerrado pelo relógio (${tick.timeoutMinutes}min)`;
+        else if (stop === "budget-cut") failure = `tick cortado pelo teto de custo ($${tick.maxBudgetUSD})`;
+        else if (stop === "max-turns") failure = `tick parou no teto de turnos (${tick.maxTurns})`;
+        else if (code !== 0) {
           try {
             failure = parseOrchestratorFailure(await fs.readFile(errPath, "utf8"));
           } catch {
@@ -322,10 +390,19 @@ export async function spawnOrchestrator(board: string, mode: OrchestratorMode, d
         }
         await fs.rm(scratch, { recursive: true, force: true }).catch(() => {});
         console.log(
-          `[orchestrator ${board}] copiloto terminou (exit=${code ?? "?"}, custo=$${parsed.costUSD.toFixed(4)})${failure ? ` — ${failure}` : ""}.`,
+          `[orchestrator ${board}] copiloto terminou (exit=${code ?? "?"}, custo=$${costUSD.toFixed(4)}${costEstimated ? " estimado" : ""})${failure ? ` — ${failure}` : ""}.`,
         );
         try {
-          deps.onResult?.({ board, costUSD: parsed.costUSD, summary: parsed.summary, failure, exitCode: code, durationMs: Date.now() - startedAt });
+          deps.onResult?.({
+            board,
+            costUSD,
+            summary: parsed.summary,
+            failure,
+            exitCode: code,
+            durationMs: Date.now() - startedAt,
+            ...(stop ? { stop } : {}),
+            ...(costEstimated ? { costEstimated } : {}),
+          });
         } catch (err) {
           console.error(`[orchestrator ${board}] onResult falhou:`, err instanceof Error ? err.message : err);
         }

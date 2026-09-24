@@ -10,7 +10,9 @@ import { budgetFlags } from "./flags";
 import {
   coerceBudgetUSD,
   coerceRunBudgetSetting,
+  coerceTickLimits,
   DEFAULT_RUN_BUDGET_USD,
+  DEFAULT_TICK_LIMITS,
   FALLBACK_RUN_BUDGET_USD,
   resolveRunBudgetUSD,
 } from "./run-budget";
@@ -209,5 +211,30 @@ describe("resolveRunPolicyArgs — o ponto único por onde o spawn do engine pas
     const comTeto = resolveRunPolicyArgs(card, def, DEFAULT_RUNNER_SETTINGS, "harness-do");
     const semTeto = resolveRunPolicyArgs(card, def, settingsWith(0), "harness-do");
     expect(comTeto.slice(0, comTeto.indexOf("--max-budget-usd"))).toEqual(semTeto);
+  });
+});
+
+describe("orchestrator.tick — a contenção do tick do copiloto (coerção)", () => {
+  it("default materializado: 40 turnos, US$ 4, 12 minutos", () => {
+    expect(DEFAULT_RUNNER_SETTINGS.orchestrator?.tick).toEqual({ maxTurns: 40, maxBudgetUSD: 4, timeoutMinutes: 12 });
+    expect(coerceRunnerSettings({}).orchestrator?.tick).toEqual(DEFAULT_TICK_LIMITS);
+  });
+
+  it("valores válidos passam; maxBudgetUSD 0 desliga só o dinheiro", () => {
+    expect(coerceRunnerSettings({ orchestrator: { tick: { maxTurns: 25, maxBudgetUSD: 2.5, timeoutMinutes: 8 } } }).orchestrator?.tick).toEqual({
+      maxTurns: 25,
+      maxBudgetUSD: 2.5,
+      timeoutMinutes: 8,
+    });
+    expect(coerceRunnerSettings({ orchestrator: { tick: { maxBudgetUSD: 0 } } }).orchestrator?.tick?.maxBudgetUSD).toBe(0);
+  });
+
+  it("lixo, 0 e negativo em turnos/relógio caem no default — um tick nunca perde o teto de turnos nem o relógio", () => {
+    const t = coerceTickLimits({ maxTurns: 0, maxBudgetUSD: "", timeoutMinutes: -3 });
+    expect(t).toEqual(DEFAULT_TICK_LIMITS);
+    expect(coerceTickLimits({ maxTurns: "abc", timeoutMinutes: "0" })).toEqual(DEFAULT_TICK_LIMITS);
+    expect(coerceTickLimits({ maxTurns: 12.9 }).maxTurns).toBe(12); // turno é inteiro
+    expect(coerceTickLimits("lixo")).toEqual(DEFAULT_TICK_LIMITS);
+    expect(coerceTickLimits(null)).toEqual(DEFAULT_TICK_LIMITS);
   });
 });

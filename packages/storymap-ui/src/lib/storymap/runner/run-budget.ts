@@ -18,7 +18,7 @@
 //
 // PURO: só lê de types.ts (isomórfico). Quem lê settings/env é config.ts; quem emite a flag é flags.ts.
 
-import { TRIGGER_IDS, type RunnerSettings, type TriggerId } from "@/lib/storymap/types";
+import { TRIGGER_IDS, type OrchestratorSettings, type RunnerSettings, type TriggerId } from "@/lib/storymap/types";
 
 /**
  * O teto default por skill, em USD. Derivado do custo nocional histórico como max(2×p90, p99): largo o
@@ -104,4 +104,31 @@ export function resolveRunBudgetUSD(trigger: TriggerId, setting: RunBudgetSettin
   else if (setting && typeof setting === "object") v = setting[trigger];
   if (v === undefined) v = DEFAULT_RUN_BUDGET_USD[trigger] ?? FALLBACK_RUN_BUDGET_USD;
   return v > 0 ? v : null;
+}
+
+/** A contenção do TICK do copiloto (settings.yaml `orchestrator.tick`): turnos, dinheiro e relógio. */
+export type TickLimits = NonNullable<OrchestratorSettings["tick"]>;
+
+/**
+ * Os defaults do tick. 40 turnos e US$ 4 cobrem com folga um ciclo que lê o board e move alguns cards pelo
+ * MCP; 12 minutos fica ABAIXO do TTL do lease do tick (20min, orchestrator-run.ts), para que o relógio mate
+ * um tick enrolado antes de o lease expirar e outro tick nascer por cima dele.
+ */
+export const DEFAULT_TICK_LIMITS: Readonly<TickLimits> = { maxTurns: 40, maxBudgetUSD: 4, timeoutMinutes: 12 };
+
+/**
+ * Coerção de `orchestrator.tick`, campo a campo sobre os defaults, sem spread do objeto cru. `maxTurns` e
+ * `timeoutMinutes` só aceitam POSITIVO — um tick sem teto de turnos ou sem relógio é exatamente o buraco que
+ * isto fecha, então `0`/lixo ali cai no default em vez de desligar. `maxBudgetUSD` aceita `0` para desligar,
+ * como o teto do engine: o orçamento diário continua limitando o gasto acumulado.
+ */
+export function coerceTickLimits(raw: unknown, d: TickLimits = DEFAULT_TICK_LIMITS): TickLimits {
+  const o = (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
+  const turns = coerceBudgetUSD(o.maxTurns); // mesma rejeição de vazio/lixo; o sinal é que muda
+  const minutes = coerceBudgetUSD(o.timeoutMinutes);
+  return {
+    maxTurns: turns !== undefined && Math.floor(turns) > 0 ? Math.floor(turns) : d.maxTurns,
+    maxBudgetUSD: coerceBudgetUSD(o.maxBudgetUSD) ?? d.maxBudgetUSD,
+    timeoutMinutes: minutes !== undefined && minutes > 0 ? minutes : d.timeoutMinutes,
+  };
 }

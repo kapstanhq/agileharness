@@ -29,7 +29,7 @@ import { MCP_TOKEN_ENV, normalizeMcpTokenEnv } from "@/lib/storymap/mcp/token-bo
 import { patchYamlScalars } from "./settings-yaml";
 import { budgetFlags, columnFlags } from "./flags";
 import { deriveCardMaxTurns, deriveCardModelEffort, type CardComplexitySignals } from "./model-routing";
-import { coerceBudgetUSD, coerceRunBudgetSetting, resolveRunBudgetUSD } from "./run-budget";
+import { coerceBudgetUSD, coerceRunBudgetSetting, coerceTickLimits, DEFAULT_TICK_LIMITS, resolveRunBudgetUSD } from "./run-budget";
 import {
   EFFORT_LEVELS,
   MODEL_TIERS,
@@ -203,6 +203,9 @@ export const DEFAULT_RUNNER_SETTINGS: RunnerSettings = {
     // WAKE — acordar por evento vem LIGADO por default, mas é INERTE sem um board `autonomous` (o wake só
     // agenda; quem decide spawnar é o tick, com todos os seus gates). Um board em off/paired nunca acorda.
     wake: { enabled: true, debounceSeconds: 45, cooldownMinutes: 5 },
+    // A contenção de CADA tick (turnos, dinheiro, relógio) — ver run-budget.ts. Sempre materializada, como o
+    // wake: o spawn do tick lê um objeto completo, nunca "ausente = sem teto".
+    tick: { ...DEFAULT_TICK_LIMITS },
   },
 };
 
@@ -467,6 +470,8 @@ function coerceOrchestratorSettings(raw: unknown, d: OrchestratorSettings): Orch
       debounceSeconds: asNonNegInt(w.debounceSeconds) ?? d.wake!.debounceSeconds,
       cooldownMinutes: asNonNegInt(w.cooldownMinutes) ?? d.wake!.cooldownMinutes,
     },
+    // Coerção EXPLÍCITA campo a campo (run-budget.ts): lixo cai no default, e só `maxBudgetUSD` aceita 0.
+    tick: coerceTickLimits(o.tick, d.tick ?? DEFAULT_TICK_LIMITS),
   };
 }
 
