@@ -962,7 +962,7 @@ export function boardCockpitItems(cards: Card[], config: BoardConfig, boardId: s
  * excluded (story-vbkazs): a deliberate operator cancel is NOT a failure — it never produces a
  * RunnerFailure (so it can't be a reason here) and its telemetry outcome is filtered out upstream
  * (cockpit-collect FAILED_STATUSES), so a cancelled run is never a 'travado' demand. */
-const STUCK_REASONS = new Set<RunnerFailure["reason"]>(["error", "timeout", "oom-killed", "exit", "no-op"]);
+const STUCK_REASONS = new Set<RunnerFailure["reason"]>(["error", "timeout", "oom-killed", "exit", "no-op", "budget-cut"]);
 
 /**
  * One `stuck` cockpit item per card whose most-recent telemetry run ended in failure.

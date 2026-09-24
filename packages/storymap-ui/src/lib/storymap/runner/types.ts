@@ -45,7 +45,8 @@ export type RunnerFailureReason =
   | "exit" // process exited non-zero
   | "error" // spawn/process error
   | "oom-killed" // the run's systemd-run scope exceeded MemoryMax → kernel OOM kill (SM-4)
-  | "no-op"; // clean exit (code 0) but a must-advance skill left the card in place — sucesso-fantasma
+  | "no-op" // clean exit (code 0) but a must-advance skill left the card in place — sucesso-fantasma
+  | "budget-cut"; // the CLI stopped the run at its `--max-budget-usd` cap without the card advancing
 
 /** A recently failed run, kept briefly so the UI can flag a stuck/broken card. */
 export interface RunnerFailure {

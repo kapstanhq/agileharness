@@ -52,7 +52,9 @@ const LANE_RANK: Record<string, number> = { travado: 0, pergunta: 1, aprovar: 2 
 // 'cancelled' is DELIBERATELY excluded (story-vbkazs) — a deliberate operator cancel (forceRelease /
 // cancel_run) is NOT a failure, so a card whose latest telemetry run is 'cancelled' must NOT surface as
 // a stuck cockpit item on Inbox. Only genuine failure outcomes belong here.
-const FAILED_STATUSES = new Set(["error", "exit", "timeout", "oom-killed", "no-op"]);
+// "budget-cut" (the per-run $ breaker cut a run that did NOT advance its card) IS a failure: the card is
+// parked with a finding asking to slice/re-plan it — a stuck item the operator (or copiloto) must act on.
+const FAILED_STATUSES = new Set(["error", "exit", "timeout", "oom-killed", "no-op", "budget-cut"]);
 
 // story-mzpzb0 — um card é TRAVADO pelo telemetry SÓ SE o run mais recente terminou num outcome de
 // FALHA **E não avançou**. Um sucesso-com-aviso (`lastAdvanced:true` — saiu sujo mas o card avançou de
@@ -87,7 +89,7 @@ export async function collectBoardCockpitItems(boardId: string): Promise<Cockpit
     .map((m) => ({
       board: boardId,
       cardId: m.cardId,
-      reason: (m.lastStatus ?? "exit") as "error" | "exit" | "timeout" | "oom-killed" | "no-op",
+      reason: (m.lastStatus ?? "exit") as "error" | "exit" | "timeout" | "oom-killed" | "no-op" | "budget-cut",
       detail: m.lastStatus ?? undefined,
       at: m.lastRunAt ?? 0,
       // trigger not available from the summary aggregate; omit (optional field)

@@ -52,11 +52,11 @@ import { appendTransition } from "./transitions";
 import { buildSpawnFlags, resolveEnginePosture, spawnContidoCmd, suporteDoHost, unsandboxedFullAllowed } from "./autonomy-sandbox";
 import { detectSystemd, runScopeUnit, stopRunScope, wrapWithScope, type StopScopeResult, type SystemdCheck } from "./governor";
 import { devServerPidFile, reapDevServerPid, type ReapPidResult } from "./dev-server";
-import { createNdjsonParser, extractFinalResult, extractResultUsage, extractSpecialistDelegations, extractToolNames, isMaxTurnsResult, summarizeStreamEvent, type RunResult } from "./stream-json";
+import { createNdjsonParser, extractFinalResult, extractResultUsage, extractSpecialistDelegations, extractToolNames, isBudgetCutResult, isMaxTurnsResult, summarizeStreamEvent, type RunResult } from "./stream-json";
 import { getTelemetryStore, isSuccessWithWarning, type TelemetryPort } from "./telemetry";
 import { readCards, readBoardConfig } from "@/lib/storymap/repo";
 import { updateCardOnDisk } from "@/lib/storymap/write";
-import { withMergeBackFailureFinding, withCapabilityUnavailableFinding, withCapabilityUnavailableResolved } from "./findings";
+import { isBudgetCutEscalated, withBudgetCutFinding, withMergeBackFailureFinding, withCapabilityUnavailableFinding, withCapabilityUnavailableResolved } from "./findings";
 import { toolTreeFlags, toolkitFlags } from "./flags";
 import {
   resolveToolkit,
@@ -1041,6 +1041,9 @@ export interface PrecheckInput {
   proposalInputHash?: string | null;
   /** case 3 — the CURRENT input hash (container body + feedback[]); compared to the stamp. */
   currentInputHash?: string | null;
+  /** the card carries an OPEN budget-cut finding already escalated to `high` — two per-run $ cuts in a row
+   *  ({@link isBudgetCutEscalated}). Case 0 holds the dispatch for the human. */
+  budgetCutEscalated?: boolean;
 }
 
 export interface PrecheckResult {
@@ -1075,6 +1078,14 @@ export const CLAIM_REFUSED_MARKER = "claim-refused";
 export const CAPABILITY_BLOCKED_MARKER = "capability-unavailable";
 
 /**
+ * The stable marker stamped on the summary of a dispatch HELD because the card was cut by the per-run $
+ * breaker twice in a row. Excluded from Case 1 for the same reason as the two markers above: the hold never
+ * ran anything, so it proves nothing about the card having nothing to do — and the release lever (triaging the
+ * budget-cut finding) DOES change the .md, but a hold must never be able to wedge the card by itself.
+ */
+export const BUDGET_CUT_HOLD_MARKER = "budget-cut-hold";
+
+/**
  * WS-5.3 — the pure pre-check decision. Returns `{ noop: true, reason }` ONLY on strong evidence that a spawn
  * would do nothing; anything uncertain → `{ noop: false }` (spawn). Exported for tests.
  */
@@ -1082,6 +1093,21 @@ export function precheckNoop(input: PrecheckInput): PrecheckResult {
   const { trigger, origin } = input;
   // A conflict-redrive exists to RE-INTEGRATE a preserved branch (never a no-op) — never pre-check it.
   if (origin === "conflict-redrive") return { noop: false };
+
+  // Case 0 — the per-run $ breaker cut this card TWICE IN A ROW (its budget-cut finding is open and already
+  // escalated to `high`). A third run of the same scope buys the same cap a third time: HOLD it for the human,
+  // $0, no process. Applies to MANUAL too, on purpose: the copiloto's `run_skill` arrives as a manual dispatch,
+  // and the whole point is that no automatic actor re-buys the cap — the release is an explicit decision on
+  // the finding (fixed/wontfix/acknowledged), which a human (or a copiloto that triages it, on the record) makes.
+  if (input.budgetCutEscalated) {
+    return {
+      noop: true,
+      reason:
+        `${BUDGET_CUT_HOLD_MARKER}: o card foi cortado DUAS vezes seguidas pelo teto de custo por run — re-disparo ` +
+        `retido para decisão humana. Fatie/re-planeje o card (ou aumente autorun.maxBudgetUSD) e dê um desfecho ao ` +
+        `finding "budget-cut" para liberar.`,
+    };
+  }
 
   // Case 3 — harness-capture idempotency: the proposal sidecar already reflects the CURRENT input (container
   // body + feedback[]). Fires only when the skill STAMPED an input hash on the proposal AND it matches the
@@ -1120,7 +1146,8 @@ export function precheckNoop(input: PrecheckInput): PrecheckResult {
   // something, never that the card has nothing to do. Treating it as a real no-op would mean the card
   // could not be re-dispatched after the operator fixed the host (its .md never changed).
   const summary = last?.summary ?? "";
-  const wasClaimRefusal = summary.includes(CLAIM_REFUSED_MARKER) || summary.includes(CAPABILITY_BLOCKED_MARKER);
+  const wasClaimRefusal =
+    summary.includes(CLAIM_REFUSED_MARKER) || summary.includes(CAPABILITY_BLOCKED_MARKER) || summary.includes(BUDGET_CUT_HOLD_MARKER);
   if (last?.status === "no-op" && !wasClaimRefusal && input.cardMtimeMs != null && input.cardMtimeMs <= last.startedAt) {
     return { noop: true, reason: `${trigger}: nada mudou desde o último no-op (card .md inalterado)` };
   }
@@ -1864,6 +1891,7 @@ export class RunnerEngine {
         hasOpenBlocker: (card?.findings ?? []).some((f) => f.status === "open" && f.severity === "blocker"),
         proposalInputHash,
         currentInputHash,
+        budgetCutEscalated: isBudgetCutEscalated(card?.findings),
       });
     } catch (err) {
       console.error(`[harness-autorun precheck ${board}/${cardId}] falhou — spawn normal:`, err instanceof Error ? err.message : err);
@@ -2569,6 +2597,9 @@ export class RunnerEngine {
       // leaves them null → the telemetry record simply carries model/effort = null.
       let spawnModel: string | null = null;
       let spawnEffort: string | null = null;
+      // O teto de custo com que ESTE run nasceu (`--max-budget-usd`), lido das flags resolvidas — o finding do
+      // corte por orçamento o cita, e tem de ser o valor que o processo RECEBEU, não o do settings de agora.
+      let spawnBudgetUSD: number | null = null;
       try {
         cfg = loadRunnerConfig();
 
@@ -2727,6 +2758,8 @@ export class RunnerEngine {
         const _efIdx = policyArgs.indexOf("--effort");
         spawnModel = _miIdx >= 0 ? policyArgs[_miIdx + 1] ?? null : null;
         spawnEffort = _efIdx >= 0 ? policyArgs[_efIdx + 1] ?? null : null;
+        const _bdIdx = policyArgs.indexOf("--max-budget-usd");
+        spawnBudgetUSD = _bdIdx >= 0 ? Number(policyArgs[_bdIdx + 1]) || null : null;
         // SM-09: derive the per-app context note from the board config read at enqueue. A null config
         // (read failure) or a board without `package:` yields a null note → omitted silently (AC4).
         // Carried on BOTH the fresh and the resumed spawn so a revived run reads app conventions too.
@@ -3044,6 +3077,10 @@ export class RunnerEngine {
       // and mark the run RESUMABLE (the partial task commits survive) instead of force-deleting it like
       // a genuine code error. Only the stream-json result event carries this signal.
       let hitMaxTurns = false;
+      // The per-run $ breaker: set when the terminal `result` event reports subtype error_max_budget_usd (the
+      // CLI stopped the run at its `--max-budget-usd` cap). finish() classifies the run `budget-cut` from THIS,
+      // before the exit-code ladder — the CLI exits 1 exactly like a genuine error.
+      let hitBudgetCap = false;
       // story-harness-cc #4: the structured tail of the run (agent's final message + stop subtype +
       // cost/turns), captured from the terminal `result` event and threaded onto RunCompletion — a
       // first-class return channel complementing the did-the-card-advance-on-disk inference. undefined
@@ -3067,6 +3104,8 @@ export class RunnerEngine {
         if (usage) this.registry.setUsage(board, cardId, usage);
         // …and, when it is a max-turns stop, the resumability signal.
         if (isMaxTurnsResult(obj)) hitMaxTurns = true;
+        // …or, when the $ breaker cut it, the budget-cut signal (NOT resumable — see finish()).
+        if (isBudgetCutResult(obj)) hitBudgetCap = true;
         // story-harness-cc #4: capture the agent's own final message + stop subtype, and surface a trimmed
         // finalText on the card console (the run panel) so the operator SEES why a run stopped — instead of
         // only inferring it from whether the status moved on disk (the sucesso/falha-fantasma guards).
@@ -3109,6 +3148,12 @@ export class RunnerEngine {
         // `claude --resume`. Set ONLY by the max-turns branch (a genuine error never sets it → its
         // tree is force-deleted as before). Always paired with outcome "max-turns" + no `failure`.
         resumable?: boolean,
+        // A run cut by the per-run $ breaker (outcome "budget-cut", card NOT advanced): PRESERVE the worktree
+        // dir + its `run/<id>` branch exactly as they are — like max-turns does — so the partial work stays
+        // inspectable, but WITHOUT the resumable mark (the journal flips to done → boot recovery never resumes
+        // it, and nothing re-dispatches it in-process). The tree is later collected by the orphan-run GC, whose
+        // teardown rescues uncommitted work and keeps committed work as `failed/run/<id>`.
+        preserveTree?: boolean,
       ) => {
         // story-r0zr3s: when the run is enqueued on the merge train, suppress emitComplete here —
         // the cascade fires from onMergeDone AFTER the merge-back lands on main (so evaluateAutorunOnEntry
@@ -3245,6 +3290,15 @@ export class RunnerEngine {
               worktreePath && worktreeBranch
                 ? `${tag} max-turns — preservando worktree + branch; re-dispatch in-process c/ --resume (run ${sessionId})`
                 : `${tag} max-turns — run sem worktree (lane light); re-dispatch in-process c/ --resume (run ${sessionId})`,
+            );
+          } else if (preserveTree) {
+            // budget-cut: keep the tree + branch where they are (no detach, no remove, no enqueue) — the work is
+            // partial and must not be integrated, but it must not be destroyed either. No emitDeferred: the
+            // generic cascade still fires, and its suppressTrigger re-eval STOPS (the card did not advance).
+            console.warn(
+              worktreePath && worktreeBranch
+                ? `${tag} budget-cut — preservando worktree ${worktreePath} + branch ${worktreeBranch} (sem resume, sem merge)`
+                : `${tag} budget-cut — run sem worktree (lane light); nada a preservar além do card`,
             );
           } else if (!failure && outcome !== "cancelled" && worktreePath && worktreeBranch && this.mergeQueue) {
             emitDeferred = true;
@@ -3490,6 +3544,40 @@ export class RunnerEngine {
         // failure, not a clean exit. Without this, code===null + signal would map to "ok". An OOM
         // kill is carved out above into its own reason, so exclude it from the generic "killed".
         const killed = !timedOut && !errDetail && signal != null && !isOomKill;
+
+        // ── BUDGET-CUT: classified from the result SUBTYPE, BEFORE the exit-code ladder ──────────────────────
+        // The CLI stopped the run at its `--max-budget-usd` cap (subtype error_max_budget_usd) and exited 1 —
+        // the SAME exit code as a genuine error, so the ladder below would call it "exit" and force-delete its
+        // tree. The subtype is the authority on WHY the model stopped (the lesson max-turns paid for). Same
+        // kill exclusions as max-turns: a stale cap event emitted before OUR kill (watchdog/cancel/OOM/external
+        // signal) never hijacks that kill's honest outcome.
+        if (hitBudgetCap && !timedOut && !errDetail && !isOomKill && !wasForceKilled && !killed) {
+          void (async () => {
+            const before = await beforeStatusP;
+            const after = await this.readCardStatus(board, cardId, worktreePath ?? undefined).catch(() => null);
+            const spent = lastResult?.cost ?? this.registry.getUsage(board, cardId)?.costUSD ?? null;
+            if (before && after && before !== after) {
+              // The card ADVANCED before the cap hit: the work landed; the CLI just stopped on the way out.
+              // Success-with-warning — the normal teardown commits + enqueues it; telemetry keeps "budget-cut".
+              const note = `budget-cut — card avançou ${before} → ${after}; sucesso-com-aviso`;
+              console.warn(`${tag} ${note}`);
+              return settle(undefined, "budget-cut", code, note);
+            }
+            // Did NOT advance: a real stop. Stamp the finding FIRST (awaited, best-effort) so the card already
+            // tells the operator why by the time the run settles, then settle as a failure that PRESERVES the
+            // tree and is NEVER resumed — resuming a run that burned its whole cap buys the same cap again.
+            const detail = `cortado pelo teto de custo${spawnBudgetUSD ? ` de $${spawnBudgetUSD}` : ""}${spent != null ? ` (gastou $${spent.toFixed(2)})` : ""}`;
+            console.warn(`${tag} ${detail} — card não avançou; preservado, sem resume`);
+            await this.updateCard(board, cardId, (c) => {
+              const next = withBudgetCutFinding(c.findings ?? [], { trigger, runId: sessionId, capUSD: spawnBudgetUSD, costUSD: spent });
+              return next ? { ...c, findings: next } : null; // null ⇒ this run already stamped ⇒ no write
+            }).catch((err) =>
+              console.error(`${tag} carimbo do finding budget-cut falhou:`, err instanceof Error ? err.message : err),
+            );
+            settle({ reason: "budget-cut", detail }, "budget-cut", code, undefined, false, true);
+          })();
+          return;
+        }
         const failure = timedOut
           ? { reason: "timeout" as const, detail: `sem resposta em ${Math.round(timeoutMs / 1000)}s` }
           : errDetail

@@ -113,6 +113,7 @@ const STATUS_CLS: Record<RunOutcome, string> = {
   timeout: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300",
   exit: "bg-orange-100 text-orange-700 dark:bg-orange-500/15 dark:text-orange-300",
   "no-op": "bg-surface-hover text-fg-muted",
+  "budget-cut": "bg-rose-100 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300",
   cancelled: "bg-surface-hover text-fg-muted",
   "max-turns": "bg-surface-hover text-fg-muted",
 };

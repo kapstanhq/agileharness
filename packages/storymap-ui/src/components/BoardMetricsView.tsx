@@ -28,6 +28,7 @@ const STATUS_CLS: Record<RunOutcome, string> = {
   exit: "bg-orange-100 dark:bg-orange-500/15 text-orange-700 dark:text-orange-300",
   "oom-killed": "bg-rose-100 dark:bg-rose-500/15 text-rose-700 dark:text-rose-300",
   "no-op": "bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-300",
+  "budget-cut": "bg-rose-100 dark:bg-rose-500/15 text-rose-700 dark:text-rose-300",
   // story-vbkazs: a deliberate operator cancel is NOT a failure → neutral slate (matches CardRunHistory).
   cancelled: "bg-slate-100 dark:bg-slate-500/15 text-slate-600 dark:text-slate-300",
   // story-9s52tu HALF B: a max-turns stop is RESUMABLE (not a failure) → calm sky/blue, distinct from
@@ -36,7 +37,11 @@ const STATUS_CLS: Record<RunOutcome, string> = {
 };
 
 // pt-BR label only for the outcomes that don't read fine in English (story-vbkazs).
-const STATUS_LABEL: Partial<Record<RunOutcome, string>> = { cancelled: "cancelado", "max-turns": "limite de turnos" };
+const STATUS_LABEL: Partial<Record<RunOutcome, string>> = {
+  cancelled: "cancelado",
+  "max-turns": "limite de turnos",
+  "budget-cut": "teto de custo",
+};
 
 type SortKey = "totalCostUSD" | "totalRuns" | "avgTurns" | "lastRunAt";
 
