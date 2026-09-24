@@ -2204,6 +2204,14 @@ export interface RunnerSettings {
      * `trigger → number` overrides the named skills (the rest keep the table); `0` disables. Absent ⇒ the
      * per-skill table. ENV AGILEHARNESS_AUTORUN_MAX_BUDGET_USD overrides with a global number (0 disables). */
     maxBudgetUSD?: number | Partial<Record<TriggerId, number>>;
+    /**
+     * The $ breaker of the OTHER autonomous spawn surfaces — the ones outside the engine that start `claude`
+     * with no human in the loop: the governance peer reviewer, the merge train's resolution judge, the deploy
+     * agent and the one-shot smart-capture/triage call. Each has a conservative default (2 / 2 / 4 / 2 USD,
+     * runner/run-budget.ts); a key here overrides that surface, `0` disables it. Absent ⇒ the defaults. The
+     * operator's interactive chat is deliberately NOT a surface here: a person is watching it.
+     */
+    surfaceMaxBudgetUSD?: { peerReview?: number; resolutionJudge?: number; deployAgent?: number; smartCapture?: number };
     timeouts: {
       /** watchdog for fast skills (enrich/tasks/prioritize), ms */
       fastMs: number;

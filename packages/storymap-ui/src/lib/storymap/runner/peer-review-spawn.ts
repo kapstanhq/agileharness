@@ -47,8 +47,10 @@ import {
   type AutonomyPosture,
   type PosturaDeps,
 } from "./autonomy-sandbox";
-import { mcpContainmentFlags } from "./flags";
+import { surfaceBudgetUSD } from "./config";
+import { budgetFlags, mcpContainmentFlags } from "./flags";
 import { applyHeadroomEnv } from "./headroom";
+import { DEFAULT_SURFACE_BUDGET_USD } from "./run-budget";
 import { sanitizeSpawnEnv } from "./spawn-env";
 import type { ExecFn } from "./worktree";
 
@@ -213,6 +215,9 @@ export interface PeerReviewSpawnDeps {
   resolvePosture?: (cwd: string, key: string) => AutonomyPosture;
   /** DI do spawn — o teste captura o argv FINAL entregue ao CLI. Produção usa o `spawn` do node. */
   spawn?: typeof spawn;
+  /** O teto de custo do revisor (`--max-budget-usd`). Ausente ⇒ settings `autorun.surfaceMaxBudgetUSD.peerReview`
+   *  (default 2); `null`/`0` ⇒ sem teto. Um revisor cortado não escreve veredito ⇒ nada aprovado (fail-closed). */
+  maxBudgetUSD?: number | null;
 }
 
 /**
@@ -260,7 +265,8 @@ export function resolveReviewerPosture(cwd: string, key: string, deps: PosturaDe
  */
 export function buildReviewerArgs(
   posture: AutonomyPosture,
-  opts: { prompt: string; notePath: string },
+  // `maxBudgetUSD` AUSENTE ⇒ o default da superfície: quem monta o argv sem pensar no teto ainda sai com ele.
+  opts: { prompt: string; notePath: string; maxBudgetUSD?: number | null },
 ): { args: string[]; needsRootBypass: boolean } {
   const { flags, needsRootBypass } = buildSpawnFlags({
     posture,
@@ -281,6 +287,9 @@ export function buildReviewerArgs(
       PEER_EFFORT,
       "--max-turns",
       String(PEER_MAX_TURNS),
+      // O disjuntor de custo (run-budget.ts): o revisor é alcançável EM BANDA por um agente autônomo, então
+      // cada chamada de `request_peer_review` é um processo que ninguém está olhando gastar.
+      ...budgetFlags(opts.maxBudgetUSD === undefined ? DEFAULT_SURFACE_BUDGET_USD.peerReview : opts.maxBudgetUSD),
       "--append-system-prompt-file",
       opts.notePath,
       ...flags,
@@ -375,7 +384,11 @@ async function runReviewer(
   // PROPONENTE escreveu, então não pode ser vetor de injeção para escrita no board; e (3) a POSTURA, que
   // é o que finalmente contém o SHELL. As duas primeiras nunca o continham: elas escolhiam onde ele
   // estava e o que ele sabia, não o que ele podia executar.
-  const { args, needsRootBypass } = buildReviewerArgs(opts.posture, { prompt: opts.prompt, notePath: opts.notePath });
+  const { args, needsRootBypass } = buildReviewerArgs(opts.posture, {
+    prompt: opts.prompt,
+    notePath: opts.notePath,
+    maxBudgetUSD: deps.maxBudgetUSD !== undefined ? deps.maxBudgetUSD : surfaceBudgetUSD("peerReview"),
+  });
   // O ÚLTIMO PORTÃO, sobre o argv EXATO que vai para o CLI e depois de toda a montagem — ver a nota
   // gêmea no juiz. O throw vira erro do módulo (nunca escapa) e erro aqui é fail-closed: nada aprovado.
   const env = buildReviewerEnv(process.env);

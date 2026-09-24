@@ -202,3 +202,46 @@ describe("captura: o modo de permissão é explícito, e o bypass não é herdad
     expect(src, "sem o delete, o filho recebe a afirmação por herança").toMatch(/delete env\.IS_SANDBOX/);
   });
 });
+
+// ── O disjuntor de custo (`--max-budget-usd`, run-budget.ts) ──────────────────────────────────────────────
+// Esta é a superfície que ingere TEXTO LIVRE não confiável, inclusive pelo endpoint MCP — um texto que conduza
+// o filho a um loop gastaria sem teto. Ela nascia sem teto de dinheiro.
+describe("runClaudeJson — o teto de custo chega à linha de comando", () => {
+  const budgetOf = (cmd: string) => cmd.match(/--max-budget-usd (\S+)/)?.[1] ?? null;
+
+  it("default: o teto da superfície no settings (2 USD)", async () => {
+    armFakeClaude();
+    await runClaudeJson("oi");
+    expect(budgetOf(childCommand())).toBe("2");
+  });
+
+  it("opts.maxBudgetUSD vence; null tira a flag", async () => {
+    armFakeClaude();
+    await runClaudeJson("oi", { maxBudgetUSD: 0.4 });
+    expect(budgetOf(childCommand())).toBe("0.4");
+    vi.mocked(spawn).mockReset();
+    armFakeClaude();
+    await runClaudeJson("oi", { maxBudgetUSD: null });
+    expect(childCommand()).not.toContain("--max-budget-usd");
+  });
+
+  it("um corte pelo teto vira um erro que NOMEIA o teto — não 'Claude saiu com código 1'", async () => {
+    vi.mocked(spawn).mockImplementation((() => {
+      const child = new EventEmitter() as EventEmitter & Record<string, unknown>;
+      child.pid = 4243;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.stdin = { write: () => {}, end: () => {} };
+      child.kill = () => true;
+      setImmediate(() => {
+        (child.stdout as EventEmitter).emit(
+          "data",
+          Buffer.from('{"type":"result","subtype":"error_max_budget_usd","is_error":true,"total_cost_usd":2.13}'),
+        );
+        child.emit("close", 1);
+      });
+      return child;
+    }) as never);
+    await expect(runClaudeJson("oi")).rejects.toThrow(/teto de custo.*\$2.*gastou \$2\.130/);
+  });
+});

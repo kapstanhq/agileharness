@@ -45,8 +45,10 @@ import {
   type AutonomyPosture,
   type PosturaDeps,
 } from "./autonomy-sandbox";
-import { mcpContainmentFlags } from "./flags";
+import { surfaceBudgetUSD } from "./config";
+import { budgetFlags, mcpContainmentFlags } from "./flags";
 import { buildAgentSpawnEnv } from "./headroom";
+import { DEFAULT_SURFACE_BUDGET_USD } from "./run-budget";
 import { resolutionTrailer, type HunkAnalysis, type HunkVerdictKind, type JudgePort, type JudgeRequest, type JudgeVerdict } from "./semantic-resolution";
 import { allCosmetic } from "./semantic-resolution";
 import type { ExecFn } from "./worktree";
@@ -182,6 +184,9 @@ export interface JudgeSpawnDeps {
   resolvePosture?: (cwd: string, key: string) => AutonomyPosture;
   /** DI do spawn — o teste captura o argv FINAL entregue ao CLI. Produção usa o `spawn` do node. */
   spawn?: typeof spawn;
+  /** O teto de custo do juiz (`--max-budget-usd`). Ausente ⇒ settings `autorun.surfaceMaxBudgetUSD.resolutionJudge`
+   *  (default 2); `null`/`0` ⇒ sem teto. Um juiz cortado não escreve veredito ⇒ nada resolvido (fail-closed). */
+  maxBudgetUSD?: number | null;
 }
 
 /**
@@ -233,7 +238,12 @@ export function resolveJudgePosture(cwd: string, key: string, deps: PosturaDeps 
  * excluem no CLI. Em todo o resto o modo é `acceptEdits`, que é load-bearing — as ferramentas nativas
  * de escrita rodam in-process e o sandbox do SO não as contém (medição da ADR-067).
  */
-export function buildJudgeArgs(posture: AutonomyPosture, notePath: string): { args: string[]; needsRootBypass: boolean } {
+export function buildJudgeArgs(
+  posture: AutonomyPosture,
+  notePath: string,
+  // AUSENTE ⇒ o default da superfície: quem monta o argv sem pensar no teto ainda sai com ele.
+  maxBudgetUSD: number | null = DEFAULT_SURFACE_BUDGET_USD.resolutionJudge,
+): { args: string[]; needsRootBypass: boolean } {
   const { flags, needsRootBypass } = buildSpawnFlags({
     posture,
     permissionArgs: posture.kind === "unsandboxed-escape" ? [] : ["--permission-mode", "acceptEdits"],
@@ -253,6 +263,8 @@ export function buildJudgeArgs(posture: AutonomyPosture, notePath: string): { ar
       JUDGE_EFFORT,
       "--max-turns",
       String(JUDGE_MAX_TURNS),
+      // O disjuntor de custo (run-budget.ts): o juiz nasce do train sem humano no laço.
+      ...budgetFlags(maxBudgetUSD),
       "--append-system-prompt-file",
       notePath,
       ...flags,
@@ -431,7 +443,11 @@ async function runJudge(
   deps: JudgeSpawnDeps,
   opts: { worktreePath: string; notePath: string; outPath: string; errPath: string; tag: string; posture: AutonomyPosture },
 ): Promise<string | null> {
-  const { args, needsRootBypass } = buildJudgeArgs(opts.posture, opts.notePath);
+  const { args, needsRootBypass } = buildJudgeArgs(
+    opts.posture,
+    opts.notePath,
+    deps.maxBudgetUSD !== undefined ? deps.maxBudgetUSD : surfaceBudgetUSD("resolutionJudge"),
+  );
   // ── O ÚLTIMO PORTÃO, DEPOIS DE TODA A MONTAGEM ───────────────────────────────────────────────────
   // Roda sobre o argv EXATO que vai para o CLI, imediatamente antes do spawn: é o último ponto em que
   // ainda se pode saber o que será executado. Uma checagem mais cedo verificaria outra coisa que não a

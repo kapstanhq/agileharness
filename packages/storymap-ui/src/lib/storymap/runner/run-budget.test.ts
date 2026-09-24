@@ -10,11 +10,14 @@ import { budgetFlags } from "./flags";
 import {
   coerceBudgetUSD,
   coerceRunBudgetSetting,
+  coerceSurfaceBudgets,
   coerceTickLimits,
   DEFAULT_RUN_BUDGET_USD,
+  DEFAULT_SURFACE_BUDGET_USD,
   DEFAULT_TICK_LIMITS,
   FALLBACK_RUN_BUDGET_USD,
   resolveRunBudgetUSD,
+  resolveSurfaceBudgetUSD,
 } from "./run-budget";
 import { TRIGGER_IDS, type Card, type RunnerSettings, type StatusDef, type TriggerId } from "@/lib/storymap/types";
 
@@ -236,5 +239,29 @@ describe("orchestrator.tick — a contenção do tick do copiloto (coerção)", 
     expect(coerceTickLimits({ maxTurns: 12.9 }).maxTurns).toBe(12); // turno é inteiro
     expect(coerceTickLimits("lixo")).toEqual(DEFAULT_TICK_LIMITS);
     expect(coerceTickLimits(null)).toEqual(DEFAULT_TICK_LIMITS);
+  });
+});
+
+describe("autorun.surfaceMaxBudgetUSD — as superfícies autônomas fora do engine", () => {
+  it("defaults: revisor 2, juiz 2, agente de deploy 4, captura 2", () => {
+    expect(DEFAULT_SURFACE_BUDGET_USD).toEqual({ peerReview: 2, resolutionJudge: 2, deployAgent: 4, smartCapture: 2 });
+    expect(resolveSurfaceBudgetUSD("deployAgent", undefined)).toBe(4);
+  });
+
+  it("uma chave sobrescreve só a sua superfície; 0 desliga; lixo/desconhecida é descartada", () => {
+    const s = coerceRunnerSettings({
+      autorun: { surfaceMaxBudgetUSD: { peerReview: 5, smartCapture: 0, deployAgent: "", chat: 9, resolutionJudge: -1 } },
+    }).autorun.surfaceMaxBudgetUSD;
+    expect(s).toEqual({ peerReview: 5, smartCapture: 0 });
+    expect(resolveSurfaceBudgetUSD("peerReview", s)).toBe(5);
+    expect(resolveSurfaceBudgetUSD("smartCapture", s)).toBeNull();
+    expect(resolveSurfaceBudgetUSD("deployAgent", s)).toBe(4); // o "" NÃO desligou — caiu no default
+    expect(resolveSurfaceBudgetUSD("resolutionJudge", s)).toBe(2);
+    expect(coerceSurfaceBudgets("lixo")).toBeUndefined();
+    expect(coerceSurfaceBudgets({ chat: 1 })).toBeUndefined(); // nada válido ⇒ "não declarado"
+  });
+
+  it("o chat interativo do operador NÃO é uma superfície com teto", () => {
+    expect(Object.keys(DEFAULT_SURFACE_BUDGET_USD)).not.toContain("chat");
   });
 });

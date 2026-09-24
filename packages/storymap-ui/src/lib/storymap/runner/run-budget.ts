@@ -132,3 +132,58 @@ export function coerceTickLimits(raw: unknown, d: TickLimits = DEFAULT_TICK_LIMI
     timeoutMinutes: minutes !== undefined && minutes > 0 ? minutes : d.timeoutMinutes,
   };
 }
+
+/**
+ * As superfícies AUTÔNOMAS fora do engine que spawnam `claude` sem humano no laço. O chat interativo do
+ * operador NÃO está aqui de propósito: lá há uma pessoa olhando, e cortar a conversa dela por dinheiro é
+ * decisão dela, não do harness.
+ */
+export type BudgetSurface = keyof NonNullable<RunnerSettings["autorun"]["surfaceMaxBudgetUSD"]>;
+
+/**
+ * Os tetos default das superfícies — conservadores, porque cada uma faz UMA coisa estreita: o revisor par
+ * lê um diff e escreve um veredito; o juiz lê hunks e escreve um veredito; a captura devolve um JSON; o
+ * agente de deploy roda a receita do dono (o único que executa comandos longos, daí o dobro).
+ */
+export const DEFAULT_SURFACE_BUDGET_USD: Readonly<Record<BudgetSurface, number>> = {
+  peerReview: 2,
+  resolutionJudge: 2,
+  deployAgent: 4,
+  smartCapture: 2,
+};
+const BUDGET_SURFACES = Object.keys(DEFAULT_SURFACE_BUDGET_USD) as BudgetSurface[];
+
+/**
+ * Coerção de `autorun.surfaceMaxBudgetUSD` — a mesma disciplina do mapa por skill: só superfície conhecida
+ * com valor válido entra (sem spread do objeto cru); o resto é descartado com aviso e segue no default.
+ */
+export function coerceSurfaceBudgets(raw: unknown): RunnerSettings["autorun"]["surfaceMaxBudgetUSD"] {
+  if (raw == null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    console.warn(`[storymap] settings autorun.surfaceMaxBudgetUSD: esperado um mapa — ignorado, tetos default mantidos.`);
+    return undefined;
+  }
+  const out: NonNullable<RunnerSettings["autorun"]["surfaceMaxBudgetUSD"]> = {};
+  const recusados: string[] = [];
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    const n = coerceBudgetUSD(v);
+    if ((BUDGET_SURFACES as string[]).includes(k) && n !== undefined) out[k as BudgetSurface] = n;
+    else recusados.push(k);
+  }
+  if (recusados.length) {
+    console.warn(
+      `[storymap] settings autorun.surfaceMaxBudgetUSD: ${recusados.length} entrada(s) DESCARTADA(s): ` +
+        `${recusados.join(", ")} (superfícies válidas: ${BUDGET_SURFACES.join(", ")}).`,
+    );
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** O teto efetivo de uma superfície autônoma, ou `null` quando desligado (`0`). Ausente ⇒ o default. */
+export function resolveSurfaceBudgetUSD(
+  surface: BudgetSurface,
+  setting: RunnerSettings["autorun"]["surfaceMaxBudgetUSD"],
+): number | null {
+  const v = setting?.[surface] ?? DEFAULT_SURFACE_BUDGET_USD[surface];
+  return v > 0 ? v : null;
+}

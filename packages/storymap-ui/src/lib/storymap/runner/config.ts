@@ -29,7 +29,16 @@ import { MCP_TOKEN_ENV, normalizeMcpTokenEnv } from "@/lib/storymap/mcp/token-bo
 import { patchYamlScalars } from "./settings-yaml";
 import { budgetFlags, columnFlags } from "./flags";
 import { deriveCardMaxTurns, deriveCardModelEffort, type CardComplexitySignals } from "./model-routing";
-import { coerceBudgetUSD, coerceRunBudgetSetting, coerceTickLimits, DEFAULT_TICK_LIMITS, resolveRunBudgetUSD } from "./run-budget";
+import {
+  coerceBudgetUSD,
+  coerceRunBudgetSetting,
+  coerceSurfaceBudgets,
+  coerceTickLimits,
+  DEFAULT_TICK_LIMITS,
+  resolveRunBudgetUSD,
+  resolveSurfaceBudgetUSD,
+  type BudgetSurface,
+} from "./run-budget";
 import {
   EFFORT_LEVELS,
   MODEL_TIERS,
@@ -306,6 +315,7 @@ export function coerceRunnerSettings(raw: unknown): RunnerSettings {
   // O teto de custo por run. Coerção ESTRITA e por entrada (run-budget.ts): lixo ⇒ ausente ⇒ a tabela por
   // skill, isto é, o teto continua LIGADO. Só um `0` explícito desliga.
   const maxBudgetUSD = coerceRunBudgetSetting(a.maxBudgetUSD);
+  const surfaceMaxBudgetUSD = coerceSurfaceBudgets(a.surfaceMaxBudgetUSD);
 
   return {
     version: asPosInt(r.version) ?? d.version,
@@ -319,6 +329,7 @@ export function coerceRunnerSettings(raw: unknown): RunnerSettings {
       noProgressMax: asNonNegInt(a.noProgressMax) ?? d.autorun.noProgressMax,
       ...(asPosNum(a.cardBudgetUSD) !== undefined ? { cardBudgetUSD: asPosNum(a.cardBudgetUSD) } : {}),
       ...(maxBudgetUSD !== undefined ? { maxBudgetUSD } : {}),
+      ...(surfaceMaxBudgetUSD !== undefined ? { surfaceMaxBudgetUSD } : {}),
       timeouts: {
         fastMs: asPosInt(t.fastMs) ?? d.autorun.timeouts.fastMs,
         doMs: t.doMs == null ? null : (asPosInt(t.doMs) ?? null),
@@ -1186,6 +1197,20 @@ export function resolveRunPolicyArgs(
 ): string[] {
   const route = card ? resolveCardArgs(card, def, config) : resolveColumnArgs(def, config);
   return [...route, ...budgetFlags(resolveRunBudgetUSD(trigger, config.autorun.maxBudgetUSD))];
+}
+
+/**
+ * O teto de custo EFETIVO de uma superfície autônoma fora do engine (revisor par, juiz, agente de deploy,
+ * captura) — o leitor de `autorun.surfaceMaxBudgetUSD`. Cada spawn o chama no próprio módulo, para que
+ * nenhum call-site possa esquecer de pedir o teto. FAIL-CLOSED: um settings ilegível NÃO desliga a proteção —
+ * cai no default da superfície. `null` só quando alguém declarou `0`.
+ */
+export function surfaceBudgetUSD(surface: BudgetSurface): number | null {
+  try {
+    return resolveSurfaceBudgetUSD(surface, loadRunnerConfig().autorun.surfaceMaxBudgetUSD);
+  } catch {
+    return resolveSurfaceBudgetUSD(surface, undefined);
+  }
 }
 
 /**

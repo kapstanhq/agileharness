@@ -13,7 +13,9 @@ import { findRepoRoot } from "../paths";
 import { sanitizeSpawnEnv } from "../runner/spawn-env";
 import { getHelperRegistry } from "@/lib/vps/helper-registry";
 import { resolvedClaudeBin } from "../runner/claude-bin";
-import { loadRunnerConfig } from "../runner/config";
+import { loadRunnerConfig, surfaceBudgetUSD } from "../runner/config";
+import { budgetFlags } from "../runner/flags";
+import { BUDGET_CUT_SUBTYPE } from "../runner/stream-json";
 
 // Watchdog for the one-shot spawn. The real fix for "didn't answer in 120s" is the
 // fast --model/--effort pin below (a bare `claude -p` runs the install default, often
@@ -31,6 +33,21 @@ function killTree(child: ChildProcess): void {
     } catch {
       // already gone
     }
+  }
+}
+
+/**
+ * O envelope `--output-format json` diz que o CLI CORTOU a chamada no `--max-budget-usd`? Devolve o gasto
+ * reportado (ou null quando ausente) — ou undefined quando o stdout não é um corte. Sem isto, o corte chega
+ * ao operador como "Claude saiu com código 1", indistinguível de uma quebra. Pura; exportada para a prova.
+ */
+export function budgetCutSpend(stdout: string): number | null | undefined {
+  try {
+    const env = JSON.parse(stdout.trim()) as { subtype?: unknown; total_cost_usd?: unknown };
+    if (env?.subtype !== BUDGET_CUT_SUBTYPE) return undefined;
+    return typeof env.total_cost_usd === "number" ? env.total_cost_usd : null;
+  } catch {
+    return undefined;
   }
 }
 
@@ -66,6 +83,9 @@ export function runClaudeJson(
     model?: string;
     effort?: string;
     dangerouslySkipPermissions?: boolean;
+    /** O teto de custo desta chamada (`--max-budget-usd`). Ausente ⇒ settings
+     *  `autorun.surfaceMaxBudgetUSD.smartCapture` (default 2); `null`/`0` ⇒ sem teto. */
+    maxBudgetUSD?: number | null;
     /** when set, this synchronous helper shows up on /processes while it runs (transient row). */
     context?: { label: string; view?: string; board?: string; cardId?: string };
   } = {},
@@ -102,7 +122,12 @@ export function runClaudeJson(
   const perm = opts.dangerouslySkipPermissions
     ? " --dangerously-skip-permissions"
     : " --permission-mode plan";
-  const cmd = `${bin} -p --output-format json --model ${model} --effort ${effort}${perm}`;
+  // O DISJUNTOR DE CUSTO (run-budget.ts). Esta é a superfície que ingere TEXTO LIVRE não confiável — inclusive
+  // pelo endpoint MCP (`report_issue`, `usm_capture`) —, então um texto que conduza o filho a um loop de leitura
+  // gastaria sem teto nenhum. O valor é um NÚMERO formatado por budgetFlags: seguro na linha de shell sem aspas.
+  const maxBudget = opts.maxBudgetUSD !== undefined ? opts.maxBudgetUSD : surfaceBudgetUSD("smartCapture");
+  const budget = budgetFlags(maxBudget).map((t) => ` ${t}`).join("");
+  const cmd = `${bin} -p --output-format json --model ${model} --effort ${effort}${perm}${budget}`;
   // story-e3lj46 — o env do filho passa pelo MESMO chokepoint das outras superfícies de spawn de Claude
   // (`sanitizeSpawnEnv`), em vez de `{ ...process.env }` cru. Esta era a única fora dele, e a de maior risco:
   // é a superfície que ingere TEXTO LIVRE não confiável (captura, triagem de `report_issue`, turno de HITL,
@@ -182,6 +207,17 @@ export function runClaudeJson(
           return;
         }
         if (code && code !== 0) {
+          // Um corte pelo teto não é uma quebra: diga qual foi o teto e quanto a chamada gastou.
+          const spent = budgetCutSpend(out);
+          if (spent !== undefined) {
+            reject(
+              new Error(
+                `Claude foi cortado pelo teto de custo desta chamada ($${maxBudget ?? "?"}` +
+                  `${spent != null ? `; gastou $${spent.toFixed(3)}` : ""}) — aumente autorun.surfaceMaxBudgetUSD.smartCapture se for legítimo.`,
+              ),
+            );
+            return;
+          }
           reject(new Error(`Claude saiu com código ${code}. ${err.trim().slice(0, 300)}`.trim()));
           return;
         }
