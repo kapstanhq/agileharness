@@ -14,6 +14,9 @@ import { sanitizeSpawnEnv } from "../runner/spawn-env";
 import { getHelperRegistry } from "@/lib/vps/helper-registry";
 import { resolvedClaudeBin } from "../runner/claude-bin";
 import { loadRunnerConfig } from "../runner/config";
+import { mcpContainmentFlags } from "../runner/flags";
+import { credentialDenyRulesDoHost, writeCredentialDenySettingsFile } from "../runner/autonomy-sandbox";
+import { quote } from "../runner/git";
 
 // Watchdog for the one-shot spawn. The real fix for "didn't answer in 120s" is the
 // fast --model/--effort pin below (a bare `claude -p` runs the install default, often
@@ -102,7 +105,22 @@ export function runClaudeJson(
   const perm = opts.dangerouslySkipPermissions
     ? " --dangerously-skip-permissions"
     : " --permission-mode plan";
-  const cmd = `${bin} -p --output-format json --model ${model} --effort ${effort}${perm}`;
+  // ── A CONTENÇÃO DOS OUTROS SPAWNS, QUE ESTE NÃO TINHA (hotfix de contenção) ────────────────────────
+  // (1) MCP: este comando não passava `--strict-mcp-config`, e o comentário abaixo dizia "este filho
+  // nunca teve MCP para perder". Falso, e medido em flags.ts (`mcpContainmentFlags`): um `claude -p` sem a
+  // flag carrega o `.mcp.json` do projeto E todo conector da conta de quem o host autentica (e-mail,
+  // drive, agenda…). Nesta superfície — a que ingere TEXTO LIVRE não confiável, alcançável pelo endpoint
+  // MCP público com token `write` — isso entregava ao texto injetado as ferramentas do DONO; no ramo
+  // opt-in de `--dangerously-skip-permissions`, AUTO-APROVADAS. Agora: servidor declarado nenhum ⇒
+  // servidor nenhum, igual ao revisor par e ao juiz.
+  // (2) Leitura de credencial: `--permission-mode plan` LÊ arquivo, e o bypass lê tudo. O settings
+  // só-de-negação (`permissions.deny`, runner/credential-deny.ts) nega `~/.aws`, `~/.ssh`, os `.env`, os
+  // segredos do próprio serviço… — e "deny rules block in every mode, including bypassPermissions", então
+  // vale nos dois ramos. É o mesmo arquivo que os tiers sem sandbox do autorun recebem.
+  // O ARQUIVO, não JSON inline: o comando roda com `shell:true`, e JSON é feito de aspas duplas.
+  const denySettings = writeCredentialDenySettingsFile(credentialDenyRulesDoHost());
+  const contencao = ` ${[...mcpContainmentFlags(), "--settings", quote(denySettings)].join(" ")}`;
+  const cmd = `${bin} -p --output-format json --model ${model} --effort ${effort}${perm}${contencao}`;
   // story-e3lj46 — o env do filho passa pelo MESMO chokepoint das outras superfícies de spawn de Claude
   // (`sanitizeSpawnEnv`), em vez de `{ ...process.env }` cru. Esta era a única fora dele, e a de maior risco:
   // é a superfície que ingere TEXTO LIVRE não confiável (captura, triagem de `report_issue`, turno de HITL,
@@ -112,8 +130,8 @@ export function runClaudeJson(
   // `next build` filho pular os .env) e o node_modules/.bin do PATH.
   // O que NÃO impede, e spawn-env.ts diz sem enfeite: o filho herda uid 0 e lê `.env.local` /
   // `storymap/.runner/*` do disco — é higiene do canal ACIDENTAL, não perímetro.
-  // Custo de autonomia: ZERO. O comando abaixo não monta `--mcp-config`, então este filho nunca teve MCP
-  // para perder; o skip-permissions opt-in do chamador segue intacto.
+  // Custo de autonomia: ZERO. Quem precisa de MCP não lê o token do env — e este filho sobe com
+  // `--strict-mcp-config` sem mount nenhum (ver acima); o skip-permissions opt-in do chamador segue intacto.
   const env = sanitizeSpawnEnv(process.env);
   // Root on POSIX → the CLI refuses to run unless IS_SANDBOX=1 (same guard the
   // autorun engine handles via needsSandboxEnv). Sem essa chave o spawn morre com
