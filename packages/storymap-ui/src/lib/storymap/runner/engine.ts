@@ -19,7 +19,7 @@ import { assertStatWithinByteCap, describeFrontmatterError, parseFrontmatter } f
 import { boardsDir, cardPath, findRepoRoot, findToolPackageDir, proposalPath, runnerStateDir, sanitizeId, findToolRoot } from "@/lib/storymap/paths";
 import { getRunnerRegistry } from "./registry";
 import { boardDataAutoPushAllowed } from "./board-data-policy";
-import { loadRunnerConfig, maxTurnsResumeMax, resolveCardArgs, resolveColumnArgs } from "./config";
+import { loadRunnerConfig, maxTurnsResumeMax, resolveRunPolicyArgs } from "./config";
 import { newRunSessionId, newScopeNonce } from "./session-id";
 import { getRunnerJournal, osBootMs, type RunnerJournalPort, type RunOutcome } from "./journal";
 import { getCardClaims, type CardClaimsPort, type ClaimKind } from "./claims";
@@ -2650,7 +2650,10 @@ export class RunnerEngine {
         // fail-open, so a read error never changes behavior. Each token is quoted (quoteArg) so a value
         // with a space survives the shell split.
         const card = await cardP;
-        const policyArgs = card ? resolveCardArgs(card, def, cfg) : resolveColumnArgs(def, cfg);
+        // resolveRunPolicyArgs = a rota (card/coluna, acima) + o TETO DE CUSTO do run (`--max-budget-usd`,
+        // run-budget.ts) para o trigger EFETIVO — o disjuntor contra run desembestado entra no mesmo ponto
+        // único por onde toda a política passa, então um spawn novo não tem como esquecê-lo.
+        const policyArgs = resolveRunPolicyArgs(card, def, cfg, trigger);
         // story-l9mac9 — o TETO de tier deste board. Ausente (o caso de TODO board hoje) ⇒ null ⇒ o tier
         // declarado da skill, byte-idêntico ao que este spawn sempre emitiu. Só um teto DECLARADO rebaixa,
         // e quando rebaixa, aparece no log: mudança silenciosa de permissão é o que não pode existir.

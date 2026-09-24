@@ -55,6 +55,9 @@
 //     DOCUMENTS it, it does not re-implement it.
 //   - a NEW model tier entering the CLI (e.g. fable) extends {@link MODEL_ORDER} and NOTHING ELSE — it is the
 //     single ordinal scale every cap/ceiling comparison in this file goes through.
+//   - the per-run $ breaker (`--max-budget-usd`, runner/run-budget.ts) keeps a skill→NUMBER table in the
+//     runner, and it is NOT a fourth door: it never picks a model, an effort or a turn budget — it only
+//     bounds how much one process may spend before the CLI stops it between turns. A cap is not a route.
 
 import type { ModelTier, EffortLevel } from "@/lib/storymap/types";
 import type { StoryType, BugSeverity } from "@/lib/storymap/frameworks";

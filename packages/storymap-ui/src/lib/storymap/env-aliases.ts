@@ -143,6 +143,8 @@ export const SUFIXOS_NATIVOS: readonly string[] = [
   "ALLOW_PUBLIC_BIND",
   "ALLOW_UNSANDBOXED_FULL",
   "AUTH_TOKEN",
+  // o teto de custo POR RUN (`--max-budget-usd`, runner/run-budget.ts) — nasceu AGILEHARNESS_, sem grafia legada.
+  "AUTORUN_MAX_BUDGET_USD",
   "BUN",
   "CLAUDE",
   "DEPLOY_LAUNCHERS",

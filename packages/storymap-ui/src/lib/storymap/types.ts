@@ -2195,6 +2195,15 @@ export interface RunnerSettings {
      * card burns $ ACROSS re-spawns, not within one run). DEFAULT undefined = DISABLED (no behaviour
      * change unless the operator opts in). ENV AGILEHARNESS_AUTORUN_CARD_BUDGET_USD overrides (a positive float). */
     cardBudgetUSD?: number;
+    /**
+     * Per-RUN $ breaker — the `claude --max-budget-usd <n>` every headless engine run is spawned with. A
+     * RUNAWAY breaker, not pacing (runner/run-budget.ts): the defaults are per-skill and wide (max(2×p90,
+     * p99) of historical cost), so a normal run never touches them; a run that does is cut between turns and
+     * settles as `budget-cut`. Distinct from {@link cardBudgetUSD} (the card's LIFETIME sum across runs,
+     * opt-in): this one bounds ONE process and is ON by default. A number = one cap for every skill; a map
+     * `trigger → number` overrides the named skills (the rest keep the table); `0` disables. Absent ⇒ the
+     * per-skill table. ENV AGILEHARNESS_AUTORUN_MAX_BUDGET_USD overrides with a global number (0 disables). */
+    maxBudgetUSD?: number | Partial<Record<TriggerId, number>>;
     timeouts: {
       /** watchdog for fast skills (enrich/tasks/prioritize), ms */
       fastMs: number;

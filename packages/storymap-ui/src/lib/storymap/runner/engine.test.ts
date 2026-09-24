@@ -4612,3 +4612,53 @@ describe("WS-1.3 — o pre-check do redrive tem TRÊS desfechos, não dois", () 
     expect(outcome?.reason).toBeUndefined(); // admitido normalmente, sem atalho
   });
 });
+
+// ── O DISJUNTOR DE CUSTO POR RUN (`--max-budget-usd`) ──────────────────────────────────────────────────
+// O engine nunca passava a flag: um run desembestado gastava até o watchdog de RELÓGIO matá-lo. Estas provas
+// leem o COMANDO que de fato vai para o shell — não a função que monta a política — porque "a proteção existe
+// numa função" e "a proteção chegou ao processo" são fatos diferentes, e só o segundo protege.
+describe("RunnerEngine.runSkill — teto de custo por run chega ao comando executado", () => {
+  const ORIGINAL_BUDGET = process.env.AGILEHARNESS_AUTORUN_MAX_BUDGET_USD;
+  beforeEach(() => {
+    delete process.env.AGILEHARNESS_AUTORUN_MAX_BUDGET_USD;
+  });
+  afterEach(() => {
+    if (ORIGINAL_BUDGET === undefined) delete process.env.AGILEHARNESS_AUTORUN_MAX_BUDGET_USD;
+    else process.env.AGILEHARNESS_AUTORUN_MAX_BUDGET_USD = ORIGINAL_BUDGET;
+  });
+
+  it("um run de harness-do nasce com `--max-budget-usd 23.8` (o default da tabela)", async () => {
+    const { engine, cmds } = makeEngine();
+    expect(engine.runSkill("acme", "story-1", "harness-do", codeDef).ok).toBe(true);
+    await flush();
+    expect(cmds).toHaveLength(1);
+    expect(cmds[0]).toMatch(/ --max-budget-usd 23\.8(\s|$)/);
+  });
+
+  it("o teto é o do TRIGGER do run: harness-enrich nasce com 3.5, uma skill fora da tabela com 8", async () => {
+    const enrichDef: StatusDef = { id: "enriquecer", name: "Enriquecer" };
+    const a = makeEngine();
+    expect(a.engine.runSkill("acme", "story-1", "harness-enrich", enrichDef).ok).toBe(true);
+    await flush();
+    expect(a.cmds[0]).toMatch(/ --max-budget-usd 3\.5(\s|$)/);
+    const b = makeEngine();
+    expect(b.engine.runSkill("acme", "story-2", "harness-refine", codeDef).ok).toBe(true);
+    await flush();
+    expect(b.cmds[0]).toMatch(/ --max-budget-usd 8(\s|$)/);
+  });
+
+  it("AGILEHARNESS_AUTORUN_MAX_BUDGET_USD substitui o teto; 0 tira a flag do comando", async () => {
+    process.env.AGILEHARNESS_AUTORUN_MAX_BUDGET_USD = "5";
+    const a = makeEngine();
+    expect(a.engine.runSkill("acme", "story-1", "harness-do", codeDef).ok).toBe(true);
+    await flush();
+    expect(a.cmds[0]).toMatch(/ --max-budget-usd 5(\s|$)/);
+    expect(a.cmds[0]).not.toContain("23.8");
+
+    process.env.AGILEHARNESS_AUTORUN_MAX_BUDGET_USD = "0";
+    const b = makeEngine();
+    expect(b.engine.runSkill("acme", "story-2", "harness-do", codeDef).ok).toBe(true);
+    await flush();
+    expect(b.cmds[0]).not.toContain("--max-budget-usd");
+  });
+});
