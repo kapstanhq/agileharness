@@ -223,6 +223,27 @@ describe("leaseHeldByTick + applyRunResult", () => {
     const ok = applyRunResult(ran, NOW + 1_000, { exitCode: 0, costUSD: 0.1 });
     expect(ok.noop?.ranStreak).toBe(1);
   });
+
+  // A contenção do tick: um tick morto pelo RELÓGIO não escreve o JSON final — o spawn o cobra pelo teto e
+  // marca como estimado. O estado tem de somar isso ao dia E dizer por que o ciclo parou.
+  it("um tick parado por um trinco (relógio) é COBRADO no dia e registra o trinco + a estimativa", () => {
+    const running = applyLease(applyTick(emptyOrchestratorState(NOW), NOW, "autonomous"), "tick", NOW, 60_000);
+    const killed = applyRunResult(running, NOW + 720_000, { costUSD: 4, exitCode: null, stop: "timeout", costEstimated: true });
+    expect(killed.budget.costToday).toBeCloseTo(4);
+    expect(killed.lastTick?.stop).toBe("timeout");
+    expect(killed.lastTick?.costEstimated).toBe(true);
+    expect(killed.tickLease ?? null).toBeNull();
+    // não é uma morte ABORTIVA (custou): o breaker de arranque não pode abrir por um tick que trabalhou
+    expect(killed.failures?.streak ?? 0).toBe(0);
+  });
+
+  it("o trinco de um tick ANTERIOR não vaza para o resultado do próximo", () => {
+    const cut = applyRunResult(emptyOrchestratorState(NOW), NOW, { costUSD: 4, exitCode: 1, stop: "budget-cut" });
+    const next = applyRunResult(cut, NOW + 1_000, { costUSD: 0.2, exitCode: 0 });
+    expect(next.lastTick?.stop).toBeUndefined();
+    expect(next.lastTick?.costEstimated).toBeUndefined();
+    expect(next.budget.costToday).toBeCloseTo(4.2);
+  });
 });
 
 // ── Incidente 2026-07-13: 19 spawns natimortos (exit 1, $0) comeram os 20 ticks do dia, e o Jido passou a

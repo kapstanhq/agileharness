@@ -95,6 +95,18 @@ async function noopAttributionFor(
   }
 }
 
+/** A frase do chat para um tick parado por um trinco de contenção (orchestrator.tick). PURA — exportada p/ teste. */
+export function tickStopText(stop: "budget-cut" | "max-turns" | "timeout"): string {
+  switch (stop) {
+    case "budget-cut":
+      return "Meu ciclo foi cortado pelo teto de custo do tick — parei antes de terminar.";
+    case "max-turns":
+      return "Meu ciclo atingiu o teto de turnos do tick — parei antes de terminar.";
+    case "timeout":
+      return "Meu ciclo estourou o relógio do tick e foi encerrado.";
+  }
+}
+
 /**
  * Monta as deps de UM tick (fresh a cada chamada — o `sigByBoard` é por-tick). `overrideBoards` restringe o
  * tick a um conjunto fixo de boards (o tick imediato/wake passa só o board alvo); ausente ⇒ varre todos os
@@ -182,8 +194,11 @@ export function buildTickDeps(overrideBoards?: ActiveBoard[], reason?: string): 
       // WS-12 — o início da JANELA de atribuição: as ações do ledger entre isto e a morte do run são as deste
       // run. Marcado antes do spawn (nunca depois): uma ação da 1a chamada de tool não pode cair fora.
       const spawnAt = Date.now();
+      const cfg = loadRunnerConfig();
       const started = await spawnOrchestrator(board, mode, {
-        claudeBin: resolvedClaudeBin({ name: loadRunnerConfig().autorun.claudeBin }),
+        claudeBin: resolvedClaudeBin({ name: cfg.autorun.claudeBin }),
+        // A contenção deste tick (turnos, dinheiro, relógio) — relida a cada spawn, como o resto do settings.
+        tick: cfg.orchestrator?.tick,
         // tick usa o token SCOPED do orquestrador (não o full). Ausente ⇒ spawnOrchestrator pula (inerte, seguro).
         token: process.env.AGILEHARNESS_MCP_TOKEN_ORCH,
         reason: spawnReason,
@@ -195,10 +210,18 @@ export function buildTickDeps(overrideBoards?: ActiveBoard[], reason?: string): 
             const s = await readOrchestratorState(r.board);
             await writeOrchestratorState(r.board, applyRunResult(applyNoop(s), Date.now(), r));
             // o operador vê no chat O QUE ele fez — não só que "rodou".
-            const cost = r.costUSD > 0 ? `$${r.costUSD.toFixed(2)} · ${Math.round(r.durationMs / 1000)}s` : undefined;
+            const cost =
+              r.costUSD > 0
+                ? `$${r.costUSD.toFixed(2)}${r.costEstimated ? " (estimado pelo teto)" : ""} · ${Math.round(r.durationMs / 1000)}s`
+                : undefined;
             await appendCopilotActivity(r.board, {
-              kind: r.exitCode === 0 ? "finished" : "error",
-              text: r.exitCode === 0 ? r.summary || "Terminei o ciclo (sem resumo)." : `Meu ciclo falhou (exit ${r.exitCode ?? "?"}).`,
+              kind: r.exitCode === 0 && !r.stop ? "finished" : "error",
+              // Um trinco de contenção não é "falhou": o ciclo foi PARADO, e o operador precisa saber por qual.
+              text: r.stop
+                ? tickStopText(r.stop)
+                : r.exitCode === 0
+                  ? r.summary || "Terminei o ciclo (sem resumo)."
+                  : `Meu ciclo falhou (exit ${r.exitCode ?? "?"}).`,
               // a CAUSA vem antes do custo: um ciclo que morre no arranque custa $0, e "exit 1" sem porquê fez o
               // operador olhar horas de falha sem nada onde pegar. Com causa, a primeira linha já é acionável.
               detail: r.failure ? (cost ? `${r.failure} · ${cost}` : r.failure) : cost,

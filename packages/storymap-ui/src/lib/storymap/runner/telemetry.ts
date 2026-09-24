@@ -16,7 +16,7 @@ import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { telemetryPath } from "@/lib/storymap/paths";
-import type { RunOutcome } from "./journal";
+import { RUN_OUTCOMES, type RunOutcome } from "./journal";
 import type { TriggerId } from "@/lib/storymap/types";
 
 /**
@@ -184,6 +184,9 @@ const SUPPRESSIBLE_DEATH_OUTCOMES: ReadonlySet<RunOutcome> = new Set<RunOutcome>
   "timeout",
   "oom-killed",
   "error",
+  // Um corte por orçamento DEPOIS de o card avançar é o mesmo desenho: o trabalho aterrissou e o CLI parou
+  // no teto na saída — o engine assenta sem RunnerFailure e grava "budget-cut" cru. Sucesso-com-aviso.
+  "budget-cut",
 ]);
 
 /**
@@ -345,7 +348,9 @@ const TelemetryRecordSchema = z.object({
   // ONE field to undefined instead of failing safeParse and DROPPING the whole record from the history —
   // a forensic ledger must not lose a run's cost over a dimension it doesn't recognize yet.
   role: z.enum(TELEMETRY_ROLES).nullable().optional().catch(undefined),
-  status: z.enum(["ok", "error", "timeout", "exit", "oom-killed", "no-op", "cancelled", "max-turns"]),
+  // "budget-cut" — the per-run $ breaker stopped the run (additive, no version bump). Derived from
+  // RUN_OUTCOMES (journal.ts) so this schema can never lag the type again.
+  status: z.enum(RUN_OUTCOMES),
   // sucesso-com-aviso (story-mzpzb0) — additive, no TELEMETRY_VERSION bump (old records lack it → parse fine).
   advanced: z.boolean().optional(),
 });

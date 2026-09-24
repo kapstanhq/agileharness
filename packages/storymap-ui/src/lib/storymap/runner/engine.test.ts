@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { promises as fsp, readFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CLAIM_REFUSED_MARKER, RunnerEngine, brandbookPathFor, buildClaudeCommand, buildContextNote, buildResumeCommand, buildRunCommitMessage, buildStateSnapshot, buildStyleGuideNote, buildToolkitNote, captureInputHash, composeSystemPrompt, formatRunAge, precheckNoop, quoteArg, sanitizeSpawnPath, styleGuidePathFor, summarizeFinalText, timeoutFor, pumpRetryNeeded, PUMP_RETRY_MS, type CardUpdater, type PumpTimerFn, type PrecheckInput } from "./engine";
+import { BUDGET_CUT_HOLD_MARKER, CLAIM_REFUSED_MARKER, RunnerEngine, brandbookPathFor, buildClaudeCommand, buildContextNote, buildResumeCommand, buildRunCommitMessage, buildStateSnapshot, buildStyleGuideNote, buildToolkitNote, captureInputHash, composeSystemPrompt, formatRunAge, precheckNoop, quoteArg, sanitizeSpawnPath, styleGuidePathFor, summarizeFinalText, timeoutFor, pumpRetryNeeded, PUMP_RETRY_MS, type CardUpdater, type PumpTimerFn, type PrecheckInput } from "./engine";
 import type { DeltaLandedFn, SplitLandedness } from "./convergence";
 import { BOARD_DATA_SKILL_INVARIANTS, CODE_SKILL_INVARIANTS, systemPromptFor } from "./skill-registry";
 import { DEFAULT_RUNNER_SETTINGS } from "./config";
@@ -20,7 +20,8 @@ import { DependencyGraph } from "./dep-graph";
 import type { CommitSerializer } from "./commit-serializer";
 import type { VpsResources } from "./scheduler";
 import type { MergeQueueEntry } from "./types";
-import type { BoardConfig, Card, StatusDef, TriggerId } from "@/lib/storymap/types";
+import type { BoardConfig, Card, Finding, StatusDef, TriggerId } from "@/lib/storymap/types";
+import { BUDGET_CUT_FINDING_ID, withBudgetCutFinding } from "./findings";
 
 // Resource probe (DI) that ALWAYS reports spare capacity, so the lane caps — not the VPS threshold —
 // govern admission in every test that isn't specifically about overload. Keeps the existing suite
@@ -4651,5 +4652,197 @@ describe("WS-1.3 — o pre-check do redrive tem TRÊS desfechos, não dois", () 
     expect(children).toHaveLength(1); // o agente fresco roda
     expect(outcome?.ok).toBe(true);
     expect(outcome?.reason).toBeUndefined(); // admitido normalmente, sem atalho
+  });
+});
+
+// ── O DISJUNTOR DE CUSTO POR RUN (`--max-budget-usd`) ──────────────────────────────────────────────────
+// O engine nunca passava a flag: um run desembestado gastava até o watchdog de RELÓGIO matá-lo. Estas provas
+// leem o COMANDO que de fato vai para o shell — não a função que monta a política — porque "a proteção existe
+// numa função" e "a proteção chegou ao processo" são fatos diferentes, e só o segundo protege.
+describe("RunnerEngine.runSkill — teto de custo por run chega ao comando executado", () => {
+  const ORIGINAL_BUDGET = process.env.AGILEHARNESS_AUTORUN_MAX_BUDGET_USD;
+  beforeEach(() => {
+    delete process.env.AGILEHARNESS_AUTORUN_MAX_BUDGET_USD;
+  });
+  afterEach(() => {
+    if (ORIGINAL_BUDGET === undefined) delete process.env.AGILEHARNESS_AUTORUN_MAX_BUDGET_USD;
+    else process.env.AGILEHARNESS_AUTORUN_MAX_BUDGET_USD = ORIGINAL_BUDGET;
+  });
+
+  it("um run de harness-do nasce com `--max-budget-usd 23.8` (o default da tabela)", async () => {
+    const { engine, cmds } = makeEngine();
+    expect(engine.runSkill("acme", "story-1", "harness-do", codeDef).ok).toBe(true);
+    await flush();
+    expect(cmds).toHaveLength(1);
+    expect(cmds[0]).toMatch(/ --max-budget-usd 23\.8(\s|$)/);
+  });
+
+  it("o teto é o do TRIGGER do run: harness-enrich nasce com 3.5, uma skill fora da tabela com 8", async () => {
+    const enrichDef: StatusDef = { id: "enriquecer", name: "Enriquecer" };
+    const a = makeEngine();
+    expect(a.engine.runSkill("acme", "story-1", "harness-enrich", enrichDef).ok).toBe(true);
+    await flush();
+    expect(a.cmds[0]).toMatch(/ --max-budget-usd 3\.5(\s|$)/);
+    const b = makeEngine();
+    expect(b.engine.runSkill("acme", "story-2", "harness-refine", codeDef).ok).toBe(true);
+    await flush();
+    expect(b.cmds[0]).toMatch(/ --max-budget-usd 8(\s|$)/);
+  });
+
+  it("AGILEHARNESS_AUTORUN_MAX_BUDGET_USD substitui o teto; 0 tira a flag do comando", async () => {
+    process.env.AGILEHARNESS_AUTORUN_MAX_BUDGET_USD = "5";
+    const a = makeEngine();
+    expect(a.engine.runSkill("acme", "story-1", "harness-do", codeDef).ok).toBe(true);
+    await flush();
+    expect(a.cmds[0]).toMatch(/ --max-budget-usd 5(\s|$)/);
+    expect(a.cmds[0]).not.toContain("23.8");
+
+    process.env.AGILEHARNESS_AUTORUN_MAX_BUDGET_USD = "0";
+    const b = makeEngine();
+    expect(b.engine.runSkill("acme", "story-2", "harness-do", codeDef).ok).toBe(true);
+    await flush();
+    expect(b.cmds[0]).not.toContain("--max-budget-usd");
+  });
+});
+
+// ── O CORTE POR ORÇAMENTO como desfecho próprio (`budget-cut`) ─────────────────────────────────────────
+// Alimenta o engine com a GRAVAÇÃO REAL de um corte (CLI 2.1.281: result/error_max_budget_usd, is_error, exit 1)
+// e mede o que o settle faz com ela. Sem ler o subtype, o exit 1 cairia na escada como "exit": árvore destruída,
+// nenhum finding, e o próximo run compraria o mesmo teto de novo.
+describe("RunnerEngine.runSkill — corte por orçamento (budget-cut)", () => {
+  const FIXTURE = readFileSync(
+    path.join(process.cwd(), "src/lib/storymap/runner/__fixtures__/stream-json-budget-cut.jsonl"),
+    "utf8",
+  );
+  const FIXTURE_COST = 0.0191536; // o total_cost_usd da gravação
+  const cardWith = (findings: Finding[] = []) =>
+    ({
+      id: "story-1",
+      type: "story",
+      storyType: "user",
+      status: "desenvolver",
+      tasks: [],
+      findings,
+      rice: { reach: null, impact: null, confidence: null, effort: null },
+    }) as unknown as Card;
+  const settleTicks = async () => {
+    for (let i = 0; i < 4; i++) await flush(); // leitura do status + carimbo do finding + settle
+  };
+
+  beforeEach(() => {
+    process.env.AGILEHARNESS_AUTORUN_WORKTREE = "1"; // um worktree existe para ser PRESERVADO
+  });
+
+  it("card NÃO avançou ⇒ outcome budget-cut, falha visível, árvore+branch PRESERVADOS, sem resume, finding + telemetria com custo", async () => {
+    const reader = async () => "desenvolver"; // antes === depois
+    const { telemetry, records } = makeTelemetry();
+    const { engine, children, finishes, resumables, worktreeRemoves, worktreeDetaches, mergeEnqueues, cardWrites } = makeEngine(
+      reader,
+      { telemetry, cardOnDisk: cardWith() },
+    );
+    expect(engine.runSkill("acme", "story-bc1", "harness-do", codeDef).ok).toBe(true);
+    await flush();
+    children[0].stdout.emit("data", Buffer.from(FIXTURE));
+    children[0].emit("close", 1, null); // o CLI sai 1 — igual a um erro genuíno
+    await settleTicks();
+
+    expect(finishes).toEqual([{ board: "acme", cardId: "story-bc1", outcome: "budget-cut", endedAt: expect.any(Number) }]);
+    expect(
+      getRunnerRegistry().snapshot().failures.some((f) => f.cardId === "story-bc1" && f.reason === "budget-cut"),
+    ).toBe(true);
+    // PRESERVADO como max-turns: nem removido, nem destacado/enfileirado (trabalho parcial não integra)…
+    expect(worktreeRemoves).toHaveLength(0);
+    expect(worktreeDetaches).toHaveLength(0);
+    expect(mergeEnqueues).toHaveLength(0);
+    // …mas SEM a marca de retomável e sem re-dispatch: retomar compraria o mesmo teto de novo.
+    expect(resumables).toHaveLength(0);
+    expect(children).toHaveLength(1);
+    // Telemetria durável com o desfecho e o CUSTO que o CLI reportou.
+    expect(records).toHaveLength(1);
+    expect(records[0].status).toBe("budget-cut");
+    expect(records[0].costUSD).toBe(FIXTURE_COST);
+    expect(records[0].advanced).toBe(false);
+    // O card diz por quê: finding medium pedindo para fatiar/re-planejar, citando o teto com que o run nasceu.
+    const f = cardWrites.at(-1)!.findings!.find((x) => x.id === BUDGET_CUT_FINDING_ID)!;
+    expect(f.severity).toBe("medium");
+    expect(f.status).toBe("open");
+    expect(f.detail).toContain("--max-budget-usd $23.80");
+    expect(f.detail).toContain("harness-do");
+  });
+
+  it("SEGUNDO corte seguido no mesmo card ⇒ o finding escala para high (decisão humana)", async () => {
+    const reader = async () => "desenvolver";
+    const prior = withBudgetCutFinding([], { trigger: "harness-do", runId: "run-anterior", capUSD: 23.8, costUSD: 24 })!;
+    const { engine, children, cardWrites } = makeEngine(reader, { cardOnDisk: cardWith(prior) });
+    engine.runSkill("acme", "story-bc2", "harness-do", codeDef);
+    await flush();
+    children[0].stdout.emit("data", Buffer.from(FIXTURE));
+    children[0].emit("close", 1, null);
+    await settleTicks();
+    const f = cardWrites.at(-1)!.findings!.filter((x) => x.id === BUDGET_CUT_FINDING_ID);
+    expect(f).toHaveLength(1);
+    expect(f[0].severity).toBe("high");
+  });
+
+  it("card AVANÇOU antes do corte ⇒ sucesso-com-aviso: integra (detach+enqueue), sem falha, telemetria budget-cut advanced", async () => {
+    const reader = async (_b: string, _c: string, cwd?: string) => (cwd ? "revisar-codigo" : "desenvolver");
+    const { telemetry, records } = makeTelemetry();
+    const { engine, children, finishes, worktreeDetaches, mergeEnqueues, cardWrites } = makeEngine(reader, {
+      telemetry,
+      cardOnDisk: cardWith(),
+    });
+    engine.runSkill("acme", "story-bc3", "harness-do", codeDef);
+    await flush();
+    children[0].stdout.emit("data", Buffer.from(FIXTURE));
+    children[0].emit("close", 1, null);
+    await settleTicks();
+    expect(finishes.map((f) => f.outcome)).toEqual(["budget-cut"]);
+    expect(getRunnerRegistry().snapshot().failures.some((f) => f.cardId === "story-bc3")).toBe(false);
+    expect(worktreeDetaches).toHaveLength(1);
+    expect(mergeEnqueues).toHaveLength(1);
+    expect(records[0].status).toBe("budget-cut");
+    expect(records[0].advanced).toBe(true);
+    expect(cardWrites.some((c) => (c.findings ?? []).some((x) => x.id === BUDGET_CUT_FINDING_ID))).toBe(false);
+  });
+
+  it("ordem das guardas: um evento de corte seguido de um KILL externo continua sendo morte (exit), não budget-cut", async () => {
+    const reader = async () => "desenvolver";
+    const { engine, children, finishes, worktreeRemoves, cardWrites } = makeEngine(reader, { cardOnDisk: cardWith() });
+    engine.runSkill("acme", "story-bc4", "harness-do", codeDef);
+    await flush();
+    children[0].stdout.emit("data", Buffer.from(FIXTURE)); // evento de corte velho…
+    children[0].emit("close", null, "SIGTERM"); // …e depois um kill — não é uma saída limpa no teto
+    await settleTicks();
+    expect(finishes.map((f) => f.outcome)).toEqual(["exit"]);
+    expect(worktreeRemoves).toHaveLength(1);
+    expect(cardWrites.some((c) => (c.findings ?? []).some((x) => x.id === BUDGET_CUT_FINDING_ID))).toBe(false);
+  });
+
+  it("card cortado DUAS vezes seguidas ⇒ o próximo dispatch é RETIDO ($0, sem processo) — autorun E manual", async () => {
+    const escalated = withBudgetCutFinding(
+      withBudgetCutFinding([], { trigger: "harness-do", runId: "r1", capUSD: 23.8, costUSD: 24 })!,
+      { trigger: "harness-do", runId: "r2", capUSD: 23.8, costUSD: 24.2 },
+    )!;
+    for (const origin of ["autorun", "manual"] as const) {
+      const { telemetry, records } = makeTelemetry();
+      const { engine, cmds, finishes } = makeEngine(async () => "desenvolver", {
+        telemetry,
+        readCard: async () => cardWith(escalated),
+      });
+      expect(engine.runSkill("acme", "story-bc5", "harness-do", codeDef, { origin }).ok).toBe(true);
+      await settleTicks();
+      expect(cmds, origin).toHaveLength(0); // nenhum processo: o teto não é comprado uma terceira vez
+      expect(finishes.map((f) => f.outcome)).toEqual(["no-op"]);
+      expect(records[0].costUSD).toBe(0);
+      expect(records[0].summary).toContain(BUDGET_CUT_HOLD_MARKER);
+    }
+  });
+
+  it("um ÚNICO corte anterior (finding medium) NÃO retém — o card ainda tem direito a uma nova tentativa", async () => {
+    const once = withBudgetCutFinding([], { trigger: "harness-do", runId: "r1", capUSD: 23.8, costUSD: 24 })!;
+    const { engine, cmds } = makeEngine(async () => "desenvolver", { readCard: async () => cardWith(once) });
+    expect(engine.runSkill("acme", "story-bc6", "harness-do", codeDef).ok).toBe(true);
+    await flush();
+    expect(cmds).toHaveLength(1);
   });
 });

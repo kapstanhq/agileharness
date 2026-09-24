@@ -27,8 +27,18 @@ import { maskSecret, secretWeakness, weaknessAdvice } from "@/lib/storymap/mcp/a
 // escopados) — ver `normalizeScopedMcpTokenEnv` logo abaixo de `mcpSecretWarned`.
 import { MCP_TOKEN_ENV, normalizeMcpTokenEnv } from "@/lib/storymap/mcp/token-bootstrap";
 import { patchYamlScalars } from "./settings-yaml";
-import { columnFlags } from "./flags";
+import { budgetFlags, columnFlags } from "./flags";
 import { deriveCardMaxTurns, deriveCardModelEffort, type CardComplexitySignals } from "./model-routing";
+import {
+  coerceBudgetUSD,
+  coerceRunBudgetSetting,
+  coerceSurfaceBudgets,
+  coerceTickLimits,
+  DEFAULT_TICK_LIMITS,
+  resolveRunBudgetUSD,
+  resolveSurfaceBudgetUSD,
+  type BudgetSurface,
+} from "./run-budget";
 import {
   EFFORT_LEVELS,
   MODEL_TIERS,
@@ -202,6 +212,9 @@ export const DEFAULT_RUNNER_SETTINGS: RunnerSettings = {
     // WAKE — acordar por evento vem LIGADO por default, mas é INERTE sem um board `autonomous` (o wake só
     // agenda; quem decide spawnar é o tick, com todos os seus gates). Um board em off/paired nunca acorda.
     wake: { enabled: true, debounceSeconds: 45, cooldownMinutes: 5 },
+    // A contenção de CADA tick (turnos, dinheiro, relógio) — ver run-budget.ts. Sempre materializada, como o
+    // wake: o spawn do tick lê um objeto completo, nunca "ausente = sem teto".
+    tick: { ...DEFAULT_TICK_LIMITS },
   },
 };
 
@@ -299,6 +312,10 @@ export function coerceRunnerSettings(raw: unknown): RunnerSettings {
   if (cdEffort) columnDefaults.effort = cdEffort;
   const cdMax = asPosInt(cd.maxTurns);
   if (cdMax) columnDefaults.maxTurns = cdMax;
+  // O teto de custo por run. Coerção ESTRITA e por entrada (run-budget.ts): lixo ⇒ ausente ⇒ a tabela por
+  // skill, isto é, o teto continua LIGADO. Só um `0` explícito desliga.
+  const maxBudgetUSD = coerceRunBudgetSetting(a.maxBudgetUSD);
+  const surfaceMaxBudgetUSD = coerceSurfaceBudgets(a.surfaceMaxBudgetUSD);
 
   return {
     version: asPosInt(r.version) ?? d.version,
@@ -311,6 +328,8 @@ export function coerceRunnerSettings(raw: unknown): RunnerSettings {
       // stays OFF unless a POSITIVE number is present — the key is omitted otherwise (mirrors the lane quotas).
       noProgressMax: asNonNegInt(a.noProgressMax) ?? d.autorun.noProgressMax,
       ...(asPosNum(a.cardBudgetUSD) !== undefined ? { cardBudgetUSD: asPosNum(a.cardBudgetUSD) } : {}),
+      ...(maxBudgetUSD !== undefined ? { maxBudgetUSD } : {}),
+      ...(surfaceMaxBudgetUSD !== undefined ? { surfaceMaxBudgetUSD } : {}),
       timeouts: {
         fastMs: asPosInt(t.fastMs) ?? d.autorun.timeouts.fastMs,
         doMs: t.doMs == null ? null : (asPosInt(t.doMs) ?? null),
@@ -480,6 +499,8 @@ function coerceOrchestratorSettings(raw: unknown, d: OrchestratorSettings): Orch
       debounceSeconds: asNonNegInt(w.debounceSeconds) ?? d.wake!.debounceSeconds,
       cooldownMinutes: asNonNegInt(w.cooldownMinutes) ?? d.wake!.cooldownMinutes,
     },
+    // Coerção EXPLÍCITA campo a campo (run-budget.ts): lixo cai no default, e só `maxBudgetUSD` aceita 0.
+    tick: coerceTickLimits(o.tick, d.tick ?? DEFAULT_TICK_LIMITS),
   };
 }
 
@@ -908,6 +929,14 @@ export function applyEnvOverrides(s: RunnerSettings): RunnerSettings {
   // leaves the file value untouched (an empty/0 value is NOT a real budget → never silently freezes a card).
   const cardBudget = asPosNum(env.AGILEHARNESS_AUTORUN_CARD_BUDGET_USD);
   if (cardBudget !== undefined) next.autorun.cardBudgetUSD = cardBudget;
+  // O teto de custo POR RUN: um número GLOBAL que substitui o do arquivo (número ou mapa) — 0 desliga. A env
+  // só pode ser um número (um mapa por env seria um segundo formato de configuração a manter). Vazia/lixo ⇒
+  // IGNORADA com aviso, e o arquivo (ou a tabela) segue valendo: uma env malformada nunca desliga o disjuntor.
+  if (isSetEnv(env.AGILEHARNESS_AUTORUN_MAX_BUDGET_USD)) {
+    const runBudget = coerceBudgetUSD(env.AGILEHARNESS_AUTORUN_MAX_BUDGET_USD);
+    if (runBudget !== undefined) next.autorun.maxBudgetUSD = runBudget;
+    else console.warn(`[storymap] AGILEHARNESS_AUTORUN_MAX_BUDGET_USD inválida (${JSON.stringify(env.AGILEHARNESS_AUTORUN_MAX_BUDGET_USD)}) — ignorada; teto do settings/tabela mantido.`);
+  }
   const fast = asPosInt(env.AGILEHARNESS_AUTORUN_TIMEOUT_MS);
   if (fast) next.autorun.timeouts.fastMs = fast;
   const doMs = asPosInt(env.AGILEHARNESS_AUTORUN_TIMEOUT_DO_MS);
@@ -1081,6 +1110,7 @@ export function activeEnvOverrides(): string[] {
     "AGILEHARNESS_AUTORUN_MAX",
     "AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX",
     "AGILEHARNESS_AUTORUN_CARD_BUDGET_USD",
+    "AGILEHARNESS_AUTORUN_MAX_BUDGET_USD",
     "AGILEHARNESS_AUTORUN_TIMEOUT_MS",
     "AGILEHARNESS_AUTORUN_TIMEOUT_DO_MS",
     "AGILEHARNESS_AUTORUN_TIMEOUT_UNIVERSAL_MS",
@@ -1164,6 +1194,43 @@ export function resolveCardArgs(card: Card, def: StatusDef, config: RunnerSettin
     maxTurns: maxTurns ?? def.maxTurns,
   };
   return columnFlags(config.economyMode ? applyEconomyCap(resolved) : resolved, config.columnDefaults);
+}
+
+/**
+ * A POLÍTICA COMPLETA de um run headless do engine — o único ponto por onde o spawn passa: as flags de
+ * rota ({@link resolveCardArgs} com o card lido, {@link resolveColumnArgs} sem ele — fail-open, como
+ * sempre) MAIS o teto de custo do run (`--max-budget-usd`, run-budget.ts).
+ *
+ * O teto entra AQUI, e não em cada spawn, pela lição que este repositório já pagou com a contenção de MCP:
+ * proteção que cada call-site precisa LEMBRAR de pedir é proteção que o próximo call-site esquece. E ele
+ * recebe o `trigger` EFETIVO do run (não o `def.trigger` da coluna): um card reaberto numa coluna de build
+ * roda `harness-fix`, e o sincronizar usa uma coluna sintética — o teto é da skill que de fato roda.
+ *
+ * Um teto não é uma rota: nada aqui muda modelo, effort ou turnos (a "quarta porta" que model-routing.ts
+ * proíbe continua fechada). Economia não mexe no teto — ela já barateia o run pelo tier.
+ */
+export function resolveRunPolicyArgs(
+  card: Card | null,
+  def: StatusDef,
+  config: RunnerSettings,
+  trigger: TriggerId,
+): string[] {
+  const route = card ? resolveCardArgs(card, def, config) : resolveColumnArgs(def, config);
+  return [...route, ...budgetFlags(resolveRunBudgetUSD(trigger, config.autorun.maxBudgetUSD))];
+}
+
+/**
+ * O teto de custo EFETIVO de uma superfície autônoma fora do engine (revisor par, juiz, agente de deploy,
+ * captura) — o leitor de `autorun.surfaceMaxBudgetUSD`. Cada spawn o chama no próprio módulo, para que
+ * nenhum call-site possa esquecer de pedir o teto. FAIL-CLOSED: um settings ilegível NÃO desliga a proteção —
+ * cai no default da superfície. `null` só quando alguém declarou `0`.
+ */
+export function surfaceBudgetUSD(surface: BudgetSurface): number | null {
+  try {
+    return resolveSurfaceBudgetUSD(surface, loadRunnerConfig().autorun.surfaceMaxBudgetUSD);
+  } catch {
+    return resolveSurfaceBudgetUSD(surface, undefined);
+  }
 }
 
 /**

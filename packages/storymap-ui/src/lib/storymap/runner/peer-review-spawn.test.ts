@@ -286,3 +286,39 @@ describe("buildReviewerArgs — a tradução postura → argv (PURA)", () => {
     expect(args).not.toContain("--permission-mode");
   });
 });
+
+// ── O disjuntor de custo do revisor (`--max-budget-usd`, run-budget.ts) ──────────────────────────────────
+// O revisor é alcançável EM BANDA: um agente autônomo chama `request_peer_review` e um processo nasce sem
+// humano olhando o gasto. Ele nascia sem teto de dinheiro nenhum.
+describe("o revisor par nasce com teto de custo", () => {
+  const opts = { prompt: "julgue", notePath: "/tmp/nota.md" };
+  const budgetOf = (args: readonly string[]) => (args.includes("--max-budget-usd") ? args[args.indexOf("--max-budget-usd") + 1] : null);
+
+  beforeEach(() => {
+    vi.stubEnv("AGILEHARNESS_HEADROOM_URL", "off");
+  });
+
+  it("buildReviewerArgs: default 2 USD; override; null e 0 desligam", () => {
+    const p = posturaContida("/wt");
+    expect(budgetOf(buildReviewerArgs(p, opts).args)).toBe("2");
+    expect(budgetOf(buildReviewerArgs(p, { ...opts, maxBudgetUSD: 0.75 }).args)).toBe("0.75");
+    expect(budgetOf(buildReviewerArgs(p, { ...opts, maxBudgetUSD: null }).args)).toBeNull();
+    expect(budgetOf(buildReviewerArgs(p, { ...opts, maxBudgetUSD: 0 }).args)).toBeNull();
+    // o teto não afrouxa a cerca: o argv continua passando no portão
+    expect(() => assertContainmentReachedArgv(p, buildReviewerArgs(p, opts).args)).not.toThrow();
+  });
+
+  it("o argv que o processo RECEBE carrega o teto — o do settings por default, o de deps quando dado", async () => {
+    const semDeps: { args?: readonly string[] } = {};
+    await spawnPeerReview(PEDIDO, { claudeBin: "claude", resolvePosture: (cwd) => posturaContida(cwd), spawn: spawnFalso(semDeps) });
+    expect(budgetOf(semDeps.args ?? [])).toBe("2"); // settings.yaml publicado não declara a superfície ⇒ default
+    const comDeps: { args?: readonly string[] } = {};
+    await spawnPeerReview(PEDIDO, {
+      claudeBin: "claude",
+      maxBudgetUSD: 3.5,
+      resolvePosture: (cwd) => posturaContida(cwd),
+      spawn: spawnFalso(comDeps),
+    });
+    expect(budgetOf(comDeps.args ?? [])).toBe("3.5");
+  });
+});

@@ -2207,6 +2207,23 @@ export interface RunnerSettings {
      * card burns $ ACROSS re-spawns, not within one run). DEFAULT undefined = DISABLED (no behaviour
      * change unless the operator opts in). ENV AGILEHARNESS_AUTORUN_CARD_BUDGET_USD overrides (a positive float). */
     cardBudgetUSD?: number;
+    /**
+     * Per-RUN $ breaker — the `claude --max-budget-usd <n>` every headless engine run is spawned with. A
+     * RUNAWAY breaker, not pacing (runner/run-budget.ts): the defaults are per-skill and wide (max(2×p90,
+     * p99) of historical cost), so a normal run never touches them; a run that does is cut between turns and
+     * settles as `budget-cut`. Distinct from {@link cardBudgetUSD} (the card's LIFETIME sum across runs,
+     * opt-in): this one bounds ONE process and is ON by default. A number = one cap for every skill; a map
+     * `trigger → number` overrides the named skills (the rest keep the table); `0` disables. Absent ⇒ the
+     * per-skill table. ENV AGILEHARNESS_AUTORUN_MAX_BUDGET_USD overrides with a global number (0 disables). */
+    maxBudgetUSD?: number | Partial<Record<TriggerId, number>>;
+    /**
+     * The $ breaker of the OTHER autonomous spawn surfaces — the ones outside the engine that start `claude`
+     * with no human in the loop: the governance peer reviewer, the merge train's resolution judge, the deploy
+     * agent and the one-shot smart-capture/triage call. Each has a conservative default (2 / 2 / 4 / 2 USD,
+     * runner/run-budget.ts); a key here overrides that surface, `0` disables it. Absent ⇒ the defaults. The
+     * operator's interactive chat is deliberately NOT a surface here: a person is watching it.
+     */
+    surfaceMaxBudgetUSD?: { peerReview?: number; resolutionJudge?: number; deployAgent?: number; smartCapture?: number };
     timeouts: {
       /** watchdog for fast skills (enrich/tasks/prioritize), ms */
       fastMs: number;
@@ -2527,6 +2544,17 @@ export interface OrchestratorSettings {
    *  - `cooldownMinutes`: intervalo mínimo entre dois runs acordados por evento (anti-rajada). Default 5.
    */
   wake?: { enabled: boolean; debounceSeconds: number; cooldownMinutes: number };
+  /**
+   * A CONTENÇÃO DE UM TICK — o spawn headless do copiloto autônomo (runner/orchestrator-spawn.ts). Nasceu sem
+   * teto de turnos e sem relógio: um tick que se enrolasse rodava até o TTL do lease (20min) e além, gastando
+   * sem limite dentro do orçamento DIÁRIO — que só olha o dia, não o ciclo. Três trincos independentes:
+   *  - `maxTurns`: `--max-turns` do CLI (default 40). Só positivo; lixo/0 ⇒ default.
+   *  - `maxBudgetUSD`: `--max-budget-usd` do CLI (default 4). `0` desliga (o orçamento diário segue valendo).
+   *  - `timeoutMinutes`: relógio de parede; estourou ⇒ SIGKILL (default 12, abaixo do TTL do lease). Só
+   *    positivo. Um tick morto pelo relógio ainda é COBRADO no orçamento do dia (ver applyRunResult).
+   * Disjuntor, não ritmo — o ritmo é `tickMinutes` + `budget`.
+   */
+  tick?: { maxTurns: number; maxBudgetUSD: number; timeoutMinutes: number };
   /**
    * A matriz de risco das ações de escopo REPO (mcp/scope.ts `REPO_SCOPED_TOOLS`): a branch `stage`, a suíte,
    * o serviço, o shell da caixa. Elas não têm board dono, então a matriz de NENHUM board.yaml as governa — sem

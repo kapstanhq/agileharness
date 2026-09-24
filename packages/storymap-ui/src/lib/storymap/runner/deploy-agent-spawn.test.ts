@@ -4,10 +4,10 @@
 // The spawn is faked (DI spawnFn) — no test ever runs a real claude.
 
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   DEPLOY_AGENT_MAX_TURNS,
   DEPLOY_AGENT_TIMEOUT_MINUTES_DEFAULT,
@@ -112,7 +112,9 @@ afterAll(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-function launchFake(opts: { timeoutMs?: number; spec?: DeployAgentSpec; throwOnSpawn?: boolean } = {}) {
+function launchFake(
+  opts: { timeoutMs?: number; spec?: DeployAgentSpec; throwOnSpawn?: boolean; maxBudgetUSD?: number | null } = {},
+) {
   const child = new FakeChild();
   const spawnArgs: { bin: string; args: string[]; cwd?: string } = { bin: "", args: [] };
   const launch = launchDeployAgent(opts.spec ?? spec(), {
@@ -120,6 +122,7 @@ function launchFake(opts: { timeoutMs?: number; spec?: DeployAgentSpec; throwOnS
     repoRoot: "/repo",
     claudeBin: "claude",
     timeoutMs: opts.timeoutMs ?? 5_000,
+    ...(opts.maxBudgetUSD !== undefined ? { maxBudgetUSD: opts.maxBudgetUSD } : {}),
     spawnFn: ((bin: string, args: string[], o: { cwd?: string }) => {
       if (opts.throwOnSpawn) throw new Error("ENOENT claude");
       spawnArgs.bin = bin;
@@ -199,5 +202,41 @@ describe("launchDeployAgent — spawn bounded que alimenta o ciclo do registry (
     expect(launch.verdict?.()).toMatchObject({ ok: false, reason: expect.stringContaining("orçamento") });
     child.emit("close", 137); // o close tardio do kill NÃO re-settla (guard settled)
     expect(launch.verdict?.()).toMatchObject({ ok: false, reason: expect.stringContaining("orçamento") });
+  });
+});
+
+// ── O disjuntor de custo do agente de deploy (`--max-budget-usd`, run-budget.ts) ─────────────────────────
+// Turnos e relógio limitavam o agente; nenhum dos dois sabe quanto um turno custa. Ele roda a receita do dono
+// com skip-permissions, sem humano no laço — e nascia sem teto de dinheiro.
+describe("launchDeployAgent — o agente nasce com teto de custo", () => {
+  const budgetOf = (args: string[]) => (args.includes("--max-budget-usd") ? args[args.indexOf("--max-budget-usd") + 1] : null);
+
+  /**
+   * Lança, lê o argv e ASSENTA o launch — incluindo esperar o log ABRIR. Estes são os últimos launches do
+   * arquivo: sem a espera, o `open` assíncrono do stream do log ainda estaria na fila quando o afterAll apaga o
+   * diretório, e viraria um ENOENT não-tratado (que os launches anteriores evitam só por terem testes depois).
+   */
+  async function settled(opts: Parameters<typeof launchFake>[0] = {}) {
+    const launched = launchFake(opts);
+    const logFile = path.join(tmp, `agent-${logSeq}.log`);
+    launched.child.emit("close", 1);
+    const code = await launched.done;
+    await vi.waitFor(() => expect(existsSync(logFile)).toBe(true));
+    return { code, args: launched.spawnArgs.args };
+  }
+  const argsOf = async (opts: Parameters<typeof launchFake>[0] = {}) => (await settled(opts)).args;
+
+  it("default: o teto da superfície no settings (4 USD — o settings publicado não declara a superfície)", async () => {
+    expect(budgetOf(await argsOf())).toBe("4");
+  });
+
+  it("deps.maxBudgetUSD vence; null e 0 tiram a flag", async () => {
+    expect(budgetOf(await argsOf({ maxBudgetUSD: 6 }))).toBe("6");
+    expect(budgetOf(await argsOf({ maxBudgetUSD: null }))).toBeNull();
+    expect(budgetOf(await argsOf({ maxBudgetUSD: 0 }))).toBeNull();
+  });
+
+  it("um agente CORTADO pelo teto sai ≠0 ⇒ deploy tratado como FALHO (fail-closed, nunca 'no ar')", async () => {
+    expect((await settled()).code).toBe(1);
   });
 });

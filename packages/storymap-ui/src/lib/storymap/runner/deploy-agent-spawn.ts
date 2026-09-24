@@ -28,8 +28,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream, mkdirSync } from "node:fs";
 import path from "node:path";
 import { findRepoRoot } from "@/lib/storymap/paths";
-import { loadRunnerConfig } from "./config";
-import { mcpContainmentFlags } from "./flags";
+import { loadRunnerConfig, surfaceBudgetUSD } from "./config";
+import { budgetFlags, mcpContainmentFlags } from "./flags";
 import { headroomUrlIfKnownAlive } from "./headroom";
 import { sanitizeSpawnEnv } from "./spawn-env";
 import type { DeployLaunch } from "./product-deploy";
@@ -182,6 +182,9 @@ export interface DeployAgentLaunchDeps {
   /** wall-clock override (tests); defaults to spec.timeoutMinutes || DEPLOY_AGENT_TIMEOUT_MINUTES_DEFAULT. */
   timeoutMs?: number;
   spawnFn?: typeof spawn;
+  /** O teto de custo do agente (`--max-budget-usd`). Ausente ⇒ settings `autorun.surfaceMaxBudgetUSD.deployAgent`
+   *  (default 4); `null`/`0` ⇒ sem teto. Um agente cortado sai ≠0 ⇒ deploy tratado como falho (fail-closed). */
+  maxBudgetUSD?: number | null;
 }
 
 /**
@@ -229,6 +232,9 @@ export function launchDeployAgent(spec: DeployAgentSpec, deps: DeployAgentLaunch
     DEPLOY_AGENT_EFFORT,
     "--max-turns",
     String(DEPLOY_AGENT_MAX_TURNS),
+    // …and a DOLLAR bound (run-budget.ts): turns + wall clock don't know what a turn costs. surfaceBudgetUSD is
+    // fail-closed on its own (an unreadable settings keeps the default cap), so this can't throw into start().
+    ...budgetFlags(deps.maxBudgetUSD !== undefined ? deps.maxBudgetUSD : surfaceBudgetUSD("deployAgent")),
     // The agent runs the owner's REAL deploy shell (vercel/firebase/ssh…) from the repo root — it needs
     // Bash like every code skill. Containment here is the BOUNDS (turns + wall clock + the board-config
     // trust boundary), deliberately NOT a worktree: a deploy acts on the live world by design.

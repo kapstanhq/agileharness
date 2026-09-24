@@ -67,6 +67,12 @@ export function summarizeStreamEvent(obj: unknown): { level: LogLevel; text: str
   }
 
   if (type === "result") {
+    // O corte por orçamento ganha uma linha PRÓPRIA: "✗ error_max_budget_usd" não diz ao operador que foi o
+    // disjuntor de custo (e não um bug) que parou o run, nem quanto ele gastou.
+    if (e.subtype === BUDGET_CUT_SUBTYPE) {
+      const spent = typeof e.total_cost_usd === "number" ? ` · gastou $${e.total_cost_usd.toFixed(3)}` : "";
+      return { level: "error", text: `✗ cortado pelo teto de custo (--max-budget-usd)${spent}` };
+    }
     if (e.is_error || e.subtype === "error" || e.subtype === "error_during_execution") {
       return { level: "error", text: `✗ ${e.subtype ?? "erro"}` };
     }
@@ -174,6 +180,26 @@ export function isMaxTurnsResult(obj: unknown): boolean {
   if (!obj || typeof obj !== "object") return false;
   const e = obj as Record<string, any>;
   return e.type === "result" && e.subtype === "error_max_turns";
+}
+
+/**
+ * The `result` subtype the CLI emits when it stops a run at its `--max-budget-usd` cap. MEASURED (CLI
+ * 2.1.281, subscription login): `claude -p … --max-budget-usd 0.001 --output-format json` ends with
+ * `{type:"result", subtype:"error_max_budget_usd", is_error:true, total_cost_usd:0.0248}` and exit 1 — the cap
+ * is checked BETWEEN turns, so the overshoot is at most one turn.
+ */
+export const BUDGET_CUT_SUBTYPE = "error_max_budget_usd";
+
+/**
+ * Did this stream-json event report that the per-run $ breaker (`--max-budget-usd`, run-budget.ts) cut the
+ * run? The engine reads it off the parsed stdout and classifies the run `budget-cut` BEFORE the exit-code
+ * ladder — the exit code (1) is the same as any genuine error and says nothing about WHY the run stopped.
+ * DEFENSIVE: any other event/shape ⇒ false. Pure — exported for tests.
+ */
+export function isBudgetCutResult(obj: unknown): boolean {
+  if (!obj || typeof obj !== "object") return false;
+  const e = obj as Record<string, any>;
+  return e.type === "result" && e.subtype === BUDGET_CUT_SUBTYPE;
 }
 
 /**

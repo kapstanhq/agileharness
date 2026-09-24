@@ -806,6 +806,82 @@ export function withCardBudgetFinding(
   });
 }
 
+// ── corte por orçamento (o disjuntor `--max-budget-usd`, runner/run-budget.ts) ──────────────────────────
+/** Stable id for the budget-cut finding — ONE per card (not per run, not per trigger): a second cut REFRESHES
+ *  it (and escalates it) instead of stacking, and it is the single place the "how many cuts in a row" fact lives. */
+export const BUDGET_CUT_FINDING_ID = "budget-cut";
+
+/** The facts of ONE cut, as the engine saw them at settle. */
+export interface BudgetCutFacts {
+  trigger: string;
+  /** the run's session id — the idempotency key (the same run never counts twice) */
+  runId: string;
+  /** the `--max-budget-usd` the run was spawned with (null when unknown) */
+  capUSD: number | null;
+  /** what the CLI reported the run spent (`total_cost_usd`), null when absent */
+  costUSD: number | null;
+}
+
+/**
+ * The card has been cut by the per-run $ breaker TWICE IN A ROW (an OPEN budget-cut finding already escalated
+ * to `high`) — the fact the engine's pre-check reads to HOLD a third dispatch for the human instead of buying
+ * the same cap again. Pure; a missing/triaged finding ⇒ false (the human's triage is the release lever).
+ */
+export function isBudgetCutEscalated(findings: readonly Finding[] | null | undefined): boolean {
+  return (findings ?? []).some((f) => f.id === BUDGET_CUT_FINDING_ID && f.status === "open" && f.severity === "high");
+}
+
+/**
+ * PURE: stamp a budget cut on the card. The count lives in the finding's own state, not in a counter that
+ * could drift: no OPEN budget-cut finding ⇒ this is the FIRST cut → `medium`, asking to slice or re-plan the
+ * card; an OPEN one already there ⇒ this is a REPEAT → `high`, surfacing to the human (and
+ * {@link isBudgetCutEscalated} makes the engine refuse the next automatic dispatch). NEVER `blocker`: it is a
+ * cost alarm on the card's scope, not a code defect, so it must not wedge `hasNoBlockers`.
+ *
+ * Idempotent by run: when the open finding already names THIS runId, returns null (no write) — a duplicate
+ * settle/stamp can never turn one cut into an escalation. A triaged (fixed/wontfix/acknowledged) finding is a
+ * fresh start: the next cut reopens it as a first cut.
+ */
+export function withBudgetCutFinding(existing: Finding[], facts: BudgetCutFacts): Finding[] | null {
+  const prior = existing.find((f) => f.id === BUDGET_CUT_FINDING_ID && f.status === "open");
+  if (prior && (prior.detail ?? "").includes(`run ${facts.runId}`)) return null;
+  const repeat = !!prior;
+  const usd = (n: number | null) => (n == null ? "?" : `$${n.toFixed(2)}`);
+  const what =
+    `O run \`${facts.trigger}\` (run ${facts.runId}) foi CORTADO pelo teto de custo por run ` +
+    `(--max-budget-usd ${usd(facts.capUSD)}; gastou ${usd(facts.costUSD)}) sem o card avançar. ` +
+    `O teto é um disjuntor contra run desembestado, calibrado largo (max(2×p90, p99) do histórico da skill): ` +
+    `bater nele quase sempre significa que o card é GRANDE ou AMBÍGUO demais para um run. O worktree/branch do ` +
+    `run foi preservado (trabalho parcial inspecionável); o run NÃO é retomado.`;
+  const ask = repeat
+    ? ` É o SEGUNDO corte seguido deste card — o harness NÃO vai re-disparar automaticamente. Decisão humana: ` +
+      `fatie o card em stories menores, refaça o plano técnico, ou aumente o teto (settings.yaml ` +
+      `autorun.maxBudgetUSD / AGILEHARNESS_AUTORUN_MAX_BUDGET_USD). Dar um desfecho a este finding ` +
+      `(fixed/wontfix/acknowledged) libera o próximo run.`
+    : ` Antes de re-rodar: fatie o card em stories menores ou refaça o plano técnico/tasks. Um segundo corte ` +
+      `seguido escala para decisão humana e para o re-disparo automático.`;
+  return upsertFinding(existing, {
+    id: BUDGET_CUT_FINDING_ID,
+    lens: "general",
+    severity: repeat ? "high" : "medium",
+    title: repeat
+      ? "run cortado pelo teto de custo DE NOVO — precisa de decisão humana"
+      : "run cortado pelo teto de custo — fatie ou re-planeje o card",
+    detail: what + ask,
+    status: "open",
+  });
+}
+
+/**
+ * The card RECOVERED (a later run succeeded, or its work integrated): an open budget-cut finding is obsolete
+ * — flip it open→fixed so the next cut counts as a FIRST cut again (the escalation is about CONSECUTIVE cuts).
+ * Returns null when nothing is open (the IO caller skips the write — never a write→watch→eval loop).
+ */
+export function withBudgetCutResolved(existing: Finding[], stamp?: FindingStatusStamp): Finding[] | null {
+  if (!existing.some((f) => f.id === BUDGET_CUT_FINDING_ID && f.status === "open")) return null;
+  return existing.map((f) => (f.id === BUDGET_CUT_FINDING_ID && f.status === "open" ? withStatusStamped(f, "fixed", stamp) : f));
+}
+
 /** Stable id of the capability-unavailable diagnostic — one per CAPABILITY, card-scoped. Per-capability
  *  (not per-run) so the same missing browser REFRESHES one entry instead of stacking one per attempt. */
 export function capabilityUnavailableFindingId(capability: string): string {

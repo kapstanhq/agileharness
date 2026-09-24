@@ -238,10 +238,12 @@ export const RUN_STATUS_LABEL_PT: Record<RunOutcome, string> = {
   "no-op": "no-op",
   cancelled: "cancelado",
   "max-turns": "limite de turnos",
+  "budget-cut": "cortado pelo teto de custo",
 };
 
-/** A hard failure (renders red) vs a neutral/success stop (ok/no-op/cancelled/max-turns). */
-const FAILURE_OUTCOMES: ReadonlySet<RunOutcome> = new Set(["error", "timeout", "exit", "oom-killed"]);
+/** A hard failure (renders red) vs a neutral/success stop (ok/no-op/cancelled/max-turns). A budget-cut is a
+ *  hard stop: the run spent its whole $ cap without finishing, and it is NOT resumable (unlike max-turns). */
+const FAILURE_OUTCOMES: ReadonlySet<RunOutcome> = new Set(["error", "timeout", "exit", "oom-killed", "budget-cut"]);
 
 /** Reentry/maintenance skills — off the default FORWARD trail; still surfaced if they ran. */
 const REENTRY_TRIGGERS: ReadonlySet<string> = new Set([

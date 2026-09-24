@@ -48,8 +48,10 @@ import {
   type AutonomyPosture,
   type PosturaDeps,
 } from "./autonomy-sandbox";
-import { mcpContainmentFlags } from "./flags";
+import { surfaceBudgetUSD } from "./config";
+import { budgetFlags, mcpContainmentFlags } from "./flags";
 import { applyHeadroomEnv } from "./headroom";
+import { DEFAULT_SURFACE_BUDGET_USD } from "./run-budget";
 import { sanitizeSpawnEnv } from "./spawn-env";
 import type { ExecFn } from "./worktree";
 
@@ -214,6 +216,9 @@ export interface PeerReviewSpawnDeps {
   resolvePosture?: (cwd: string, key: string) => AutonomyPosture;
   /** DI do spawn — o teste captura o argv FINAL entregue ao CLI. Produção usa o `spawn` do node. */
   spawn?: typeof spawn;
+  /** O teto de custo do revisor (`--max-budget-usd`). Ausente ⇒ settings `autorun.surfaceMaxBudgetUSD.peerReview`
+   *  (default 2); `null`/`0` ⇒ sem teto. Um revisor cortado não escreve veredito ⇒ nada aprovado (fail-closed). */
+  maxBudgetUSD?: number | null;
 }
 
 /**
@@ -262,7 +267,8 @@ export function resolveReviewerPosture(cwd: string, key: string, deps: PosturaDe
  */
 export function buildReviewerArgs(
   posture: AutonomyPosture,
-  opts: { prompt: string; notePath: string; denySettingsFile?: string | null },
+  // `maxBudgetUSD` AUSENTE ⇒ o default da superfície: quem monta o argv sem pensar no teto ainda sai com ele.
+  opts: { prompt: string; notePath: string; denySettingsFile?: string | null; maxBudgetUSD?: number | null },
 ): { args: string[]; needsRootBypass: boolean } {
   const { flags, needsRootBypass } = buildSpawnFlags({
     posture,
@@ -284,6 +290,9 @@ export function buildReviewerArgs(
       PEER_EFFORT,
       "--max-turns",
       String(PEER_MAX_TURNS),
+      // O disjuntor de custo (run-budget.ts): o revisor é alcançável EM BANDA por um agente autônomo, então
+      // cada chamada de `request_peer_review` é um processo que ninguém está olhando gastar.
+      ...budgetFlags(opts.maxBudgetUSD === undefined ? DEFAULT_SURFACE_BUDGET_USD.peerReview : opts.maxBudgetUSD),
       "--append-system-prompt-file",
       opts.notePath,
       ...flags,
@@ -383,6 +392,7 @@ async function runReviewer(
     notePath: opts.notePath,
     // a negação NATIVA de credencial nas posturas sem sandbox (a contida a leva no próprio settings)
     denySettingsFile: denySettingsFileFor(opts.posture),
+    maxBudgetUSD: deps.maxBudgetUSD !== undefined ? deps.maxBudgetUSD : surfaceBudgetUSD("peerReview"),
   });
   // O ÚLTIMO PORTÃO, sobre o argv EXATO que vai para o CLI e depois de toda a montagem — ver a nota
   // gêmea no juiz. O throw vira erro do módulo (nunca escapa) e erro aqui é fail-closed: nada aprovado.

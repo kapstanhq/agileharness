@@ -16,7 +16,7 @@
 
 import { updateCardOnDisk } from "@/lib/storymap/write";
 import type { Card, FailureClass, Finding } from "@/lib/storymap/types";
-import { classifyFailure, upsertFinding } from "./findings";
+import { classifyFailure, upsertFinding, withBudgetCutResolved } from "./findings";
 import { getRunnerRegistry } from "./registry";
 import type { RunnerFailureReason } from "./types";
 
@@ -144,13 +144,54 @@ export async function clearRunDeathFinding(board: string, cardId: string): Promi
   }
 }
 
+/**
+ * IO: o card RECUPEROU (um run posterior sucedeu, ou o trabalho integrou) → o finding de corte por orçamento
+ * fica obsoleto: flipa open→fixed, e o próximo corte volta a contar como o PRIMEIRO (a escalada ao humano é
+ * sobre cortes SEGUIDOS). Best-effort; pula a escrita quando não há finding aberto. Nunca lança.
+ */
+export async function clearBudgetCutFinding(board: string, cardId: string): Promise<void> {
+  try {
+    await updateCardOnDisk(board, cardId, (card) => {
+      const next = withBudgetCutResolved(card.findings ?? [], {
+        by: "run:recovered",
+        at: new Date().toISOString().slice(0, 10),
+      });
+      return next ? { ...card, findings: next } : null; // nada aberto → sem escrita
+    });
+  } catch (err) {
+    console.error(`[run-death ${board}/${cardId}] limpeza do budget-cut falhou:`, err instanceof Error ? err.message : err);
+  }
+}
+
 /** Fontes de evento mínimas (portas) — evitam acoplar run-death ao tipo concreto do engine/merge-queue. */
 interface CompletionSource {
-  onComplete(fn: (ev: { board: string; cardId: string }) => void): () => void;
+  onComplete(fn: (ev: { board: string; cardId: string; outcome?: string }) => void): () => void;
 }
 interface MergeDoneSource {
   onMergeDone(fn: (ev: { board: string; cardId: string }) => void): () => void;
 }
+
+/**
+ * Os desfechos SEM RunnerFailure que NÃO provam recuperação do card: um cancelamento do operador (trabalho
+ * incompleto por decisão) e uma parada em max-turns (o run segue, retomado). Nenhum dos dois pode zerar a
+ * contagem de cortes por orçamento — senão cancelar um run bastaria para o próximo corte parecer o primeiro.
+ */
+const NOT_A_RECOVERY = new Set(["cancelled", "max-turns"]);
+
+/** O IO que o hook dispara — injetável para a prova observar QUAL carimbo/limpeza cada desfecho produz. */
+export interface RunDeathIo {
+  failures: () => Array<{ board: string; cardId: string; reason: RunnerFailureReason; detail?: string }>;
+  stamp: (board: string, cardId: string, reason: RunnerFailureReason, detail?: string | null) => void | Promise<void>;
+  clearDeath: (board: string, cardId: string) => void | Promise<void>;
+  clearBudgetCut: (board: string, cardId: string) => void | Promise<void>;
+}
+
+const defaultRunDeathIo: RunDeathIo = {
+  failures: () => getRunnerRegistry().snapshot().failures,
+  stamp: stampRunDeathFinding,
+  clearDeath: clearRunDeathFinding,
+  clearBudgetCut: clearBudgetCutFinding,
+};
 
 /**
  * Assina a conclusão de run para carimbar/limpar o diagnóstico de morte — chamado UMA vez pelo
@@ -162,13 +203,25 @@ interface MergeDoneSource {
  * (onMergeDone) = o trabalho integrou = recuperado → limpa também (cobre o sucesso ISOLADO, que sai por
  * onMergeDone e não por onComplete).
  */
-export function registerRunDeathFindings(engine: CompletionSource, mergeQueue: MergeDoneSource): void {
+export function registerRunDeathFindings(
+  engine: CompletionSource,
+  mergeQueue: MergeDoneSource,
+  io: RunDeathIo = defaultRunDeathIo,
+): void {
   engine.onComplete((ev) => {
-    const failure = getRunnerRegistry()
-      .snapshot()
-      .failures.find((f) => f.board === ev.board && f.cardId === ev.cardId);
-    if (failure) void stampRunDeathFinding(ev.board, ev.cardId, failure.reason, failure.detail);
-    else void clearRunDeathFinding(ev.board, ev.cardId);
+    const failure = io.failures().find((f) => f.board === ev.board && f.cardId === ev.cardId);
+    // Um corte por orçamento já tem o SEU diagnóstico — o finding `budget-cut` que o engine carimbou no settle
+    // (com o teto, o gasto e o pedido de fatiar/re-planejar). Carimbar também "run morreu: budget-cut" seriam
+    // dois alarmes para um fato, e o genérico diria menos que o específico.
+    if (failure?.reason === "budget-cut") return;
+    if (failure) void io.stamp(ev.board, ev.cardId, failure.reason, failure.detail);
+    else {
+      void io.clearDeath(ev.board, ev.cardId);
+      if (!NOT_A_RECOVERY.has(ev.outcome ?? "")) void io.clearBudgetCut(ev.board, ev.cardId);
+    }
   });
-  mergeQueue.onMergeDone((ev) => void clearRunDeathFinding(ev.board, ev.cardId));
+  mergeQueue.onMergeDone((ev) => {
+    void io.clearDeath(ev.board, ev.cardId);
+    void io.clearBudgetCut(ev.board, ev.cardId);
+  });
 }

@@ -46,8 +46,10 @@ import {
   type AutonomyPosture,
   type PosturaDeps,
 } from "./autonomy-sandbox";
-import { mcpContainmentFlags } from "./flags";
+import { surfaceBudgetUSD } from "./config";
+import { budgetFlags, mcpContainmentFlags } from "./flags";
 import { buildAgentSpawnEnv } from "./headroom";
+import { DEFAULT_SURFACE_BUDGET_USD } from "./run-budget";
 import { resolutionTrailer, type HunkAnalysis, type HunkVerdictKind, type JudgePort, type JudgeRequest, type JudgeVerdict } from "./semantic-resolution";
 import { allCosmetic } from "./semantic-resolution";
 import type { ExecFn } from "./worktree";
@@ -183,6 +185,9 @@ export interface JudgeSpawnDeps {
   resolvePosture?: (cwd: string, key: string) => AutonomyPosture;
   /** DI do spawn — o teste captura o argv FINAL entregue ao CLI. Produção usa o `spawn` do node. */
   spawn?: typeof spawn;
+  /** O teto de custo do juiz (`--max-budget-usd`). Ausente ⇒ settings `autorun.surfaceMaxBudgetUSD.resolutionJudge`
+   *  (default 2); `null`/`0` ⇒ sem teto. Um juiz cortado não escreve veredito ⇒ nada resolvido (fail-closed). */
+  maxBudgetUSD?: number | null;
 }
 
 /**
@@ -240,6 +245,8 @@ export function buildJudgeArgs(
   notePath: string,
   /** o settings só-de-negação (`denySettingsFileFor`) — vale nas posturas sem sandbox; ignorado na contida */
   denySettingsFile: string | null = null,
+  // AUSENTE ⇒ o default da superfície: quem monta o argv sem pensar no teto ainda sai com ele.
+  maxBudgetUSD: number | null = DEFAULT_SURFACE_BUDGET_USD.resolutionJudge,
 ): { args: string[]; needsRootBypass: boolean } {
   const { flags, needsRootBypass } = buildSpawnFlags({
     posture,
@@ -261,6 +268,8 @@ export function buildJudgeArgs(
       JUDGE_EFFORT,
       "--max-turns",
       String(JUDGE_MAX_TURNS),
+      // O disjuntor de custo (run-budget.ts): o juiz nasce do train sem humano no laço.
+      ...budgetFlags(maxBudgetUSD),
       "--append-system-prompt-file",
       notePath,
       ...flags,
@@ -440,7 +449,12 @@ async function runJudge(
   opts: { worktreePath: string; notePath: string; outPath: string; errPath: string; tag: string; posture: AutonomyPosture },
 ): Promise<string | null> {
   // a negação NATIVA de credencial nas posturas sem sandbox (a contida a leva no próprio settings)
-  const { args, needsRootBypass } = buildJudgeArgs(opts.posture, opts.notePath, denySettingsFileFor(opts.posture));
+  const { args, needsRootBypass } = buildJudgeArgs(
+    opts.posture,
+    opts.notePath,
+    denySettingsFileFor(opts.posture),
+    deps.maxBudgetUSD !== undefined ? deps.maxBudgetUSD : surfaceBudgetUSD("resolutionJudge"),
+  );
   // ── O ÚLTIMO PORTÃO, DEPOIS DE TODA A MONTAGEM ───────────────────────────────────────────────────
   // Roda sobre o argv EXATO que vai para o CLI, imediatamente antes do spawn: é o último ponto em que
   // ainda se pode saber o que será executado. Uma checagem mais cedo verificaria outra coisa que não a

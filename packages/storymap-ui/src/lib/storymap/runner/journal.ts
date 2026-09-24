@@ -41,7 +41,27 @@ import type { TriggerId } from "@/lib/storymap/types";
 // branch are PRESERVED on teardown (not force-deleted) and a re-run continues via `claude --resume`.
 // Distinct from "error" so the journal/forensics flag a turn-budget exhaustion (recoverable) vs a
 // genuine code error (force-deleted). Like a crash-interrupted run, it is left effectively resumable.
-export type RunOutcome = "ok" | "error" | "timeout" | "exit" | "oom-killed" | "no-op" | "cancelled" | "max-turns";
+// "budget-cut": the CLI stopped the run at its `--max-budget-usd` cap (stream-json `result` subtype
+// error_max_budget_usd — the per-run $ breaker, runner/run-budget.ts). Classified from the result SUBTYPE,
+// never from the exit code (it exits 1 like any error). Unlike "max-turns" it is NOT resumable: resuming a
+// run that burned its whole dollar cap just buys the same cap again. The worktree + branch are PRESERVED
+// (the partial work is inspectable), the card gets a finding asking to slice or re-plan it, and a SECOND
+// consecutive cut escalates to the human instead of being retried (engine.ts precheck hold).
+//
+// RUN_OUTCOMES is the SINGLE source: the type, the journal schema and the telemetry schema all derive from
+// it, so a new outcome can never be accepted by one layer and silently dropped by the zod parse of another.
+export const RUN_OUTCOMES = [
+  "ok",
+  "error",
+  "timeout",
+  "exit",
+  "oom-killed",
+  "no-op",
+  "cancelled",
+  "max-turns",
+  "budget-cut",
+] as const;
+export type RunOutcome = (typeof RUN_OUTCOMES)[number];
 
 /** One durably-recorded headless run. Keyed (in memory + file) by `board/cardId`. */
 export interface JournalEntry {
@@ -314,7 +334,7 @@ const JournalEntrySchema = z.object({
   unit: z.string().optional(),
   status: z.enum(["running", "done"]),
   endedAt: z.number().optional(),
-  outcome: z.enum(["ok", "error", "timeout", "exit", "oom-killed", "no-op", "cancelled", "max-turns"]).optional(),
+  outcome: z.enum(RUN_OUTCOMES).optional(),
   resumable: z.boolean().optional(),
   maxTurnsResumeCount: z.number().optional(),
   resumeFallbackCount: z.number().optional(),

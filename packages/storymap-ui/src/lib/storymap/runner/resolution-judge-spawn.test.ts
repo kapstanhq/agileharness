@@ -313,3 +313,44 @@ describe("buildJudgeArgs — a tradução postura → argv (PURA)", () => {
     expect(args).not.toContain("--permission-mode");
   });
 });
+
+// ── O disjuntor de custo do juiz (`--max-budget-usd`, run-budget.ts) ─────────────────────────────────────
+// O juiz nasce do merge train sem humano no laço; ele nascia sem teto de dinheiro nenhum.
+describe("o juiz de resolução nasce com teto de custo", () => {
+  const budgetOf = (args: readonly string[]) => (args.includes("--max-budget-usd") ? args[args.indexOf("--max-budget-usd") + 1] : null);
+
+  beforeEach(() => {
+    vi.stubEnv("AGILEHARNESS_HEADROOM_URL", "off");
+  });
+
+  it("buildJudgeArgs: default 2 USD; override; null e 0 desligam", () => {
+    const p = posturaContida("/wt");
+    expect(budgetOf(buildJudgeArgs(p, "/tmp/nota.md").args)).toBe("2");
+    expect(budgetOf(buildJudgeArgs(p, "/tmp/nota.md", null, 1.25).args)).toBe("1.25");
+    expect(budgetOf(buildJudgeArgs(p, "/tmp/nota.md", null, null).args)).toBeNull();
+    expect(budgetOf(buildJudgeArgs(p, "/tmp/nota.md", null, 0).args)).toBeNull();
+    expect(() => assertContainmentReachedArgv(p, buildJudgeArgs(p, "/tmp/nota.md").args)).not.toThrow();
+  });
+
+  it("o argv que o processo RECEBE carrega o teto de deps (e o do settings sem ele)", async () => {
+    const comDeps: { args?: readonly string[] } = {};
+    await spawnResolutionJudge(REQ, {
+      claudeBin: "claude",
+      repoRoot: repoTmp(),
+      exec: execFalso([]),
+      maxBudgetUSD: 0.5,
+      resolvePosture: (cwd) => posturaContida(cwd),
+      spawn: spawnFalso(comDeps),
+    });
+    expect(budgetOf(comDeps.args ?? [])).toBe("0.5");
+    const semDeps: { args?: readonly string[] } = {};
+    await spawnResolutionJudge(REQ, {
+      claudeBin: "claude",
+      repoRoot: repoTmp(),
+      exec: execFalso([]),
+      resolvePosture: (cwd) => posturaContida(cwd),
+      spawn: spawnFalso(semDeps),
+    });
+    expect(budgetOf(semDeps.args ?? [])).toBe("2");
+  });
+});

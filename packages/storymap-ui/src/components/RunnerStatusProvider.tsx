@@ -1940,6 +1940,7 @@ const FAILURE_LABEL: Record<string, string> = {
   error: "erro ao iniciar",
   "oom-killed": "estourou memória",
   "no-op": "não avançou (no-op)",
+  "budget-cut": "cortado (teto de custo)",
 };
 
 // Pretty display name per trigger (the raw id is verbose for harness-sync-card).

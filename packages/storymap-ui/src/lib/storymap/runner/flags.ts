@@ -33,6 +33,20 @@ export function columnFlags(
 }
 
 /**
+ * O teto de custo de UM processo: `--max-budget-usd <n>` quando `usd` é um número finito > 0, nada
+ * quando é null/0 (teto desligado por configuração). É um DISJUNTOR contra run desembestado, não ritmo
+ * — ver run-budget.ts. O CLI checa o teto ENTRE turnos, então o estouro máximo é um turno, e o run
+ * cortado termina com um `result` de subtype `error_max_budget_usd` (que o engine classifica como
+ * `budget-cut`). O valor sai com até 4 casas e sem zeros à direita (`23.8`, `2`, `0.001`): um número
+ * puro, seguro para a linha de shell do engine sem aspas. Um positivo menor que a 4ª casa vira o menor
+ * teto representável — arredondar para `0` desligaria a proteção que alguém pediu apertada. Pura.
+ */
+export function budgetFlags(usd: number | null | undefined): string[] {
+  if (typeof usd !== "number" || !Number.isFinite(usd) || usd <= 0) return [];
+  return ["--max-budget-usd", usd < 0.0001 ? "0.0001" : String(Number(usd.toFixed(4)))];
+}
+
+/**
  * A spawn's MCP surface is EXACTLY what it declares — the UNCONDITIONAL containment flags. Emits
  * `--strict-mcp-config` ALWAYS, plus one `--mcp-config <path>` per declared mount. Declaring nothing
  * therefore means "no MCP servers at all", not "whatever the host happens to be logged into".

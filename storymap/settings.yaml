@@ -5,6 +5,16 @@ autorun:
   resumeOnBoot: true
   maxConcurrent: 6
   noProgressMax: 3
+  # DISJUNTOR DE CUSTO POR RUN — todo run headless nasce com `claude --max-budget-usd <n>`
+  # (runner/run-budget.ts). Ausente ⇒ a tabela por skill, max(2×p90, p99) do custo histórico
+  # (harness-do 23.8 … harness-capture 2.6; qualquer outra 8). Um número vale para toda skill, um mapa
+  # sobrescreve só as skills nomeadas, 0 desliga. Env AGILEHARNESS_AUTORUN_MAX_BUDGET_USD vence.
+  # NÃO é ritmo: é contra run desembestado. Um run cortado vira `budget-cut` (árvore preservada, sem
+  # resume, finding no card); dois cortes seguidos retêm o card para decisão humana.
+  # maxBudgetUSD: { harness-do: 30 }
+  # O mesmo disjuntor nas superfícies autônomas FORA do engine (defaults 2 / 2 / 4 / 2; 0 desliga).
+  # O chat interativo do operador não tem teto por desenho.
+  # surfaceMaxBudgetUSD: { peerReview: 2, resolutionJudge: 2, deployAgent: 4, smartCapture: 2 }
   timeouts:
     fastMs: 1800000
     doMs: 7200000
@@ -153,6 +163,10 @@ orchestrator:
     debounceSeconds: 45
     cooldownMinutes: 5
     enabled: true
+  # A contenção de CADA tick do copiloto: teto de turnos, de dinheiro e relógio de parede (SIGKILL).
+  # Defaults 40 / US$ 4 / 12 min (abaixo do TTL de 20 min do lease). Só o dinheiro aceita 0 (desliga);
+  # um tick morto pelo relógio é cobrado no orçamento do dia pelo teto, marcado como estimado.
+  # tick: { maxTurns: 40, maxBudgetUSD: 4, timeoutMinutes: 12 }
 mcpTokens:
   - tokenEnv: AGILEHARNESS_MCP_TOKEN_ORCH
     level: orch
