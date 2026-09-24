@@ -31,6 +31,8 @@ import type { BoardDeployConfig } from "@/lib/storymap/types";
 // (`/root/.bun/bin/bun`) e passa pela régua declarado > PATH > recusa. Ver host-tools.ts.
 import { quotePathForShell, resolveHostTool } from "./host-tools";
 import {
+  composedFaceFiles,
+  composedFacePrefixes,
   composedFaceTarget,
   deployPkgForPackage,
   productDeployTargets,
@@ -38,6 +40,12 @@ import {
   touchesComposedFace,
   type ProductDeployRegistry,
 } from "./product-deploy";
+// O PREFLIGHT DE FRESCOR (deploy-freshness.ts): todo deploy de produto que este módulo lança passa por ele
+// ANTES do registry — e o registry exige a autorização que só ele cunha. O escopo de sujeira é o MESMO que a
+// promoção leva (release-scope.ts), para "o que sobe" e "o que tem de estar commitado" serem uma régua só.
+import { checkDeployFreshness, type DeployFreshnessRequest, type DeployFreshnessVerdict, type FreshnessRefusalCode } from "./deploy-freshness";
+import { releaseCodePrefixes } from "./release-scope";
+import type { DeployFailureDetail } from "./deploy-revert";
 // story-dlsxfj (3ª passada) — a RÉGUA dos comandos declarados em board-data saiu daqui para um módulo PURO
 // e sem imports (`deploy-command-guard.ts`). Não foi arrumação: o executor do TERCEIRO campo declarado no
 // MESMO bloco `deploy:` (`canaryCommand`, em runner/face-probe.ts) não pode importar ESTE arquivo — o
@@ -96,6 +104,19 @@ const defaultSettle: DeploySettleFn = async (board, cardId, opts) => {
   return settleDeploySuccess(board, cardId, opts);
 };
 
+/** DI seam do PREFLIGHT DE FRESCOR (testes injetam um veredito; o default é o real, sobre o `exec` do deploy). */
+export type DeployFreshnessGate = (req: DeployFreshnessRequest) => Promise<DeployFreshnessVerdict>;
+
+/** DI seam do revert quando a FACE encadeada é recusada pelo preflight — minutos depois de `deployBoard` ter
+ *  voltado, então não há chamador para devolver a recusa. Default: import dinâmico de deploy-revert (o mesmo
+ *  padrão do `defaultSettle`: deploy-revert puxa a cascata, e um import estático fecharia um ciclo). */
+export type DeployRefusalRevertFn = (board: string, cardId: string, detail: DeployFailureDetail) => Promise<void>;
+
+const defaultRefusalRevert: DeployRefusalRevertFn = async (board, cardId, detail) => {
+  const { revertCardOnDeployFailure } = await import("./deploy-revert");
+  await revertCardOnDeployFailure(board, cardId, detail);
+};
+
 export interface DeployResult {
   /** the deploy was dispatched (the detached unit started / the product orch-deploy kicked off) */
   fired: boolean;
@@ -135,6 +156,15 @@ export interface DeployResult {
    * é lida) é o que a torna VISÍVEL sem torná-la fatal — nenhuma autonomia é perdida.
    */
   refusedPublishSteps?: { command: string; refusal: string }[];
+  /**
+   * O PREFLIGHT DE FRESCOR recusou este deploy (deploy-freshness.ts) — NADA foi lançado. Presente só na recusa.
+   *
+   * Existe como campo próprio (e não só como `reason`) porque o efeito que chamou (`fireDeployBoard`) tem de
+   * tratá-la como FALHA de publicação — devolver o card para Liberar com o finding que diz o que fazer —, e
+   * não como o "nada disparou" de um board sem alvo, cujo caminho tenta um settle de card sem código e
+   * avançaria para "No ar" algo que não foi publicado.
+   */
+  freshnessRefused?: { code: FreshnessRefusalCode; reason: string };
 }
 
 /** Opts for {@link buildSelfDeployScript} — kept explicit so the builder stays PURE and unit-testable. */
@@ -373,8 +403,38 @@ export async function deployBoard(opts: {
    *  Injetável pela mesma razão que `exec` e `deployTargets` já são: sem isto, todo caso que exercita
    *  o self-deploy passaria a depender da árvore em que a suíte roda. */
   toolPackageDir?: string;
+  /**
+   * O ESCOPO do deploy para o preflight de frescor — onde uma mudança não commitada RECUSA a publicação. É o
+   * escopo da promoção do board (`releaseCodePrefixes`: `package` + `sharedPackages` + `deploy.surfaces`, com o
+   * fallback global), threaded por `fireDeployBoard`, que tem o board inteiro na mão. Ausente ⇒ derivado aqui
+   * do que este módulo recebe (`package` + superfícies), e vazio ⇒ o repositório inteiro (fail-closed).
+   */
+  deployScope?: readonly string[];
+  /** DI: o preflight de frescor. Ausente ⇒ o real (`checkDeployFreshness`) sobre `exec`. */
+  freshness?: DeployFreshnessGate;
+  /** DI: o revert do card quando a face encadeada é recusada pelo preflight (default: deploy-revert). */
+  revertOnRefusal?: DeployRefusalRevertFn;
 }): Promise<DeployResult> {
   const { exec, repoRoot, boardPackage } = opts;
+  // ── O PREFLIGHT DE FRESCOR — antes de QUALQUER deploy de produto lançado daqui (declarado, legado, face).
+  // A recusa não lança: vira `freshnessRefused` e o efeito devolve o card pelo caminho de falha de deploy.
+  const freshness: DeployFreshnessGate =
+    opts.freshness ?? ((req) => checkDeployFreshness(req, { exec }));
+  const deployScope = opts.deployScope ?? releaseCodePrefixes({ package: boardPackage, deploy: opts.boardDeploy }, []);
+  const liveShaCommands = [opts.boardDeploy?.liveShaCommand];
+  const refusedByFreshness = (
+    base: Pick<DeployResult, "tool" | "pkg">,
+    v: Extract<DeployFreshnessVerdict, { ok: false }>,
+  ): DeployResult => ({
+    ...base,
+    fired: false,
+    reason: `deploy RECUSADO pelo preflight de frescor (nada foi executado) — ${v.reason}`,
+    freshnessRefused: { code: v.code, reason: v.reason },
+  });
+  // O preflight AGUARDA (fetch com teto de minuto): o `isRunning` checado antes dele pode ter virado enquanto
+  // media — outro caminho disparou o mesmo alvo. Re-checar depois é o que mantém o registry idempotente.
+  const startedMeanwhile = (registry: ProductDeployRegistry, key: string, base: Pick<DeployResult, "tool" | "pkg">): DeployResult | null =>
+    registry.isRunning(key) ? { ...base, fired: false, reason: `deploy de ${key} já em andamento — veja deploy_status` } : null;
 
   // ── Deploy agnóstico (D-AG1/D-AG2/D-AG3) — a DECLARED descriptor wins over the package-derived
   // routing (declaring it is the board owner's explicit intent, config-authored like column triggers).
@@ -424,7 +484,13 @@ export async function deployBoard(opts: {
       // serviço para dentro de um argumento (`"$AGILEHARNESS_MCP_TOKEN"`). Citando palavra por palavra, o shell
       // recebe exatamente a argv que foi autorizada — o comando declarado roda igual, sem expansão nenhuma.
       const authorizedCommand = quoteArgv(verdict.argv);
-      const job = registry.start(opts.board, ctx, { kind: "shell", command: authorizedCommand });
+      // O preflight vem DEPOIS da régua do comando (config inválida é config inválida, não "checkout velho")
+      // e ANTES do registry — que de qualquer forma não lançaria sem a autorização que só ele cunha.
+      const fresh = await freshness({ target: opts.board, repoRoot, scope: deployScope, liveShaCommands, label: `board ${opts.board}` });
+      if (!fresh.ok) return refusedByFreshness({ tool }, fresh);
+      const meanwhile = startedMeanwhile(registry, opts.board, { tool });
+      if (meanwhile) return meanwhile;
+      const job = registry.start(opts.board, fresh.clearance, ctx, { kind: "shell", command: authorizedCommand });
       return {
         fired: true,
         tool,
@@ -441,6 +507,12 @@ export async function deployBoard(opts: {
     if (!description) {
       return { fired: false, tool, reason: "deploy.kind=agent sem `description` no board.yaml — descritor inválido, nada disparado" };
     }
+    // O agente publica A PARTIR deste checkout tanto quanto o comando — a mesma pré-condição, e ANTES de
+    // assinar o settle abaixo (uma recusa não pode deixar um assinante órfão no registry).
+    const fresh = await freshness({ target: opts.board, repoRoot, scope: deployScope, liveShaCommands, label: `board ${opts.board}` });
+    if (!fresh.ok) return refusedByFreshness({ tool }, fresh);
+    const meanwhile = startedMeanwhile(registry, opts.board, { tool });
+    if (meanwhile) return meanwhile;
     if (ctx) {
       // D-AG4 — THE PROOF SEAM, subscribed BEFORE start() (the face-chain precedent above) so the settle
       // is never missed; one-shot. On ok+liveSha the agent's CLAIM becomes the measured `deployedShaFor`
@@ -460,7 +532,7 @@ export async function deployBoard(opts: {
         );
       });
     }
-    const job = registry.start(opts.board, ctx, {
+    const job = registry.start(opts.board, fresh.clearance, ctx, {
       kind: "agent",
       board: opts.board,
       cardId: opts.cardId,
@@ -479,6 +551,10 @@ export async function deployBoard(opts: {
   }
 
   if (boardPackage === TOOL_PACKAGE_REL) {
+    // ISENÇÃO DECLARADA do preflight de frescor (deploy-freshness.ts): isto não é deploy de PRODUTO. Ele
+    // reconstrói o pacote da FERRAMENTA que está rodando (e só quando a árvore declarada É a que está no ar —
+    // a régua logo abaixo), e a ferramenta se atualiza pelo canal de release dela. O censo
+    // (deploy-freshness-chokepoint.test.ts) registra esta isenção por nome.
     // ── A RÉGUA DO SELF-DEPLOY: "este board É a ferramenta que está rodando" ────────────────────────
     // Antes ela era "o caminho do pacote tem este nome", e as duas leituras coincidiam enquanto a
     // ferramenta morava DENTRO do repositório que ela opera. Elas divergem no instante em que o serviço
@@ -588,6 +664,17 @@ export async function deployBoard(opts: {
     if (registry.isRunning(pkg)) {
       return { fired: false, tool: "orch-deploy", pkg, reason: `deploy de ${pkg} já em andamento — veja deploy_status` };
     }
+    // O PREFLIGHT, antes de assinar o encadeamento da face abaixo (uma recusa não deixa assinante órfão).
+    const fresh = await freshness({
+      target: pkg,
+      repoRoot,
+      scope: deployScope,
+      liveShaCommands,
+      label: opts.board ? `board ${opts.board}` : `alvo ${pkg}`,
+    });
+    if (!fresh.ok) return refusedByFreshness({ tool: "orch-deploy", pkg }, fresh);
+    const meanwhile = startedMeanwhile(registry, pkg, { tool: "orch-deploy", pkg });
+    if (meanwhile) return meanwhile;
     // story-efwo30 — `orch-deploy <target>` ships the backend but NOT the merged web face (no hosting unit
     // in any manifest, by design — ADR-061). When the release promoted a diff that touched a face path (its
     // own web/, or the shared SDK), ALSO publish the face via the deployment's DECLARED face recipe. Chain
@@ -606,17 +693,46 @@ export async function deployBoard(opts: {
     const alvoDaFace = composedFaceTarget();
     const chainComposedFace = !!alvoDaFace && touchesComposedFace(opts.changedFiles ?? []) && !!(opts.board && opts.cardId);
     if (chainComposedFace) {
+      const face = alvoDaFace!;
+      const board = opts.board!;
+      const cardId = opts.cardId!;
+      const revert = opts.revertOnRefusal ?? defaultRefusalRevert;
       const unsub = registry.onDone((ev) => {
         if (ev.pkg !== pkg || ev.board !== opts.board || ev.cardId !== opts.cardId) return;
         unsub();
         // idempotent: if a face deploy is already in flight (another board just fired it) skip — the merged
         // build is global, so one run publishes every board's staged web change.
-        if (ev.ok && !registry.isRunning(alvoDaFace!)) {
-          registry.start(alvoDaFace!, { board: opts.board!, cardId: opts.cardId! });
-        }
+        if (!ev.ok || registry.isRunning(face)) return;
+        // A FACE É OUTRO DEPLOY, com o seu PRÓPRIO preflight — minutos depois do backend: o upstream pode ter
+        // andado nesse meio-tempo (o dono publicou de outra máquina), e a autorização do backend é de uso
+        // único e de outro alvo. Escopo = o do board ⊕ o que compõe a face. SEM `liveShaCommand`: o comando
+        // do board descreve o alvo do BOARD, não a face — usá-lo aqui mediria outra coisa (dito, não fingido).
+        // Recusada, a face NÃO sobe e o card volta para Liberar com o motivo (o backend já está no ar e a
+        // prova do settle segue exigindo a face — nunca "No ar" meio publicado).
+        void (async () => {
+          const faceFresh = await freshness({
+            target: face,
+            repoRoot,
+            // escopo VAZIO significa "o repositório inteiro" — somar a face a ele o ESTREITARIA
+            scope: deployScope.length === 0 ? [] : [...deployScope, ...composedFacePrefixes(), ...composedFaceFiles()],
+            label: `face ${face} (board ${board})`,
+          });
+          if (!faceFresh.ok) {
+            await revert(board, cardId, { pkg: face, phase: "freshness", reason: faceFresh.reason });
+            return;
+          }
+          if (registry.isRunning(face)) return; // outro board a disparou enquanto medíamos
+          registry.start(face, faceFresh.clearance, { board, cardId });
+        })().catch((err) =>
+          console.error(`[deploy ${board}/${cardId}] encadeamento da face falhou:`, err instanceof Error ? err.message : err),
+        );
       });
     }
-    const job = registry.start(pkg, opts.board && opts.cardId ? { board: opts.board, cardId: opts.cardId, expectWork: opts.expectWork } : undefined);
+    const job = registry.start(
+      pkg,
+      fresh.clearance,
+      opts.board && opts.cardId ? { board: opts.board, cardId: opts.cardId, expectWork: opts.expectWork } : undefined,
+    );
     return {
       fired: true,
       tool: "orch-deploy",

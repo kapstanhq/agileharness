@@ -35,8 +35,11 @@ export interface DeployFailureDetail {
    *   - "deploy-noop" → the deploy settled exit-0 but did NO work (~0s, no drift) → code not actually live.
    *   - "face-stale"  → the face deploy REPORTED success but the canary saw mosaico.app still serving an OLD
    *                     x-build-sha (silent-CDN class): the shipped bundle is not actually live (P0/VERIFY).
-   *   - "deploy" (default) → the orch-deploy exited non-zero. */
-  phase?: "release" | "deploy" | "deploy-noop" | "face-stale" | "self-deploy";
+   *   - "deploy" (default) → the orch-deploy exited non-zero.
+   *   - "freshness"   → o PREFLIGHT DE FRESCOR (deploy-freshness.ts) recusou o deploy ANTES de executá-lo: o
+   *                     checkout de onde ele rodaria não carrega o que está no ar (atrás do upstream, sujo no
+   *                     escopo, sem upstream, sha no ar não-ancestral…). Nada foi publicado. */
+  phase?: "release" | "deploy" | "deploy-noop" | "face-stale" | "self-deploy" | "freshness";
   /** story-5vv8n1 — the underlying reason (e.g. the promote result's reason) surfaced into the finding. */
   reason?: string;
   /** WS1.1 — tail of the self-deploy build/restart log (already base64-decoded by the webhook route), woven
@@ -119,6 +122,21 @@ export function buildDeployFailureFinding(detail: DeployFailureDetail, today: st
         `propagação do CDN/edge para a superfície citada. Se servido e publicado seguem divergentes após a ` +
         `republicação, o problema está na publicação/CDN, não no código — NÃO adianta reentrar no Deploy em ` +
         `loop, é o mesmo artefato sendo republicado.`,
+    };
+  }
+  if (detail.phase === "freshness") {
+    // O deploy NÃO RODOU: o preflight recusou antes. O que o operador precisa ler é o MOTIVO medido — ele já
+    // traz o remédio ("N commits atrás de origin/main — git pull --ff-only", "arquivos sujos no escopo: …") —
+    // e a garantia de que produção não foi tocada. "Reentrar no Deploy" sozinho seria o conselho errado:
+    // sem resolver a causa, o mesmo preflight recusa de novo, pelo mesmo motivo (e é isso que impede laço).
+    return {
+      ...base,
+      title: "Deploy RECUSADO pelo preflight de frescor — nada foi publicado",
+      detail:
+        `O preflight de frescor recusou o deploy${detail.pkg ? ` de ${detail.pkg}` : ""} ANTES de executá-lo: ` +
+        `nada foi publicado e produção segue exatamente como estava.${because} O card foi devolvido para ` +
+        `Liberar em ${today}. RESOLVA o que o motivo pede no checkout de onde o serviço publica e só então ` +
+        `reentre no Deploy — reentrar sem resolver é recusado de novo, pelo mesmo motivo.`,
     };
   }
   if (detail.phase === "self-deploy") {

@@ -65,6 +65,9 @@ export interface ReleaseOutcome {
   /** Quem segura a publicação, quando `outcome === "concurrent-work"` — ver `PromoteResult.clashes`. É o
    *  que deixa a Entrega apontar a LINHA do bloqueador em vez de procurar o uuid dentro da frase. */
   heldBy?: string[];
+  /** O release aterrissou, mas o DEPLOY foi recusado pelo preflight de frescor (deploy-freshness.ts): o motivo.
+   *  Presente só nesse caso — preenchido por `firePromoteAndDeploy`, nunca por `classifyRelease`. */
+  deployRefused?: string;
 }
 
 /**
@@ -546,8 +549,28 @@ export async function fireDeployBoard(
     changedFiles,
     boardDeploy: config.deploy,
     releasedSha,
+    // O escopo do PREFLIGHT DE FRESCOR é o da PROMOÇÃO deste board (release-scope.ts) — a mesma régua que
+    // decide o que sobe decide o que tem de estar commitado. Com o fallback global de quem não declara package.
+    deployScope: releaseCodePrefixes(config, loadRunnerConfig().autorun.staging?.codePrefixes ?? []),
   });
   console.log(`[deploy ${boardId}] ${result.fired ? `disparado (${result.tool})` : result.reason}`);
+  // O PREFLIGHT DE FRESCOR recusou: NADA foi publicado. É uma FALHA de publicação, não o "nada a disparar" de
+  // um board sem alvo — então segue o caminho de falha de deploy (deploy-revert): o card volta para Liberar
+  // com o finding que diz exatamente o que fazer (pull, commit, …), sem `mode: fix` (não é defeito de código)
+  // e sem autorun (Liberar é parada humana) — reentrar sem resolver recusa de novo, então não há laço. E NÃO
+  // pode cair no settle de baixo, que avançaria um card sem código para "No ar" sem nada ter subido.
+  if (result.freshnessRefused) {
+    if (cardId) {
+      await revertCardOnDeployFailure(boardId, cardId, {
+        pkg: result.pkg,
+        phase: "freshness",
+        reason: result.freshnessRefused.reason,
+      });
+    } else {
+      console.error(`[deploy ${boardId}] preflight de frescor recusou um deploy SEM card — nada publicado, nada revertido`);
+    }
+    return result;
+  }
   // A outra metade da evidência (deploy-reconcile.ts): QUAIS alvos precisam subir para este card estar vivo.
   // Quem os NOMEIA é a camada de deploy (result.targets) — este módulo é agnóstico de produto (agnostic-lint) e
   // só registra o que lhe é devolvido. Sem este carimbo a reconciliação teria de adivinhar as unidades
@@ -700,7 +723,11 @@ export async function firePromoteAndDeploy(
     }
     return release;
   }
-  await fireDeployBoard(boardId, cardId, { expectWork: release.expectWork, changedFiles: release.changedFiles });
+  const deploy = await fireDeployBoard(boardId, cardId, { expectWork: release.expectWork, changedFiles: release.changedFiles });
+  // A promoção aterrissou, mas o deploy foi RECUSADO pelo preflight de frescor: o código está em main e NÃO
+  // no ar. Quem lê este retorno (a fila de publicação) tem de saber — senão carimba `published` num deploy
+  // que nunca rodou (a mesma mentira que o `ReleaseOutcome` existe para não contar).
+  if (deploy?.freshnessRefused) return { ...release, deployRefused: deploy.freshnessRefused.reason };
   return release;
 }
 

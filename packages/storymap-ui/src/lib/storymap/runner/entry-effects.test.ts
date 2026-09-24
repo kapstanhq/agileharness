@@ -488,6 +488,53 @@ describe("fireDeployBoard — deploy-truth: watchdog em todo disparo + settle im
   });
 });
 
+// O PREFLIGHT DE FRESCOR recusou o deploy (deploy-freshness.ts): NADA foi publicado. É uma FALHA de publicação
+// — o card volta para Liberar pelo caminho de falha de deploy, com o motivo —, e NÃO o "nada disparou" de um
+// board sem alvo: aquele caminho tenta o settle imediato, que avançaria um card sem código para "No ar".
+describe("fireDeployBoard — recusa do preflight de frescor segue o caminho de FALHA de deploy", () => {
+  const recusado = {
+    fired: false,
+    tool: "orch-deploy",
+    pkg: "acmeapp",
+    reason: "deploy RECUSADO pelo preflight de frescor (nada foi executado) — 4 commit(s) ATRÁS de origin/main",
+    freshnessRefused: { code: "behind", reason: "o checkout está 4 commit(s) ATRÁS de origin/main" },
+  } as DeployResult;
+
+  it("reverte o card com phase `freshness` e o motivo — sem settle imediato, sem carimbo de disparo", async () => {
+    mockDeploy.mockResolvedValueOnce(recusado);
+    await fireDeployBoard("acme", "s1");
+    expect(mockRevert).toHaveBeenCalledWith("acme", "s1", {
+      pkg: "acmeapp",
+      phase: "freshness",
+      reason: "o checkout está 4 commit(s) ATRÁS de origin/main",
+    });
+    expect(vi.mocked(settleDeploySuccess)).not.toHaveBeenCalled();
+    expect(vi.mocked(updateCardOnDisk)).not.toHaveBeenCalled(); // nem deployFiredAt: nada foi disparado
+  });
+
+  it("o escopo do preflight é o da PROMOÇÃO do board (package + sharedPackages), threaded ao deployBoard", async () => {
+    mockReadBoardConfig.mockResolvedValueOnce({
+      package: "packages/acmeapp",
+      sharedPackages: ["packages/acme-shared"],
+      statuses: [],
+    } as never);
+    mockDeploy.mockResolvedValueOnce({ fired: true, tool: "orch-deploy", pkg: "acmeapp" } as DeployResult);
+    await fireDeployBoard("acme", "s1");
+    expect(mockDeploy).toHaveBeenCalledWith(
+      expect.objectContaining({ deployScope: ["packages/acmeapp/", "packages/acme-shared/"] }),
+    );
+  });
+
+  it("firePromoteAndDeploy: promoveu mas o deploy foi recusado ⇒ o retorno CARREGA a recusa (a fila não carimba `published`)", async () => {
+    mockPromote.mockResolvedValue(promoteResult({ promoted: true, commit: "abc1234", outcome: "promoted" }));
+    mockDeploy.mockResolvedValueOnce(recusado);
+    const r = await firePromoteAndDeploy("acme", "story-fresh");
+    expect(r.revert).toBe(false); // a promoção aterrissou…
+    expect(r.deployRefused).toBe("o checkout está 4 commit(s) ATRÁS de origin/main"); // …e o deploy não rodou
+    expect(mockRevert).toHaveBeenCalledWith("acme", "story-fresh", expect.objectContaining({ phase: "freshness" }));
+  });
+});
+
 // 1.5 — a 2nd self-deploy that collides with the fixed unit is parked; the in-flight deploy's settle
 // re-dispatches it. redispatchPendingSelfDeploy runs at the settle over injected deps (no disk/systemd).
 describe("redispatchPendingSelfDeploy — re-dispatch the parked self-deploy at the settle (1.5)", () => {

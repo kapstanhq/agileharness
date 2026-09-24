@@ -99,10 +99,14 @@ import { resolveCardRoute } from "@/lib/storymap/runner/config";
 // WS-6.5 — the deterministic "what next?" ranking (pure) + its IO half.
 import { collectWorkCandidates, excludedReason, rankWorkCandidates } from "@/lib/storymap/runner/suggest-work";
 import { getCardClaims, isClaimLive } from "@/lib/storymap/runner/claims";
-import { readBoardConfig, readCard, readCards } from "@/lib/storymap/repo";
+import { listBoards, readBoardConfig, readCard, readCards } from "@/lib/storymap/repo";
 // Deploy of a product app: the SINGLE source lives in the runner (also used by the onEnter deploy-board
 // effect). The MCP `deploy`/`deploy_status` tools reuse the SAME registry — no parallel implementation.
 import { productDeployTargets, getProductDeploy } from "@/lib/storymap/runner/product-deploy";
+// O PREFLIGHT DE FRESCOR — a tool crua publica do MESMO checkout de runtime que o pipeline, então passa pela
+// MESMA pré-condição (e o registry não lançaria sem a autorização que só ele cunha).
+import { checkDeployFreshness, legacyTargetFreshnessInputs } from "@/lib/storymap/runner/deploy-freshness";
+import { releaseCodePrefixes } from "@/lib/storymap/runner/release-scope";
 import { resolvedClaudeBin } from "../runner/claude-bin";
 
 const pexec = promisify(execFile);
@@ -1605,7 +1609,30 @@ export function registerDevTools(server: McpServer): void {
       }
       const reg = getProductDeploy();
       if (reg.isRunning(pkg)) return fail(`Já há um deploy de ${pkg} em andamento — veja deploy_status.`);
-      const job = reg.start(pkg);
+      // O PREFLIGHT DE FRESCOR. Sem card, então sem revert: a recusa volta a quem chamou, com o remédio. O
+      // escopo é o de promoção dos boards que publicam este alvo (ou `packages/<alvo>/` sem board), e o
+      // `liveShaCommand` é o que ESSES boards declaram — a tool crua não inventa o seu.
+      const staging = loadRunnerConfig().autorun.staging?.codePrefixes ?? [];
+      const boards = await Promise.all(
+        (await listBoards().catch(() => [])).map(async ({ id }) => {
+          const c = await readBoardConfig(id).catch(() => null);
+          return c ? { package: c.package, scope: releaseCodePrefixes(c, staging), liveShaCommand: c.deploy?.liveShaCommand } : null;
+        }),
+      );
+      const { scope, liveShaCommands } = legacyTargetFreshnessInputs(
+        pkg,
+        boards.filter((b): b is NonNullable<typeof b> => b !== null),
+      );
+      const fresh = await checkDeployFreshness(
+        { target: pkg, repoRoot: findRepoRoot(), scope, liveShaCommands, label: `mcp deploy ${pkg}` },
+        { exec: defaultExec },
+      );
+      if (!fresh.ok) {
+        return fail(`Deploy de ${pkg} RECUSADO pelo preflight de frescor — nada foi executado. ${fresh.reason}.`);
+      }
+      // o preflight aguardou (fetch): outro caminho pode ter disparado o mesmo alvo enquanto ele media
+      if (reg.isRunning(pkg)) return fail(`Já há um deploy de ${pkg} em andamento — veja deploy_status.`);
+      const job = reg.start(pkg, fresh.clearance);
       return json({
         ok: true,
         deploying: pkg,
@@ -1613,6 +1640,8 @@ export function registerDevTools(server: McpServer): void {
         pid: job.pid,
         startedAt: job.startedAt,
         hint: "Acompanhe com deploy_status (o deploy roda em background, leva minutos).",
+        // o que o preflight MEDIU (ou, no escape humano, o aviso de que nada foi medido)
+        freshness: fresh.summary,
         // WS-10.3: torna o footgun VISÍVEL no ponto de uso. Esta tool crua roda `orch-deploy` SEM
         // `promoteStageToMain` e SEM o face-chain (mosaico.app/...). Para PUBLICAR UM CARD do AgileHarness, o
         // caminho correto é o pipeline (move_card → step `deploy` = promote-and-deploy + face-chain); use
