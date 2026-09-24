@@ -7,6 +7,8 @@ import { CLAIM_REFUSED_MARKER, RunnerEngine, brandbookPathFor, buildClaudeComman
 import type { DeltaLandedFn, SplitLandedness } from "./convergence";
 import { BOARD_DATA_SKILL_INVARIANTS, CODE_SKILL_INVARIANTS, systemPromptFor } from "./skill-registry";
 import { DEFAULT_RUNNER_SETTINGS } from "./config";
+import { tokenizeCommandLine } from "./autonomy-sandbox";
+import { DEFAULT_CREDENTIAL_DENY_RULES } from "./credential-deny";
 import { getRunnerRegistry } from "./registry";
 import { findRepoRoot, runnerStateDir } from "@/lib/storymap/paths";
 import { CardClaims, memoryClaimStore, setCardClaimsSingletonForTests, type CardClaim, type CardClaimsPort } from "./claims";
@@ -784,6 +786,45 @@ describe("RunnerEngine.runSkill — a fronteira chega ao comando executado", () 
     ).toBe(true);
     // E, em qualquer postura, a flag perigosa não pode estar lá.
     expect(cmd).not.toContain("--dangerously-skip-permissions");
+  });
+
+  // ── A NEGAÇÃO NATIVA DE CREDENCIAL CHEGA AO COMANDO — em TODO tier ───────────────────────────────
+  // O `Read` nativo roda no processo do CLI, fora de qualquer jaula de SO. Os tiers sem sandbox
+  // (`write`/`orch`/`ro`) não tinham negação NENHUMA; o `full` só negava ao Bash. Estas provas leem os
+  // `--settings` do comando que o spawn RECEBEU e exigem as regras `permissions.deny` lá dentro.
+  const settingsDoComando = (cmd: string): Array<{ file: string; deny: string[] }> => {
+    const t = tokenizeCommandLine(cmd);
+    const out: Array<{ file: string; deny: string[] }> = [];
+    for (let i = 0; i < t.length - 1; i++) {
+      if (t[i] !== "--settings") continue;
+      const file = t[i + 1]!;
+      const json = JSON.parse(readFileSync(file, "utf8")) as { permissions?: { deny?: string[] } };
+      out.push({ file, deny: json.permissions?.deny ?? [] });
+    }
+    return out;
+  };
+
+  it("tier SEM sandbox (harness-grill, acceptEdits) ⇒ o comando carrega um --settings que nega as credenciais", async () => {
+    const { engine, cmds } = makeEngine(async () => null);
+    engine.runSkill("acme", "deny-1", "harness-grill", { id: "grill", name: "Dúvidas" });
+    await flush();
+    expect(cmds[0], "nenhum comando chegou ao spawn — o run não nasceu").toBeDefined();
+    const settings = settingsDoComando(cmds[0]!);
+    expect(settings, `sem --settings: o Read nativo deste tier lê ~/.aws\n${cmds[0]}`).toHaveLength(1);
+    for (const r of DEFAULT_CREDENTIAL_DENY_RULES) expect(settings[0]!.deny).toContain(r);
+    expect(settings[0]!.deny).toContain("Read(~/.ssh/**)");
+    expect(settings[0]!.deny).toContain(`Read(/${path.join(runnerStateDir(), "auth-token")})`);
+  });
+
+  it("tier full (harness-do) ⇒ contido OU rebaixado, o --settings efetivo nega as credenciais", async () => {
+    const { engine, cmds } = makeEngine(async () => null);
+    engine.runSkill("acme", "deny-2", "harness-do", codeDef);
+    await flush();
+    expect(cmds[0], "nenhum comando chegou ao spawn — o run não nasceu").toBeDefined();
+    const settings = settingsDoComando(cmds[0]!);
+    // contido: UM --settings (a cerca, com as regras dentro); rebaixado: UM (o de negação)
+    expect(settings).toHaveLength(1);
+    for (const r of DEFAULT_CREDENTIAL_DENY_RULES) expect(settings[0]!.deny).toContain(r);
   });
 
   it("um --settings a MAIS (extraArgs do operador) impede o run em vez de deixá-lo nascer", async () => {

@@ -49,7 +49,14 @@ import { appendTransition } from "./transitions";
 // para `resolveEnginePosture` e apareciam SÓ na linha de import. Não é higiene cosmética — um import
 // morto faz a superfície pública do módulo parecer maior do que é, e um símbolo que "tem chamador de
 // produção" é exatamente o que impede alguém de apagá-lo depois.
-import { buildSpawnFlags, resolveEnginePosture, spawnContidoCmd, suporteDoHost, unsandboxedFullAllowed } from "./autonomy-sandbox";
+import {
+  buildSpawnFlags,
+  denySettingsFileFor,
+  resolveEnginePosture,
+  spawnContidoCmd,
+  suporteDoHost,
+  unsandboxedFullAllowed,
+} from "./autonomy-sandbox";
 import { detectSystemd, runScopeUnit, stopRunScope, wrapWithScope, type StopScopeResult, type SystemdCheck } from "./governor";
 import { devServerPidFile, reapDevServerPid, type ReapPidResult } from "./dev-server";
 import { createNdjsonParser, extractFinalResult, extractResultUsage, extractSpecialistDelegations, extractToolNames, isMaxTurnsResult, summarizeStreamEvent, type RunResult } from "./stream-json";
@@ -2712,6 +2719,11 @@ export class RunnerEngine {
           streamFlags,
           policyArgs,
           extraArgs: cfg.autorun.extraArgs,
+          // A negação NATIVA de credencial (`permissions.deny`) para os tiers SEM sandbox — `write`,
+          // `orch`, `ro`, o rebaixado e a válvula. Antes eles não tinham negação nenhuma: o `Read` nativo
+          // de um run de enriquecimento lia `~/.aws` se um card injetado pedisse. `sandboxed` leva as
+          // regras dentro do próprio settings de cerca (⇒ null aqui, e o portão segue vendo UM --settings).
+          denySettingsFile: denySettingsFileFor(posture),
         });
         const flags = spawnFlags.flags;
         escapeHatchNeedsRootBypass =

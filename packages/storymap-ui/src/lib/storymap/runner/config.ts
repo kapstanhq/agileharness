@@ -432,11 +432,29 @@ export function coerceRunnerSettings(raw: unknown): RunnerSettings {
       sessions: {
         maxWorktrees: asPosInt(ss.maxWorktrees) ?? d.autorun.sessions.maxWorktrees,
       },
+      // Contenção declarada pelo adotante (ver o tipo). Coerção EXPLÍCITA e só de string não-vazia: um
+      // item não-string virando "[object Object]" seria uma negação que não nega nada e PARECE declarada.
+      // Ausente ⇒ a chave não existe — o default (só as negações embutidas) é byte-idêntico ao de hoje.
+      ...(coerceSandboxDecl(a.sandbox) ? { sandbox: coerceSandboxDecl(a.sandbox)! } : {}),
     },
     columnDefaults,
     ...(coerceDeploySettings(r.deploy) ? { deploy: coerceDeploySettings(r.deploy) } : {}),
     orchestrator: coerceOrchestratorSettings(r.orchestrator, d.orchestrator!),
     ...(coerceMcpTokens(r.mcpTokens) ? { mcpTokens: coerceMcpTokens(r.mcpTokens) } : {}),
+  };
+}
+
+/**
+ * `autorun.sandbox` → `{ denyReadGlobs }`, ou undefined quando não há lista declarada. Só entram strings
+ * não-vazias (aparadas); qualquer outra coisa é descartada em silêncio — ela nunca poderia ter negado nada.
+ * Exportada para o teste da coerção.
+ */
+export function coerceSandboxDecl(raw: unknown): { denyReadGlobs: string[] } | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const lista = (raw as Record<string, unknown>).denyReadGlobs;
+  if (!Array.isArray(lista)) return undefined;
+  return {
+    denyReadGlobs: lista.filter((x): x is string => typeof x === "string" && x.trim() !== "").map((x) => x.trim()),
   };
 }
 
@@ -857,6 +875,8 @@ export function applyEnvOverrides(s: RunnerSettings): RunnerSettings {
         thresholds: { ...s.autorun.scheduler.thresholds },
       },
       sessions: { ...s.autorun.sessions },
+      // Clone profundo quando PRESENTE, ausente quando ausente (mesma regra do `dataDerived` acima).
+      ...(s.autorun.sandbox ? { sandbox: { denyReadGlobs: [...s.autorun.sandbox.denyReadGlobs] } } : {}),
     },
     columnDefaults: { ...s.columnDefaults },
     deploy: s.deploy ? { ...s.deploy } : undefined,

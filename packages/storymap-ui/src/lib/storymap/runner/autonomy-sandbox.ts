@@ -29,11 +29,20 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { boardsDir, findRepoRoot, runnerStateDir } from "@/lib/storymap/paths";
+import { boardsDir, findRepoRoot, findToolPackageDir, runnerStateDir } from "@/lib/storymap/paths";
 import type { AutonomyTier } from "@/lib/storymap/types";
+import { loadRunnerConfig } from "./config";
+import {
+  CREDENTIAL_DENY_CARVE_OUTS,
+  DEFAULT_CREDENTIAL_DENY_RULES,
+  buildCredentialDenySettings,
+  credentialDenyRules,
+  resolveCredentialDenyGlobs,
+  toolEnvSecretPaths,
+} from "./credential-deny";
 
 /** O env que ESTE módulo consome — só as chaves que ele lê, não o `ProcessEnv` inteiro. Pedir menos torna
  *  a função testável sem fabricar um ambiente completo, e documenta a superfície real de configuração. */
@@ -225,6 +234,112 @@ export const HARNESS_CREDENTIAL_FILES = ["auth-token", "session-secret", "mcp-ha
 /** Os caminhos ABSOLUTOS a negar, resolvidos a partir do state dir REAL. */
 export function harnessCredentialPaths(stateDir: string): string[] {
   return HARNESS_CREDENTIAL_FILES.map((f) => path.join(stateDir, f));
+}
+
+// ── A NEGAÇÃO NATIVA (`permissions.deny`) — o que o sandbox do SO não alcança ──────────────────────────
+// `denyRead`/`credentials.files` acima viram mount do bwrap: contêm o BASH, não a ferramenta `Read` que
+// roda no processo do CLI (medido: vazamento em 3 de 4 e 1 de 3, ver `buildSandboxSettings`). As regras
+// de permissão alcançam o caminho nativo — e valem em TODO modo, inclusive no bypass. A lista e a sintaxe
+// moram em credential-deny.ts; aqui mora só o que depende do HOST: os segredos do próprio serviço, a
+// declaração do adotante e o arquivo que os spawns sem sandbox recebem.
+
+/**
+ * Os segredos do PRÓPRIO serviço que um run não pode ler: as credenciais do harness no state dir e os
+ * `.env*` do pacote da ferramenta (por onde o token MCP e o do operador chegam). O pacote da ferramenta
+ * pode não ser resolvível numa árvore exótica — aí só ele sai; os defaults e o state dir continuam.
+ */
+export function servicoSecretPaths(stateRoot: string, toolPackageDir: () => string = findToolPackageDir): string[] {
+  const out = harnessCredentialPaths(stateRoot);
+  try {
+    out.push(...toolEnvSecretPaths(toolPackageDir()));
+  } catch {
+    /* ferramenta não resolvível: os demais caminhos seguem negados */
+  }
+  return out;
+}
+
+/**
+ * O LEITOR de `autorun.sandbox.denyReadGlobs` (settings.yaml). Config ilegível ⇒ lista vazia: a
+ * declaração do adotante só ACRESCENTA, então perdê-la nunca remove um default — e derrubar o spawn por
+ * um settings.yaml quebrado trocaria contenção por indisponibilidade.
+ */
+export function declaredDenyReadGlobs(): string[] {
+  try {
+    return [...(loadRunnerConfig().autorun.sandbox?.denyReadGlobs ?? [])];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * As regras EFETIVAS de negação nativa deste host: defaults ⊕ segredos do serviço ⊕ declaração do
+ * adotante (settings.yaml) ⊕ `AGILEHARNESS_SANDBOX_DENY_READ`. Tudo injetável para o teste; em produção
+ * ninguém passa nada e cada fonte é lida onde mora.
+ */
+export function credentialDenyRulesDoHost(
+  deps: { env?: EnvLike; declared?: readonly string[]; stateRoot?: string; toolPackageDir?: () => string } = {},
+): string[] {
+  return credentialDenyRules(
+    resolveCredentialDenyGlobs({
+      env: deps.env ?? process.env,
+      declared: deps.declared ?? declaredDenyReadGlobs(),
+      serviceSecretPaths: servicoSecretPaths(deps.stateRoot ?? runnerStateDir(), deps.toolPackageDir),
+    }),
+  );
+}
+
+/**
+ * Grava o settings SÓ-DE-NEGAÇÃO (`{ permissions: { deny } }`) e devolve o caminho — o `--settings` dos
+ * spawns que NÃO carregam o settings de sandbox (tiers `write`/`orch`/`ro`, rebaixado, válvula de escape,
+ * captura inteligente).
+ *
+ * Endereçado por CONTEÚDO (`deny-<sha>.json`): o mesmo conjunto de regras é o mesmo arquivo para todo
+ * spawn, então não acumula um por run e dispensa poda (o prefixo não casa `sandbox-*`, de propósito). Um
+ * arquivo que já existe com os MESMOS bytes não é reescrito — reescrever truncaria o arquivo que o CLI de
+ * um run concorrente pode estar lendo naquele instante, e settings lido pela metade é settings ignorado.
+ * Quando precisa escrever, escreve num temporário e RENOMEIA (atômico no mesmo diretório).
+ *
+ * Mesma invariante de `writeSandboxSettingsFile`: nunca dentro da árvore do alvo; state dir indisponível
+ * cai no temp do SO em vez de deixar o spawn sem negação.
+ */
+export function writeCredentialDenySettingsFile(
+  rules: readonly string[],
+  dir: string = path.join(runnerStateDir(), "sandbox"),
+): string {
+  const bytes = serializeSandboxSettings(buildCredentialDenySettings(rules));
+  const nome = `deny-${createHash("sha256").update(bytes).digest("hex").slice(0, 16)}.json`;
+  const gravar = (alvoDir: string): string => {
+    mkdirSync(alvoDir, { recursive: true });
+    const file = path.join(alvoDir, nome);
+    try {
+      if (readFileSync(file, "utf8") === bytes) return file;
+    } catch {
+      /* ausente: escreve abaixo */
+    }
+    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+    writeFileSync(tmp, bytes, "utf8");
+    renameSync(tmp, file);
+    return file;
+  };
+  try {
+    return gravar(dir);
+  } catch {
+    return gravar(os.tmpdir());
+  }
+}
+
+/**
+ * O `--settings` de negação que um spawn SEM sandbox precisa — ou `null` quando a postura já o carrega
+ * (`sandboxed`: as regras vão DENTRO do settings de sandbox, porque o portão exige exatamente UM
+ * `--settings` ali) ou não spawna (`refused`).
+ */
+export function denySettingsFileFor(
+  posture: AutonomyPosture,
+  deps: { rules?: readonly string[]; write?: (rules: readonly string[]) => string } = {},
+): string | null {
+  if (posture.kind === "sandboxed" || posture.kind === "refused") return null;
+  const rules = deps.rules ?? credentialDenyRulesDoHost();
+  return (deps.write ?? writeCredentialDenySettingsFile)(rules);
 }
 
 /**
@@ -586,6 +701,12 @@ export interface SandboxSettingsOpts {
    */
   denyWrite?: readonly string[];
   weakerNested?: boolean;
+  /**
+   * As regras de `permissions.deny` que acompanham a cerca — a negação que alcança as ferramentas
+   * NATIVAS (ver credential-deny.ts). Ausente ⇒ os defaults (`DEFAULT_CREDENTIAL_DENY_RULES`); a postura
+   * de produção passa as do host (defaults ⊕ segredos do serviço ⊕ declaração do adotante).
+   */
+  permissionDeny?: readonly string[];
 }
 
 /** O objeto de settings que o CLI consome. PURO — o teste compara a forma sem tocar em disco. */
@@ -632,7 +753,12 @@ export function buildSandboxSettings(opts: SandboxSettingsOpts): Record<string, 
     },
   };
   if (opts.weakerNested) sandbox.enableWeakerNestedSandbox = true;
-  return { sandbox };
+  // ── A CAMADA QUE A CERCA DO SO NÃO É ─────────────────────────────────────────────────────────────
+  // Tudo acima contém o BASH. A ferramenta `Read` nativa roda no processo do CLI, fora da jaula, e só a
+  // camada de PERMISSÃO a alcança — daí `permissions.deny` no MESMO arquivo (o portão exige um único
+  // `--settings` nesta postura). O CLI também mescla essas regras na configuração do sandbox, então elas
+  // somam à negação do Bash em vez de competir com ela.
+  return { sandbox, permissions: { deny: [...(opts.permissionDeny ?? DEFAULT_CREDENTIAL_DENY_RULES)] } };
 }
 
 /**
@@ -675,9 +801,19 @@ export function buildSpawnFlags(input: {
   streamFlags?: readonly string[];
   policyArgs?: readonly string[];
   extraArgs?: readonly string[];
+  /**
+   * O settings SÓ-DE-NEGAÇÃO (`denySettingsFileFor`) para as posturas que não carregam o de sandbox.
+   * Numa postura `sandboxed` ele é IGNORADO de propósito: lá as regras moram dentro do settings da cerca,
+   * e um segundo `--settings` faria o portão abortar o run (o último vence no parsing).
+   */
+  denySettingsFile?: string | null;
 }): { flags: string[]; needsRootBypass: boolean } {
   const postureArgs: string[] = [];
   let needsRootBypass = false;
+  // A negação nativa de credencial — em TODA postura que spawna. `sandboxed` a leva no próprio settings.
+  if (input.posture.kind !== "sandboxed" && input.posture.kind !== "refused" && input.denySettingsFile) {
+    postureArgs.push("--settings", input.denySettingsFile);
+  }
   if (input.posture.kind === "sandboxed") {
     postureArgs.push("--settings", input.posture.settingsFile);
   } else if (input.posture.kind === "unsandboxed-escape") {
@@ -1015,6 +1151,31 @@ export function assertSettingsIsFence(
         `Run ABORTADO.`,
     );
   }
+  // ── A NEGAÇÃO NATIVA (hotfix de contenção) ───────────────────────────────────────────────────────
+  // Tudo acima contém o BASH; `permissions.deny` é o que alcança o `Read` nativo. Ancorado na CONSTANTE
+  // de módulo (`DEFAULT_CREDENTIAL_DENY_RULES`), pelo mesmo motivo do `DEFAULT_DENY_READ` logo acima: o
+  // lado esperado não é derivável pelo chamador, então mutar o argumento não move o alvo junto.
+  const deny = (parsed as { permissions?: { deny?: unknown } } | null)?.permissions?.deny;
+  const regras = new Set(Array.isArray(deny) ? deny.map(String) : []);
+  const regrasFaltando = DEFAULT_CREDENTIAL_DENY_RULES.filter((r) => !regras.has(r));
+  if (regrasFaltando.length > 0) {
+    throw new Error(
+      `[autonomy] o settings não emite permissions.deny em ${esperado.origem}: faltam ` +
+        `${JSON.stringify(regrasFaltando.slice(0, 6))}${regrasFaltando.length > 6 ? ` (+${regrasFaltando.length - 6})` : ""}. ` +
+        `Sem elas a ferramenta Read NATIVA — que roda fora da jaula do SO — lê as credenciais do host. ` +
+        `Run ABORTADO.`,
+    );
+  }
+  // Uma exceção (`!`) REABRE leitura. Só as declaradas no módulo podem existir — qualquer outra é a
+  // negação sendo desfeita dentro do próprio arquivo que a anuncia.
+  const excecoesPermitidas = new Set(CREDENTIAL_DENY_CARVE_OUTS.flatMap((c) => [`Read(!${c})`, `Edit(!${c})`]));
+  const excecoesIntrusas = [...regras].filter((r) => /^[A-Za-z]+\(!/.test(r) && !excecoesPermitidas.has(r));
+  if (excecoesIntrusas.length > 0) {
+    throw new Error(
+      `[autonomy] permissions.deny em ${esperado.origem} carrega exceção(ões) não declarada(s): ` +
+        `${JSON.stringify(excecoesIntrusas)}. Uma regra "!" reabre o que a lista nega. Run ABORTADO.`,
+    );
+  }
 }
 
 /**
@@ -1255,6 +1416,8 @@ export interface PosturaDeps {
   env?: EnvLike;
   writeSettings?: (dir: string, settings: Record<string, unknown>, key: string) => string;
   readTarget?: (p: string) => string | null;
+  /** A declaração do adotante (`autorun.sandbox.denyReadGlobs`); ausente ⇒ lida do settings.yaml. */
+  declaredDenyRead?: readonly string[];
 }
 
 // Exportada em 2026-08-05: `resolveReviewerPosture` e `resolveJudgePosture` remontavam este mesmo
@@ -1287,6 +1450,7 @@ export function resolveEnginePosture(
     key: input.key,
     readTarget: deps.readTarget ?? readTargetSettings,
     writeSettings: deps.writeSettings,
+    declaredDenyRead: deps.declaredDenyRead,
   });
 }
 
@@ -1313,6 +1477,7 @@ export function resolveRunTaskPosture(
     key: input.key,
     readTarget: deps.readTarget ?? readTargetSettings,
     writeSettings: deps.writeSettings,
+    declaredDenyRead: deps.declaredDenyRead,
   });
 }
 
@@ -1631,6 +1796,12 @@ export function resolveAutonomyPosture(input: {
    * trigger é obrigado a dizer `null` — uma decisão, em vez de uma omissão.
    */
   trigger: string | null;
+  /**
+   * Os globs EXTRAS de negação nativa que o adotante declarou (`autorun.sandbox.denyReadGlobs`). Ausente
+   * ⇒ lidos do settings.yaml (`declaredDenyReadGlobs`) — o mesmo padrão do `readTarget` acima: produção
+   * não passa, o teste injeta.
+   */
+  declaredDenyRead?: readonly string[];
 }): AutonomyPosture {
   const { tier, support, env, projectRoot, writeRoot, stateRoot, key } = input;
   // As duas derivações, lado a lado e no mesmo lugar — ver a nota em `stateRoot`.
@@ -1727,6 +1898,13 @@ export function resolveAutonomyPosture(input: {
       // `buildSandboxSettings` e nenhum chamador de produção a preenchia — costura sem sujeito, que é
       // a dívida que esta fase já removeu uma vez em outro ponto.
       allowedDomains: resolveAllowedDomains(env),
+      // A negação NATIVA efetiva deste host — o env é o INJETADO (não o global), e o state dir é o
+      // mesmo de onde saem as credenciais negadas acima.
+      permissionDeny: credentialDenyRulesDoHost({
+        env,
+        declared: input.declaredDenyRead,
+        stateRoot,
+      }),
     });
     const write = input.writeSettings ?? writeSandboxSettingsFile;
     return {

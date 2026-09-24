@@ -35,6 +35,7 @@ import {
   resolveRunTaskPosture,
   spawnContidoArgv,
   buildSpawnFlags,
+  denySettingsFileFor,
   // Sete símbolos saíram daqui em 2026-08-05 — mesmo motivo do engine.ts: resíduo da migração para
   // `resolveRunTaskPosture`, presentes só na linha de import.
   type AutonomyPosture,
@@ -330,6 +331,8 @@ export async function pollSessionAlive(
 export function buildRunTaskArgs(
   prompt: string,
   posture: AutonomyPosture,
+  /** o settings só-de-negação (`denySettingsFileFor`) — vale nas posturas sem sandbox; ignorado na contida */
+  denySettingsFile: string | null = null,
 ): { args: string[]; needsRootBypass: boolean } {
   // ⚠ `permissionArgs` NÃO pode ser vazio (achado de revisão). A primeira migração passava `[]`, e o
   // comando saía sem `--permission-mode acceptEdits` — o modo que este mesmo módulo declara
@@ -339,6 +342,7 @@ export function buildRunTaskArgs(
   const { flags, needsRootBypass } = buildSpawnFlags({
     posture,
     permissionArgs: posture.kind === "unsandboxed-escape" ? [] : ["--permission-mode", "acceptEdits"],
+    denySettingsFile,
   });
   return { args: ["-p", prompt, "--output-format", "text", ...flags], needsRootBypass };
 }
@@ -2656,7 +2660,8 @@ export function registerDevTools(server: McpServer): void {
         semShell && posture.kind !== "sandboxed"
           ? { kind: "downgraded", tier: "write", warn: "skipPermissions=false" }
           : posture;
-      const { args: argsBase, needsRootBypass } = buildRunTaskArgs(prompt, posturaEfetiva);
+      // A negação NATIVA de credencial acompanha a postura sem sandbox (a contida a leva no próprio settings).
+      const { args: argsBase, needsRootBypass } = buildRunTaskArgs(prompt, posturaEfetiva, denySettingsFileFor(posturaEfetiva));
       // Contido E sem shell: mantém a cerca, tira o Bash por cima dela.
       const args = semShell && posturaEfetiva.kind === "sandboxed" ? [...argsBase, "--disallowedTools", "Bash"] : argsBase;
       // ── O MESMO PORTÃO DO ENGINE (achado de revisão) ────────────────────────────────────────────

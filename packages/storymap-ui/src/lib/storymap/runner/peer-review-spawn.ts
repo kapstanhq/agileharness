@@ -39,6 +39,7 @@ import { boardsDir, runnerStateDir } from "@/lib/storymap/paths";
 import {
   spawnContidoArgv,
   buildSpawnFlags,
+  denySettingsFileFor,
   detectSandboxSupport,
   envelopeForSpawn,
   readTargetSettings,
@@ -250,6 +251,7 @@ export function resolveReviewerPosture(cwd: string, key: string, deps: PosturaDe
     key,
     readTarget: deps.readTarget ?? readTargetSettings,
     writeSettings: deps.writeSettings,
+    declaredDenyRead: deps.declaredDenyRead,
   });
 }
 
@@ -260,7 +262,7 @@ export function resolveReviewerPosture(cwd: string, key: string, deps: PosturaDe
  */
 export function buildReviewerArgs(
   posture: AutonomyPosture,
-  opts: { prompt: string; notePath: string },
+  opts: { prompt: string; notePath: string; denySettingsFile?: string | null },
 ): { args: string[]; needsRootBypass: boolean } {
   const { flags, needsRootBypass } = buildSpawnFlags({
     posture,
@@ -268,6 +270,7 @@ export function buildReviewerArgs(
     // "O revisor precisa de ZERO MCP" ENFORÇADO: tirar os tokens fechou o caminho do curl, e não dizia
     // nada sobre servidores MONTADOS. Este spawn não declara mounts, então não recebe nenhum.
     extraArgs: mcpContainmentFlags(),
+    denySettingsFile: opts.denySettingsFile ?? null,
   });
   return {
     args: [
@@ -375,7 +378,12 @@ async function runReviewer(
   // PROPONENTE escreveu, então não pode ser vetor de injeção para escrita no board; e (3) a POSTURA, que
   // é o que finalmente contém o SHELL. As duas primeiras nunca o continham: elas escolhiam onde ele
   // estava e o que ele sabia, não o que ele podia executar.
-  const { args, needsRootBypass } = buildReviewerArgs(opts.posture, { prompt: opts.prompt, notePath: opts.notePath });
+  const { args, needsRootBypass } = buildReviewerArgs(opts.posture, {
+    prompt: opts.prompt,
+    notePath: opts.notePath,
+    // a negação NATIVA de credencial nas posturas sem sandbox (a contida a leva no próprio settings)
+    denySettingsFile: denySettingsFileFor(opts.posture),
+  });
   // O ÚLTIMO PORTÃO, sobre o argv EXATO que vai para o CLI e depois de toda a montagem — ver a nota
   // gêmea no juiz. O throw vira erro do módulo (nunca escapa) e erro aqui é fail-closed: nada aprovado.
   const env = buildReviewerEnv(process.env);
