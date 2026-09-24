@@ -1062,7 +1062,14 @@ export function makeDefaultGateRunner(fs: WorktreeFs = defaultWorktreeFs): Integ
   // Os diretórios vazios para onde as CLIs de nuvem apontam valem UMA execução do gate: nascem aqui e
   // morrem no `finally`, em TODO caminho de saída — inclusive nos retornos antecipados de dentro do corpo.
   return async (opts) => {
-    const semCredencial = criarDiretoriosSemCredencial();
+    let semCredencial: ReturnType<typeof criarDiretoriosSemCredencial>;
+    try {
+      semCredencial = criarDiretoriosSemCredencial();
+    } catch (err) {
+      // Sem os diretórios vazios não há env neutralizado — e rodar o código do delta com o env do serviço
+      // é exatamente o que isto fecha. INCONCLUSIVO (infra), nunca "seus testes quebraram".
+      return { passed: false, inconclusive: true, log: `gate setup falhou (diretórios sem credencial): ${execErrorDetail(err, GATE_LOG_CAP)}` };
+    }
     try {
       return await rodar(opts, semCredencial);
     } finally {
@@ -2389,8 +2396,9 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
     const pkgDir = path.join(cwd, "packages", "storymap-ui");
     // O `vitest -u` roda a suíte INTEIRA — código escrito por agente — como o uid do serviço: o mesmo
     // env neutralizado do gate (sem credencial MCP nem de nuvem), com diretórios vazios só desta regen.
-    const semCredencial = criarDiretoriosSemCredencial();
+    let semCredencial: ReturnType<typeof criarDiretoriosSemCredencial> | null = null;
     try {
+      semCredencial = criarDiretoriosSemCredencial();
       await provisionNodeModules(snapFs, cfg.repoRoot, cwd);
       await cfg.exec(`bunx vitest run -u`, gateExecOptions(pkgDir, snapRegenTimeoutMs, semCredencial));
     } catch (err) {
@@ -2399,7 +2407,7 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
       await deprovisionNodeModules(snapFs, cfg.repoRoot, cwd).catch(() => {});
       return { status: "failed", detail: execErrorDetail(err, 160) };
     } finally {
-      semCredencial.descartar();
+      semCredencial?.descartar();
     }
     await deprovisionNodeModules(snapFs, cfg.repoRoot, cwd).catch(() => {});
     // Stage each regenerated snap; vitest is idempotent when nothing changed → `git add` is a no-op then.

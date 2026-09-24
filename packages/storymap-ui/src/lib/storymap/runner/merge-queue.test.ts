@@ -1921,6 +1921,22 @@ describe("makeDefaultGateRunner — staging worktree lifecycle", () => {
     }
   });
 
+  it("sem como criar os diretórios vazios ⇒ INCONCLUSIVO e NADA do delta roda com o env do serviço", async () => {
+    const antes = process.env.TMPDIR;
+    process.env.TMPDIR = "/caminho/que/nao/existe/ah-gate";
+    try {
+      const { exec, calls } = makeGateExec({ mergedFailures: [] });
+      const res = await makeDefaultGateRunner(noopFs)({ exec, repoRoot: "/repo", branch: "run/x", runId: "x", checkCommand: "vitest run", timeoutMs: 1000, typecheck: TC });
+      expect(res.passed).toBe(false);
+      expect(res.inconclusive).toBe(true);
+      expect(res.log).toMatch(/sem credencial/);
+      expect(calls.some((c) => c.cmd.includes("vitest run") || c.cmd.includes("tsc --noEmit"))).toBe(false);
+    } finally {
+      if (antes === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = antes;
+    }
+  });
+
   it("PASS: adds a staging worktree, merges the run branch there, runs the check, then cleans up", async () => {
     const { exec, calls } = makeGateExec({ mergedFailures: [] });
     const runner = makeDefaultGateRunner(noopFs);
