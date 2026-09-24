@@ -2418,6 +2418,18 @@ export interface RunnerSettings {
     sessions: {
       maxWorktrees: number;
     };
+    /**
+     * Contenção DECLARADA pelo adotante. `denyReadGlobs`: caminhos/globs EXTRAS que nenhum spawn headless
+     * lê nem edita pelas ferramentas NATIVAS — viram `Read(…)`/`Edit(…)` em `permissions.deny` do settings
+     * de cada run (runner/credential-deny.ts). Sempre ESTENDE a lista default (credenciais de nuvem, SSH,
+     * Docker, netrc, `.env*`), nunca a substitui. Um caminho `/abs` é absoluto; `~/x` é do HOME; sem barra
+     * inicial é relativo ao cwd do run. Ausente ⇒ só os defaults. A env AGILEHARNESS_SANDBOX_DENY_READ
+     * (vírgula) SOMA a esta lista. Leitor: `declaredDenyReadGlobs` (runner/autonomy-sandbox.ts).
+     *
+     * ⚠ Não confundir com o `autorun.sandbox.enabled` removido em 2026-08-05 (config-dead-knobs.test.ts):
+     * aquele era um interruptor sem leitor; este é uma lista com leitor e teste.
+     */
+    sandbox?: { denyReadGlobs: string[] };
   };
   /** model/effort/maxTurns fallback for autorun columns lacking their own */
   columnDefaults: RunnerColumnDefaults;

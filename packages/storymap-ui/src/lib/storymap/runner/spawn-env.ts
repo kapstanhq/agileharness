@@ -28,6 +28,7 @@
 // headroom) e PASSE o resultado na chamada — o lint checa as duas coisas, e o censo dele exige registrar a
 // superfície nova, que é o momento em que um humano decide se aquele agente devia existir.
 
+import os from "node:os";
 import path from "node:path";
 
 import { nomeLegadoDe, resolverAliasesDeEnv } from "@/lib/storymap/env-aliases";
@@ -160,5 +161,71 @@ export function sanitizeSpawnEnv(source: NodeJS.ProcessEnv = process.env): NodeJ
   // é lido por hooks de repositórios que não são nossos, ainda na grafia velha. Depois dos segredos, nunca
   // antes — senão a própria ponte recriaria o tier MCP na outra grafia.
   resolverAliasesDeEnv(env);
+  return env as NodeJS.ProcessEnv;
+}
+
+/**
+ * As variáveis que CARREGAM credencial de nuvem no próprio valor — somem do env neutralizado. Genérica
+ * por construção: as três CLIs/SDKs grandes, sem privilegiar nenhuma.
+ */
+export const CLOUD_CREDENTIAL_ENV_REMOVIDAS = [
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_SESSION_TOKEN",
+  "GOOGLE_OAUTH_ACCESS_TOKEN",
+  "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE",
+  "CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE",
+] as const;
+
+/** Os diretórios de config VAZIOS para onde as CLIs de nuvem são apontadas (criados pelo chamador). */
+export interface DiretoriosSemCredencial {
+  /** vira `CLOUDSDK_CONFIG` — a config inteira do gcloud (contas, tokens, ADC) passa a ser este vazio */
+  gcloudConfigDir: string;
+  /** vira `AZURE_CONFIG_DIR` — idem para a CLI da Azure */
+  azureConfigDir: string;
+}
+
+/**
+ * O env de um processo que executa código ESCRITO POR AGENTE (a suíte e o typecheck do gate de
+ * integração) com as credenciais de NUVEM neutralizadas. Parte de {@link sanitizeSpawnEnv} — tudo o que
+ * ela já nega continua negado — e então:
+ *
+ *   · APAGA as variáveis que carregam credencial no valor ({@link CLOUD_CREDENTIAL_ENV_REMOVIDAS});
+ *   · APONTA os arquivos de credencial das SDKs para o nulo do SO: `GOOGLE_APPLICATION_CREDENTIALS`,
+ *     `AWS_SHARED_CREDENTIALS_FILE`, `AWS_CONFIG_FILE`. Apontar, e não apagar, é o ponto: sem a variável
+ *     a SDK cai no arquivo padrão sob o HOME (`~/.aws/credentials`, o ADC do gcloud) — que é exatamente o
+ *     que um teste hostil quer. Com ela no nulo, a leitura explícita falha e a cadeia PARA ali;
+ *   · APONTA os diretórios de config das CLIs (`CLOUDSDK_CONFIG`, `AZURE_CONFIG_DIR`) para diretórios
+ *     vazios e recém-criados — um `gcloud auth print-access-token` num teste acha uma instalação sem conta;
+ *   · `AWS_EC2_METADATA_DISABLED=true`: com os arquivos no nulo, a cadeia padrão da AWS segue para o
+ *     serviço de metadados da instância — num host que é VM da AWS isso devolveria a credencial da própria
+ *     máquina. Desligar o IMDS fecha o último elo da cadeia que não passa por arquivo.
+ *
+ * ⚠ O HOME NÃO muda, de propósito: os caches do bun/npm e o store de módulos vivem sob ele, e o gate
+ * precisa deles para rodar a suíte em tempo aceitável.
+ *
+ * ⚠ ISTO É HIGIENE, NÃO SANDBOX — e dizer o contrário seria a proteção-que-mede-zero que este módulo
+ * inteiro existe para matar. O processo do gate roda com o uid do serviço (root, na instalação de
+ * referência): um teste hostil ainda LÊ `~/.config/gcloud`, `~/.aws/credentials` ou `/proc/<ppid>/environ`
+ * direto do disco, e ainda alcança o serviço de metadados do GCP. O que isto fecha é o canal ACIDENTAL e o
+ * preguiçoso — a SDK que pega a credencial do operador sozinha porque ela estava no caminho padrão, um
+ * teste de integração que "funciona" deployando com a conta de produção. O isolamento real (uid próprio,
+ * sem credencial montada, sem rede) é item de trabalho separado.
+ *
+ * PURA: não cria os diretórios (o chamador cria e descarta) e não muta a fonte.
+ */
+export function neutralizeCloudCredentials(
+  source: NodeJS.ProcessEnv,
+  dirs: DiretoriosSemCredencial,
+  devNull: string = os.devNull,
+): NodeJS.ProcessEnv {
+  const env = { ...sanitizeSpawnEnv(source) } as Record<string, string | undefined>;
+  for (const k of CLOUD_CREDENTIAL_ENV_REMOVIDAS) delete env[k];
+  env.GOOGLE_APPLICATION_CREDENTIALS = devNull;
+  env.CLOUDSDK_CONFIG = dirs.gcloudConfigDir;
+  env.AWS_SHARED_CREDENTIALS_FILE = devNull;
+  env.AWS_CONFIG_FILE = devNull;
+  env.AWS_EC2_METADATA_DISABLED = "true";
+  env.AZURE_CONFIG_DIR = dirs.azureConfigDir;
   return env as NodeJS.ProcessEnv;
 }

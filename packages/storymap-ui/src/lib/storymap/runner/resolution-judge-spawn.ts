@@ -38,6 +38,7 @@ import { boardsDir, runnerStateDir } from "@/lib/storymap/paths";
 import {
   spawnContidoArgv,
   buildSpawnFlags,
+  denySettingsFileFor,
   envelopeForSpawn,
   readTargetSettings,
   resolveAutonomyPosture,
@@ -221,6 +222,7 @@ export function resolveJudgePosture(cwd: string, key: string, deps: PosturaDeps 
     key,
     readTarget: deps.readTarget ?? readTargetSettings,
     writeSettings: deps.writeSettings,
+    declaredDenyRead: deps.declaredDenyRead,
   });
 }
 
@@ -233,13 +235,19 @@ export function resolveJudgePosture(cwd: string, key: string, deps: PosturaDeps 
  * excluem no CLI. Em todo o resto o modo é `acceptEdits`, que é load-bearing — as ferramentas nativas
  * de escrita rodam in-process e o sandbox do SO não as contém (medição da ADR-067).
  */
-export function buildJudgeArgs(posture: AutonomyPosture, notePath: string): { args: string[]; needsRootBypass: boolean } {
+export function buildJudgeArgs(
+  posture: AutonomyPosture,
+  notePath: string,
+  /** o settings só-de-negação (`denySettingsFileFor`) — vale nas posturas sem sandbox; ignorado na contida */
+  denySettingsFile: string | null = null,
+): { args: string[]; needsRootBypass: boolean } {
   const { flags, needsRootBypass } = buildSpawnFlags({
     posture,
     permissionArgs: posture.kind === "unsandboxed-escape" ? [] : ["--permission-mode", "acceptEdits"],
     // O worktree limita os ARQUIVOS; nunca limitou a superfície MCP. O juiz não declara mounts, então
     // não recebe nenhum — um juiz mecânico de conflito não tem o que fazer com os conectores do dono.
     extraArgs: mcpContainmentFlags(),
+    denySettingsFile,
   });
   return {
     args: [
@@ -431,7 +439,8 @@ async function runJudge(
   deps: JudgeSpawnDeps,
   opts: { worktreePath: string; notePath: string; outPath: string; errPath: string; tag: string; posture: AutonomyPosture },
 ): Promise<string | null> {
-  const { args, needsRootBypass } = buildJudgeArgs(opts.posture, opts.notePath);
+  // a negação NATIVA de credencial nas posturas sem sandbox (a contida a leva no próprio settings)
+  const { args, needsRootBypass } = buildJudgeArgs(opts.posture, opts.notePath, denySettingsFileFor(opts.posture));
   // ── O ÚLTIMO PORTÃO, DEPOIS DE TODA A MONTAGEM ───────────────────────────────────────────────────
   // Roda sobre o argv EXATO que vai para o CLI, imediatamente antes do spawn: é o último ponto em que
   // ainda se pode saber o que será executado. Uma checagem mais cedo verificaria outra coisa que não a

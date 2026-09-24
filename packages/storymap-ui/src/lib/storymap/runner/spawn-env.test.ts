@@ -1,7 +1,13 @@
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { SEGREDOS_DO_SERVICO, sanitizeSpawnEnv, sanitizeSpawnPath } from "./spawn-env";
+import {
+  CLOUD_CREDENTIAL_ENV_REMOVIDAS,
+  SEGREDOS_DO_SERVICO,
+  neutralizeCloudCredentials,
+  sanitizeSpawnEnv,
+  sanitizeSpawnPath,
+} from "./spawn-env";
 // story-e3lj46 — a prova de que a remoção não custa capacidade vem de FORA deste módulo: o mount de
 // MCP nasce de um ARQUIVO (buildOrchestratorMcpConfig) e todo spawn de Claude passa pelo chokepoint.
 import { buildOrchestratorMcpConfig } from "./orchestrator-spawn";
@@ -242,5 +248,90 @@ describe("nenhum segredo do serviço viaja para o filho sem estar classificado",
   it("os quatro segredos nomeados somem de verdade (guarda de não-vacuidade do lint acima)", () => {
     const bruto = Object.fromEntries(SEGREDOS_DO_SERVICO.map((k) => [k, "s3cr3t"])) as unknown as NodeJS.ProcessEnv;
     expect(Object.keys(sanitizeSpawnEnv(bruto))).toEqual(["PATH"]);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════════════════════════════
+// CREDENCIAL DE NUVEM NEUTRALIZADA — o env do processo que roda código ESCRITO POR AGENTE (gate).
+//
+// O ataque: o gate de integração roda a suíte e o typecheck do delta como o uid do serviço, com o env
+// dele. Um teste que chama a SDK de nuvem (ou `gcloud auth print-access-token`, ou lê
+// `$AWS_SECRET_ACCESS_KEY`) achava a credencial do OPERADOR sozinho — pelo valor da variável ou pelo
+// caminho padrão sob o HOME. É higiene, não sandbox (o mesmo uid ainda lê o disco); o que estes testes
+// cobram é que o canal ACIDENTAL fecha, e que fecha sem tirar do gate o que ele precisa para rodar.
+// ════════════════════════════════════════════════════════════════════════════════════════════════════
+describe("neutralizeCloudCredentials — o env do gate não entrega credencial de nuvem", () => {
+  const DIRS = { gcloudConfigDir: "/tmp/vazio/gcloud", azureConfigDir: "/tmp/vazio/azure" };
+  const HOSTIL = asEnv({
+    HOME: "/home/operador",
+    PATH: "/usr/local/bin:/usr/bin:/bin",
+    AWS_ACCESS_KEY_ID: "AKIAEXEMPLO",
+    AWS_SECRET_ACCESS_KEY: "segredo-aws",
+    AWS_SESSION_TOKEN: "sessao-aws",
+    GOOGLE_OAUTH_ACCESS_TOKEN: "ya29.token",
+    CLOUDSDK_AUTH_ACCESS_TOKEN_FILE: "/root-do-operador/token",
+    CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: "/root-do-operador/sa.json",
+    GOOGLE_APPLICATION_CREDENTIALS: "/root-do-operador/adc.json",
+    CLOUDSDK_CONFIG: "/root-do-operador/.config/gcloud",
+    AWS_SHARED_CREDENTIALS_FILE: "/root-do-operador/.aws/credentials",
+    AWS_CONFIG_FILE: "/root-do-operador/.aws/config",
+    AZURE_CONFIG_DIR: "/root-do-operador/.azure",
+    AGILEHARNESS_MCP_TOKEN: "token-mcp",
+    NODE_ENV: "production",
+    SONDA_NEUTRA: "atravessa",
+  });
+
+  it("apaga toda variável que carrega credencial no VALOR", () => {
+    const env = neutralizeCloudCredentials(HOSTIL, DIRS, "/dev/null");
+    for (const k of CLOUD_CREDENTIAL_ENV_REMOVIDAS) expect(env[k], k).toBeUndefined();
+    // e por VALOR: renomear não é remover — um `printenv` acharia o segredo sob qualquer nome
+    const valores = Object.values(env).filter((v): v is string => typeof v === "string");
+    for (const segredo of ["AKIAEXEMPLO", "segredo-aws", "sessao-aws", "ya29.token"]) {
+      expect(valores.some((v) => v.includes(segredo)), segredo).toBe(false);
+    }
+  });
+
+  it("aponta os ARQUIVOS de credencial das SDKs para o nulo — apagar faria a SDK cair no caminho padrão do HOME", () => {
+    const env = neutralizeCloudCredentials(HOSTIL, DIRS, "/dev/null");
+    expect(env.GOOGLE_APPLICATION_CREDENTIALS).toBe("/dev/null");
+    expect(env.AWS_SHARED_CREDENTIALS_FILE).toBe("/dev/null");
+    expect(env.AWS_CONFIG_FILE).toBe("/dev/null");
+    // o último elo da cadeia da AWS que não passa por arquivo: o serviço de metadados da instância
+    expect(env.AWS_EC2_METADATA_DISABLED).toBe("true");
+  });
+
+  it("aponta os diretórios de config das CLIs para os vazios recebidos (nunca o do operador)", () => {
+    const env = neutralizeCloudCredentials(HOSTIL, DIRS, "/dev/null");
+    expect(env.CLOUDSDK_CONFIG).toBe(DIRS.gcloudConfigDir);
+    expect(env.AZURE_CONFIG_DIR).toBe(DIRS.azureConfigDir);
+  });
+
+  it("a MESMA neutralização vale com o ambiente LIMPO — a variável ausente não é 'nada a fazer'", () => {
+    // Sem GOOGLE_APPLICATION_CREDENTIALS no env, a SDK procura o ADC no HOME: é exatamente o caso comum
+    // num host de operador. Neutralizar só quando a variável existe deixaria esse caminho aberto.
+    const env = neutralizeCloudCredentials(asEnv({ HOME: "/home/operador", PATH: "/usr/bin" }), DIRS, "/dev/null");
+    expect(env.GOOGLE_APPLICATION_CREDENTIALS).toBe("/dev/null");
+    expect(env.AWS_SHARED_CREDENTIALS_FILE).toBe("/dev/null");
+    expect(env.CLOUDSDK_CONFIG).toBe(DIRS.gcloudConfigDir);
+    expect(env.AZURE_CONFIG_DIR).toBe(DIRS.azureConfigDir);
+  });
+
+  it("é um SUPERCONJUNTO de sanitizeSpawnEnv: o que o saneador tira continua fora", () => {
+    const env = neutralizeCloudCredentials(HOSTIL, DIRS, "/dev/null");
+    expect(env.AGILEHARNESS_MCP_TOKEN).toBeUndefined();
+    expect(env.NODE_ENV).toBeUndefined();
+  });
+
+  it("NÃO-REGRESSÃO: HOME e PATH ficam (caches do bun/npm), e o resto atravessa", () => {
+    const env = neutralizeCloudCredentials(HOSTIL, DIRS, "/dev/null");
+    expect(env.HOME).toBe("/home/operador");
+    expect(env.PATH).toContain("/usr/bin");
+    expect(env.SONDA_NEUTRA).toBe("atravessa");
+  });
+
+  it("não muta a fonte (o env do serviço segue intacto)", () => {
+    const fonte = { ...HOSTIL };
+    neutralizeCloudCredentials(fonte, DIRS, "/dev/null");
+    expect(fonte).toEqual(HOSTIL);
   });
 });
