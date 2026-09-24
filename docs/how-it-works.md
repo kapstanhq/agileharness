@@ -316,6 +316,31 @@ Heavy content lives beside the card: `plans/<id>.md` (files to touch, contracts,
 sidecar and trust it** rather than re-scanning the codebase. Re-discovery is the largest
 uncached cost of an agent run, and the step before already paid it.
 
+### A deploy can't roll production back
+
+The service publishes from its own checkout of your repository. If you also deploy by hand from
+another machine, that checkout can fall behind what is live, and an autonomous deploy from it would
+quietly ship older code. So before **every** product deploy the engine launches — a declared
+`command`, a deploy agent, the legacy per-package route, the chained face, the publish queue, the MCP
+`deploy` tool — a freshness preflight runs in that checkout, and it **refuses** when:
+
+- `git fetch` of the current branch's upstream fails, or the branch has no upstream;
+- `HEAD` is behind its upstream;
+- a tracked file inside the deploy's scope (the board's `package`, `sharedPackages` and
+  `deploy.surfaces` — the same scope the promotion uses) has uncommitted changes. Dirt outside
+  the scope, like local tool settings, is ignored;
+- the board declares `deploy.liveShaCommand` and `HEAD` does not descend from every commit sha it
+  prints (one per line). A failing command or output that isn't a sha also refuses. Without the
+  field, this check is skipped, and a log line says so.
+
+A refusal runs nothing: the card goes back to *Release* with a finding that says what to do (pull,
+commit), through the same path as any failed deploy, so there is no automatic retry loop. The
+authorization the preflight issues is an object that only it can create. It is bound to one target
+and usable once, and the deploy registry won't launch without one. That makes skipping the preflight
+impossible rather than merely discouraged. `liveShaCommand` goes through the same allow-list as the
+other declared commands. The escape hatch is for humans only: `AGILEHARNESS_DEPLOY_FRESHNESS=off` in
+the service's environment. It is read on every deploy and logs a warning each time it's used.
+
 
 ## Built on Claude Code
 

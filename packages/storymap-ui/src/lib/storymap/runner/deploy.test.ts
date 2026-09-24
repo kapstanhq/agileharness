@@ -2,13 +2,41 @@ import { describe, expect, it, vi } from "vitest";
 import {
   authorizeDeployCommand,
   buildSelfDeployScript,
-  deployBoard,
+  deployBoard as deployBoardReal,
   parseDeclaredArgv,
   resolveDeployKind,
   resolveDeployLaunchers,
   resolveDeployRecipes,
+  type DeployFreshnessGate,
   type DeploySettleFn,
 } from "./deploy";
+import { checkDeployFreshness, type DeployClearance } from "./deploy-freshness";
+
+/**
+ * O PREFLIGHT DE FRESCOR, liberado — e só nesta suíte, que mede ROTEAMENTO. Todo deploy de produto passa
+ * pelo preflight antes do registry, e o default dele é o real, que rodaria `git` pelo `exec` gravador destes
+ * casos (e recusaria: `recordingExec` devolve stdout vazio para tudo). O preflight tem suítes PRÓPRIAS —
+ * `deploy-freshness.test.ts` (medição sobre git real) e `deploy-freshness-chokepoint.test.ts` (cada caminho
+ * de deploy RECUSA quando ele recusa) —, então aqui ele só precisa deixar passar, e deixa passar pelo ÚNICO
+ * caminho que não mede nada: o escape humano. A autorização que sai daqui é REAL (cunhada pelo módulo), então
+ * o registry continua exigindo e resgatando uma por lançamento.
+ */
+const liberado: DeployFreshnessGate = (req) =>
+  checkDeployFreshness(req, {
+    exec: async () => {
+      throw new Error("o escape não mede git");
+    },
+    env: { AGILEHARNESS_DEPLOY_FRESHNESS: "off" },
+    log: () => {},
+  });
+const deployBoard: typeof deployBoardReal = (opts) => deployBoardReal({ freshness: liberado, ...opts });
+
+/** Uma autorização real para `target` (pelo mesmo escape) — para os casos que semeiam o registry à mão. */
+async function ok(target: string): Promise<DeployClearance> {
+  const v = await liberado({ target, repoRoot: "/repo", scope: [], label: "teste" });
+  if (!v.ok) throw new Error("o escape humano deveria cunhar a autorização");
+  return v.clearance;
+}
 import {
   ProductDeployRegistry,
   composedFaceManifestStatus,
@@ -178,7 +206,7 @@ describe("deployBoard — Fase 4c board-aware deploy", () => {
   it("a PRODUCT board already deploying is an idempotent no-op (registry isRunning)", async () => {
     const { exec } = recordingExec();
     const productDeploy = new ProductDeployRegistry(() => ({ pid: 1, whenDone: () => {} }));
-    productDeploy.start("nestify"); // a deploy is already in flight
+    productDeploy.start("nestify", await ok("nestify")); // a deploy is already in flight
     const res = await deployBoard({ exec, repoRoot: "/repo", boardPackage: "packages/nestify", deployTargets: ALVOS_TESTE, productDeploy });
     expect(res.fired).toBe(false);
     expect(res.tool).toBe("orch-deploy");
@@ -386,6 +414,10 @@ describe("buildSelfDeployScript — post-build surface publish (story-zr1cmf)", 
 
 // A launcher that records every launched target and lets a test SETTLE a specific one (per-target whenDone),
 // so the "fire the face only after the backend deploy closes" chain is testable without a real child process.
+/** Dá à cadeia da face (preflight assíncrono → start) a chance de rodar ANTES de afirmar que ela NÃO rodou —
+ *  sem isto um "não disparou" passaria só por ter sido medido cedo demais. */
+const drenarCadeia = () => new Promise<void>((r) => setTimeout(r, 0));
+
 function keyedLauncher() {
   const started: string[] = [];
   const dones = new Map<string, (code: number | null) => void>();
@@ -446,7 +478,8 @@ describe("deployBoard — cidade.ai face chaining (story-efwo30)", () => {
     expect(f.started).toEqual(["nestify"]); // backend fired; face NOT yet (backend still running)
 
     f.finish("nestify", 0); // backend deploy closes exit-0
-    expect(f.started).toEqual(["nestify", ALVO_DA_FACE]); // face published only now, after the backend settled OK
+    // a face tem o PRÓPRIO preflight de frescor (assíncrono) entre o settle do backend e o lançamento
+    await vi.waitFor(() => expect(f.started).toEqual(["nestify", ALVO_DA_FACE])); // face published only now, after the backend settled OK
     // the face job carries the card ctx, so its OWN failure reverts the card (truthful "No ar") via the
     // existing G3 onDone subscriber — a face publish is part of the ship, not a silent side-quest.
     expect(reg.get(ALVO_DA_FACE!)).toMatchObject({ board: "nest", cardId: "story-1" });
@@ -484,6 +517,7 @@ describe("deployBoard — cidade.ai face chaining (story-efwo30)", () => {
     // e a face NÃO é armada — nem antes, nem depois de o backend fechar
     expect(res.chainedComposedFace).toBeFalsy();
     f.finish("nestify", 0);
+    await drenarCadeia();
     expect(f.started).toEqual(["nestify"]);
     expect(ALVO_DA_FACE === null || reg.get(ALVO_DA_FACE) === undefined).toBe(true);
   });
@@ -505,6 +539,7 @@ describe("deployBoard — cidade.ai face chaining (story-efwo30)", () => {
 
     expect(res.chainedComposedFace).toBeFalsy();
     f.finish("nestify", 0);
+    await drenarCadeia();
     expect(f.started).toEqual(["nestify"]); // face never fired
   });
 
@@ -525,6 +560,7 @@ describe("deployBoard — cidade.ai face chaining (story-efwo30)", () => {
     expect(res.chainedComposedFace).toBe(true);
 
     f.finish("nestify", 1); // backend deploy FAILS
+    await drenarCadeia();
     expect(f.started).toEqual(["nestify"]); // face suppressed
   });
 
@@ -532,7 +568,7 @@ describe("deployBoard — cidade.ai face chaining (story-efwo30)", () => {
     const { exec } = recordingExec();
     const f = keyedLauncher();
     const reg = new ProductDeployRegistry(f.launcher);
-    if (ALVO_DA_FACE) reg.start(ALVO_DA_FACE); // a face deploy is already running (e.g. another board just fired it)
+    if (ALVO_DA_FACE) reg.start(ALVO_DA_FACE, await ok(ALVO_DA_FACE)); // a face deploy is already running (e.g. another board just fired it)
     await deployBoard({
       exec,
       repoRoot: "/repo",
@@ -544,6 +580,7 @@ describe("deployBoard — cidade.ai face chaining (story-efwo30)", () => {
       productDeploy: reg,
     });
     f.finish("nestify", 0);
+    await drenarCadeia();
     // A propriedade é "NÃO disparou uma SEGUNDA vez". A primeira é a que o próprio caso arma acima
     // (`reg.start(ALVO_DA_FACE)`), então a conta é 1 sempre que há alvo declarado — com ou sem manifesto.
     // Escrevi `ALVO_DA_FACE && TEM_MANIFESTO ? 1 : 0` primeiro e o artefato extraído reprovou: lá a face
@@ -556,7 +593,7 @@ describe("deployBoard — cidade.ai face chaining (story-efwo30)", () => {
     const { exec } = recordingExec();
     const f = keyedLauncher();
     const reg = new ProductDeployRegistry(f.launcher);
-    reg.start("nestify"); // nestify already in flight
+    reg.start("nestify", await ok("nestify")); // nestify already in flight
     const res = await deployBoard({
       exec,
       repoRoot: "/repo",
@@ -644,7 +681,7 @@ describe("deployBoard — descritor kind:command (D-AG2)", () => {
     const { exec } = recordingExec();
     const f = specLauncher();
     const reg = new ProductDeployRegistry(f.launcher);
-    reg.start("nest", undefined, { kind: "shell", command: "x" });
+    reg.start("nest", await ok("nest"), undefined, { kind: "shell", command: "x" });
     const res = await deployBoard({ exec, repoRoot: "/repo", boardPackage: undefined, board: "nest", cardId: "s2", boardDeploy, productDeploy: reg });
     expect(res.fired).toBe(false);
     expect(res.tool).toBe("board-command");

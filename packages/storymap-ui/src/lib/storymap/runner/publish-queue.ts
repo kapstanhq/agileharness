@@ -281,6 +281,31 @@ export interface PublishEffect {
   heldBy?: string[];
 }
 
+/**
+ * PURO — traduz o veredito de `firePromoteAndDeploy` (o `ReleaseOutcome`, lido aqui pela FORMA para este
+ * módulo seguir sem importar o efeito) no que a fila decide. `revert:false` significa que o código ESTÁ em main
+ * — mas só isso não autoriza `published`: quando o PREFLIGHT DE FRESCOR recusou o deploy (`deployRefused`), o
+ * código está em main e NÃO no ar, e carimbar `published` seria a mesma mentira que `landed` existe para
+ * impedir. Vira falha COM o motivo (não adiamento: o próximo tick recusaria igual até alguém fazer o pull).
+ * `concurrent-work` segue sendo adiamento, não defeito.
+ */
+export function publishEffectFromRelease(r: {
+  revert: boolean;
+  outcome: string;
+  reason?: string;
+  heldBy?: string[];
+  deployRefused?: string;
+}): PublishEffect {
+  if (!r.revert && r.deployRefused) {
+    return {
+      landed: false,
+      deferred: false,
+      reason: `promovido para main, mas o deploy foi RECUSADO pelo preflight de frescor (nada publicado): ${r.deployRefused}`,
+    };
+  }
+  return { landed: !r.revert, deferred: r.outcome === "concurrent-work", reason: r.reason, heldBy: r.heldBy };
+}
+
 export type DrainOutcome =
   | { status: "empty" }
   | { status: "skipped-busy"; blockedBy: string | null }

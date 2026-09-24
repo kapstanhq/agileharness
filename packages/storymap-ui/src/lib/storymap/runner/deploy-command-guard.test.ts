@@ -168,7 +168,9 @@ describe("os knobs do OPERADOR: o que eles liberam, e o que eles NÃO reabrem", 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 describe("censo: TODO campo de board-data que vira comando passa pelo chokepoint", () => {
   /** os campos de comando do contrato `deploy:` (contracts.ts boardDeployConfigShape), e quem os executa. */
-  const COMMAND_FIELDS = ["command", "canaryCommand", "deployCmd"] as const;
+  // `liveShaCommand` (o 4º) entrou com o preflight de frescor — executado por deploy-freshness.ts, que
+  // passa pela MESMA régua (ver a asserção dos executores abaixo).
+  const COMMAND_FIELDS = ["command", "canaryCommand", "deployCmd", "liveShaCommand"] as const;
 
   it("o contrato de `deploy:` tem EXATAMENTE estes campos de comando — um quarto reprova aqui", () => {
     // A régua não pode depender de alguém lembrar. O contrato é a fonte: se um campo novo com cara de
@@ -186,8 +188,8 @@ describe("censo: TODO campo de board-data que vira comando passa pelo chokepoint
     expect(new Set(found)).toEqual(new Set(COMMAND_FIELDS));
   });
 
-  it("os DOIS executores importam a régua do mesmo módulo (nenhum tem cópia própria)", () => {
-    for (const f of ["deploy.ts", "face-probe.ts"]) {
+  it("os TRÊS executores importam a régua do mesmo módulo (nenhum tem cópia própria)", () => {
+    for (const f of ["deploy.ts", "face-probe.ts", "deploy-freshness.ts"]) {
       expect(code(f), `${f}: o executor de comando declarado tem de passar pelo chokepoint`).toMatch(
         /from "\.\/deploy-command-guard"/,
       );

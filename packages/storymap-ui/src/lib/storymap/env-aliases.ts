@@ -145,6 +145,7 @@ export const SUFIXOS_NATIVOS: readonly string[] = [
   "AUTH_TOKEN",
   "BUN",
   "CLAUDE",
+  "DEPLOY_FRESHNESS",
   "DEPLOY_LAUNCHERS",
   "DEPLOY_RECIPES",
   "DEPLOY_RECIPE_RUNNERS",

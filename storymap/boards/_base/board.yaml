@@ -144,8 +144,26 @@ specialists:
 #       o health em /api/health.         #   SEMPRE re-medido por ancestralidade antes da prova
 #     healthUrl: https://meuapp.com/api/health   # contexto p/ o agente confirmar o app no ar
 #     timeoutMinutes: 15                 # orçamento do agente (default 15)
+#     liveShaCommand: just live-sha meuapp   # opcional — stdout = o(s) sha(s) de commit NO AR, um por linha
 # Prova de publicação: o settle continua sendo a autoridade — sem prova medida o card ESPERA em
 # Publicar (watchdog deploy-unsettled escala). Nenhum board declara o bloco ainda (documentação, não default).
+#
+# PREFLIGHT DE FRESCOR (runner/deploy-freshness.ts) — roda antes de TODO deploy de produto que o motor lança
+# (kind command/agent, orch-deploy legado, a face encadeada, a fila de publicação e a tool MCP `deploy`). O
+# motor publica do checkout de RUNTIME do alvo; se o dono também publica de outra máquina, esse checkout pode
+# estar atrás do que já está no ar, e publicar dali REGREDIRIA produção. Então, na raiz desse checkout:
+#   1. `git fetch` do upstream do branch atual (teto de tempo) — falhou ou não há upstream ⇒ RECUSA;
+#   2. HEAD atrás do upstream (`rev-list --count HEAD..@{u}` > 0) ⇒ RECUSA ("faça git pull --ff-only");
+#   3. arquivo RASTREADO com mudança não commitada DENTRO do escopo do deploy (o escopo da promoção:
+#      `package` + `sharedPackages` + `deploy.surfaces`) ⇒ RECUSA. Sujeira fora do escopo é ignorada;
+#   4. com `liveShaCommand` declarado: o HEAD tem de DESCENDER de cada sha impresso
+#      (`git merge-base --is-ancestor`); o comando falhou, estourou o tempo ou imprimiu outra coisa ⇒ RECUSA.
+#      Sem ele a checagem é PULADA com uma linha no log (1-3 seguem valendo).
+# A recusa NÃO executa o deploy: o card volta para Liberar com um finding que diz o que fazer (nada de modo
+# fix, nada de autorun — reentrar sem resolver recusa de novo). `liveShaCommand` passa pela MESMA régua dos
+# outros comandos declarados: `just <receita> <arg>` só roda se a receita E o argumento com forma de nome
+# estiverem em AGILEHARNESS_DEPLOY_RECIPES no env do SERVIÇO (ex.: "live-sha meuapp"). Escape só HUMANO:
+# AGILEHARNESS_DEPLOY_FRESHNESS=off no env do serviço (lido a cada deploy; grita no log a cada uso).
 
 # STAGES (colunas visuais) — agrupam os STEPS (statuses) consecutivos. O engine anda
 # os STEPS por ordem do array `statuses`; estas colunas são só agrupamento de exibição

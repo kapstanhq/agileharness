@@ -12,6 +12,11 @@
 // campo vizinho do MESMO bloco `deploy:`. Este módulo é PURO e sem NENHUM import justamente para que os
 // dois executores possam depender dele — a régua deixa de ser propriedade de um caminho.
 //
+// O QUARTO CAMPO (preflight de frescor): `deploy.liveShaCommand`, o comando que diz qual sha está no ar, é
+// executado por um TERCEIRO módulo (`runner/deploy-freshness.ts`) — e passa por esta mesma régua, sem cópia.
+// O censo em `deploy-command-guard.test.ts` foi o que obrigou o registro: um campo com cara de comando no
+// contrato reprova lá até alguém decidir quem o executa e por qual régua.
+//
 // O QUE ELE IMPEDE: que uma linha de CONFIGURAÇÃO vire execução arbitrária como root. Board-data
 // (`storymap/boards/**`) é editado por humanos E por agentes e é a ÚNICA classe de caminho que o gate de
 // código NÃO examina por desenho (`classifyDeltaPath`, release.ts: `board-data` é auto-skip; a

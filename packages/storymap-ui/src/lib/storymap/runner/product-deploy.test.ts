@@ -24,6 +24,7 @@ import {
   type DeployLauncher,
   type DeployLaunchSpec,
 } from "./product-deploy";
+import { checkDeployFreshness, type DeployClearance } from "./deploy-freshness";
 
 // ── ESTE ALVO DECLARA UMA SUPERFÍCIE COMPOSTA? ──────────────────────────────────────────────────────
 //
@@ -52,6 +53,26 @@ const manifestDoDono = (() => {
 
 // A launcher that never spawns a real process: records the launched pkg and exposes a manual `finish`
 // to drive the close event (so the running→done/failed transition is testable without child_process).
+/**
+ * Uma autorização de frescor REAL para `target` — `start` não lança sem uma (deploy-freshness.ts). Cunhada
+ * pelo escape HUMANO (`AGILEHARNESS_DEPLOY_FRESHNESS=off`), o único caminho que não mede git: estes casos
+ * medem o CICLO do registry, e o preflight tem a sua própria suíte. Não há cunhagem só-de-teste.
+ */
+async function ok(target: string): Promise<DeployClearance> {
+  const v = await checkDeployFreshness(
+    { target, repoRoot: "/repo", scope: [], label: "teste do registry" },
+    {
+      exec: async () => {
+        throw new Error("o escape não mede git");
+      },
+      env: { AGILEHARNESS_DEPLOY_FRESHNESS: "off" },
+      log: () => {},
+    },
+  );
+  if (!v.ok) throw new Error("o escape humano deveria cunhar a autorização");
+  return v.clearance;
+}
+
 function fakeLauncher() {
   const launched: string[] = [];
   let done: ((code: number | null) => void) | undefined;
@@ -153,11 +174,11 @@ describe("logFileFor", () => {
   });
 });
 
-describe("ProductDeployRegistry — job lifecycle (injected launcher, no real spawn)", () => {
-  it("start() launches orch-deploy for the pkg and tracks it as running", () => {
+describe("ProductDeployRegistry — job lifecycle (injected launcher, no real spawn)", async () => {
+  it("start() launches orch-deploy for the pkg and tracks it as running", async () => {
     const f = fakeLauncher();
     const reg = new ProductDeployRegistry(f.launcher);
-    const job = reg.start("nestify");
+    const job = reg.start("nestify", await ok("nestify"));
     expect(f.launched).toEqual(["nestify"]);
     expect(job.pkg).toBe("nestify");
     expect(job.pid).toBe(999);
@@ -165,10 +186,10 @@ describe("ProductDeployRegistry — job lifecycle (injected launcher, no real sp
     expect(reg.isRunning("nestify")).toBe(true);
   });
 
-  it("transitions running → done on exit 0", () => {
+  it("transitions running → done on exit 0", async () => {
     const f = fakeLauncher();
     const reg = new ProductDeployRegistry(f.launcher);
-    reg.start("nestify");
+    reg.start("nestify", await ok("nestify"));
     f.finish(0);
     const job = reg.get("nestify")!;
     expect(job.status).toBe("done");
@@ -177,28 +198,28 @@ describe("ProductDeployRegistry — job lifecycle (injected launcher, no real sp
     expect(job.finishedAt).toBeTypeOf("number");
   });
 
-  it("transitions running → failed on a non-zero / spawn-error exit", () => {
+  it("transitions running → failed on a non-zero / spawn-error exit", async () => {
     const f = fakeLauncher();
     const reg = new ProductDeployRegistry(f.launcher);
-    reg.start("comet");
+    reg.start("comet", await ok("comet"));
     f.finish(-1);
     const job = reg.get("comet")!;
     expect(job.status).toBe("failed");
     expect(job.exitCode).toBe(-1);
   });
 
-  it("latest() returns the most recently started job", () => {
+  it("latest() returns the most recently started job", async () => {
     const f = fakeLauncher();
     const reg = new ProductDeployRegistry(f.launcher);
-    reg.start("nestify");
-    reg.start("quartz");
+    reg.start("nestify", await ok("nestify"));
+    reg.start("quartz", await ok("quartz"));
     expect(reg.latest()?.pkg).toBe("quartz");
   });
 
   it("tail() of a job with no real log file degrades gracefully", async () => {
     const f = fakeLauncher();
     const reg = new ProductDeployRegistry(f.launcher);
-    const job = reg.start("nestify");
+    const job = reg.start("nestify", await ok("nestify"));
     // Hermetic: logFileFor() resolves to `<root>/.artifacts/logs/mcp-deploy-nestify.log`, which
     // EXISTS in the live VPS checkout (a real MCP deploy left it) and would leak into this "no log
     // yet" assertion. Repoint at a path guaranteed absent so `tail()` deterministically hits the
@@ -207,20 +228,20 @@ describe("ProductDeployRegistry — job lifecycle (injected launcher, no real sp
     expect(await reg.tail(job, 80)).toBe("(sem log ainda)");
   });
 
-  it("G3: start(ctx) threads board/cardId onto the job", () => {
+  it("G3: start(ctx) threads board/cardId onto the job", async () => {
     const f = fakeLauncher();
     const reg = new ProductDeployRegistry(f.launcher);
-    const job = reg.start("nestify", { board: "nest", cardId: "story-7" });
+    const job = reg.start("nestify", await ok("nestify"), { board: "nest", cardId: "story-7" });
     expect(job.board).toBe("nest");
     expect(job.cardId).toBe("story-7");
   });
 
-  it("G3: onDone fires with ok=true + threaded board/cardId on a successful deploy", () => {
+  it("G3: onDone fires with ok=true + threaded board/cardId on a successful deploy", async () => {
     const f = fakeLauncher();
     const reg = new ProductDeployRegistry(f.launcher);
     const events: unknown[] = [];
     reg.onDone((ev) => events.push(ev));
-    reg.start("nestify", { board: "nest", cardId: "story-1" });
+    reg.start("nestify", await ok("nestify"), { board: "nest", cardId: "story-1" });
     f.finish(0);
     // story-5vv8n1 (t5): the event now also carries durationMs (wall-clock) + expectWork (threaded from ctx).
     expect(events).toEqual([
@@ -228,47 +249,47 @@ describe("ProductDeployRegistry — job lifecycle (injected launcher, no real sp
     ]);
   });
 
-  it("G3: onDone fires with ok=false + the exit code on a failed deploy", () => {
+  it("G3: onDone fires with ok=false + the exit code on a failed deploy", async () => {
     const f = fakeLauncher();
     const reg = new ProductDeployRegistry(f.launcher);
     const events: unknown[] = [];
     reg.onDone((ev) => events.push(ev));
-    reg.start("nestify", { board: "nest", cardId: "story-1" });
+    reg.start("nestify", await ok("nestify"), { board: "nest", cardId: "story-1" });
     f.finish(2);
     expect(events).toEqual([
       { pkg: "nestify", ok: false, exitCode: 2, board: "nest", cardId: "story-1", durationMs: expect.any(Number), expectWork: undefined },
     ]);
   });
 
-  it("G3: a manual deploy with no card ctx emits onDone without board/cardId", () => {
+  it("G3: a manual deploy with no card ctx emits onDone without board/cardId", async () => {
     const f = fakeLauncher();
     const reg = new ProductDeployRegistry(f.launcher);
     const events: Array<{ board?: string; cardId?: string }> = [];
     reg.onDone((ev) => events.push(ev));
-    reg.start("nestify");
+    reg.start("nestify", await ok("nestify"));
     f.finish(0);
     expect(events[0]?.board).toBeUndefined();
     expect(events[0]?.cardId).toBeUndefined();
   });
 
-  it("story-5vv8n1 (t5): threads expectWork onto the job and the onDone event", () => {
+  it("story-5vv8n1 (t5): threads expectWork onto the job and the onDone event", async () => {
     const f = fakeLauncher();
     const reg = new ProductDeployRegistry(f.launcher);
     const events: DeployDoneEvent[] = [];
     reg.onDone((ev) => events.push(ev));
-    const job = reg.start("nestify", { board: "nest", cardId: "story-1", expectWork: true });
+    const job = reg.start("nestify", await ok("nestify"), { board: "nest", cardId: "story-1", expectWork: true });
     expect(job.expectWork).toBe(true);
     f.finish(0);
     expect(events[0]?.expectWork).toBe(true);
     expect(typeof events[0]?.durationMs).toBe("number");
   });
 
-  it("D-AG2: um start LEGADO (sem spec) emite o evento byte-idêntico — sem chave diffAware nem liveSha", () => {
+  it("D-AG2: um start LEGADO (sem spec) emite o evento byte-idêntico — sem chave diffAware nem liveSha", async () => {
     const f = fakeLauncher();
     const reg = new ProductDeployRegistry(f.launcher);
     const events: DeployDoneEvent[] = [];
     reg.onDone((ev) => events.push(ev));
-    reg.start("nestify", { board: "nest", cardId: "s1" });
+    reg.start("nestify", await ok("nestify"), { board: "nest", cardId: "s1" });
     f.finish(0);
     expect("diffAware" in events[0]).toBe(false);
     expect("liveSha" in events[0]).toBe(false);
@@ -278,7 +299,7 @@ describe("ProductDeployRegistry — job lifecycle (injected launcher, no real sp
 // D-AG2/D-AG3 — the registry gains a LAUNCH SPEC (the board's declared deploy) threaded to the launcher;
 // the done event then carries `diffAware:false` (the declared paths are NOT the diff-aware orch-deploy)
 // and, for an agent verdict that claimed one, `liveSha` — read at close time via the launch's verdict().
-describe("ProductDeployRegistry — launch spec do deploy declarado (D-AG2/D-AG3)", () => {
+describe("ProductDeployRegistry — launch spec do deploy declarado (D-AG2/D-AG3)", async () => {
   function specLauncher(verdict: (() => { ok: boolean; liveSha?: string } | null) | undefined) {
     const seen: { pkg: string; spec?: DeployLaunchSpec }[] = [];
     let done: ((code: number | null) => void) | undefined;
@@ -289,12 +310,12 @@ describe("ProductDeployRegistry — launch spec do deploy declarado (D-AG2/D-AG3
     return { launcher, seen, finish: (code: number | null) => done?.(code) };
   }
 
-  it("threads o spec shell ao launcher e marca o evento diffAware:false (isento do guard instant-noop)", () => {
+  it("threads o spec shell ao launcher e marca o evento diffAware:false (isento do guard instant-noop)", async () => {
     const f = specLauncher(undefined);
     const reg = new ProductDeployRegistry(f.launcher);
     const events: DeployDoneEvent[] = [];
     reg.onDone((ev) => events.push(ev));
-    reg.start("nest", { board: "nest", cardId: "s1", expectWork: true }, { kind: "shell", command: "vercel deploy --prod" });
+    reg.start("nest", await ok("nest"), { board: "nest", cardId: "s1", expectWork: true }, { kind: "shell", command: "vercel deploy --prod" });
     f.finish(0);
 
     expect(f.seen).toEqual([{ pkg: "nest", spec: { kind: "shell", command: "vercel deploy --prod" } }]);
@@ -304,23 +325,23 @@ describe("ProductDeployRegistry — launch spec do deploy declarado (D-AG2/D-AG3
     expect(deploySettledWithoutWork(events[0])).toBe(false);
   });
 
-  it("agente com veredito liveSha ⇒ o evento carrega a ALEGAÇÃO (o settle re-mede; nunca vira carimbo aqui)", () => {
+  it("agente com veredito liveSha ⇒ o evento carrega a ALEGAÇÃO (o settle re-mede; nunca vira carimbo aqui)", async () => {
     const f = specLauncher(() => ({ ok: true, liveSha: "eeff0011" }));
     const reg = new ProductDeployRegistry(f.launcher);
     const events: DeployDoneEvent[] = [];
     reg.onDone((ev) => events.push(ev));
-    reg.start("nest", { board: "nest", cardId: "s1" }, { kind: "agent", board: "nest", description: "deploy via flyctl" });
+    reg.start("nest", await ok("nest"), { board: "nest", cardId: "s1" }, { kind: "agent", board: "nest", description: "deploy via flyctl" });
     f.finish(0);
     expect(events[0]?.liveSha).toBe("eeff0011");
     expect(events[0]?.diffAware).toBe(false);
   });
 
-  it("veredito sem liveSha / launch sem verdict ⇒ evento sem a chave liveSha", () => {
+  it("veredito sem liveSha / launch sem verdict ⇒ evento sem a chave liveSha", async () => {
     const f = specLauncher(() => ({ ok: true }));
     const reg = new ProductDeployRegistry(f.launcher);
     const events: DeployDoneEvent[] = [];
     reg.onDone((ev) => events.push(ev));
-    reg.start("nest", { board: "nest", cardId: "s1" }, { kind: "agent", board: "nest", description: "x" });
+    reg.start("nest", await ok("nest"), { board: "nest", cardId: "s1" }, { kind: "agent", board: "nest", description: "x" });
     f.finish(0);
     expect("liveSha" in events[0]).toBe(false);
   });

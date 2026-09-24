@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { coerceStatuses, coerceToolkit, coerceToolConfigs, coerceBoardDeploy } from "./repo";
+import { dump, load } from "js-yaml";
+import {
+  coerceStatuses,
+  coerceToolkit,
+  coerceToolConfigs,
+  coerceBoardDeploy,
+  deriveBoardConfigForPersist,
+  readBoardConfig,
+} from "./repo";
 import { boardDeployConfigShape } from "./contracts";
+import { FIXTURE_BOARD } from "./board-fixture";
 
 // coerceStatuses parses board.yaml's `statuses` — the pipeline topology for a whole
 // app board. A bad parse (dropped gate/trigger, accepted garbage enum) breaks gate
@@ -197,6 +206,20 @@ describe("coerceBoardDeploy", () => {
     ]);
   });
 
+  // O campo que o PREFLIGHT DE FRESCOR lê: se a leitura ou um save o perdessem, a checagem de ancestralidade
+  // do sha no ar seria PULADA em silêncio ("não declarado") — o oposto do que o dono escreveu no board.yaml.
+  it("liveShaCommand sobrevive à ida e volta (persist → yaml → coerce); em branco não vira declaração", async () => {
+    const base = await readBoardConfig(FIXTURE_BOARD);
+    const raw = await deriveBoardConfigForPersist(FIXTURE_BOARD, {
+      ...base,
+      deploy: { liveShaCommand: "just live-sha app" },
+    });
+    const back = coerceBoardDeploy((load(dump(raw)) as { deploy?: unknown }).deploy);
+    expect(back?.liveShaCommand).toBe("just live-sha app");
+    expect(coerceBoardDeploy({ liveShaCommand: "  just live-sha app  " })?.liveShaCommand).toBe("just live-sha app");
+    expect(coerceBoardDeploy({ liveShaCommand: "   " })).toBeUndefined();
+  });
+
   it("drops a non-array or all-invalid surfaces (never throws → empty descriptor)", () => {
     expect(coerceBoardDeploy({ surfaces: "nope" })).toBeUndefined();
     expect(coerceBoardDeploy({ surfaces: [{ prefix: "" }] })).toBeUndefined();
@@ -212,6 +235,7 @@ describe("coerceBoardDeploy", () => {
       description: "como este app é publicado",
       healthUrl: "https://x/health",
       canaryCommand: "just canary",
+      liveShaCommand: "just live-sha",
       timeoutMinutes: 20,
       surfaces: [{ prefix: "tools/web-terminal/", deployCmd: "just sync-web-terminal" }],
     };

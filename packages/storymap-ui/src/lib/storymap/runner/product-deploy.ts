@@ -22,6 +22,9 @@ import { sanitizeSpawnEnv } from "./spawn-env";
 // story-frente3 — o `just` do lançador default passa pela régua declarado > PATH > recusa.
 import { resolveHostTool } from "./host-tools";
 import { launchDeployAgent, type DeployAgentSpec, type DeployAgentVerdict } from "./deploy-agent-spawn";
+// O PREFLIGHT DE FRESCOR é pré-condição de `start` — ver o doc do método. Este import é seguro: o módulo de
+// frescor não importa nada daqui (nem repo/config), então não há ciclo nem leitura em tempo de carga.
+import { redeemDeployClearance, type DeployClearance } from "./deploy-freshness";
 
 /**
  * OS ALVOS DEPLOYÁVEIS DESTE DEPLOYMENT — lidos do settings.yaml do ALVO, não do fonte deste motor.
@@ -476,8 +479,25 @@ export class ProductDeployRegistry {
    *  D-AG2/D-AG3: an optional `spec` reroutes the launch to a board-DECLARED deploy (shell command /
    *  agent) with the job key = the board id — same tracking, same onDone, same everything downstream.
    *  The done event then carries `diffAware:false` (instant-noop exemption) and, for an agent whose
-   *  verdict claimed one, `liveSha` (a claim the settle re-measures — D-AG4). */
-  start(pkg: string, ctx?: { board: string; cardId: string; expectWork?: boolean }, spec?: DeployLaunchSpec): DeployJob {
+   *  verdict claimed one, `liveSha` (a claim the settle re-measures — D-AG4).
+   *
+   *  `clearance` — A PRÉ-CONDIÇÃO QUE NÃO SE PULA: a autorização que só `checkDeployFreshness`
+   *  (deploy-freshness.ts) cunha, depois de provar que o checkout de onde o deploy roda carrega o que está no
+   *  ar. É resgatada AQUI, antes de o launcher existir: sem ela (ou com uma forjada, vencida, já usada ou de
+   *  outro alvo) este método LANÇA e nada é executado. Existe porque todo deploy de produto — pipeline, fila
+   *  de publicação, tool MCP, a face encadeada — termina neste método; pôr a régua só em cada chamador seria
+   *  confiar que o PRÓXIMO chamador lembre dela (medido 2026-09-24: nenhum dos caminhos buscava o upstream). */
+  start(
+    pkg: string,
+    clearance: DeployClearance,
+    ctx?: { board: string; cardId: string; expectWork?: boolean },
+    spec?: DeployLaunchSpec,
+  ): DeployJob {
+    const recusa = redeemDeployClearance(clearance, pkg);
+    if (recusa) {
+      console.error(`[harness-deploy] RECUSADO: ${recusa}`);
+      throw new Error(recusa);
+    }
     const logFile = logFileFor(pkg);
     const launch = this.launcher(pkg, logFile, spec);
     const startedAt = Date.now();

@@ -18,6 +18,24 @@ describe("deploy-revert — redeploy revert transform (P0/story-2p5zuy: deploy f
     expect(DEPLOY_REVERT_DESTINATION).toBe("release");
   });
 
+  it("phase `freshness`: o finding diz que NADA foi publicado, carrega o motivo medido e avisa que reentrar sem resolver recusa de novo", () => {
+    const reason = "o checkout /srv/app (main em abc1234) está 12 commit(s) ATRÁS de origin/main — rode `git pull --ff-only`";
+    const f = buildDeployFailureFinding({ pkg: "acmeapp", phase: "freshness", reason }, "2026-09-25");
+    expect(f.id).toBe(DEPLOY_FAILURE_FINDING_ID); // o MESMO id: idempotente, e um deploy bem-sucedido depois o resolve
+    expect(f.severity).toBe("high"); // alerta ao operador, nunca blocker
+    expect(f.status).toBe("open");
+    expect(f.title).toMatch(/RECUSADO pelo preflight de frescor/);
+    expect(f.detail).toContain("nada foi publicado");
+    expect(f.detail).toContain(reason); // o remédio vem no motivo — é ele que diz o que fazer
+    expect(f.detail).toContain("acmeapp");
+    expect(f.detail).toMatch(/recusado de novo/);
+    // anti-laço: a recusa volta para a parada HUMANA, sem transformar o card em conserto de código
+    const card = { id: "s1", type: "story", status: "deploy", deployFiredAt: "x" } as unknown as Card;
+    const next = applyDeployFailureRevert(card, f, DEPLOY_REVERT_DESTINATION);
+    expect(next.status).toBe("release");
+    expect((next as { mode?: string }).mode).toBeUndefined();
+  });
+
   it("buildDeployFailureFinding produces a high (non-blocker) finding with pkg + exit + log + stable id, status open", () => {
     const f = buildDeployFailureFinding({ pkg: "acmeapp", exitCode: 2 }, "2026-06-21");
     expect(f.severity).toBe("high"); // operator alert, NOT blocker (must not gate anything)
