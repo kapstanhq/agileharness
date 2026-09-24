@@ -765,6 +765,9 @@ export function coerceBoardDeploy(raw: unknown): BoardDeployConfig | undefined {
   if (typeof r.description === "string" && r.description.trim()) out.description = r.description;
   if (typeof r.healthUrl === "string" && r.healthUrl.trim()) out.healthUrl = r.healthUrl;
   if (typeof r.canaryCommand === "string" && r.canaryCommand.trim()) out.canaryCommand = r.canaryCommand;
+  // Sem esta linha o campo seria DECLARADO-MAS-INERTE: lido fora do descritor, o preflight de frescor pularia a
+  // checagem de ancestralidade achando que o board não a declarou — o oposto do que o dono pediu.
+  if (typeof r.liveShaCommand === "string" && r.liveShaCommand.trim()) out.liveShaCommand = r.liveShaCommand.trim();
   const t = Number(r.timeoutMinutes);
   if (Number.isFinite(t) && t > 0) out.timeoutMinutes = t;
   // story-zr1cmf — deployable SURFACES outside `package`. Tolerant on shape (a non-array or a malformed

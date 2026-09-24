@@ -1743,6 +1743,18 @@ export interface BoardDeployConfig {
    * publication fidelity is simply not checked — never a legacy URL guessed by the harness.
    */
   canaryCommand?: string;
+  /**
+   * O que está NO AR, segundo quem publica: um comando cujo stdout é o sha do commit publicado — um por linha
+   * quando a publicação tem várias unidades. Lido pelo PREFLIGHT DE FRESCOR (runner/deploy-freshness.ts) antes
+   * de todo deploy de produto deste board: o HEAD do checkout de onde o deploy roda tem de DESCENDER de cada
+   * sha impresso (`git merge-base --is-ancestor`), senão o deploy é RECUSADO — publicar dali regrediria o ar.
+   * Falhou, estourou o tempo ou imprimiu outra coisa ⇒ recusa (fail-closed). Ausente ⇒ a checagem é PULADA com
+   * uma linha de log (fetch, atraso e sujeira seguem valendo).
+   *
+   * Board-data que vira execução: passa pela MESMA régua dos outros comandos declarados deste bloco
+   * (`authorizeDeployCommand` — lançador e receita em allow-list, estendível pelo env do serviço).
+   */
+  liveShaCommand?: string;
   /** wall-clock budget of the deploy agent, minutes (default 15 — DEPLOY_AGENT_TIMEOUT_MINUTES_DEFAULT). */
   timeoutMinutes?: number;
   /**

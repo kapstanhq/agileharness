@@ -504,6 +504,8 @@ export const boardDeployConfigShape = {
   description: z.string().optional(),
   healthUrl: z.string().optional(),
   canaryCommand: z.string().optional(),
+  // o sha no AR, para o preflight de frescor (runner/deploy-freshness.ts) — mesma régua dos comandos acima.
+  liveShaCommand: z.string().optional(),
   timeoutMinutes: z.number().positive().optional(),
   // story-zr1cmf — deployable surfaces outside `package`: each `prefix` routed to stage by the split
   // (must also be in staging.codePrefixes — lint) + an optional `deployCmd` published by the self-deploy.
