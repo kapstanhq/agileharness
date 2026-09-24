@@ -136,8 +136,8 @@ export type ExecFn = (
   command: string,
   // `env` é OPCIONAL por compatibilidade, e AUSENTE significa «herda o process.env do serviço» —
   // sob systemd, NODE_ENV=production e os tokens MCP. Quem spawna uma suíte de teste ou um tsc passa
-  // `env: sanitizeSpawnEnv(...)` (ver gateExecOptions em merge-queue.ts). promisify(child_process.exec)
-  // repassa o campo tal qual.
+  // o env de `gateExecOptions` (merge-queue.ts): saneado E sem credencial de nuvem.
+  // promisify(child_process.exec) repassa o campo tal qual.
   opts?: { cwd?: string; timeout?: number; maxBuffer?: number; env?: NodeJS.ProcessEnv },
 ) => Promise<{ stdout: string; stderr: string }>;
 

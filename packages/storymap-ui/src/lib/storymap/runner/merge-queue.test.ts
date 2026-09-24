@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { devNull } from "node:os";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -1852,6 +1853,74 @@ describe("makeDefaultGateRunner — staging worktree lifecycle", () => {
     }
   });
 
+  // ── E SEM CREDENCIAL DE NUVEM — o produtor, de novo, e não a intenção ────────────────────────────
+  // A suíte e o tsc do gate executam código ESCRITO POR AGENTE como o uid do serviço. Com o env do
+  // serviço, um teste que chama a SDK de nuvem achava a credencial do operador pelo caminho padrão. Este
+  // teste FALHA sem a neutralização: com `gateExecOptions` só saneando, as chaves AWS atravessam e
+  // GOOGLE_APPLICATION_CREDENTIALS/CLOUDSDK_CONFIG ficam no valor do serviço.
+  it("[PRODUTOR] a suíte E o tsc recebem env SEM credencial de nuvem — diretórios vazios desta execução, HOME intacto", async () => {
+    const env = process.env as Record<string, string | undefined>;
+    const chaves = ["AWS_SECRET_ACCESS_KEY", "AWS_ACCESS_KEY_ID", "GOOGLE_APPLICATION_CREDENTIALS", "CLOUDSDK_CONFIG", "AZURE_CONFIG_DIR"] as const;
+    const antes = Object.fromEntries(chaves.map((k) => [k, env[k]]));
+    env.AWS_SECRET_ACCESS_KEY = "segredo-aws-do-operador";
+    env.AWS_ACCESS_KEY_ID = "AKIA-DO-OPERADOR";
+    env.GOOGLE_APPLICATION_CREDENTIALS = "/credencial/do/operador.json";
+    env.CLOUDSDK_CONFIG = "/config/gcloud/do/operador";
+    env.AZURE_CONFIG_DIR = "/config/azure/do/operador";
+    try {
+      // O exec do teste OLHA os diretórios no instante do spawn: eles têm de existir e estar vazios
+      // enquanto o comando roda — um caminho que não existe faria a CLI criar um lá dentro, fora do controle.
+      const vistos: Array<{ gcloud: string; azure: string; gcloudVazio: boolean; azureVazio: boolean }> = [];
+      const base = makeGateExec({ mergedFailures: [] });
+      const exec: ExecFn = async (cmd, o) => {
+        if ((cmd.includes("vitest run") || cmd.includes("tsc --noEmit")) && o?.env) {
+          const g = o.env.CLOUDSDK_CONFIG!;
+          const a = o.env.AZURE_CONFIG_DIR!;
+          vistos.push({
+            gcloud: g,
+            azure: a,
+            gcloudVazio: existsSync(g) && readdirSync(g).length === 0,
+            azureVazio: existsSync(a) && readdirSync(a).length === 0,
+          });
+        }
+        return base.exec(cmd, o);
+      };
+      const runner = makeDefaultGateRunner(noopFs);
+
+      const res = await runner({ exec, repoRoot: "/repo", branch: "run/x", runId: "x", checkCommand: "vitest run", timeoutMs: 1000, typecheck: TC });
+
+      expect(res.passed).toBe(true);
+      const alvo = base.calls.filter((c) => c.cmd.includes("vitest run") || c.cmd.includes("tsc --noEmit"));
+      expect(alvo.length, "nem a suíte nem o tsc rodaram — o teste mediria o vazio").toBeGreaterThanOrEqual(2);
+      for (const c of alvo) {
+        expect(c.env, `sem env ⇒ herda o do serviço: ${c.cmd}`).toBeDefined();
+        expect(c.env!.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+        expect(c.env!.AWS_ACCESS_KEY_ID).toBeUndefined();
+        expect(c.env!.GOOGLE_APPLICATION_CREDENTIALS).toBe(devNull);
+        expect(c.env!.AWS_SHARED_CREDENTIALS_FILE).toBe(devNull);
+        expect(c.env!.AWS_CONFIG_FILE).toBe(devNull);
+        expect(c.env!.CLOUDSDK_CONFIG).not.toBe("/config/gcloud/do/operador");
+        expect(c.env!.AZURE_CONFIG_DIR).not.toBe("/config/azure/do/operador");
+        // o HOME é o do serviço — os caches do bun/npm moram nele
+        expect(c.env!.HOME).toBe(env.HOME);
+      }
+      expect(vistos.length).toBeGreaterThanOrEqual(2);
+      for (const v of vistos) {
+        expect(v.gcloudVazio, `CLOUDSDK_CONFIG ${v.gcloud} não existia vazio no spawn`).toBe(true);
+        expect(v.azureVazio, `AZURE_CONFIG_DIR ${v.azure} não existia vazio no spawn`).toBe(true);
+      }
+      // UMA execução do gate ⇒ UM par de diretórios; e ele some quando o gate termina.
+      expect(new Set(vistos.map((v) => v.gcloud)).size).toBe(1);
+      expect(existsSync(vistos[0]!.gcloud), "o diretório vazio sobreviveu ao gate").toBe(false);
+      expect(existsSync(vistos[0]!.azure)).toBe(false);
+    } finally {
+      for (const k of chaves) {
+        if (antes[k] === undefined) delete env[k];
+        else env[k] = antes[k];
+      }
+    }
+  });
+
   it("PASS: adds a staging worktree, merges the run branch there, runs the check, then cleans up", async () => {
     const { exec, calls } = makeGateExec({ mergedFailures: [] });
     const runner = makeDefaultGateRunner(noopFs);
@@ -2069,6 +2138,38 @@ describe("makeDefaultGateRunner — SNAP-AWARE staging merge (story-zdeajs CRITI
     };
     return { exec, calls };
   }
+
+  // `vitest -u` RODA a suíte inteira do delta — é código escrito por agente tanto quanto a checagem. Ele
+  // saía com `{ cwd, timeout }` e nada mais: o env CRU do serviço, com token MCP e credencial de nuvem.
+  it("[PRODUTOR] a regen de snapshot no gate recebe o MESMO env neutralizado da suíte", async () => {
+    const env = process.env as Record<string, string | undefined>;
+    const antes = { aws: env.AWS_SECRET_ACCESS_KEY, mcp: env.AGILEHARNESS_MCP_TOKEN };
+    env.AWS_SECRET_ACCESS_KEY = "segredo-aws-do-operador";
+    env.AGILEHARNESS_MCP_TOKEN = "token-mcp-do-servico";
+    try {
+      const { exec: baseExec } = makeSnapGateExec({ unmergedPaths: ["packages/storymap-ui/src/__snapshots__/board.snap"] });
+      const regens: Array<NodeJS.ProcessEnv | undefined> = [];
+      const exec: ExecFn = async (cmd, o) => {
+        if (cmd.includes("bunx vitest run -u")) regens.push(o?.env);
+        return baseExec(cmd, o);
+      };
+      const res = await makeDefaultGateRunner(noopFs)({ exec, repoRoot: "/repo", branch: "run/x", runId: "x", checkCommand: "vitest run", timeoutMs: 1000 });
+
+      expect(res.passed).toBe(true);
+      expect(regens.length, "a regen não rodou — o teste mediria o vazio").toBe(1);
+      const e = regens[0];
+      expect(e, "regen sem env ⇒ herda o do serviço").toBeDefined();
+      expect(e!.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+      expect(e!.AGILEHARNESS_MCP_TOKEN).toBeUndefined();
+      expect(e!.GOOGLE_APPLICATION_CREDENTIALS).toBe(devNull);
+      expect(e!.CLOUDSDK_CONFIG).toBeTruthy();
+    } finally {
+      if (antes.aws === undefined) delete env.AWS_SECRET_ACCESS_KEY;
+      else env.AWS_SECRET_ACCESS_KEY = antes.aws;
+      if (antes.mcp === undefined) delete env.AGILEHARNESS_MCP_TOKEN;
+      else env.AGILEHARNESS_MCP_TOKEN = antes.mcp;
+    }
+  });
 
   it("SNAP-ONLY conflict → REGENERATES from the merged source, runs the suite, and PASSES (no false-park)", async () => {
     const { exec, calls } = makeSnapGateExec({ unmergedPaths: ["packages/storymap-ui/src/__snapshots__/board.snap"] });

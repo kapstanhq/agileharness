@@ -27,7 +27,8 @@
 // batching: gate K compatible entries together, bisect on red) is a FOLLOW-UP, to be done only if
 // the queue becomes a MEASURED pain — not a speculative one. See `11-autocritica-e-follow-ups.md`.
 
-import { promises as fsp, existsSync } from "node:fs";
+import { promises as fsp, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import { execErrorDetail, makeGit, quote, type GitResult, type GitRunner } from "./git";
@@ -63,7 +64,7 @@ import {
   type WorktreeFs,
 } from "./worktree";
 import { serialCommit, type CommitSerializer } from "./commit-serializer";
-import { sanitizeSpawnEnv } from "./spawn-env";
+import { neutralizeCloudCredentials, type DiretoriosSemCredencial } from "./spawn-env";
 import { patchCreatedPaths, sweepPatchCreations } from "./patch-creations";
 import { partitionPaths, pathsTouchCode, promoteImportedDataPaths } from "./staging";
 // story-281gg4 / story-m3iouv — a fronteira de contribuição é UMA régua para os TRÊS lugares que fazem
@@ -854,6 +855,7 @@ async function mergeBranchIntoStaging(
   repoRoot: string,
   stagingPath: string,
   branch: string,
+  semCredencial: DiretoriosSemCredencial,
 ): Promise<{ ok: true } | { ok: false; log: string }> {
   const detailOf = (err: unknown): string => execErrorDetail(err, GATE_LOG_CAP);
   const gitS = async (args: string): Promise<{ ok: boolean; stdout: string; stderr: string }> => {
@@ -918,7 +920,7 @@ async function mergeBranchIntoStaging(
     let regenErr: string | null = null;
     try {
       await provisionNodeModules(fs, repoRoot, stagingPath);
-      await exec(`bunx vitest run -u`, { cwd: pkgDir, timeout: DEFAULT_GATE_TIMEOUT_MS });
+      await exec(`bunx vitest run -u`, gateExecOptions(pkgDir, DEFAULT_GATE_TIMEOUT_MS, semCredencial));
     } catch (err) {
       regenErr = detailOf(err);
     }
@@ -1023,12 +1025,15 @@ async function regenSnapshotsInTree(
   treePath: string,
   snapFiles: string[],
   timeoutMs: number,
+  semCredencial: DiretoriosSemCredencial,
 ): Promise<{ status: "regenerated" | "noop" | "failed"; detail?: string }> {
   const pkgs = [...new Set(snapFiles.map(packageDirOf).filter((p): p is string => !!p))];
   if (pkgs.length === 0) return { status: "noop" };
   try {
     for (const p of pkgs) {
-      await exec(`bunx vitest run -u`, { cwd: path.join(treePath, p), timeout: timeoutMs });
+      // `vitest -u` RODA a suíte inteira do pacote — o mesmo código do delta que a checagem roda, logo o
+      // mesmo env neutralizado (antes: env do serviço cru, com credencial MCP e de nuvem).
+      await exec(`bunx vitest run -u`, gateExecOptions(path.join(treePath, p), timeoutMs, semCredencial));
     }
   } catch (err) {
     return { status: "failed", detail: execErrorDetail(err, 160) };
@@ -1053,21 +1058,41 @@ async function regenSnapshotsInTree(
  * e a limpeza da árvore roda em TODOS os caminhos de saída.
  */
 export function makeDefaultGateRunner(fs: WorktreeFs = defaultWorktreeFs): IntegrationGateRunner {
-  return async ({
-    exec,
-    repoRoot,
-    branch,
-    runId,
-    checkCommand,
-    timeoutMs,
-    retryOnNewFailure = true,
-    affected,
-    baselineRef,
-    deltaBase,
-    scope,
-    typecheck,
-    quarantined,
-  }) => {
+  const rodar = gateRunnerSemCredencial(fs);
+  // Os diretórios vazios para onde as CLIs de nuvem apontam valem UMA execução do gate: nascem aqui e
+  // morrem no `finally`, em TODO caminho de saída — inclusive nos retornos antecipados de dentro do corpo.
+  return async (opts) => {
+    const semCredencial = criarDiretoriosSemCredencial();
+    try {
+      return await rodar(opts, semCredencial);
+    } finally {
+      semCredencial.descartar();
+    }
+  };
+}
+
+/** O corpo do gate — todo exec que roda CÓDIGO do delta recebe o env de {@link gateExecOptions}. */
+function gateRunnerSemCredencial(
+  fs: WorktreeFs,
+): (opts: Parameters<IntegrationGateRunner>[0], semCredencial: DiretoriosSemCredencial) => ReturnType<IntegrationGateRunner> {
+  return async (
+    {
+      exec,
+      repoRoot,
+      branch,
+      runId,
+      checkCommand,
+      timeoutMs,
+      retryOnNewFailure = true,
+      affected,
+      baselineRef,
+      deltaBase,
+      scope,
+      typecheck,
+      quarantined,
+    },
+    semCredencial,
+  ) => {
     const stagingPath = gateStagingPath(repoRoot, runId);
     const stagingBranch = gateStagingBranch(runId);
     const detailOf = (err: unknown): string => execErrorDetail(err, GATE_LOG_CAP);
@@ -1088,7 +1113,7 @@ export function makeDefaultGateRunner(fs: WorktreeFs = defaultWorktreeFs): Integ
           exec,
           fs,
           provisionNodeModules,
-          regenerateSnapshots: (treePath, snaps) => regenSnapshotsInTree(exec, treePath, snaps, timeoutMs),
+          regenerateSnapshots: (treePath, snaps) => regenSnapshotsInTree(exec, treePath, snaps, timeoutMs, semCredencial),
           join: (...parts) => path.join(...parts),
           readFile: (abs) => fsp.readFile(abs, "utf8"),
         },
@@ -1135,7 +1160,7 @@ export function makeDefaultGateRunner(fs: WorktreeFs = defaultWorktreeFs): Integ
       // regenerating the snapshots from the merged source so the gate proceeds to the validation suite
       // (which then passes with fresh snaps) instead of false-parking the card. Main stays intocada.
       if (!useBaseline) {
-        const mergedIn = await mergeBranchIntoStaging(exec, fs, repoRoot, stagingPath, branch);
+        const mergedIn = await mergeBranchIntoStaging(exec, fs, repoRoot, stagingPath, branch, semCredencial);
         if (!mergedIn.ok) {
           return { passed: false, log: mergedIn.log };
         }
@@ -1217,7 +1242,7 @@ export function makeDefaultGateRunner(fs: WorktreeFs = defaultWorktreeFs): Integ
           const byUnit = new Map<string, { ok: boolean; out: string }>();
           for (const unit of units) {
             try {
-              await exec(typecheck.command, gateExecOptions(path.join(stagingPath, unit.cwd), timeoutMs));
+              await exec(typecheck.command, gateExecOptions(path.join(stagingPath, unit.cwd), timeoutMs, semCredencial));
               byUnit.set(unit.cwd, { ok: true, out: "" });
             } catch (err) {
               const e = err as { stdout?: unknown; stderr?: unknown };
@@ -1334,7 +1359,7 @@ export function makeDefaultGateRunner(fs: WorktreeFs = defaultWorktreeFs): Integ
               ? resolveAffectedGate(unit.command, baseSha, changedInTree, affected).command
               : unit.command;
           const unitDir = path.join(stagingPath, unit.cwd);
-          const r = await runGateCheck(exec, unitDir, command, timeoutMs);
+          const r = await runGateCheck(exec, unitDir, command, timeoutMs, semCredencial);
           if (!r.ok) ok = false;
           failures.push(...r.failures);
           if (r.raw) raw = raw ? `${raw}\n[${unit.label}] ${r.raw}` : `[${unit.label}] ${r.raw}`;
@@ -1533,9 +1558,48 @@ const GATE_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
  * dos AGENTES (`spawn-env.ts`) é o mesmo que serve aqui: tira NODE_ENV, `__NEXT_*` e toda credencial
  * MCP — a suíte do alvo não tem por que ver o token do serviço. Exportada para o teste de PRODUTOR
  * medir o env que CHEGA ao exec, não a intenção.
+ *
+ * ── E SEM CREDENCIAL DE NUVEM (hotfix de contenção) ────────────────────────────────────────────────
+ * O que este exec roda é CÓDIGO ESCRITO POR AGENTE — a suíte e o typecheck do delta, e o `vitest -u` que
+ * regenera snapshot —, como o uid do serviço (root na instalação de referência) e com o env dele. Um
+ * teste que chama a SDK de nuvem achava a credencial do operador sozinho, pelo caminho padrão. Agora o env
+ * passa por {@link neutralizeCloudCredentials}: variáveis de credencial apagadas, arquivos de credencial
+ * das SDKs no nulo do SO, diretórios de config das CLIs apontados para vazios desta execução do gate.
+ * ⚠ HIGIENE, NÃO SANDBOX: o mesmo uid ainda lê o disco direto (ver a nota na função). O HOME não muda.
  */
-export function gateExecOptions(cwd: string, timeoutMs: number, source: NodeJS.ProcessEnv = process.env) {
-  return { cwd, timeout: timeoutMs, maxBuffer: GATE_MAX_BUFFER_BYTES, env: sanitizeSpawnEnv(source) };
+export function gateExecOptions(
+  cwd: string,
+  timeoutMs: number,
+  semCredencial: DiretoriosSemCredencial,
+  source: NodeJS.ProcessEnv = process.env,
+) {
+  return { cwd, timeout: timeoutMs, maxBuffer: GATE_MAX_BUFFER_BYTES, env: neutralizeCloudCredentials(source, semCredencial) };
+}
+
+/**
+ * Os diretórios de config VAZIOS de UMA execução — criados frescos (nada que uma execução anterior tenha
+ * escrito neles sobrevive para a seguinte) sob o temp do SO, FORA de qualquer árvore git, e apagados por
+ * `descartar()` em todo caminho de saída. Exportada para o teste medir que eles nascem vazios e somem.
+ */
+export function criarDiretoriosSemCredencial(
+  base: string = os.tmpdir(),
+): DiretoriosSemCredencial & { descartar: () => void } {
+  const raiz = mkdtempSync(path.join(base, "ah-gate-sem-credencial-"));
+  const gcloudConfigDir = path.join(raiz, "gcloud");
+  const azureConfigDir = path.join(raiz, "azure");
+  mkdirSync(gcloudConfigDir);
+  mkdirSync(azureConfigDir);
+  return {
+    gcloudConfigDir,
+    azureConfigDir,
+    descartar: () => {
+      try {
+        rmSync(raiz, { recursive: true, force: true });
+      } catch {
+        /* best-effort: um temp que sobra não pode derrubar o veredito do gate */
+      }
+    },
+  };
 }
 
 async function runGateCheck(
@@ -1543,8 +1607,9 @@ async function runGateCheck(
   cwd: string,
   checkCommand: string,
   timeoutMs: number,
+  semCredencial: DiretoriosSemCredencial,
 ): Promise<{ ok: boolean; failures: GateFailure[]; raw: string }> {
-  const opts = gateExecOptions(cwd, timeoutMs);
+  const opts = gateExecOptions(cwd, timeoutMs, semCredencial);
   try {
     const { stdout } = await exec(`${checkCommand} --reporter=json`, opts);
     return { ok: true, failures: parseVitestFailures(stdout), raw: "" };
@@ -2322,14 +2387,19 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
     snapFiles: string[],
   ): Promise<{ status: "regenerated" | "noop" | "failed"; detail?: string }> => {
     const pkgDir = path.join(cwd, "packages", "storymap-ui");
+    // O `vitest -u` roda a suíte INTEIRA — código escrito por agente — como o uid do serviço: o mesmo
+    // env neutralizado do gate (sem credencial MCP nem de nuvem), com diretórios vazios só desta regen.
+    const semCredencial = criarDiretoriosSemCredencial();
     try {
       await provisionNodeModules(snapFs, cfg.repoRoot, cwd);
-      await cfg.exec(`bunx vitest run -u`, { cwd: pkgDir, timeout: snapRegenTimeoutMs });
+      await cfg.exec(`bunx vitest run -u`, gateExecOptions(pkgDir, snapRegenTimeoutMs, semCredencial));
     } catch (err) {
       // The vitest run itself failed (a genuine red test the regen can't paper over) → signal the
       // caller to undo + re-drive, CARRYING the error detail for triage. Links dropped first.
       await deprovisionNodeModules(snapFs, cfg.repoRoot, cwd).catch(() => {});
       return { status: "failed", detail: execErrorDetail(err, 160) };
+    } finally {
+      semCredencial.descartar();
     }
     await deprovisionNodeModules(snapFs, cfg.repoRoot, cwd).catch(() => {});
     // Stage each regenerated snap; vitest is idempotent when nothing changed → `git add` is a no-op then.
