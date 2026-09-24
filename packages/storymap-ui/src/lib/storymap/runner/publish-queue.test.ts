@@ -13,6 +13,7 @@ import {
   enqueuePublish,
   findOpenDuplicate,
   nextWaiting,
+  publishEffectFromRelease,
   reapInterrupted,
   reapInterruptedAtBoot,
   registerPublishDrainTrigger,
@@ -633,5 +634,48 @@ describe("drainDeferred", () => {
     expect(drainDeferred({ status: "failed", id: "pub-1", reason: "promote lançou" })).toBe(false);
     expect(drainDeferred(null)).toBe(false);
     expect(drainDeferred(undefined)).toBe(false);
+  });
+});
+
+// O veredito do release → o que a fila decide. O caso NOVO é o do preflight de frescor: a promoção aterrissou
+// (código em main) mas o deploy foi RECUSADO — nada subiu. Carimbar `published` ali seria a mentira que
+// `landed` existe para impedir; e não é adiamento, porque o próximo tick recusaria igual até alguém agir.
+describe("publishEffectFromRelease — promovido NÃO é publicado quando o preflight recusou o deploy", () => {
+  it("promoveu + deploy recusado pelo preflight ⇒ falha COM o motivo (nem published, nem adiado)", () => {
+    const e = publishEffectFromRelease({ revert: false, outcome: "promoted", deployRefused: "3 commit(s) ATRÁS de origin/main" });
+    expect(e.landed).toBe(false);
+    expect(e.deferred).toBe(false);
+    expect(e.reason).toContain("RECUSADO pelo preflight de frescor");
+    expect(e.reason).toContain("3 commit(s) ATRÁS de origin/main");
+  });
+
+  it("sem recusa, a tradução de sempre: aterrissou ⇒ landed; concurrent-work ⇒ adiado; falha ⇒ não aterrissou", () => {
+    expect(publishEffectFromRelease({ revert: false, outcome: "promoted" })).toEqual({
+      landed: true,
+      deferred: false,
+      reason: undefined,
+      heldBy: undefined,
+    });
+    expect(publishEffectFromRelease({ revert: true, outcome: "concurrent-work", reason: "r", heldBy: ["s"] })).toEqual({
+      landed: false,
+      deferred: true,
+      reason: "r",
+      heldBy: ["s"],
+    });
+    expect(publishEffectFromRelease({ revert: true, outcome: "apply-failed", reason: "x" }).landed).toBe(false);
+  });
+
+  it("drenado de ponta a ponta: o pedido termina `failed` com o motivo, nunca `published`", async () => {
+    const store = memStore([req({ id: "pub-f", board: "acme", requestedSha: "aaaa1111" })]);
+    const out = await drainPublishQueue(
+      deps({
+        store,
+        publish: async () => publishEffectFromRelease({ revert: false, outcome: "promoted", deployRefused: "sujo no escopo" }),
+      }),
+    );
+    expect(out.status).toBe("failed");
+    const row = (await store.load()).find((r) => r.id === "pub-f");
+    expect(row?.status).toBe("failed");
+    expect(row?.reason).toContain("sujo no escopo");
   });
 });

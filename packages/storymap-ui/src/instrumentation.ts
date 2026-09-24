@@ -748,7 +748,7 @@ async function registerImpl(): Promise<void> {
   //       esvazia (sem esperar até um intervalo inteiro) e o timer é a rede de segurança para o caso em
   //       que nada mais completa (pedido enfileirado com o sistema já parado — não haveria evento algum).
   {
-    const { drainPublishQueue, defaultPublishQueueStore, registerPublishDrainTrigger, drainDeferred, reapInterruptedAtBoot, enqueuePublish, listPublishRequests } = await import("@/lib/storymap/runner/publish-queue");
+    const { drainPublishQueue, defaultPublishQueueStore, registerPublishDrainTrigger, drainDeferred, reapInterruptedAtBoot, enqueuePublish, listPublishRequests, publishEffectFromRelease } = await import("@/lib/storymap/runner/publish-queue");
     const { listBoards, readBoardConfig } = await import("@/lib/storymap/repo");
     const { releaseModeOf, shouldAutoEnqueue } = await import("@/lib/storymap/release-policy");
     const { frontierOf } = await import("@/lib/storymap/runner/delivery-deps");
@@ -856,7 +856,9 @@ async function registerImpl(): Promise<void> {
             // só o pedido em que alguém pediu isso explicitamente.
             overrideEmbargo: publishOpts?.overrideEmbargo,
           });
-          return { landed: !r.revert, deferred: r.outcome === "concurrent-work", reason: r.reason, heldBy: r.heldBy };
+          // A tradução é PURA e mora na fila (publishEffectFromRelease) — inclusive o caso em que a promoção
+          // aterrissou mas o preflight de frescor recusou o deploy: aquilo NÃO é `published`.
+          return publishEffectFromRelease(r);
         },
         retryEtaMs,
         // A BORDA de "isto virou bloqueio". Um aviso só, na transição — nunca por tentativa (seriam
