@@ -18,6 +18,8 @@ import type { BoardConfig, Card, CardQuestion } from "@/lib/storymap/types";
 import { resolvedClaudeBin } from "./claude-bin";
 import { loadRunnerConfig } from "./config";
 import { isVpsOverloaded, probeVpsResources } from "./scheduler";
+import { getCapacityGovernor } from "./capacity-service";
+import type { GateVerdict } from "./capacity-governor";
 import { allSessions } from "./session-worktree";
 import { getTelemetryStore } from "./telemetry";
 import { blindQuestion, spawnProxy, type OwnerDecision, type ProxyRequest, type ProxyResult } from "./proxy-spawn";
@@ -176,6 +178,16 @@ async function bookCost(board: string, cardId: string, result: ProxyResult, star
   });
 }
 
+/**
+ * A admissão do proxy, na ordem: a JANELA DA CONTA (o governador de capacidade — o proxy é AUTOMAÇÃO: ninguém
+ * está no teclado quando ele dispara) e depois a CAIXA (RAM/load). Retido ⇒ o motivo, e o dispatcher espera
+ * (a próxima varredura re-pergunta); nunca descarta a pergunta. PURA.
+ */
+export function proxyAdmissionReason(account: GateVerdict, boxRefusal: string | null): string | null {
+  if (!account.admit) return `janela da conta: ${account.detail}`;
+  return boxRefusal;
+}
+
 export function defaultProxyDeps(): ProxyDispatchDeps {
   return {
     ledger: diskProxyLedger(),
@@ -185,9 +197,9 @@ export function defaultProxyDeps(): ProxyDispatchDeps {
     masterEnabled: () => loadRunnerConfig().autorun.enabled,
     admission: () => {
       const t = loadRunnerConfig().autorun.scheduler?.thresholds;
-      if (!t) return null;
-      const r = probeVpsResources();
-      return isVpsOverloaded(r, t) ? `RAM livre ${Math.round(r.freeRamMb)}MB / load ${r.loadAvg1.toFixed(2)}` : null;
+      const r = t ? probeVpsResources() : null;
+      const box = t && r && isVpsOverloaded(r, t) ? `RAM livre ${Math.round(r.freeRamMb)}MB / load ${r.loadAvg1.toFixed(2)}` : null;
+      return proxyAdmissionReason(getCapacityGovernor().admission("automation"), box);
     },
     buildRequest,
     spawn: async (req) => {

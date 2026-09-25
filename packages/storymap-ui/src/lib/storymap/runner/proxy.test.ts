@@ -7,7 +7,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { applyProxyAnswers, markProxyDeclined } from "@/lib/storymap/autonomy";
 import { memoryProxyLedger, PROXY_MAX_ATTEMPTS, proxyCard, proxyWork, sweepProxy, type ProxyDispatchDeps } from "./proxy";
-import { ownerDecisions } from "./proxy-deps";
+import { ownerDecisions, proxyAdmissionReason } from "./proxy-deps";
 import type { ProxyRequest, ProxyResult } from "./proxy-spawn";
 import type { BoardConfig, Card, CardQuestion } from "@/lib/storymap/types";
 
@@ -233,5 +233,17 @@ describe("ownerDecisions — o proxy imita o DONO, nunca a si mesmo", () => {
       { cardTitle: "c2", question: "pergunta q2", answer: "B — porque sim" },
       { cardTitle: "c1", question: "pergunta q1", answer: "velha" },
     ]);
+  });
+});
+
+describe("proxyAdmissionReason — a janela da CONTA antes da caixa", () => {
+  const admit = { admit: true, reason: "admit" as const, detail: "", retryAt: null };
+  const held = { admit: false, reason: "latch" as const, detail: "trava 92/90", retryAt: null };
+  it("governador retém ⇒ espera pelo motivo da conta, mesmo com a caixa folgada", () => {
+    expect(proxyAdmissionReason(held, null)).toBe("janela da conta: trava 92/90");
+  });
+  it("conta admite ⇒ vale a caixa (RAM/load)", () => {
+    expect(proxyAdmissionReason(admit, "RAM livre 900MB / load 7.10")).toBe("RAM livre 900MB / load 7.10");
+    expect(proxyAdmissionReason(admit, null)).toBeNull();
   });
 });
