@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { getBoard, listBoards } from "@/lib/storymap/repo";
 import { getTelemetryStore } from "@/lib/storymap/runner/telemetry";
 import { BoardMetricsView } from "@/components/BoardMetricsView";
+import { getCapacityGovernor } from "@/lib/storymap/runner/capacity-service";
 
 export const dynamic = "force-dynamic";
 
@@ -17,5 +18,13 @@ export default async function BoardMetricsPage(props: { params: Promise<{ boardI
     getTelemetryStore().boardSummary(params.boardId),
   ]);
   if (!board) notFound();
-  return <BoardMetricsView board={board} boards={boards} summary={summary} />;
+  // O governador de capacidade: o custo em dólar desta página é NOCIONAL numa assinatura; o limite que existe é
+  // a janela de uso — então ela abre a página. Um retrato ilegível vira null (o painel diz que está indisponível).
+  let capacity = null;
+  try {
+    capacity = getCapacityGovernor().snapshot();
+  } catch {
+    capacity = null;
+  }
+  return <BoardMetricsView board={board} boards={boards} summary={summary} capacity={capacity} />;
 }

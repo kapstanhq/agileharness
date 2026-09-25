@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -113,5 +113,19 @@ describe("o engine de produção usa o governador SINGLETON por default", () => 
     expect(spawned.some((c) => c.includes("acme/prod-op"))).toBe(true);
     expect(g.snapshot().held.count).toBe(1);
     await g.flush();
+  });
+});
+
+describe("o boot arma o governador ANTES da recuperação, com a trava dura ligada ao engine", () => {
+  const src = readFileSync(path.join(process.cwd(), "src/instrumentation.ts"), "utf8");
+  it("startCapacityGovernor com hardStop (stopAutomationRuns) e rearm (evaluateAutorunOnEntry)", () => {
+    const at = src.indexOf("startCapacityGovernor({");
+    expect(at, "o boot não arma o governador — o laço (1ª leitura do dia, trava automática, avisos) não existe").toBeGreaterThan(0);
+    const block = src.slice(at, at + 900);
+    expect(block).toContain("hardStop: (reason) => engine.stopAutomationRuns(reason)");
+    expect(block).toContain("evaluateAutorunOnEntry(it.board, it.cardId)");
+    expect(at, "armado DEPOIS da recuperação: os runs re-despachados no boot sairiam antes da 1ª leitura").toBeLessThan(
+      src.indexOf("const makeRecoveryDeps"),
+    );
   });
 });

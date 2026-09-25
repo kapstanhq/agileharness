@@ -11,7 +11,8 @@
 // windows, extra-usage credits, headroom compression effectiveness (honest — it says "0 reqs"
 // when the proxy has compressed nothing, instead of a reassuring green), and RAM/HD.
 
-import { AlertTriangle, Zap } from "lucide-react";
+import { AlertTriangle, Lock, Zap } from "lucide-react";
+import { CapacityPanel } from "@/components/CapacityPanel";
 import { cn } from "@/lib/cn";
 import { useVpsMetrics } from "@/components/RunnerStatusProvider";
 import {
@@ -125,6 +126,9 @@ export function HealthPill() {
 
   const { pct, estimate, stale } = headline(metrics);
   const { usage } = metrics;
+  // A TRAVA do governador de capacidade muda o chip: é o único estado da cota que PARA a frota, e ele não pode
+  // depender de o operador abrir o painel para ser visto.
+  const latched = !!metrics.governor?.latch;
 
   return (
     <div ref={ref} className="relative shrink-0" onMouseEnter={openNow} onMouseLeave={closeSoon}>
@@ -135,20 +139,23 @@ export function HealthPill() {
       <NavChip
         onClick={() => setOpen((o) => !o)}
         open={open}
-        tone={meterTone(pct)}
+        tone={latched ? "danger" : meterTone(pct)}
         leading={
           <span className="relative inline-flex">
             <UsageRing pct={pct ?? 0} />
             {stale && (
               <AlertTriangle className="absolute -right-1 -top-1 h-2.5 w-2.5 text-amber-500" aria-label="defasado" />
             )}
+            {latched && <Lock className="absolute -bottom-1 -right-1 h-2.5 w-2.5 text-rose-600" aria-label="trava de capacidade" />}
           </span>
         }
         value={pct != null ? `${Math.round(pct)}%${estimate ? "≈" : ""}` : "—"}
         title={
-          stale
-            ? `Uso Claude — número defasado (proxy atualizou ${formatAge(usage?.polledAt ?? null)})`
-            : "Uso Claude — sessão · semana · Sonnet"
+          latched
+            ? "Trava de capacidade engatada — nenhum trabalho automático começa"
+            : stale
+              ? `Uso Claude — número defasado (proxy atualizou ${formatAge(usage?.polledAt ?? null)})`
+              : "Uso Claude — sessão · semana · Sonnet"
         }
         ariaLabel={`Uso Claude${pct != null ? ` — ${Math.round(pct)}% da semana` : ""}`}
       />
@@ -190,6 +197,13 @@ export function HealthPill() {
           ) : (
             <NavPopoverEmpty>{metrics.tokenError ?? "cota indisponível"}</NavPopoverEmpty>
           )}
+          {/* O GOVERNADOR DE CAPACIDADE: o que a frota pode gastar desta mesma janela hoje, o que está retido e a
+              trava. As barras de 7d/5h já estão acima quando o proxy responde — aqui não se repetem. */}
+          <NavPopoverDivider />
+          <NavPopoverTitle>Capacidade da frota</NavPopoverTitle>
+          <NavPopoverBlock>
+            <CapacityPanel snapshot={metrics.governor} omit={usage ? ["week", "session"] : []} />
+          </NavPopoverBlock>
           {/* Sem rodapé de propósito: este painel RESPONDE (quanto da cota já foi), não encaminha. A
               porta para Processos vive no medidor ao lado — repeti-la aqui só punha uma saída para
               OUTRO assunto no fim de uma leitura que já estava completa. */}

@@ -58,6 +58,7 @@ export const REPO_SCOPED_TOOLS: ReadonlySet<string> = new Set([
   "claude_kill", // mata um processo da caixa
   "term_new", // abre um shell na caixa
   "run_task", // spawna um `claude` com Bash pleno na caixa
+  "engage_capacity_latch", // a trava do governador de capacidade é da CONTA (uma janela de uso por host), não de um board
 ]);
 
 /** As chaves de argumento das quais um board é derivável — a heurística, agora com um nome e um teste. */

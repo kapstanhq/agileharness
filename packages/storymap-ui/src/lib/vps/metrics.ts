@@ -16,7 +16,10 @@ import { promisify } from "node:util";
 import yaml from "js-yaml";
 import { findRepoRoot, settingsPath } from "@/lib/storymap/paths";
 import { parseWeeklyTokenWindow } from "./ccusage";
-import { isUsageStale, parseHeadroomStats } from "./subscription";
+import { isUsageStale } from "./subscription";
+import { headroomStatsUrl, readHeadroomStats } from "./subscription-reader";
+import { getCapacityGovernor } from "@/lib/storymap/runner/capacity-service";
+import type { GovernorSnapshot } from "@/lib/storymap/runner/capacity-governor";
 import type { DiskMetric, HeadroomSavings, LoadMetric, RamMetric, TokenWindow, UsageWindow, VpsMetrics } from "./types";
 
 const pexec = promisify(execFile);
@@ -144,29 +147,12 @@ function configuredUsageMaxAgeMs(): number {
   return Math.floor(min * 60_000);
 }
 
-function headroomStatsUrl(): string | null {
-  const env = process.env.AGILEHARNESS_HEADROOM_URL?.trim();
-  if (env && /^(0|off|false|none|disabled)$/i.test(env)) return null;
-  const base = (env || "http://127.0.0.1:8787").replace(/\/+$/, "");
-  return `${base}/stats`;
-}
-
+// The proxy read itself lives in subscription-reader.ts — shared with the capacity governor, which needs the
+// window WITHOUT paying this hub's ccusage spawn on every admission decision.
 async function readUsage(): Promise<{ usage: UsageWindow | null; headroom: HeadroomSavings | null }> {
   const url = headroomStatsUrl();
   if (!url) return { usage: null, headroom: null };
-  // A broken/absent proxy must NEVER stall the metrics poll — short timeout, fail to null.
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 1500);
-  try {
-    const res = await fetch(url, { signal: ctrl.signal, cache: "no-store" });
-    if (!res.ok) return { usage: null, headroom: null };
-    const { usage, savings } = parseHeadroomStats(await res.text());
-    return { usage, headroom: savings };
-  } catch {
-    return { usage: null, headroom: null };
-  } finally {
-    clearTimeout(timer);
-  }
+  return readHeadroomStats(url);
 }
 
 type Listener = (m: VpsMetrics) => void;
@@ -216,7 +202,16 @@ class MetricsHub {
     // frozen proxy poll flips to "stale" between the slow /stats refreshes.
     if (usage) usage = { ...usage, stale: isUsageStale(usage.polledAt, now, configuredUsageMaxAgeMs()) };
 
-    this.last = { at: now, ram, disk, load, tokens, tokenError, usage, headroom };
+    // O governador de capacidade: um retrato SÍNCRONO do estado em memória (ele relê o medidor por conta própria,
+    // com cache) — nunca pode derrubar o poll, então qualquer falha vira null.
+    let governor: GovernorSnapshot | null = null;
+    try {
+      governor = getCapacityGovernor().snapshot();
+    } catch {
+      governor = null;
+    }
+
+    this.last = { at: now, ram, disk, load, tokens, tokenError, usage, headroom, governor };
     return this.last;
   }
 

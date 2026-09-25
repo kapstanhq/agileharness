@@ -13,6 +13,8 @@
 
 // --- Box health -------------------------------------------------------------
 
+import type { GovernorSnapshot } from "@/lib/storymap/runner/capacity-governor";
+
 export interface RamMetric {
   totalBytes: number;
   usedBytes: number;
@@ -150,6 +152,12 @@ export interface VpsMetrics {
   usage: UsageWindow | null;
   /** headroom compression effectiveness; null when the proxy/stats are unavailable */
   headroom: HeadroomSavings | null;
+  /**
+   * The capacity governor's state (runner/capacity-service.ts): window %, today's pacing, held work, the latch.
+   * Optional so an older snapshot shape (tests, a hub built before the governor) still type-checks; null when
+   * the governor could not be read.
+   */
+  governor?: GovernorSnapshot | null;
 }
 
 // --- Running services -------------------------------------------------------
