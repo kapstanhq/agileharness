@@ -116,6 +116,14 @@ const CORPUS: Array<{ name: string; fm: string; status: string }> = [
   { name: "rev: user + hasUiSurface false → both allow (UI-less user story exempt)", fm: "id: c\ntype: story\nstoryType: user\nhasUiSurface: false", status: "rev" },
   { name: "rev: hasUiSurface quoted 'true' (malformed) → fallback user → both block", fm: 'id: c\ntype: story\nstoryType: user\nhasUiSurface: "true"', status: "rev" },
   { name: "rev: bug + hasUiSurface true + qaPassed → both allow", fm: "id: c\ntype: story\nstoryType: bug\nhasUiSurface: true\nqaPassed: true", status: "rev" },
+  // gate honesto — um card COM CÓDIGO (commitRange/stagedAt) exige qaPassed + qaEvidence, com ou sem tela.
+  { name: "rev: chore + commitRange, sem QA → both block", fm: "id: c\ntype: story\nstoryType: chore\ncommitRange:\n  base: aaa\n  head: bbb", status: "rev" },
+  { name: "rev: chore + commitRange + qaPassed SEM qaEvidence → both block", fm: "id: c\ntype: story\nstoryType: chore\nqaPassed: true\ncommitRange:\n  base: aaa\n  head: bbb", status: "rev" },
+  { name: "rev: chore + commitRange + qaPassed + qaEvidence.suite true → both allow", fm: "id: c\ntype: story\nstoryType: chore\nqaPassed: true\ncommitRange:\n  base: aaa\n  head: bbb\nqaEvidence:\n  suite: true\n  at: 2026-09-25T10:00:00Z", status: "rev" },
+  { name: "rev: chore + stagedAt + qaPassed + qaEvidence.visual true → both allow", fm: "id: c\ntype: story\nstoryType: technical\nstagedAt: 2026-09-25\nqaPassed: true\nqaEvidence:\n  visual: true\n  at: 2026-09-25T10:00:00Z", status: "rev" },
+  { name: "rev: código + qaEvidence.suite 'true' (string, malformado) → both block", fm: 'id: c\ntype: story\nstoryType: chore\nqaPassed: true\nstagedAt: 2026-09-25\nqaEvidence:\n  suite: "true"\n  at: x', status: "rev" },
+  { name: "rev: código + qaEvidence.suite true SEM at → both block", fm: "id: c\ntype: story\nstoryType: chore\nqaPassed: true\nstagedAt: 2026-09-25\nqaEvidence:\n  suite: true", status: "rev" },
+  { name: "rev: código + qaEvidence que não prova nada (suite/visual false) → both block", fm: "id: c\ntype: story\nstoryType: chore\nqaPassed: true\nstagedAt: 2026-09-25\nqaEvidence:\n  suite: false\n  visual: false\n  at: x", status: "rev" },
 ];
 
 /** The gate id a verdict points at, or null when allowed — the comparable unit. */

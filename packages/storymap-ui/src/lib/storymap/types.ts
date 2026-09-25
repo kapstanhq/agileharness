@@ -701,8 +701,10 @@ export interface Card {
   reviewCommit?: string | null;
   /**
    * harness-qa proved the acceptance criteria end-to-end (E2E + headless visual) →
-   * gate hasQaPassed. Only `user` stories with a UI-observable criterion require
-   * it; technical/spike/chore/bug pass the gate freely (no deadlock on infra cards).
+   * gate hasQaPassed. Required by a card with a UI surface AND by any card that carries
+   * CODE (declaresCode: stagedAt/commitRange) — the latter together with `qaEvidence`
+   * saying what was proven. A card with neither passes the gate freely (no deadlock on
+   * board-only chores/spikes).
    */
   qaPassed?: boolean;
   /** when the last QA run ran (YYYY-MM-DD) + the commit/HEAD it validated. */
@@ -981,7 +983,7 @@ export const GATE_IDS = [
   "hasCriteriaSpecs", // revisar-codigo (ADR-063 2c): every UI-observable acceptance criterion has an authored spec (shift-left; default-satisfied on absent)
   "hasBuildEvidence", // revisar-codigo (C2/ny4v26): every declared task done + delegates hasCriteriaSpecs — build evidence before review; via the pre-write hook it binds ANY writer, including a manual status flip
   "hasNoBlockers", // qa-automatizado: code review left no open blocker
-  "hasQaPassed", // revisao: automated acceptance/E2E + visual QA is green (user stories)
+  "hasQaPassed", // revisao: QA green — UI surface ⇒ visual proof; carries code ⇒ qaEvidence (suite/visual)
   "hasRefineBrief", // refinar: a refinement must carry a free-text brief
   "hasBugReport", // corrigir: a bug fix must carry a free-text report
   "hasRetireBrief", // descontinuar: a retirement must carry a free-text reason
@@ -2233,6 +2235,27 @@ export interface RunnerColumnDefaults {
  * Per-PIPELINE policy (which model column X uses) lives on StatusDef in
  * board.yaml; this holds only cross-board infra knobs + the column fallbacks.
  */
+/**
+ * Uma unidade DECLARADA do gate de integração (`autorun.mergeGate.scope.packages|units`). Espelho estrutural
+ * de runner/gate-scope.ts `GateUnitSpec` — lá está o porquê de cada campo.
+ */
+export interface MergeGateUnitDecl {
+  /** o comando da suíte da unidade, com as flags dela (`bunx vitest run --config vitest.unit.config.ts`, `pytest -q`) */
+  command: string;
+  /** como a unidade é medida; default `vitest-json` */
+  reporter?: "vitest-json" | "junit-xml" | "exit-code";
+  /** aceita seleção por afetados (só `vitest-json`; default true lá) */
+  affected?: boolean;
+  /** `junit-xml`: o relatório que o comando grava, relativo ao `cwd` da unidade */
+  junitPath?: string;
+  /** rede sob o selo; default `deny` */
+  network?: "deny" | "allow";
+  /** onde o comando roda (repo-relativo); default a própria chave; `.` = a raiz */
+  cwd?: string;
+  /** globs que também disparam a unidade (ex.: `packages/*\/web/**` para um lint de arquitetura) */
+  triggers?: string[];
+}
+
 export interface RunnerSettings {
   /** schema version for future migration */
   version: number;
@@ -2317,8 +2340,13 @@ export interface RunnerSettings {
        * the full suite. Optional/absent ⇒ always full suite (pre-perf behavior). See runner/affected-gate.ts. */
       affected?: {
         enabled: boolean;
-        /** command template; `{base}` → pre-merge sha; MUST pass on zero matches (e.g. `--passWithNoTests`). */
-        command: string;
+        /**
+         * LEGADO, ignorado. Era um template (`{base}`) que SUBSTITUÍA o comando de TODA unidade — uma unidade
+         * pytest rodava vitest e uma unidade com `--config` perdia a config. A seleção agora é por UNIDADE:
+         * `<comando da unidade> --changed <base> --passWithNoTests`, só em unidades `vitest-json`. Aceito para
+         * um settings.yaml antigo carregar. Ver runner/affected-gate.ts.
+         */
+        command?: string;
         /** repo-relative exact/`dir/`/glob patterns that force the full suite. */
         fullSuitePaths: string[];
       };
@@ -2332,13 +2360,31 @@ export interface RunnerSettings {
        * qualquer coisa fora do mapa cai no fallback (o pacote do harness), que é exatamente o
        * comportamento de hoje. Ausente ⇒ nada muda. Ver runner/gate-scope.ts. */
       scope?: {
-        /** `<dir do pacote>` → comando de checagem; a chave casa por PREFIXO de diretório. */
-        packages?: Record<string, string>;
+        /** `<dir do pacote>` → unidade (string = comando vitest legado, ou {@link MergeGateUnitDecl}); a chave
+         *  casa por PREFIXO de diretório. */
+        packages?: Record<string, string | MergeGateUnitDecl>;
+        /** unidades EXTRAS por prefixo que não é pacote (`tests/architecture`), mesma forma e casamento. */
+        units?: Record<string, string | MergeGateUnitDecl>;
         /** teto de suítes por entrada; acima disso colapsa no fallback (o slot serial não se multiplica) */
         maxUnits?: number;
         /** a suíte que roda quando o delta não casa o mapa (ou transborda). Ausente ⇒ o pacote da ferramenta —
          *  default histórico que só é válido num repositório onde a ferramenta MORA. Ver runner/gate-scope.ts. */
-        fallback?: { cwd: string; command?: string };
+        fallback?: { cwd: string; command?: string } & Omit<Partial<MergeGateUnitDecl>, "command" | "cwd" | "triggers">;
+      };
+      /**
+       * O SELO (runner/gate-sandbox.ts): `systemd` (default) roda cada comando de código-do-delta numa unidade
+       * transiente do systemd — root SEM capability, FS read-only exceto a árvore do gate, `/run` e `/tmp`
+       * privados, credenciais conhecidas inacessíveis e (por unidade, `network: deny`, o default) sem rede. Só
+       * vale quando a SONDA prova o selo neste host; sem systemd o gate cai para `none` com aviso alto (log de
+       * cada gate + preflight). `none` desliga por declaração: o comportamento de antes (env neutralizado).
+       */
+      isolation?: "systemd" | "none";
+      /** Caminhos do selo além dos defaults: absolutos, `~/…` ou repo-relativos. */
+      sealed?: {
+        /** a esconder (ex.: o diretório de env do serviço, `/etc/agileharness`) */
+        inaccessiblePaths?: string[];
+        /** caches que a suíte PRECISA escrever além da árvore do gate */
+        writablePaths?: string[];
       };
       /**
        * Typecheck como pergunta BINÁRIA por árvore, em canal PRÓPRIO — nunca misturado ao parse de

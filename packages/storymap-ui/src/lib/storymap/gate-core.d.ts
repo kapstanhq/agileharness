@@ -49,6 +49,9 @@ export function hasUiSurface(card: Card): boolean;
 /** Did the QA that stamped this card look at the SCREEN? `qaEvidence.visual`, or null when nothing was
  *  recorded (absent ≠ false — the gate treats unknown differently from a negative). */
 export function qaVisualProof(card: Card): boolean | null;
+/** Did the QA stamp record WHAT it proved (`qaEvidence` with `at` and `suite` or `visual` true)? The
+ *  evidence hasQaPassed demands of a code-bearing card (declaresCode), with or without a UI surface. */
+export function qaHasEvidence(card: Card): boolean;
 /** deploy-truth (D-DT4) — does the card POSITIVELY declare code (stagedAt stamped OR a full commitRange)?
  *  The single no-code ruler shared by hasReleased, hasDeployProof AND the server settle handler. */
 export function declaresCode(card: Card): boolean;

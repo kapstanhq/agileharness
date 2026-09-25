@@ -189,8 +189,10 @@ que não têm o que desenhar, o caminho ramifica:
   a cascata avança direto de `pronta`/`design-ux` para `plano-tecnico` (kernel
   `lib/storymap/pipeline-routing.ts` → `nextBuildStatus`/`skipsStatusForType`, consumido por
   `cascade-decision.ts`). E no `qa-automatizado` o gate concreto é a **suíte** (`just test-<pkg>`)
-  verde + as lentes do `harness-review`, NÃO seed+E2E+visual. O gate `hasQaPassed` já é type-aware
-  (`storyType !== "user"` destrava sem `qaPassed`), então design-skip e QA-skip andam em par.
+  verde + as lentes do `harness-review`, NÃO seed+E2E+visual. O gate `hasQaPassed` não exige prova
+  VISUAL de um card sem tela — mas um card que CARREGA CÓDIGO (`stagedAt`/`commitRange`) só entra em
+  `revisao` com `qaPassed: true` + `qaEvidence.suite: true` (a suíte rodou), tenha tela ou não. Só o card
+  sem código e sem tela (chore/spike de board) segue isento.
 
 O skip do bloco de design vale **independente do toggle `autorun`** da coluna: o
 `decideCascade` avalia o branch de skip **antes** do guard de parada manual, então uma story
@@ -216,7 +218,7 @@ short-circuit se acionado na mão sobre um card não-`user` (encaminha sem gerar
 | `hasTechPlan` | `techPlanReady: true` (o `harness-plan` escreveu `plans/<id>.md`) — gate de entrada em `quebrar-tasks` |
 | `hasWireframe` | `wireframeChosen` preenchido (o artefato de tela PRIMÁRIO do canvas — ou uma opção legada — de `wireframes/<id>.json`) — gate de entrada em `com-design` |
 | `hasNoBlockers` | nenhum `findings[]` com `severity: blocker` **e** `status: open` — gate de entrada em `qa-automatizado` |
-| `hasQaPassed` | `qaPassed: true` (QA de aceite E2E + visual verde; só user stories) — gate de entrada em `revisao` |
+| `hasQaPassed` | gate de entrada em `revisao`. Card com superfície de UI: `qaPassed: true` (+ `qaEvidence.visual: true` quando o diff tocou tela). Card COM CÓDIGO (`stagedAt`/`commitRange`), com ou sem tela: `qaPassed: true` + `qaEvidence` com `suite` (ou `visual`) verdadeiro — o bit sozinho não prova suíte. Card sem código e sem tela: isento. |
 | `hasRefineBrief` | `refinement.brief` preenchido — gate de `refinar` (modo melhoria) |
 | `hasBugReport` | `bugReport.brief` preenchido — gate de `corrigir` (modo correção) |
 
@@ -457,7 +459,8 @@ As skills de automação operam sobre os status que declaram `trigger`:
    dev seedado, roda os critérios de aceite de ponta a ponta (E2E) + sweep visual headless, marca
    `qaPassed` e move para `revisao` (gate `hasQaPassed`). `technical`/`chore`/`spike`/`bug` → o
    gate concreto é a **suíte do pacote** (`just test-<pkg>`) verde + as lentes do `harness-review` —
-   sem seed/E2E/visual; suíte vermelha vira um finding `testing: blocker` e NÃO destrava o gate.
+   sem seed/E2E/visual; o carimbo registra `qaEvidence.suite: true`, que é o que o gate exige de um
+   card com código. Suíte vermelha vira um finding `testing: blocker` e NÃO destrava o gate.
    `revisao` é a **PARADA** final — revisão humana do que foi entregue.
 9. **`harness-refine`** (status `refinar`, **modo melhoria**): triagem de uma story já entregue,
    reaberta pelo botão **Refinar**. Diagnostica a implementação que JÁ existe (read-only),

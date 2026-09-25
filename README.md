@@ -281,8 +281,10 @@ worktree per run, and live console output. Arming a board is a second, deliberat
 a board is registered disarmed.
 
 **Merge train.** N sessions work in parallel, each in an ephemeral git worktree. Integration
-is serialized through a train that pins the submitted sha, runs the affected test suite as a
-gate, and splits the result: product code to the staging branch, board data to `main`. A
+is serialized through a train that pins the submitted sha, runs the entry's declared test units
+as a gate (vitest, JUnit or exit-code; affected-only where a unit supports it), sealed in a
+transient systemd unit where the host proves it can, recording the exact argv and how many
+tests ran, and splits the result: product code to the staging branch, board data to `main`. A
 conflict goes back to the session that caused it, not to the operator's lap.
 
 **Design as data.** Beyond the [wireframe DSL](./docs/how-it-works.md#wireframes-the-llm-authors-a-tree-the-code-draws-the-picture): a canvas of screens, components, flows and

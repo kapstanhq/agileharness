@@ -243,9 +243,11 @@ export function registerResources(server: McpServer): void {
       } catch {
         raiz = null;
       }
+      const { cachedGateSandboxProbe } = await import("@/lib/storymap/runner/gate-sandbox");
       return runPreflight({
         repoRoot: raiz,
         claudeName: loadRunnerConfig().autorun.claudeBin,
+        gateSeal: cachedGateSandboxProbe(),
         run: (cmd, args) => {
           try {
             const r = spawnSync(cmd, args, { encoding: "utf8", timeout: 1500 });

@@ -154,3 +154,38 @@ describe("diskMergeQueueStore.load — WS-2.4: a entry `re-driving` órfã do bo
     expect(out[1]).toMatchObject({ runId: "a779b5be", status: "failed" });
   });
 });
+
+describe("diskMergeQueueStore — o gateReport sobrevive ao restart (gate honesto)", () => {
+  const report = {
+    isolation: "systemd",
+    isolationReason: "selo provado",
+    testsExecuted: 42,
+    uncountedUnits: 0,
+    units: [
+      {
+        label: "packages/web",
+        cwd: "packages/web",
+        reporter: "vitest-json",
+        mode: "affected",
+        network: "deny",
+        isolation: "systemd",
+        argv: ["systemd-run", "--wait", "--", "/bin/sh", "-c", "bunx vitest run --reporter=json"],
+        exitCode: 0,
+        tests: 42,
+        failures: 0,
+      },
+    ],
+  };
+
+  it("a prova de que N>0 testes rodaram NÃO some no load — Zod estripa chave desconhecida", async () => {
+    const out = await storeWith({ version: 1, entries: [{ ...valid, status: "done", gateReport: report }] }).load();
+    expect(out[0].gateReport).toEqual(report);
+  });
+
+  it("um relatório malformado cai SOZINHO — a entrada (branch, estado da fila) é preservada", async () => {
+    const out = await storeWith({ version: 1, entries: [{ ...valid, status: "done", gateReport: { testsExecuted: "muitos" } }] }).load();
+    expect(out).toHaveLength(1);
+    expect(out[0].runId).toBe("r1");
+    expect(out[0].gateReport).toBeUndefined();
+  });
+});

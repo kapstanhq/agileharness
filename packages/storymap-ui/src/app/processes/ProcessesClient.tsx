@@ -198,6 +198,16 @@ function MergeQueueRow({
             {entry.failureReason}
           </p>
         )}
+        {entry.gateReport && (
+          // O que o gate EXECUTOU: sem a contagem, "gate verde" não diz se algum teste rodou.
+          <p
+            className="mt-1 truncate font-mono text-[10px] text-fg-subtle"
+            title={entry.gateReport.units.map((u) => `[${u.label}] ${u.argv.join(" ")}`).join("\n")}
+          >
+            gate: {entry.gateReport.testsExecuted ?? "?"} teste(s) · {entry.gateReport.units.length} unidade(s) ·{" "}
+            {entry.gateReport.isolation === "systemd" ? "selado" : "SEM selo"}
+          </p>
+        )}
       </div>
       {entry.status === "gate-failed" && (
         <div className="flex shrink-0 items-center gap-1">

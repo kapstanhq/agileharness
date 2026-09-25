@@ -726,11 +726,19 @@ export function registerStorymapTools(server: McpServer): void {
               "cujo diff tocou superfície de UI (um qaPassed vindo só da suíte não prova tela). Omitido ⇒ " +
               "não mexe na evidência existente.",
           ),
+        suite: z
+          .boolean()
+          .optional()
+          .describe(
+            "você RODOU a suíte e ela passou? Grava qaEvidence.suite — a prova que o gate cobra de um card " +
+              "COM CÓDIGO (stagedAt/commitRange), tenha tela ou não: o bit qaPassed sozinho não prova suíte. " +
+              "Omitido ⇒ não mexe na evidência existente.",
+          ),
         comment: z.string().optional().describe("nota opcional (não persiste no card)"),
       },
     },
-    async ({ board, cardId, qaPassed, qaRanAt, qaCommit, visual, comment }) => {
-      const r = await approveQaAction({ boardId: board, cardId, qaPassed, qaRanAt, qaCommit, visual, comment });
+    async ({ board, cardId, qaPassed, qaRanAt, qaCommit, visual, suite, comment }) => {
+      const r = await approveQaAction({ boardId: board, cardId, qaPassed, qaRanAt, qaCommit, visual, suite, comment });
       return r.ok ? json({ ok: true, card: r.data ? slim(r.data.card) : null }) : fail(r.error);
     },
   );
@@ -1538,6 +1546,9 @@ export function registerStorymapTools(server: McpServer): void {
             // P-1 — os arquivos que divergiram. Antes o desfecho era "código conflita com stage" e nada
             // mais, então quem lia esta superfície não tinha o que acionar.
             conflictFiles: e.conflict?.files,
+            // Gate honesto — quantos testes a última rodada do gate EXECUTOU (null = nenhuma unidade conta).
+            // Um `gate-failed` com 0 aqui é outra conversa que um com 400.
+            ...(e.gateReport ? { gateTestsExecuted: e.gateReport.testsExecuted, gateIsolation: e.gateReport.isolation } : {}),
           })),
         // P-8 — A MAIN VERMELHA, que o gate sempre mediu e ninguém nunca reportou. Enquanto ela existir,
         // NENHUM card é reprovado por essas falhas (a atribuição as absolve, corretamente) — e por isso

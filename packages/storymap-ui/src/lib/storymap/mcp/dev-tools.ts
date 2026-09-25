@@ -1022,6 +1022,7 @@ export function registerDevTools(server: McpServer): void {
             : result.state === "timeout"
               ? "ainda na fila — re-chame esta tool para continuar esperando"
               : `parqueado como ${status} — leia o motivo em detail e trate antes de re-submeter`;
+      const gr = settled?.gateReport;
       return json({
         sessionId,
         state: result.state,
@@ -1029,6 +1030,19 @@ export function registerDevTools(server: McpServer): void {
         // SEMPRE presente quando há motivo: era exatamente isto que não tinha leitor nenhum na superfície
         // MCP, e por isso a devolução chegava à sessão sem nada em que agir.
         ...(detail ? { detail } : {}),
+        // O QUE O GATE EXECUTOU nesta submissão — quantos testes rodaram, em que unidades, com qual argv e
+        // sob qual isolamento. "integrado" sem isto não diz se algum teste do seu código chegou a rodar.
+        ...(gr
+          ? {
+              gate: {
+                testsExecuted: gr.testsExecuted,
+                uncountedUnits: gr.uncountedUnits,
+                isolation: gr.isolation,
+                ...(gr.isolation === "none" ? { isolationReason: gr.isolationReason } : {}),
+                units: gr.units.map((u) => ({ label: u.label, reporter: u.reporter, mode: u.mode, tests: u.tests, exitCode: u.exitCode, argv: u.argv })),
+              },
+            }
+          : {}),
         waitedMs: "waitedMs" in result ? result.waitedMs : 0,
         next,
       });

@@ -126,6 +126,21 @@ function qaVisualProof(card) {
 }
 
 /**
+ * Did the QA stamp record that something was PROVEN — the suite ran green, or someone looked at the
+ * screen? A code-bearing card needs this and not the bare `qaPassed` bit (see hasQaPassed).
+ *
+ * Parity-safe by construction: `at` must be present (coerceQaEvidence drops a stamp without it, so the
+ * raw-yaml hook must not count it either — a Date from js-yaml or the app's string both `stamped`), and
+ * only a REAL boolean `true` counts (a quoted "true" is dropped by the coerce, and `=== true` rejects it
+ * on the raw path too). Pure, zero imports.
+ */
+function qaHasEvidence(card) {
+  const ev = card.qaEvidence;
+  if (!ev || typeof ev !== "object" || !stamped(ev.at)) return false;
+  return ev.suite === true || ev.visual === true;
+}
+
+/**
  * The gate map. Each entry: ok (predicate), label (UI chip), message (why blocked), fix (how to
  * unblock — surfaced by the pre-write hook). PT-BR throughout. Mirrors storymap/frameworks.md §4
  * for the prioritization rubric. THIS is the source; the hook reads board.yaml for which gate
@@ -290,19 +305,30 @@ const GATES = {
     // exigiu sweep nenhum. Só cobramos a prova visual de quem tem superfície MEDIDA: para um card sem
     // medição (anterior a este campo, ou sem run de código) o veredito é byte-idêntico ao de antes —
     // fechar o vazamento não pode travar card em voo.
+    //
+    // (c) GATE HONESTO — o card CARREGA CÓDIGO? A isenção "sem superfície ⇒ passa" era VÁCUA para código: um
+    // `chore`/`technical` que reescrevia lógica chegava à Revisão (e dali ao merge) sem prova de suíte
+    // nenhuma — nem `qaPassed`. A régua de "tem código" é a MESMA do release/deploy ({@link declaresCode}:
+    // `stagedAt` do train OU `commitRange` do review/QA), e o que se exige é o carimbo com EVIDÊNCIA
+    // ({@link qaHasEvidence}: `qaEvidence` com `suite` ou `visual` verdadeiros) — o bit `qaPassed` sozinho
+    // não diz O QUE foi provado. Card sem código e sem superfície segue isento, byte a byte.
     ok: (card) => {
-      if (!hasUiSurface(card)) return true;
+      const surface = hasUiSurface(card);
+      const code = card.type === "story" && declaresCode(card);
+      if (!surface && !code) return true;
       if (card.qaPassed !== true) return false;
+      if (code && !qaHasEvidence(card)) return false;
       const ev = card.uiSurfaceEvidence;
       const measured = !!(ev && typeof ev === "object" && ev.touched === true);
-      return measured ? qaVisualProof(card) === true : true;
+      return surface && measured ? qaVisualProof(card) === true : true;
     },
     message:
       "Rode /harness-qa para validar os critérios de aceite de ponta a ponta (E2E + visual) e marcar qaPassed antes de ir para a Revisão humana. " +
-      "Se o diff deste card tocou tela (uiSurfaceEvidence.touched), o QA precisa REGISTRAR que o sweep visual rodou — um qaPassed vindo só da suíte não prova tela.",
+      "Se o diff deste card tocou tela (uiSurfaceEvidence.touched), o QA precisa REGISTRAR que o sweep visual rodou — um qaPassed vindo só da suíte não prova tela. " +
+      "Um card COM CÓDIGO (stagedAt/commitRange) precisa do carimbo com evidência — `qaEvidence` com `suite: true` (ou `visual: true`) —, tenha tela ou não: o bit qaPassed sozinho não prova suíte nenhuma.",
     fix:
-      "Rode /harness-qa (aceite end-to-end + sweep visual) e grave `qaPassed: true` + `qaEvidence: { suite, visual: true, at }`. " +
-      "Se você validou a tela na mão, use approve_qa com `visual: true` (é você afirmando que olhou).",
+      "Rode /harness-qa (aceite end-to-end + sweep visual; num card sem tela, a suíte do pacote) e grave `qaPassed: true` + `qaEvidence: { suite, visual, at }`. " +
+      "Se você validou na mão, use approve_qa com `suite: true` (você rodou a suíte) e/ou `visual: true` (você olhou a tela) — é você afirmando o que provou.",
   },
   hasRefineBrief: {
     label: "brief de refino",
@@ -623,6 +649,7 @@ module.exports = {
   hasNarrative,
   hasUiSurface,
   qaVisualProof,
+  qaHasEvidence,
   declaresCode,
   GATES,
   GATE_LABELS,

@@ -76,8 +76,26 @@ import { partitionPaths, pathsTouchCode, promoteImportedDataPaths } from "./stag
 // fronteira chamava de DADO).
 import { classifyDeltaPath, judgeIncoming } from "./release";
 import { resolveAffectedGate, type AffectedGateSpec } from "./affected-gate";
+import { parseJunitReport, parseVitestReport, type GateFailure, type ParsedReport } from "./gate-reporters";
+import {
+  buildSealedInvocation,
+  defaultInaccessiblePaths,
+  cachedGateSandboxProbe,
+  resolveGateIsolation,
+  stopUnitCommand,
+  type GateIsolationMode,
+  type GateSeal,
+  type SandboxProbe,
+} from "./gate-sandbox";
 import { captureConflictArtifact, describeConflictArtifact, type ConflictArtifact } from "./conflict-artifact";
-import { resolveGateUnits, type GateScopeSpec, type GateUnit } from "./gate-scope";
+import {
+  resolveGateUnits,
+  unitAcceptsAffected,
+  unitReporter,
+  type GateNetwork,
+  type GateScopeSpec,
+  type GateUnit,
+} from "./gate-scope";
 import { corridaVerdeLimpaMainRed, describeMainRed, quarantinedTestIds, recordMainRedMeasurement } from "./gate-health";
 import { prepareGateTree } from "./gate-tree";
 import { appendTransition } from "./transitions";
@@ -86,8 +104,8 @@ import { recordLanding } from "./landings";
 import { climbLadder, isResolved, type JudgePort, type ResolutionOutcome, type ResolutionResult } from "./semantic-resolution";
 import { makeJudgePort } from "./resolution-judge-spawn";
 import { isActiveMergeStatus, isLiveMergeStatus, isParkedMergeStatus } from "./merge-status";
-import type { MergeQueueEntry, MergeQueueSnapshot } from "./types";
-import type { Card, DiffSnapshot, Finding, TriggerId } from "@/lib/storymap/types";
+import type { GateReport, GateUnitReport, MergeQueueEntry, MergeQueueSnapshot } from "./types";
+import type { Card, DiffSnapshot, Finding, RunnerSettings, TriggerId } from "@/lib/storymap/types";
 import { resolvedClaudeBin } from "./claude-bin";
 
 // The merge runs on the MAIN tree (a few refs + a working-tree merge), never minutes — but a
@@ -332,6 +350,13 @@ export type IntegrationGateRunner = (opts: {
    * um conjunto de chaves conhecidas antes de decidir.
    */
   quarantined?: ReadonlySet<string>;
+  /**
+   * O ISOLAMENTO EFETIVO desta execução — o chamador já cruzou o pedido (`mergeGate.isolation`) com a
+   * sonda (`resolveGateIsolation`). `systemd` ⇒ todo comando de código-do-delta roda numa unidade
+   * transiente selada (gate-sandbox.ts). Ausente ⇒ `none`, o comportamento de antes, byte a byte — o
+   * default ligado mora na config, não no runner (a mesma disciplina do `typecheck`).
+   */
+  isolation?: IntegrationGateIsolation;
   /** true when the gate could not produce a VERDICT (crash/kill/setup error — no parseable report),
    *  as opposed to the suite actually reporting failures. Still blocks (fail-closed), but the caller
    *  must not tell the submitter their code broke: nothing was attributable. */
@@ -340,6 +365,12 @@ export type IntegrationGateRunner = (opts: {
   log: string;
   inconclusive?: boolean;
   flaky?: GateFailure[];
+  /**
+   * O que a rodada que DECIDIU executou: por unidade, a argv exata, o reporter, o modo (afetados/completa)
+   * e QUANTOS testes rodaram; mais o isolamento efetivo. Ausente quando nenhuma suíte chegou a rodar
+   * (conflito, recusa, typecheck vermelho) — e é por isso que ausência nunca pode ler como "verde".
+   */
+  report?: GateReport;
   /**
    * P-2 — o delta NÃO APLICA na baseline. Desfecho NOVO e o mais valioso do gate: o conflito aparece
    * aqui, em segundos, ANTES de a suíte rodar (o p90 do gate é ~2 min) e já com os arquivos/regiões. O
@@ -350,6 +381,17 @@ export type IntegrationGateRunner = (opts: {
   /** as falhas que JÁ existiam na baseline (main vermelha) — o produtor que faltava (P-8) */
   preexisting?: GateFailure[];
 }>;
+
+/** O isolamento que o CHAMADOR resolveu para uma execução do gate (ver `IntegrationGateRunner.isolation`). */
+export interface IntegrationGateIsolation {
+  mode: GateIsolationMode;
+  /** o porquê do modo — vai para o log de cada gate (o fallback nunca é silencioso) */
+  reason: string;
+  /** `mergeGate.sealed.inaccessiblePaths` — além da deny-list default (absolutos, `~/…` ou repo-relativos) */
+  inaccessiblePaths?: string[];
+  /** `mergeGate.sealed.writablePaths` — caches graváveis além da árvore */
+  writablePaths?: string[];
+}
 
 /** The injectable surface the engine + ops actions depend on (DI — like the engine's `spawn`). */
 export interface MergeQueuePort {
@@ -532,6 +574,14 @@ export interface MergeQueueConfig {
   gateScope?: GateScopeSpec;
   /** typecheck do gate (tests); unset ⇒ o `mergeGate.typecheck` vivo do `settings.yaml`. */
   gateTypecheck?: { enabled: boolean; command: string };
+  /** o isolamento do gate JÁ RESOLVIDO (tests); unset ⇒ `mergeGate.isolation` vivo × a sonda abaixo. */
+  gateIsolation?: IntegrationGateIsolation;
+  /**
+   * A sonda do selo (gate-sandbox.ts `probeGateSandbox`). `getMergeQueue()` injeta a real (memorizada por
+   * processo); AUSENTE ⇒ "sonda não injetada" ⇒ o gate roda sem selo, anunciando — assim um teste de fila
+   * nunca dispara `systemd-run` no host sem pedir.
+   */
+  gateSandboxProbe?: () => SandboxProbe;
   /**
    * P-3 — PRAZO de uma entrada EM VOO (ms). Toda chamada git tem timeout e o gate tem teto, mas a ENTRADA
    * não tinha prazo nenhum — e uma cabeça travada não é só uma entrada parada: o portão de ociosidade do
@@ -855,7 +905,7 @@ async function mergeBranchIntoStaging(
   repoRoot: string,
   stagingPath: string,
   branch: string,
-  semCredencial: DiretoriosSemCredencial,
+  runInTree: GateCommandRunner,
 ): Promise<{ ok: true } | { ok: false; log: string }> {
   const detailOf = (err: unknown): string => execErrorDetail(err, GATE_LOG_CAP);
   const gitS = async (args: string): Promise<{ ok: boolean; stdout: string; stderr: string }> => {
@@ -920,7 +970,9 @@ async function mergeBranchIntoStaging(
     let regenErr: string | null = null;
     try {
       await provisionNodeModules(fs, repoRoot, stagingPath);
-      await exec(`bunx vitest run -u`, gateExecOptions(pkgDir, DEFAULT_GATE_TIMEOUT_MS, semCredencial));
+      // O `vitest -u` roda a suíte do delta — MESMO caminho (env neutralizado + selo) da checagem.
+      const r = await runInTree(`bunx vitest run -u`, pkgDir, { timeoutMs: DEFAULT_GATE_TIMEOUT_MS });
+      if (!r.ok) regenErr = detailOf(r.err);
     } catch (err) {
       regenErr = detailOf(err);
     }
@@ -1021,19 +1073,19 @@ export function verificationDemand(
  * NUNCA lança — devolve `failed` com o motivo, que o chamador trata como defeito do delta.
  */
 async function regenSnapshotsInTree(
-  exec: ExecFn,
+  runInTree: GateCommandRunner,
   treePath: string,
   snapFiles: string[],
   timeoutMs: number,
-  semCredencial: DiretoriosSemCredencial,
 ): Promise<{ status: "regenerated" | "noop" | "failed"; detail?: string }> {
   const pkgs = [...new Set(snapFiles.map(packageDirOf).filter((p): p is string => !!p))];
   if (pkgs.length === 0) return { status: "noop" };
   try {
     for (const p of pkgs) {
       // `vitest -u` RODA a suíte inteira do pacote — o mesmo código do delta que a checagem roda, logo o
-      // mesmo env neutralizado (antes: env do serviço cru, com credencial MCP e de nuvem).
-      await exec(`bunx vitest run -u`, gateExecOptions(path.join(treePath, p), timeoutMs, semCredencial));
+      // mesmo env neutralizado E o mesmo selo (antes: env do serviço cru, com credencial MCP e de nuvem).
+      const r = await runInTree(`bunx vitest run -u`, path.join(treePath, p), { timeoutMs });
+      if (!r.ok) return { status: "failed", detail: execErrorDetail(r.err, 160) };
     }
   } catch (err) {
     return { status: "failed", detail: execErrorDetail(err, 160) };
@@ -1057,8 +1109,8 @@ async function regenSnapshotsInTree(
  * degradar para o comportamento de ontem é sempre melhor que travar o train. `main` NUNCA é tocada aqui,
  * e a limpeza da árvore roda em TODOS os caminhos de saída.
  */
-export function makeDefaultGateRunner(fs: WorktreeFs = defaultWorktreeFs): IntegrationGateRunner {
-  const rodar = gateRunnerSemCredencial(fs);
+export function makeDefaultGateRunner(fs: WorktreeFs = defaultWorktreeFs, reportIo: GateReportIo = defaultGateReportIo): IntegrationGateRunner {
+  const rodar = gateRunnerSemCredencial(fs, reportIo);
   // Os diretórios vazios para onde as CLIs de nuvem apontam valem UMA execução do gate: nascem aqui e
   // morrem no `finally`, em TODO caminho de saída — inclusive nos retornos antecipados de dentro do corpo.
   return async (opts) => {
@@ -1078,9 +1130,230 @@ export function makeDefaultGateRunner(fs: WorktreeFs = defaultWorktreeFs): Integ
   };
 }
 
-/** O corpo do gate — todo exec que roda CÓDIGO do delta recebe o env de {@link gateExecOptions}. */
+/** O desfecho de UM comando do gate — sucesso OU falha, nunca exceção (quem decide é o chamador). */
+export interface GateCommandOutcome {
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+  /** o erro do exec, quando `ok:false` (carrega stdout/stderr/code como o `child_process` os entrega) */
+  err?: unknown;
+  /** a argv EXATA executada — vai para o log e para o relatório da entrada */
+  argv: string[];
+  isolation: GateIsolationMode;
+  /** status de saída: 0 no sucesso; o do processo quando numérico; `null` quando morto por sinal/timeout */
+  exitCode: number | null;
+}
+
+/** Roda UM comando de código-do-delta no `cwd` dado, com env neutralizado e (quando ligado) o selo. */
+export type GateCommandRunner = (
+  command: string,
+  cwd: string,
+  opts: { timeoutMs: number; network?: GateNetwork },
+) => Promise<GateCommandOutcome>;
+
+/**
+ * Onde o gate lê/limpa o relatório JUnit que a unidade grava (DI: o teste injeta um fake). `read` devolve
+ * `null` quando o arquivo não existe — "não há relatório" é um FATO que o gate precisa ver, não um erro.
+ */
+export interface GateReportIo {
+  read(absPath: string): Promise<string | null>;
+  remove(absPath: string): Promise<void>;
+}
+
+export const defaultGateReportIo: GateReportIo = {
+  async read(p) {
+    try {
+      return await fsp.readFile(p, "utf8");
+    } catch {
+      return null;
+    }
+  },
+  async remove(p) {
+    await fsp.rm(p, { force: true });
+  },
+};
+
+/** Uma unidade rodada: o relatório + o que a decisão precisa (falhas identificadas, relatório legível). */
+interface UnitRun {
+  unit: GateUnit;
+  report: GateUnitReport;
+  ok: boolean;
+  /** o reporter declarado produziu um relatório legível (sempre true para exit-code) */
+  parsed: boolean;
+  failures: GateFailure[];
+  raw: string;
+}
+
+/** Resume as rodadas numa contagem por entrada. PURA. */
+export function summarizeGateReport(
+  units: GateUnitReport[],
+  isolation: { mode: GateIsolationMode; reason: string },
+): GateReport {
+  const counted = units.filter((u) => u.tests !== null);
+  return {
+    isolation: isolation.mode,
+    isolationReason: isolation.reason,
+    testsExecuted: counted.length > 0 ? counted.reduce((acc, u) => acc + (u.tests ?? 0), 0) : null,
+    uncountedUnits: units.length - counted.length,
+    units,
+  };
+}
+
+/** As linhas de unidade do log do gate — a argv inteira, palavra por palavra (JSON), por unidade. PURA. */
+export function formatUnitLines(report: GateReport): string {
+  const head =
+    `unidades do gate (isolamento: ${report.isolation}${report.isolation === "none" ? ` — ${report.isolationReason}` : ""}) · ` +
+    `${report.testsExecuted === null ? "contagem desconhecida" : `${report.testsExecuted} teste(s) executado(s)`}` +
+    `${report.uncountedUnits > 0 && report.testsExecuted !== null ? ` + ${report.uncountedUnits} unidade(s) sem contagem` : ""}:`;
+  const lines = report.units.map(
+    (u) =>
+      `  [${u.label}] ${u.reporter} · ${u.mode === "affected" ? "afetados" : "completa"} · ` +
+      `${u.tests === null ? "contagem n/d" : `${u.tests} teste(s)`} · exit ${u.exitCode ?? "sinal/timeout"} · rede ${u.network}\n` +
+      `    argv: ${JSON.stringify(u.argv)}`,
+  );
+  return [head, ...lines].join("\n");
+}
+
+/**
+ * Caminho repo-relativo de um relatório JUnit dentro da unidade — `null` se a declaração escapa da unidade
+ * (absoluto ou com `..`): o gate só lê relatório de dentro da árvore que ele mesmo montou. PURA.
+ */
+export function junitReportPath(unitDir: string, junitPath: string | undefined): string | null {
+  if (!junitPath || !junitPath.trim()) return null;
+  const rel = junitPath.trim();
+  if (path.isAbsolute(rel) || rel.split(/[\\/]/).includes("..")) return null;
+  return path.join(unitDir, rel);
+}
+
+/** `.env*` que não são exemplo: segredo local que um teste hostil leria direto do checkout principal. */
+const ENV_FILE_RE = /^\.env(\..+)?$/;
+const ENV_EXAMPLE_RE = /\.(example|sample|template|dist|defaults?)$/;
+
+/**
+ * Os `.env*` do checkout PRINCIPAL (raiz, `packages/*`, `packages/*\/*`) — a árvore do gate só tem o que é
+ * versionado, mas os `node_modules` dela são links para o principal, então o principal inteiro fica visível
+ * (read-only) dentro do selo. Os segredos locais dele entram na deny-list. Best-effort e raso de propósito:
+ * profundidade 3, sem descer em node_modules/.git/.worktrees. Nunca lança.
+ */
+export async function discoverEnvFiles(repoRoot: string): Promise<string[]> {
+  const out: string[] = [];
+  const SKIP = new Set(["node_modules", ".git", ".worktrees", ".next", "dist"]);
+  const walk = async (dir: string, depth: number): Promise<void> => {
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isFile() && ENV_FILE_RE.test(e.name) && !ENV_EXAMPLE_RE.test(e.name)) out.push(full);
+      else if (e.isDirectory() && depth < 3 && !SKIP.has(e.name)) await walk(full, depth + 1);
+    }
+  };
+  await walk(repoRoot, 0);
+  return out;
+}
+
+/** `~/x` → HOME; relativo → contra a raiz do repositório; absoluto fica. PURA. */
+function resolveSealPath(p: string, repoRoot: string): string {
+  if (p === "~" || p.startsWith("~/")) return path.join(os.homedir(), p.slice(1));
+  return path.isAbsolute(p) ? p : path.join(repoRoot, p);
+}
+
+/**
+ * O selo de UMA execução do gate. `undefined` quando o isolamento efetivo é `none` (o chamador decide o
+ * efetivo — `resolveGateIsolation` — com a sonda). A deny-list: credenciais padrão do HOME/sistema + o estado
+ * do runner (token do operador, handles MCP) + os `.env*` do serviço e do checkout principal + o declarado.
+ */
+async function buildGateSeal(opts: {
+  isolation: IntegrationGateIsolation | undefined;
+  stagingPath: string;
+  repoRoot: string;
+  runId: string;
+}): Promise<GateSeal | undefined> {
+  const iso = opts.isolation;
+  if (!iso || iso.mode !== "systemd") return undefined;
+  const serviceCwd = process.cwd();
+  const serviceEnvFiles = [".env", ".env.local", ".env.production", ".env.production.local", ".env.development.local"].map((f) =>
+    path.join(serviceCwd, f),
+  );
+  const declared = (iso.inaccessiblePaths ?? []).map((p) => resolveSealPath(p, opts.repoRoot));
+  return {
+    mode: "systemd",
+    reason: iso.reason,
+    treePath: opts.stagingPath,
+    repoRoot: opts.repoRoot,
+    inaccessiblePaths: [
+      ...new Set([
+        ...defaultInaccessiblePaths(os.homedir()),
+        runnerStateDir(),
+        ...serviceEnvFiles,
+        ...(await discoverEnvFiles(opts.repoRoot)),
+        ...declared,
+      ]),
+    ],
+    writablePaths: (iso.writablePaths ?? []).map((p) => resolveSealPath(p, opts.repoRoot)),
+    runId: opts.runId,
+  };
+}
+
+/** Folga do exec sobre o `RuntimeMaxSec` do selo: quem mata no teto é o systemd, e a unidade SAI limpa. */
+const SEAL_EXEC_GRACE_MS = 15_000;
+
+/**
+ * O executor de comandos de UMA execução do gate: env neutralizado (sempre) + o selo (quando efetivo). Toda
+ * linha que roda código do delta — suíte, typecheck, `vitest -u` — passa por aqui; é UM chokepoint, e é
+ * ele que devolve a argv exata. Num timeout o cliente `systemd-run` morre mas a unidade NÃO (medido): o
+ * executor a para pelo nome, que só pode ser uma unidade do gate ({@link stopUnitCommand}).
+ */
+function makeGateCommandRunner(
+  exec: ExecFn,
+  semCredencial: DiretoriosSemCredencial,
+  seal: GateSeal | undefined,
+): GateCommandRunner {
+  let seq = 0;
+  return async (command, cwd, { timeoutMs, network }) => {
+    const base = gateExecOptions(cwd, timeoutMs, semCredencial);
+    const inv = buildSealedInvocation({
+      command,
+      cwd,
+      env: base.env,
+      timeoutMs,
+      network,
+      seal,
+      nonce: `${Date.now().toString(36)}${(seq++).toString(36)}`,
+    });
+    if (inv.skipped.length > 0) {
+      console.warn(`[harness-merge-queue] selo: caminho(s) fora da forma aceita pelo systemd, NÃO aplicados: ${inv.skipped.join(", ")}`);
+    }
+    const opts = { ...base, env: inv.env, timeout: inv.unit ? timeoutMs + SEAL_EXEC_GRACE_MS : timeoutMs };
+    try {
+      const r = await exec(inv.command, opts);
+      return { ok: true, stdout: r.stdout ?? "", stderr: r.stderr ?? "", argv: inv.argv, isolation: inv.isolation, exitCode: 0 };
+    } catch (err) {
+      const e = err as { stdout?: unknown; stderr?: unknown; code?: unknown; killed?: unknown; signal?: unknown };
+      if (inv.unit && (e?.killed === true || e?.signal != null)) {
+        const stop = stopUnitCommand(inv.unit);
+        if (stop) await exec(stop, { timeout: 30_000 }).catch(() => {});
+      }
+      return {
+        ok: false,
+        stdout: String(e?.stdout ?? ""),
+        stderr: String(e?.stderr ?? ""),
+        err,
+        argv: inv.argv,
+        isolation: inv.isolation,
+        exitCode: typeof e?.code === "number" ? e.code : null,
+      };
+    }
+  };
+}
+
+/** O corpo do gate — todo exec que roda CÓDIGO do delta passa pelo {@link GateCommandRunner} desta execução. */
 function gateRunnerSemCredencial(
   fs: WorktreeFs,
+  reportIo: GateReportIo,
 ): (opts: Parameters<IntegrationGateRunner>[0], semCredencial: DiretoriosSemCredencial) => ReturnType<IntegrationGateRunner> {
   return async (
     {
@@ -1097,6 +1370,7 @@ function gateRunnerSemCredencial(
       scope,
       typecheck,
       quarantined,
+      isolation,
     },
     semCredencial,
   ) => {
@@ -1106,6 +1380,11 @@ function gateRunnerSemCredencial(
     // P-2 só entra com os DOIS ingredientes: sem a base do delta não há patch a aplicar, e cortar da
     // baseline sem aplicar nada validaria a árvore errada — pior que o caminho legado.
     const useBaseline = !!baselineRef && !!deltaBase;
+    // O isolamento EFETIVO desta execução (o chamador já resolveu pedido × sonda). Ausente ⇒ `none`, o
+    // comportamento de antes — o default ligado mora na config, como o typecheck.
+    const isoEfetivo = { mode: isolation?.mode ?? ("none" as GateIsolationMode), reason: isolation?.reason ?? "isolamento não pedido ao runner" };
+    const seal = await buildGateSeal({ isolation, stagingPath, repoRoot, runId });
+    const runInTree = makeGateCommandRunner(exec, semCredencial, seal);
 
     // Defensive: a stale staging tree from a crashed prior run would make `git worktree add` fail.
     await cleanupGateStaging(exec, fs, repoRoot, runId);
@@ -1120,7 +1399,7 @@ function gateRunnerSemCredencial(
           exec,
           fs,
           provisionNodeModules,
-          regenerateSnapshots: (treePath, snaps) => regenSnapshotsInTree(exec, treePath, snaps, timeoutMs, semCredencial),
+          regenerateSnapshots: (treePath, snaps) => regenSnapshotsInTree(runInTree, treePath, snaps, timeoutMs),
           join: (...parts) => path.join(...parts),
           readFile: (abs) => fsp.readFile(abs, "utf8"),
         },
@@ -1167,7 +1446,7 @@ function gateRunnerSemCredencial(
       // regenerating the snapshots from the merged source so the gate proceeds to the validation suite
       // (which then passes with fresh snaps) instead of false-parking the card. Main stays intocada.
       if (!useBaseline) {
-        const mergedIn = await mergeBranchIntoStaging(exec, fs, repoRoot, stagingPath, branch, semCredencial);
+        const mergedIn = await mergeBranchIntoStaging(exec, fs, repoRoot, stagingPath, branch, runInTree);
         if (!mergedIn.ok) {
           return { passed: false, log: mergedIn.log };
         }
@@ -1193,7 +1472,15 @@ function gateRunnerSemCredencial(
       // default continua CERTO, porque lá `packages/storymap-ui` existe de verdade.
       const declaredFallback = scope?.fallback;
       const fallbackUnit: GateUnit = declaredFallback
-        ? { cwd: declaredFallback.cwd, command: declaredFallback.command ?? checkCommand, label: declaredFallback.cwd }
+        ? {
+            cwd: declaredFallback.cwd,
+            command: declaredFallback.command ?? checkCommand,
+            label: declaredFallback.cwd,
+            ...(declaredFallback.reporter ? { reporter: declaredFallback.reporter } : {}),
+            ...(declaredFallback.affected !== undefined ? { affected: declaredFallback.affected } : {}),
+            ...(declaredFallback.junitPath ? { junitPath: declaredFallback.junitPath } : {}),
+            ...(declaredFallback.network ? { network: declaredFallback.network } : {}),
+          }
         : { cwd: "packages/storymap-ui", command: checkCommand, label: "packages/storymap-ui" };
       const scoped = resolveGateUnits(changedInTree, fallbackUnit, scope);
 
@@ -1208,15 +1495,25 @@ function gateRunnerSemCredencial(
       // aparecia nas duas rodadas (mergeada e base), a atribuição a creditava à base — "não é culpa do
       // branch" — e o gate APROVAVA. Uma recusa é sobre a árvore, não sobre o código; torná-la
       // atribuível é entregá-la à máquina que existe para perdoar falhas pré-existentes.
+      //
+      // A MESMA régua vale para uma unidade `junit-xml` sem `junitPath` utilizável: sem o caminho do
+      // relatório o gate não tem o que ler — e um junit sem relatório é uma unidade que "passa" sem medir.
       const unidadesAusentes: string[] = [];
+      const declaracoesInvalidas: string[] = [];
       for (const unit of scoped.units) {
         if (!(await fs.isDir(path.join(stagingPath, unit.cwd)))) unidadesAusentes.push(unit.cwd);
+        if (unitReporter(unit) === "junit-xml" && !junitReportPath(path.join(stagingPath, unit.cwd), unit.junitPath)) {
+          declaracoesInvalidas.push(`${unit.label} (junit-xml sem junitPath relativo à unidade)`);
+        }
       }
-      if (unidadesAusentes.length > 0) {
+      if (unidadesAusentes.length > 0 || declaracoesInvalidas.length > 0) {
         const motivo =
-          `gate RECUSADO (não reprovado): ${unidadesAusentes.join(", ")} não existe em ${stagingPath}. ` +
-          `A suíte NÃO rodou. Declare as unidades em \`mergeGate.scope.packages\` do settings, ou aponte o ` +
-          `gate para a árvore que de fato tem o pacote.`;
+          unidadesAusentes.length > 0
+            ? `gate RECUSADO (não reprovado): ${unidadesAusentes.join(", ")} não existe em ${stagingPath}. ` +
+              `A suíte NÃO rodou. Declare as unidades em \`mergeGate.scope.packages\` do settings, ou aponte o ` +
+              `gate para a árvore que de fato tem o pacote.`
+            : `gate RECUSADO (não reprovado): declaração de unidade inválida — ${declaracoesInvalidas.join(", ")}. ` +
+              `A suíte NÃO rodou. Corrija \`mergeGate.scope\` no settings.`;
         await cleanupGateStaging(exec, fs, repoRoot, runId);
         return { passed: false, log: motivo };
       }
@@ -1248,13 +1545,8 @@ function gateRunnerSemCredencial(
         const runTypecheck = async (units: GateUnit[]): Promise<Map<string, { ok: boolean; out: string }>> => {
           const byUnit = new Map<string, { ok: boolean; out: string }>();
           for (const unit of units) {
-            try {
-              await exec(typecheck.command, gateExecOptions(path.join(stagingPath, unit.cwd), timeoutMs, semCredencial));
-              byUnit.set(unit.cwd, { ok: true, out: "" });
-            } catch (err) {
-              const e = err as { stdout?: unknown; stderr?: unknown };
-              byUnit.set(unit.cwd, { ok: false, out: `${String(e?.stdout ?? "")}\n${String(e?.stderr ?? "")}`.trim() });
-            }
+            const r = await runInTree(typecheck.command, path.join(stagingPath, unit.cwd), { timeoutMs, network: unit.network });
+            byUnit.set(unit.cwd, r.ok ? { ok: true, out: "" } : { ok: false, out: `${r.stdout}\n${r.stderr}`.trim() });
           }
           return byUnit;
         };
@@ -1354,62 +1646,153 @@ function gateRunnerSemCredencial(
         }
       }
       const tcNote = notasAteAqui();
-      /** Roda TODAS as unidades e agrega. `useAffected` só vale na rodada do delta — a de ATRIBUIÇÃO é
-       *  sempre completa, senão a base seria medida com uma régua mais frouxa que a do veredito. */
-      const runUnits = async (useAffected: boolean): Promise<{ ok: boolean; failures: GateFailure[]; raw: string }> => {
-        const failures: GateFailure[] = [];
-        let ok = true;
-        let raw = "";
-        for (const unit of scoped.units) {
-          const command =
-            useAffected && affected?.enabled
-              ? resolveAffectedGate(unit.command, baseSha, changedInTree, affected).command
-              : unit.command;
-          const unitDir = path.join(stagingPath, unit.cwd);
-          const r = await runGateCheck(exec, unitDir, command, timeoutMs, semCredencial);
-          if (!r.ok) ok = false;
-          failures.push(...r.failures);
-          if (r.raw) raw = raw ? `${raw}\n[${unit.label}] ${r.raw}` : `[${unit.label}] ${r.raw}`;
-        }
-        return { ok, failures, raw };
+
+      // ── AS UNIDADES — cada uma medida pelo reporter QUE DECLAROU ──────────────────────────────────────
+      /**
+       * Roda UMA unidade. `useAffected` só vale na rodada do delta — a de ATRIBUIÇÃO é sempre completa, senão
+       * a base seria medida com uma régua mais frouxa que a do veredito. A seleção por afetados é da UNIDADE:
+       * o sufixo entra no comando DELA (flags preservadas), e só se ela é `vitest-json`.
+       */
+      const runUnit = async (unit: GateUnit, useAffected: boolean): Promise<UnitRun> => {
+        const reporter = unitReporter(unit);
+        const decision =
+          useAffected && affected?.enabled
+            ? resolveAffectedGate(unit.command, baseSha, changedInTree, affected, unitAcceptsAffected(unit))
+            : { command: unit.command, mode: "full" as const };
+        const command = reporter === "vitest-json" ? `${decision.command} --reporter=json` : decision.command;
+        const unitDir = path.join(stagingPath, unit.cwd);
+        const junitAbs = reporter === "junit-xml" ? junitReportPath(unitDir, unit.junitPath) : null;
+        // Um relatório de uma rodada ANTERIOR (a mesclada, antes do reset para a base — `git reset --hard`
+        // não apaga arquivo não-rastreado) seria lido como o desta. Apagar ANTES de rodar é o que garante
+        // que o relatório lido foi escrito por ESTE comando.
+        if (junitAbs) await reportIo.remove(junitAbs).catch(() => {});
+        const r = await runInTree(command, unitDir, { timeoutMs, network: unit.network });
+        let parsed: ParsedReport;
+        if (reporter === "vitest-json") parsed = parseVitestReport(r.stdout);
+        else if (reporter === "junit-xml") {
+          const xml = junitAbs ? await reportIo.read(junitAbs) : null;
+          parsed = xml === null ? { parsed: false, failures: [], tests: null } : parseJunitReport(xml);
+        } else parsed = { parsed: true, failures: [], tests: null };
+        return {
+          unit,
+          ok: r.ok,
+          parsed: parsed.parsed,
+          failures: parsed.failures,
+          raw: r.ok ? "" : execErrorDetail(r.err, GATE_LOG_CAP),
+          report: {
+            label: unit.label,
+            cwd: unit.cwd,
+            reporter,
+            mode: decision.mode,
+            network: unit.network ?? "deny",
+            isolation: r.isolation,
+            argv: r.argv,
+            exitCode: r.exitCode,
+            tests: parsed.parsed ? parsed.tests : null,
+            failures: parsed.failures.length,
+          },
+        };
       };
-      const merged = await runUnits(true);
-      if (merged.ok) {
+      const runUnits = async (units: GateUnit[], useAffected: boolean): Promise<UnitRun[]> => {
+        const out: UnitRun[] = [];
+        for (const u of units) out.push(await runUnit(u, useAffected));
+        return out;
+      };
+      /** A falha SINTÉTICA de uma unidade exit-code vermelha — a atribuição dela é por UNIDADE, não por teste. */
+      const exitFailure = (r: UnitRun): GateFailure => ({
+        file: r.unit.label,
+        name: "(exit-code ≠ 0)",
+        message: (r.raw || `exit ${r.report.exitCode ?? "sinal/timeout"}`).split("\n")[0],
+      });
+      /** As falhas atribuíveis de uma rodada: as identificadas + uma sintética por unidade exit-code vermelha. */
+      const failuresOf = (runs: UnitRun[]): GateFailure[] =>
+        runs.flatMap((r) => (r.ok ? [] : unitReporter(r.unit) === "exit-code" ? [exitFailure(r)] : r.failures));
+
+      const merged = await runUnits(scoped.units, true);
+      const report = summarizeGateReport(
+        merged.map((r) => r.report),
+        isoEfetivo,
+      );
+      const unitLines = `\n${formatUnitLines(report)}`;
+      const usouAfetados = merged.some((r) => r.report.mode === "affected");
+
+      // Um reporter DECLARADO que não produziu relatório legível não mediu nada — nem na saída verde. Exit 0
+      // sem relatório (junitPath errado, `--reporter` do comando engolindo o do gate) é exatamente o "verde
+      // sem prova" que este gate existe para matar: INCONCLUSIVO, nunca aprovação.
+      const semRelatorio = merged.filter((r) => unitReporter(r.unit) !== "exit-code" && !r.parsed);
+      if (semRelatorio.length > 0) {
+        const quais = semRelatorio.map((r) => `[${r.unit.label}] ${unitReporter(r.unit)} ${r.ok ? "exit 0" : "falhou"} sem relatório legível${r.raw ? `: ${r.raw}` : ""}`);
+        return {
+          passed: false,
+          inconclusive: true,
+          report,
+          log: `${quais.join("\n")}${tcNote}${unitLines}`,
+        };
+      }
+      // Não-zero SEM falha identificada num reporter que identifica = crash / OOM / setup / processo MORTO
+      // no meio (um `systemctl restart` durante o gate faz isto) — nada atribuível. Bloqueia (nunca arriscar
+      // aprovar uma suíte quebrada), mas diz O QUE aconteceu: INCONCLUSIVO, não "seus testes falharam". Vale
+      // POR UNIDADE: antes, uma unidade que crashava ao lado de outra com falha pré-existente sumia na soma,
+      // e a atribuição aprovava a entrada inteira.
+      const crashed = merged.filter((r) => !r.ok && unitReporter(r.unit) !== "exit-code" && r.failures.length === 0);
+      if (crashed.length > 0) {
+        return {
+          passed: false,
+          inconclusive: true,
+          report,
+          log: (crashed.map((r) => (merged.length > 1 ? `[${r.unit.label}] ${r.raw}` : r.raw)).join("\n") || "gate falhou (sem saída parseável)") + tcNote + unitLines,
+        };
+      }
+      const red = merged.filter((r) => !r.ok);
+      if (red.length === 0) {
         // P-8b — o caminho VERDE também é uma medição da main, e por anos ele não reportava nada. Como a
         // atribuição só roda quando a mesclada FALHA, um episódio vermelho entrava e nunca mais saía: o
         // estado só some com uma medição verde, e ela nunca chegava. `preexisting: []` É essa medição.
         // `undefined` sob seleção por afetados — ver `corridaVerdeLimpaMainRed`.
-        const limpa = corridaVerdeLimpaMainRed({ ok: true, affectedOnly: affected?.enabled === true });
-        return { passed: true, preexisting: limpa ? [] : undefined, log: `✓ suíte verde (${scoped.reason})${tcNote}` };
+        const limpa = corridaVerdeLimpaMainRed({ ok: true, affectedOnly: usouAfetados });
+        const contagem = report.testsExecuted === null ? "contagem desconhecida" : `${report.testsExecuted} teste(s) executado(s)`;
+        return {
+          passed: true,
+          preexisting: limpa ? [] : undefined,
+          report,
+          log: `✓ suíte verde (${scoped.reason}) — ${contagem}${tcNote}${unitLines}`,
+        };
       }
-      // Non-zero WITHOUT parseable failures = crash / OOM / setup error / the process being KILLED
-      // mid-run (a `systemctl restart storymap` during the gate does exactly this) — the reporter never
-      // wrote JSON, so nothing is attributable. Still block (never risk passing a broken suite), but say
-      // WHAT happened: this is INCONCLUSIVE, not "your tests failed". Reporting it as a plain gate
-      // failure hands the submitter a stderr tail of unrelated test-fixture noise and tells them to fix
-      // code that is fine — the same infra-dressed-as-product confusion the capability contract exists to
-      // end, one layer up.
-      if (merged.failures.length === 0) return { passed: false, inconclusive: true, log: (merged.raw || "gate falhou (sem saída parseável)") + tcNote };
       // WS1.3 — remember the MERGED (main+branch) sha so the flaky retry can restore it after the base run
       // resets the staging tree to baseSha for attribution.
       const mergedSha = (await exec(`git rev-parse HEAD`, { cwd: stagingPath, timeout: GATE_GIT_TIMEOUT_MS })).stdout.trim();
-      // ATTRIBUTION: re-run the suite on the BASE (pre-merge main HEAD) to learn which failures already
-      // existed — the card is blocked ONLY by the failures its diff INTRODUCED (new = merged \ base).
+      // ATTRIBUTION: re-run the RED units on the BASE (pre-merge main HEAD) to learn which failures already
+      // existed — the card is blocked ONLY by the failures its diff INTRODUCED (new = merged \ base). Só as
+      // unidades vermelhas: uma unidade verde na mesclada não tem nada a atribuir.
       let baseKeys: Set<string> | null = null;
       let preexisting: GateFailure[] = [];
+      let exitVermelhasNaBase: UnitRun[] = [];
       try {
         await exec(`git reset --hard ${quote(baseSha)}`, { cwd: stagingPath, timeout: GATE_GIT_TIMEOUT_MS });
-        const base = await runUnits(false); // atribuição SEMPRE completa — ver runUnits
-        // base.ok → no pre-existing failures (empty set). A base crash (!ok, no JSON) → can't attribute.
-        if (base.ok) baseKeys = new Set();
-        else if (base.failures.length > 0) {
-          preexisting = base.failures;
-          baseKeys = new Set(base.failures.map(gateFailureKey));
+        const base = await runUnits(
+          red.map((r) => r.unit),
+          false,
+        ); // atribuição SEMPRE completa — ver runUnit
+        const baseCrash = base.some((b) => !b.ok && unitReporter(b.unit) !== "exit-code" && (!b.parsed || b.failures.length === 0));
+        const baseSemRelatorio = base.some((b) => unitReporter(b.unit) !== "exit-code" && !b.parsed);
+        // A base só é MEDIDA quando toda unidade atribuível produziu relatório: um crash na base não perdoa.
+        if (!baseCrash && !baseSemRelatorio) {
+          const baseFailures = base.flatMap((b) => (b.ok || unitReporter(b.unit) === "exit-code" ? [] : b.failures));
+          preexisting = baseFailures;
+          baseKeys = new Set(baseFailures.map(gateFailureKey));
+          exitVermelhasNaBase = base.filter((b) => !b.ok && unitReporter(b.unit) === "exit-code");
+          // uma unidade exit-code vermelha na base também é um fato de main vermelha (P-8) — mas NÃO entra
+          // em baseKeys: exit-code não tem identidade de teste, e perdoá-la seria aprovar sem ter medido.
+          preexisting = [...preexisting, ...exitVermelhasNaBase.map(exitFailure)];
         }
       } catch {
         /* couldn't run the base → fall through to blocking on all branch failures (conservative) */
       }
-      if (!baseKeys) return { passed: false, log: formatGateFailures(merged.failures, 0) + tcNote };
+      if (!baseKeys) return { passed: false, report, log: formatGateFailures(failuresOf(merged), 0) + tcNote + unitLines };
+      // exit-code: vermelha na mesclada E na base ⇒ não há como dizer se o delta piorou algo. Essas unidades
+      // saem da atribuição por chave (nunca perdoadas por ela) e decidem sozinhas, abaixo: INCONCLUSIVO.
+      const exitInconclusivas = new Set(exitVermelhasNaBase.map((b) => b.unit.label));
+      const mergedAtribuiveis = failuresOf(merged).filter((f) => !(f.name === "(exit-code ≠ 0)" && exitInconclusivas.has(f.file)));
       // P-8 — a QUARENTENA entra AQUI, no único lugar onde ela custa três linhas: o gate já subtrai um
       // conjunto de chaves conhecidas antes de decidir, então quarentenar é somar chaves a esse conjunto.
       // O teste em quarentena CONTINUA rodando e continua no relatório — só deixa de ser atribuído ao
@@ -1417,9 +1800,10 @@ function gateRunnerSemCredencial(
       // vitest, sem tocar na suíte e sem nunca esconder um resultado.
       const attributionKeys = quarantined?.size ? new Set([...baseKeys, ...quarantined]) : baseKeys;
       // WS1.3 — flaky quarantine: a NEW failure may be inter-worker pollution, not this card's fault. Decide
-      // pass/park via attributeWithRetry, which re-runs the WHOLE merged suite ONCE when a new failure appears.
+      // pass/park via attributeWithRetry, which re-runs the WHOLE merged suite of the red units ONCE when a
+      // new failure appears.
       const decision = await attributeWithRetry({
-        mergedFailures: merged.failures,
+        mergedFailures: mergedAtribuiveis,
         baseKeys: attributionKeys,
         retryEnabled: retryOnNewFailure,
         rerun: async () => {
@@ -1431,20 +1815,42 @@ function gateRunnerSemCredencial(
           } catch {
             return { ok: false, failures: [] as GateFailure[] };
           }
-          const r = await runUnits(true);
-          return { ok: r.ok, failures: r.failures };
+          const rerun = await runUnits(
+            red.filter((r) => !exitInconclusivas.has(r.unit.label)).map((r) => r.unit),
+            true,
+          );
+          // Um reporter que crashou no retry não pode limpar nada (sentinela de crash → park).
+          if (rerun.some((r) => !r.ok && unitReporter(r.unit) !== "exit-code" && (!r.parsed || r.failures.length === 0))) {
+            return { ok: false, failures: [] as GateFailure[] };
+          }
+          return { ok: rerun.every((r) => r.ok), failures: failuresOf(rerun) };
         },
       });
       const quarantineNote = quarantined?.size ? ` · ${quarantined.size} em quarentena (rodam, não atribuem)` : "";
       if (decision.verdict === "park") {
-        return { passed: false, preexisting, log: formatGateFailures(decision.newFailures, baseKeys.size) + quarantineNote + tcNote };
+        return { passed: false, preexisting, report, log: formatGateFailures(decision.newFailures, baseKeys.size) + quarantineNote + tcNote + unitLines };
+      }
+      if (exitInconclusivas.size > 0) {
+        // A outra metade do contrato de exit-code: com a BASE vermelha, "vermelha com o delta" não diz nada
+        // sobre o delta. Nunca aprovação — e nunca "seus testes quebraram". INCONCLUSIVO, nomeado.
+        return {
+          passed: false,
+          inconclusive: true,
+          preexisting,
+          report,
+          log:
+            `INCONCLUSIVO: unidade(s) exit-code vermelha(s) TAMBÉM na base — ${[...exitInconclusivas].join(", ")}. ` +
+            `Um reporter exit-code não identifica testes, então não há como separar o que o delta quebrou do que ` +
+            `a main já quebrava. Conserte a main (ou declare um reporter que identifique testes).${quarantineNote}${tcNote}${unitLines}`,
+        };
       }
       if (decision.flaky?.length) {
         return {
           passed: true,
           flaky: decision.flaky,
           preexisting,
-          log: `⚠ ${decision.flaky.length} falha(s) NOVA(s) não reproduziu(ram) no retry da suíte completa (flaky) — integrado; ver flaky.json${quarantineNote}${tcNote}`,
+          report,
+          log: `⚠ ${decision.flaky.length} falha(s) NOVA(s) não reproduziu(ram) no retry da suíte completa (flaky) — integrado; ver flaky.json${quarantineNote}${tcNote}${unitLines}`,
         };
       }
       // Every failure pre-exists on main → this card's diff introduced NONE → it is NOT to blame. It merges;
@@ -1453,7 +1859,8 @@ function gateRunnerSemCredencial(
       return {
         passed: true,
         preexisting,
-        log: `✓ nenhuma falha NOVA — ${baseKeys.size} falha(s) pré-existente(s) na main (NÃO atribuída(s) a este card; a main precisa de conserto à parte)${quarantineNote}${tcNote}`,
+        report,
+        log: `✓ nenhuma falha NOVA — ${baseKeys.size} falha(s) pré-existente(s) na main (NÃO atribuída(s) a este card; a main precisa de conserto à parte)${quarantineNote}${tcNote}${unitLines}`,
       };
     } finally {
       // Cleanup ALWAYS, BEFORE any operation on main — the staging tree never leaks into the merge-back.
@@ -1463,12 +1870,10 @@ function gateRunnerSemCredencial(
 }
 
 // ── attribution-aware gate helpers (structured reporter + new-vs-base diff) ──────────────────────
-/** One test vitest reported as failed: file, full name, and the first line of its assertion message. */
-export interface GateFailure {
-  file: string;
-  name: string;
-  message: string;
-}
+// `GateFailure` mora em gate-reporters.ts (é o formato comum dos três reporters); reexportado aqui porque
+// este módulo sempre foi o endereço público dele.
+export type { GateFailure } from "./gate-reporters";
+export { parseVitestFailures } from "./gate-reporters";
 
 /** Identity of a failing test across the merged-run and the base-run (same staging tree → same paths). */
 function gateFailureKey(f: GateFailure): string {
@@ -1504,48 +1909,8 @@ export async function attributeWithRetry(opts: {
 }
 
 /**
- * Parse vitest `--reporter=json` stdout into the FAILED tests. TOLERANT: returns `[]` when there is no
- * parseable JSON (a crash/OOM before the reporter wrote) so the caller blocks safely instead of passing.
- * Exported for unit tests. PURE.
- */
-export function parseVitestFailures(stdout: string): GateFailure[] {
-  let json: unknown;
-  try {
-    json = JSON.parse(stdout.trim());
-  } catch {
-    const m = stdout.match(/\{[\s\S]*\}/); // vitest may print a stray line around the JSON object
-    if (!m) return [];
-    try {
-      json = JSON.parse(m[0]);
-    } catch {
-      return [];
-    }
-  }
-  const results = (json as { testResults?: unknown })?.testResults;
-  if (!Array.isArray(results)) return [];
-  const out: GateFailure[] = [];
-  for (const tr of results) {
-    const file = String((tr as { name?: unknown })?.name ?? "");
-    const ars = (tr as { assertionResults?: unknown })?.assertionResults;
-    if (!Array.isArray(ars)) continue;
-    for (const a of ars) {
-      const ar = a as { status?: unknown; fullName?: unknown; title?: unknown; failureMessages?: unknown };
-      if (ar?.status !== "failed") continue;
-      const msgs = Array.isArray(ar.failureMessages) ? ar.failureMessages : [];
-      out.push({
-        file,
-        name: String(ar.fullName || ar.title || "?"),
-        message: String(msgs[0] ?? "").split("\n")[0],
-      });
-    }
-  }
-  return out;
-}
-
-/**
  * Run the gate's check with the JSON reporter; capture failures EVEN on a non-zero exit (vitest writes
- * the JSON to stdout, which the rejected exec error still carries). `ok` is the exit-0 verdict — a crash
- * with no parseable failures stays `ok:false, failures:[]` so the caller blocks (never wrongly passes).
+ * the JSON to stdout, which the rejected exec error still carries).
  *
  * The JSON report carries EVERY test (2.7k+ here), so it outgrows `child_process.exec`'s 1 MiB default
  * `maxBuffer` as the suite grows — and an overflow REJECTS the exec with a TRUNCATED stdout even when the
@@ -1607,23 +1972,6 @@ export function criarDiretoriosSemCredencial(
       }
     },
   };
-}
-
-async function runGateCheck(
-  exec: ExecFn,
-  cwd: string,
-  checkCommand: string,
-  timeoutMs: number,
-  semCredencial: DiretoriosSemCredencial,
-): Promise<{ ok: boolean; failures: GateFailure[]; raw: string }> {
-  const opts = gateExecOptions(cwd, timeoutMs, semCredencial);
-  try {
-    const { stdout } = await exec(`${checkCommand} --reporter=json`, opts);
-    return { ok: true, failures: parseVitestFailures(stdout), raw: "" };
-  } catch (err) {
-    const out = String((err as { stdout?: unknown })?.stdout ?? "");
-    return { ok: false, failures: parseVitestFailures(out), raw: execErrorDetail(err, GATE_LOG_CAP) };
-  }
 }
 
 /** ACTIONABLE gate log: the tests THIS card's diff broke (with the pre-existing count noted as ignored). */
@@ -1739,6 +2087,27 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
   const cleanTreeAttempts = Math.max(1, cfg.cleanTreeRecheck?.attempts ?? DEFAULT_CLEAN_TREE_RECHECK.attempts);
   const cleanTreeDelayMs = cfg.cleanTreeRecheck?.delayMs ?? DEFAULT_CLEAN_TREE_RECHECK.delayMs;
   const sleep = cfg.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const sandboxProbe = cfg.gateSandboxProbe ?? ((): SandboxProbe => ({ ok: false, detail: "sonda do selo não injetada nesta fila" }));
+  /**
+   * O isolamento de UMA execução de gate: override de teste, senão o `mergeGate.isolation` VIVO (hot, como o
+   * resto do mergeGate) cruzado com a sonda. `systemd` pedido + sonda que falha ⇒ `none` COM o motivo —
+   * portabilidade para quem não tem systemd, nunca em silêncio.
+   */
+  const resolveLiveGateIsolation = (live: RunnerSettings["autorun"]["mergeGate"]): IntegrationGateIsolation => {
+    if (cfg.gateIsolation) return cfg.gateIsolation;
+    const eff = resolveGateIsolation(live?.isolation, sandboxProbe);
+    // O aviso alto é da fila de PRODUÇÃO (a que recebeu a sonda real): numa fila de teste sem sonda ele
+    // seria só ruído — o motivo segue no log do gate e no relatório da entrada de qualquer jeito.
+    if (eff.mode === "none" && (live?.isolation ?? "systemd") === "systemd" && cfg.gateSandboxProbe) {
+      console.warn(`[harness-merge-queue] ${eff.reason}`);
+    }
+    return {
+      mode: eff.mode,
+      reason: eff.reason,
+      inaccessiblePaths: live?.sealed?.inaccessiblePaths ?? [],
+      writablePaths: live?.sealed?.writablePaths ?? [],
+    };
+  };
   let entries: MergeQueueEntry[] = [];
   let processing = false;
   // story-92ldyt: the engine callback fired on a re-driven conflict (null = no engine wired → degrade
@@ -2400,7 +2769,15 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
     try {
       semCredencial = criarDiretoriosSemCredencial();
       await provisionNodeModules(snapFs, cfg.repoRoot, cwd);
-      await cfg.exec(`bunx vitest run -u`, gateExecOptions(pkgDir, snapRegenTimeoutMs, semCredencial));
+      // E sob o MESMO selo do gate: a árvore da regen é a única gravável.
+      const seal = await buildGateSeal({
+        isolation: resolveLiveGateIsolation(loadRunnerConfig().autorun.mergeGate),
+        stagingPath: cwd,
+        repoRoot: cfg.repoRoot,
+        runId: `regen-${path.basename(cwd)}`,
+      });
+      const r = await makeGateCommandRunner(cfg.exec, semCredencial, seal)(`bunx vitest run -u`, pkgDir, { timeoutMs: snapRegenTimeoutMs });
+      if (!r.ok) throw r.err ?? new Error(`vitest -u falhou (exit ${r.exitCode ?? "sinal"})`);
     } catch (err) {
       // The vitest run itself failed (a genuine red test the regen can't paper over) → signal the
       // caller to undo + re-drive, CARRYING the error detail for triage. Links dropped first.
@@ -3688,6 +4065,7 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
           flaky?: GateFailure[];
           conflict?: ConflictArtifact;
           preexisting?: GateFailure[];
+          report?: GateReport;
         };
         // P-8: quem está em quarentena AGORA. Best-effort — falhar em ler o ledger só significa não
         // quarentenar ninguém, que é o comportamento de sempre.
@@ -3720,6 +4098,9 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
             // Typecheck binário por árvore — mesma proveniência do scope: override de teste, senão o vivo.
             typecheck: cfg.gateTypecheck ?? liveMergeGate?.typecheck,
             quarantined: new Set(quarantine.testIds),
+            // O SELO — pedido (config viva, override de teste) × sonda (uma vez por processo). O fallback
+            // para `none` vai com o motivo para o log de cada gate e para o relatório da entrada.
+            isolation: resolveLiveGateIsolation(liveMergeGate),
           });
         } catch (err) {
           // An UNEXPECTED gate error (not a clean pass/fail) is treated as a failure — fail CLOSED: never
@@ -3733,6 +4114,14 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
         if (gate.preexisting) {
           void recordMainRedMeasurement({ failures: gate.preexisting, sha: ownWorkBase || entry.baseCommit || "HEAD" });
         }
+        // O QUE O GATE EXECUTOU, na entrada: por unidade a argv exata e quantos testes rodaram. É o que deixa
+        // o operador PROVAR que N>0 testes rodaram — ou ver que não rodaram. Uma rodada sem relatório (conflito,
+        // recusa, typecheck) LIMPA o de uma tentativa anterior: relatório velho sobre árvore nova é mentira.
+        entry.gateReport = gate.report;
+        console.log(
+          `[harness-merge-queue] gate ${entry.runId}: ${gate.passed ? "APROVADO" : gate.inconclusive ? "INCONCLUSIVO" : "REPROVADO"}` +
+            `${gate.report ? ` — ${gate.report.testsExecuted ?? "?"} teste(s) executado(s), isolamento ${gate.report.isolation}` : ""}\n${gate.log}`,
+        );
         // P-2 — o gate viu que o delta NÃO APLICA na baseline. É CONFLITO, não reprovação: nada foi
         // testado, e chamar isto de "seus testes quebraram" foi por anos a informação errada no pior
         // momento. Dispõe pela rota de conflito — agora ANTES de a suíte custar os ~2 min do p90.
@@ -4196,8 +4585,10 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
       await cleanupGateStaging(cfg.exec, gateFs, cfg.repoRoot, entry.runId);
       if (action === "retry") {
         // Re-drive: the run's branch is preserved; reset to `waiting` so the gate runs again (the
-        // operator re-drove the companion run, or the failure was a flake). Clear the stale gate log.
+        // operator re-drove the companion run, or the failure was a flake). Clear the stale gate log — and
+        // the stale gate REPORT: a test count about the previous attempt must not read as this one's.
         entry.gateLog = undefined;
+        entry.gateReport = undefined;
         entry.status = "waiting";
         entry.mergeStartedAt = undefined;
         entry.mergeEndedAt = undefined;
@@ -4235,6 +4626,7 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
       entry.status = "waiting";
       entry.conflictDetail = undefined;
       entry.gateLog = undefined;
+      entry.gateReport = undefined;
       entry.resolutionAnalysis = undefined;
       entry.mergeStartedAt = undefined;
       entry.mergeEndedAt = undefined;
@@ -4655,6 +5047,33 @@ const MergeQueueEntrySchema = z.object({
       truncatedHunks: z.number().optional(),
     })
     .optional(),
+  // Gate honesto — O QUE o gate executou (argv por unidade, testes executados, isolamento). A mesma lição dos
+  // campos acima: Zod STRIPA chave desconhecida, e a prova de que N>0 testes rodaram sumiria no próximo
+  // restart, justo quando o operador vai procurá-la. `.catch(undefined)`: um relatório malformado é
+  // descartado SOZINHO — nunca derruba a entrada inteira (que carrega a branch e o estado da fila).
+  gateReport: z
+    .object({
+      isolation: z.enum(["systemd", "none"]),
+      isolationReason: z.string(),
+      testsExecuted: z.number().nullable(),
+      uncountedUnits: z.number(),
+      units: z.array(
+        z.object({
+          label: z.string(),
+          cwd: z.string(),
+          reporter: z.enum(["vitest-json", "junit-xml", "exit-code"]),
+          mode: z.enum(["full", "affected"]),
+          network: z.enum(["deny", "allow"]),
+          isolation: z.enum(["systemd", "none"]),
+          argv: z.array(z.string()),
+          exitCode: z.number().nullable(),
+          tests: z.number().nullable(),
+          failures: z.number(),
+        }),
+      ),
+    })
+    .optional()
+    .catch(undefined),
 });
 
 /** Atomic on-disk store: write a temp file then rename over the target (same fs) — mirrors the journal. */
@@ -4754,6 +5173,9 @@ export function getMergeQueue(): MergeQueuePort {
     exec: defaultExec,
     store: diskMergeQueueStore(runnerStateDir()),
     integrationGate: makeDefaultGateRunner(),
+    // O selo do gate: a sonda REAL, uma vez por processo (a disponibilidade do systemd não muda com o
+    // serviço de pé). Só a fila de produção a recebe — ver `gateSandboxProbe` em MergeQueueConfig.
+    gateSandboxProbe: cachedGateSandboxProbe,
     // WS-10/D14 — rung 2 of the semantic ladder. ALWAYS wired (the port is a pure closure — no IO until a
     // conflict actually invokes it), and gated per-conflict by the `semanticResolution` flag read live in
     // climbSemanticLadder. Same shape as the gate runner above: wiring is free, the flag decides.

@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   activeEnvOverrides,
   applyEnvOverrides,
+  coerceGateScope,
   coerceRunnerSettings,
   DEFAULT_RUNNER_SETTINGS,
   maxTurnsResumeMax,
@@ -28,6 +29,7 @@ const ENV_KEYS = [
   "AGILEHARNESS_AUTORUN_EXTRA_ARGS",
   "AGILEHARNESS_AUTORUN_WORKTREE",
   "AGILEHARNESS_AUTORUN_MERGE_GATE",
+  "AGILEHARNESS_AUTORUN_GATE_ISOLATION",
   "AGILEHARNESS_AUTORUN_STAGING",
   "AGILEHARNESS_AUTORUN_LANE_LIGHT_MAX",
   "AGILEHARNESS_AUTORUN_LANE_HEAVY_MAX",
@@ -543,7 +545,7 @@ describe("coerceRunnerSettings — mergeGate (story-1k7els)", () => {
   const dmg = DEFAULT_RUNNER_SETTINGS.autorun.mergeGate!;
 
   it("the default is the integration gate OFF (a dormant capability)", () => {
-    expect(dmg).toEqual({ enabled: false, checkCommand: "vitest run", timeoutMs: 300_000, retryOnNewFailure: true, typecheck: { enabled: true, command: "bunx tsc --noEmit" } });
+    expect(dmg).toEqual({ enabled: false, checkCommand: "vitest run", timeoutMs: 300_000, retryOnNewFailure: true, typecheck: { enabled: true, command: "bunx tsc --noEmit" }, isolation: "systemd" });
   });
 
   it("an absent mergeGate section falls back to the OFF default", () => {
@@ -552,14 +554,14 @@ describe("coerceRunnerSettings — mergeGate (story-1k7els)", () => {
 
   it("coerces enabled from YAML, filling checkCommand/timeoutMs from defaults", () => {
     const out = coerceRunnerSettings({ autorun: { mergeGate: { enabled: true } } }).autorun.mergeGate;
-    expect(out).toEqual({ enabled: true, checkCommand: dmg.checkCommand, timeoutMs: dmg.timeoutMs, retryOnNewFailure: true, typecheck: { enabled: true, command: "bunx tsc --noEmit" } });
+    expect(out).toEqual({ enabled: true, checkCommand: dmg.checkCommand, timeoutMs: dmg.timeoutMs, retryOnNewFailure: true, typecheck: { enabled: true, command: "bunx tsc --noEmit" }, isolation: "systemd" });
   });
 
   it("coerces a full mergeGate from YAML (trims checkCommand, positive-int timeoutMs)", () => {
     const out = coerceRunnerSettings({
       autorun: { mergeGate: { enabled: true, checkCommand: "  just test-storymap  ", timeoutMs: 120_000 } },
     }).autorun.mergeGate;
-    expect(out).toEqual({ enabled: true, checkCommand: "just test-storymap", timeoutMs: 120_000, retryOnNewFailure: true, typecheck: { enabled: true, command: "bunx tsc --noEmit" } });
+    expect(out).toEqual({ enabled: true, checkCommand: "just test-storymap", timeoutMs: 120_000, retryOnNewFailure: true, typecheck: { enabled: true, command: "bunx tsc --noEmit" }, isolation: "systemd" });
   });
 
   it("coerces retryOnNewFailure from YAML (WS1.3 flaky quarantine toggle), defaulting true", () => {
@@ -573,7 +575,7 @@ describe("coerceRunnerSettings — mergeGate (story-1k7els)", () => {
     const out = coerceRunnerSettings({
       autorun: { mergeGate: { enabled: true, checkCommand: "   ", timeoutMs: 0 } },
     }).autorun.mergeGate;
-    expect(out).toEqual({ enabled: true, checkCommand: dmg.checkCommand, timeoutMs: dmg.timeoutMs, retryOnNewFailure: true, typecheck: { enabled: true, command: "bunx tsc --noEmit" } });
+    expect(out).toEqual({ enabled: true, checkCommand: dmg.checkCommand, timeoutMs: dmg.timeoutMs, retryOnNewFailure: true, typecheck: { enabled: true, command: "bunx tsc --noEmit" }, isolation: "systemd" });
   });
 
   it("ignores a non-boolean enabled (default OFF kept — no accidental enable from garbage)", () => {
@@ -697,5 +699,80 @@ describe("activeEnvOverrides — the ADR-063 knobs surface when set", () => {
     const out = activeEnvOverrides();
     expect(out).toContain("AGILEHARNESS_AUTORUN_NO_PROGRESS_MAX");
     expect(out).toContain("AGILEHARNESS_AUTORUN_CARD_BUDGET_USD");
+  });
+});
+
+describe("coerceRunnerSettings — mergeGate.scope com unidades DECLARADAS (a chave CHEGA ao motor)", () => {
+  // A metade da CHEGADA; a do USO está em gate-units.test.ts. Um coerce que dropasse `reporter` rodaria a
+  // unidade pytest com o leitor do vitest — medir outra coisa em silêncio.
+  const mgDe = (raw: unknown) => coerceRunnerSettings({ autorun: { mergeGate: { enabled: true, ...(raw as object) } } }).autorun.mergeGate!;
+
+  it("carrega a unidade-objeto inteira (reporter, junitPath, network, cwd, triggers, affected) e mantém a string legada", () => {
+    const scope = mgDe({
+      scope: {
+        packages: {
+          "packages/web": "bunx vitest run",
+          "services/api": { command: "pytest -q", reporter: "junit-xml", junitPath: ".gate/junit.xml", network: "allow" },
+        },
+        units: { "tests/architecture": { command: "bunx vitest run --config tests/architecture/vitest.config.ts", cwd: ".", triggers: ["packages/*/web/**"], affected: false } },
+      },
+    }).scope!;
+    expect(scope.packages).toEqual({
+      "packages/web": "bunx vitest run",
+      "services/api": { command: "pytest -q", reporter: "junit-xml", junitPath: ".gate/junit.xml", network: "allow" },
+    });
+    expect(scope.units).toEqual({
+      "tests/architecture": { command: "bunx vitest run --config tests/architecture/vitest.config.ts", cwd: ".", triggers: ["packages/*/web/**"], affected: false },
+    });
+  });
+
+  it("reporter DESCONHECIDO descarta a unidade (nunca cai no vitest), e unidade sem command também", () => {
+    const scope = coerceGateScope({ packages: { a: { command: "x", reporter: "junit" }, b: { reporter: "exit-code" }, c: { command: "ok", reporter: "exit-code" } } });
+    expect(Object.keys(scope.packages ?? {})).toEqual(["c"]);
+  });
+
+  it("network inválido não entra (fica o default `deny`, o lado seguro)", () => {
+    const scope = coerceGateScope({ packages: { a: { command: "x", network: "open" } } });
+    expect(scope.packages?.a).toEqual({ command: "x" });
+  });
+
+  it("o fallback declarado carrega os campos de medição também", () => {
+    const scope = coerceGateScope({ fallback: { cwd: "packages/shared", command: "pytest", reporter: "junit-xml", junitPath: "r.xml", network: "allow" } });
+    expect(scope.fallback).toEqual({ cwd: "packages/shared", command: "pytest", reporter: "junit-xml", junitPath: "r.xml", network: "allow" });
+  });
+
+  it("`affected` sem o `command` legado é um bloco VÁLIDO (antes era dropado inteiro em silêncio)", () => {
+    expect(mgDe({ affected: { enabled: true, fullSuitePaths: ["a/"] } }).affected).toEqual({ enabled: true, fullSuitePaths: ["a/"] });
+  });
+});
+
+describe("coerceRunnerSettings — mergeGate.isolation / sealed (o selo)", () => {
+  const mgDe = (raw: unknown) => coerceRunnerSettings({ autorun: { mergeGate: { enabled: true, ...(raw as object) } } }).autorun.mergeGate!;
+
+  it("default `systemd`; `none` desliga por declaração", () => {
+    expect(mgDe({}).isolation).toBe("systemd");
+    expect(mgDe({ isolation: "none" }).isolation).toBe("none");
+  });
+
+  it("[ATAQUE] um typo NUNCA desliga o selo — fica o default", () => {
+    for (const v of ["off", "false", false, 0, "docker"]) expect(mgDe({ isolation: v }).isolation, String(v)).toBe("systemd");
+  });
+
+  it("sealed carrega os caminhos declarados; ausente ⇒ ausente", () => {
+    expect(mgDe({ sealed: { inaccessiblePaths: ["/etc/agileharness"], writablePaths: ["~/.cache/ms-playwright"] } }).sealed).toEqual({
+      inaccessiblePaths: ["/etc/agileharness"],
+      writablePaths: ["~/.cache/ms-playwright"],
+    });
+    expect(mgDe({}).sealed).toBeUndefined();
+  });
+
+  it("AGILEHARNESS_AUTORUN_GATE_ISOLATION vence o arquivo; valor desconhecido é ignorado", () => {
+    const base = coerceRunnerSettings({ autorun: { mergeGate: { enabled: true } } });
+    process.env.AGILEHARNESS_AUTORUN_GATE_ISOLATION = "none";
+    expect(applyEnvOverrides(base).autorun.mergeGate?.isolation).toBe("none");
+    expect(activeEnvOverrides()).toContain("AGILEHARNESS_AUTORUN_GATE_ISOLATION");
+    process.env.AGILEHARNESS_AUTORUN_GATE_ISOLATION = "desliga";
+    expect(applyEnvOverrides(base).autorun.mergeGate?.isolation).toBe("systemd");
+    delete process.env.AGILEHARNESS_AUTORUN_GATE_ISOLATION;
   });
 });
