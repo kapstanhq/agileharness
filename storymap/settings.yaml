@@ -44,9 +44,13 @@ autorun:
     # imports não enxerga força a suíte completa. Um arquivo que não está nessa lista e quebra alguém
     # remoto é o residual ACEITO — e a saída dele é a suíte completa periódica sobre `stage`, não voltar
     # a gatear tudo por entrada.
+    # A seleção é POR UNIDADE e só em unidades `vitest-json`: o gate ANEXA `--changed <base>
+    # --passWithNoTests` ao comando da própria unidade (as flags dela — `--config` incluso — sobrevivem).
+    # Unidades junit-xml/exit-code rodam SEMPRE completas. O antigo `affected.command` (um template que
+    # SUBSTITUÍA o comando de toda unidade: pytest rodava vitest, `--config` sumia) foi aposentado — se
+    # ainda estiver no seu settings, é ignorado.
     affected:
       enabled: true
-      command: bunx vitest run --changed {base} --passWithNoTests
       fullSuitePaths:
         # Widely-imported kernels — each pulls ≥30% of the suite (measured), and the import graph is
         # least trustworthy here, so run everything.
@@ -77,6 +81,50 @@ autorun:
       packages:
         packages/storymap-ui: vitest run
       maxUnits: 3
+    # ── UM ALVO MONOREPO (exemplo — comentado; este repositório só tem o pacote acima) ─────────────
+    # Cada unidade DECLARA como é medida. A string solta (`dir: comando`) continua valendo: é uma unidade
+    # `vitest-json`. Todo gate grava, por unidade, a argv EXATA executada e QUANTOS testes rodaram
+    # (entrada do train → `gateReport`; `wait_for_submit` → `gate`; log do gate).
+    #
+    # scope:
+    #   packages:
+    #     # vitest do web: o gate anexa --reporter=json (e, com affected ligado, --changed <base>)
+    #     packages/shop/web: bunx vitest run
+    #     # vitest com config PRÓPRIA: o --config sobrevive à seleção por afetados
+    #     packages/shop/api:
+    #       command: bunx vitest run --config vitest.unit.config.ts
+    #     # pytest: relatório JUnit num caminho RELATIVO à unidade; sempre suíte completa
+    #     services/recommender:
+    #       command: python -m pytest -q --junitxml=.gate/junit.xml
+    #       reporter: junit-xml
+    #       junitPath: .gate/junit.xml
+    #       network: deny        # default; `allow` devolve a rede à unidade selada
+    #   units:
+    #     # prefixo FORA de packages/: roda da raiz e dispara com QUALQUER mudança num web
+    #     tests/architecture:
+    #       command: bunx vitest run --config tests/architecture/vitest.config.ts
+    #       cwd: .
+    #       triggers:
+    #         - packages/*/web/**
+    #   maxUnits: 4
+    #   fallback:
+    #     cwd: packages/shared
+    #     command: bunx vitest run
+    #
+    # reporter: `vitest-json` (default) | `junit-xml` (lê `junitPath`, apagado antes de cada rodada) |
+    # `exit-code` (só o status: não conta testes; com a BASE também vermelha o veredito é INCONCLUSIVO,
+    # nunca aprovação). Só falhas NOVAS reprovam (a base é re-medida), com retry de flaky.
+    #
+    # O SELO: cada comando do delta (suíte, typecheck, `vitest -u`) roda numa unidade transiente do
+    # systemd — root SEM capability, FS read-only exceto a árvore do gate, /run e /tmp privados,
+    # credenciais conhecidas inacessíveis (~/.ssh, ~/.aws, ~/.config/gcloud, ~/.claude, os .env do
+    # checkout…) e sem rede nas unidades `network: deny`. Só vale quando a SONDA prova o selo no host;
+    # sem systemd (ou serviço não-root) o gate cai para `none` com aviso (log de cada gate + preflight).
+    # `none` declara o risco aceito. Ver runner/gate-sandbox.ts para o que foi medido e o que NÃO cobre.
+    isolation: systemd
+    # sealed:
+    #   inaccessiblePaths: [/etc/agileharness]    # o diretório de env/segredos do SEU serviço
+    #   writablePaths: [~/.cache/ms-playwright]   # um cache que a suíte precisa ESCREVER
   mergeTrain:
     maxRedrives: 2
     semanticResolution: true

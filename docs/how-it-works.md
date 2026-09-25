@@ -20,7 +20,7 @@ because the list *is* the argument — more than any feature table.
 
 > **"I wanted several terminals working on the same repository, merging by themselves."** Every
 > session gets its own git worktree, and integration is serialized through a merge train that runs
-> the affected suite as a gate. A conflict doesn't wake anyone up: a headless run reads the
+> each affected test unit as a gate, sealed, and records how many tests it actually ran. A conflict doesn't wake anyone up: a headless run reads the
 > divergence and judges it **hunk by hunk, cosmetic against substantive**, in a fresh worktree it
 > physically cannot escape. What it can't settle comes back to the session that caused it — not to
 > your lap.
@@ -315,6 +315,72 @@ Heavy content lives beside the card: `plans/<id>.md` (files to touch, contracts,
 `wireframes/<id>.json` (the journey and the design canvas). The next skill is told to **read the
 sidecar and trust it** rather than re-scanning the codebase. Re-discovery is the largest
 uncached cost of an agent run, and the step before already paid it.
+
+### The merge gate says what it ran — and runs it sealed
+
+Every code entry on the merge train is integrated into a throwaway tree and tested there before it
+lands. The gate's scope is **declared per unit**, and a unit says how it is measured:
+
+```yaml
+# storymap/settings.yaml — a monorepo target
+autorun:
+  mergeGate:
+    enabled: true
+    affected: { enabled: true, fullSuitePaths: ["**/tsconfig*.json"] }
+    scope:
+      packages:
+        packages/shop/web: bunx vitest run                      # a string = a vitest unit
+        packages/shop/api:
+          command: bunx vitest run --config vitest.unit.config.ts   # its own config survives
+        services/recommender:
+          command: python -m pytest -q --junitxml=.gate/junit.xml
+          reporter: junit-xml
+          junitPath: .gate/junit.xml                          # relative to the unit
+      units:
+        tests/architecture:                                   # a prefix outside packages/
+          command: bunx vitest run --config tests/architecture/vitest.config.ts
+          cwd: .
+          triggers: ["packages/*/web/**"]                     # runs whenever any web changes
+    isolation: systemd                                        # the default
+```
+
+- **Reporters.** `vitest-json` (the default — the gate appends `--reporter=json`), `junit-xml`
+  (the gate reads the file at `junitPath`, deleting it before every run so a stale report can
+  never be read as this one's) and `exit-code` (status only). Only **new** failures reprove an
+  entry: when the merged tree is red, the red units are re-run on the base, and whatever was
+  already failing there is not blamed on the entry. A new failure gets one full re-run before it
+  counts (flaky tests don't freeze the train). An `exit-code` unit can't name its failures, so a
+  red base makes its verdict **inconclusive** — never a pass.
+- **Affected-only selection is per unit.** With `affected.enabled`, a `vitest-json` unit runs
+  `<its own command> --changed <base> --passWithNoTests`; every other reporter always runs in
+  full. (An earlier version replaced every unit's command with one global template, so a pytest
+  unit ran vitest and a `--config` disappeared.)
+- **The count is the proof.** For each unit the gate records the **exact argv** it executed, the
+  reporter, the mode (affected or full) and **how many tests ran**. That report is stored on the
+  train entry (`gateReport`), returned by `wait_for_submit`, shown in `/processes` and printed in
+  the gate log. "Green" with zero tests is visible as zero.
+- **The seal.** The suite under test is agent-written code. With `isolation: systemd`, each gate
+  command (the suite, the typecheck, snapshot regeneration) runs in a transient systemd unit
+  (`systemd-run --wait --pipe --collect`): root **without capabilities**, the filesystem
+  read-only except for the gate's tree, `/run` and `/tmp` private, known credential locations
+  (`~/.ssh`, `~/.aws`, `~/.config/gcloud`, `~/.claude`, the checkout's `.env*`, the runner's
+  own state, and whatever `mergeGate.sealed.inaccessiblePaths` adds) inaccessible, and no
+  network for units declared `network: deny` (the default). Each of those properties is there
+  because a probe on a real host broke without it. For example, root with capabilities simply
+  unmounted the hidden credential, and the systemd socket under `/run` let the unit start an
+  unsealed one. What the seal does **not** do is isolate process IDs (`PrivatePIDs` is not
+  available on systemd 255). The unit can see the host's process list and signal processes
+  running as the same user, although their environments stay unreadable.
+- **No systemd, no silence.** The seal is used only when a probe proves it on the host. On a
+  host without systemd, or with a non-root service, the gate falls back to the old behaviour
+  (sanitized environment, no seal). It says so in every gate log and in the preflight report
+  (`gate.isolation`). `isolation: none` (or `AGILEHARNESS_AUTORUN_GATE_ISOLATION=none`) records
+  that you accept the risk.
+
+A related rule sits on the board side. A card that carries code (it has been staged, or a review
+recorded its commit range) can only enter the human review column with a QA stamp that says
+**what was proven**: `qaEvidence.suite` or `qaEvidence.visual`. The "no screen, no QA" exemption
+still applies to board-only cards, and no longer to code.
 
 ### A deploy can't roll production back
 
