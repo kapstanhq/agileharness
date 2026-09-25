@@ -141,7 +141,9 @@ function KanbanCardImpl({
   const signalDemands = cardDemands(card, config, config.id).filter((d) => !(laneRoutine && d.type === "gate"));
   const cardSignal = dominantDemand(signalDemands);
   const showStatus = !overlay && !isTerminal && !def?.laneStep && !!def && !laneTags;
-  // The AUTONOMY KEY on the card (autonomy.ts): an `ultra` story says so — its proxiable decisions go to the proxy.
+  // The AUTONOMY KEY on the card (autonomy.ts): the story's OWN exception (set_card_autonomy) is shown — `ultra` on a
+  // human board, `humano` on an ultra board. The board-wide mode is not repeated on every card (70 identical chips
+  // on an ultra board said nothing; the exception is the information).
   const autonomy = effectiveAutonomy(card, config);
 
   return (
@@ -194,16 +196,19 @@ function KanbanCardImpl({
             sinal — construído e invisível; o stepper de coluna sozinho mentia por omissão. */}
         <div className="flex items-center gap-2">
           <KanbanTypeLabel card={card} />
-          {autonomy.mode === "ultra" && (
+          {autonomy.source === "card" && (
             <span
               title={
-                autonomy.source === "card"
+                autonomy.mode === "ultra"
                   ? "Modo ultra (exceção desta story): o proxy responde entrevista e escolha de tela; dinheiro segue com você."
-                  : "Modo ultra (do board): o proxy responde entrevista e escolha de tela; dinheiro segue com você."
+                  : "Modo humano (exceção desta story): você responde tudo, mesmo com o board em ultra."
               }
-              className="rounded px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-accent ring-1 ring-inset ring-accent/40"
+              className={cn(
+                "rounded px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide ring-1 ring-inset",
+                autonomy.mode === "ultra" ? "text-accent ring-accent/40" : "text-fg-muted ring-line-emphasis",
+              )}
             >
-              ultra
+              {autonomy.mode === "ultra" ? "ultra" : "humano"}
             </span>
           )}
           {!overlay && !isTerminal && (
