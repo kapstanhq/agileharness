@@ -11,6 +11,8 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  conductorSessionSlug,
+  countLiveConductorsByBoard,
   admitConductorCard,
   CONDUCTOR_MAX_SPAWN_ATTEMPTS,
   isLiveConductor,
@@ -161,7 +163,7 @@ describe("pumpConductorQueue — o cap POR BOARD, a espera e a vaga que volta", 
       driver: "conductor",
       command: "/harness-conductor b/s1",
       model: "opus",
-      name: "conductor-s1",
+      name: expect.stringMatching(/^conductor-s1-[0-9a-z]{4}$/), // sufixo por despacho (v0.9.1)
     });
     expect(h.queue.entries).toHaveLength(0);
   });
@@ -407,5 +409,27 @@ describe("isLiveConductor — a contagem do cap", () => {
 
   it("uma sessão comum (sem driver) nunca ocupa vaga de condutor", () => {
     expect(isLiveConductor(s({ driver: undefined }), new Set(["agent-x"]), () => true)).toBe(false);
+  });
+});
+
+
+describe("identidade do condutor — um tmux, um condutor (v0.9.1)", () => {
+  const row = (sessionId: string, tmuxSession: string | undefined, board = "b") =>
+    ({ sessionId, agentId: sessionId, role: "implement", board, cardId: "s1", task: "t", driver: "conductor", tmuxSession, openedAt: "x", heartbeatAt: "x" }) as AgentSession;
+
+  it("duas linhas do registro no MESMO tmux contam como UM condutor (a morta não ressuscita pela viva)", () => {
+    const counts = countLiveConductorsByBoard([row("dead", "agent-conductor-s1"), row("live", "agent-conductor-s1"), row("other", "agent-conductor-s2")]);
+    expect(counts.get("b")).toBe(2);
+  });
+
+  it("linha sem tmux conta por si; boards separados", () => {
+    const counts = countLiveConductorsByBoard([row("hb", undefined), row("x", "agent-x", "c")]);
+    expect(counts.get("b")).toBe(1);
+    expect(counts.get("c")).toBe(1);
+  });
+
+  it("dois despachos do mesmo card nunca repetem o nome do tmux", () => {
+    expect(conductorSessionSlug("story-1", 1_790_000_000_000)).not.toBe(conductorSessionSlug("story-1", 1_790_000_060_000));
+    expect(conductorSessionSlug("story-1", 1_790_000_000_000)).toMatch(/^conductor-story-1-[0-9a-z]{4}$/);
   });
 });

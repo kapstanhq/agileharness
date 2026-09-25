@@ -66,6 +66,31 @@ export function isLiveConductor(s: AgentSession, liveTmux: ReadonlySet<string> |
   return liveTmux.has(s.tmuxSession);
 }
 
+/**
+ * The tmux slug of a conductor dispatch: the card id plus a short per-dispatch suffix, so two dispatches of the
+ * same card never share a tmux name (see the spawn site). PURE.
+ */
+export function conductorSessionSlug(cardId: string, now: number): string {
+  return `conductor-${cardId}-${now.toString(36).slice(-4)}`;
+}
+
+/**
+ * Live conductors per board, counted by the PROCESS that hosts them: rows that name the same tmux session are one
+ * conductor (a tmux hosts one `claude`). A row with no tmux (heartbeat-only) counts on its own. PURE.
+ */
+export function countLiveConductorsByBoard(liveConductors: readonly AgentSession[]): Map<string, number> {
+  const seen = new Set<string>();
+  const out = new Map<string, number>();
+  for (const s of liveConductors) {
+    if (!s.board) continue;
+    const key = s.tmuxSession ? `tmux:${s.tmuxSession}` : `session:${s.sessionId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.set(s.board, (out.get(s.board) ?? 0) + 1);
+  }
+  return out;
+}
+
 // ── the durable queue ───────────────────────────────────────────────────────────────────────────────────
 
 /** One card waiting for a conductor slot. Durable: a restart must not strand a card that already has the
@@ -254,8 +279,7 @@ async function pumpUnlocked(deps: ConductorDeps): Promise<ConductorPumpReport> {
   const sessions = await deps.sessions().catch(() => [] as AgentSession[]);
   const live = await deps.liveTmux().catch(() => null);
   const liveConductors = sessions.filter((s) => isLiveConductor(s, live, deps.heartbeatAlive));
-  const liveCount = new Map<string, number>();
-  for (const s of liveConductors) if (s.board) liveCount.set(s.board, (liveCount.get(s.board) ?? 0) + 1);
+  const liveCount = countLiveConductorsByBoard(liveConductors);
 
   const keep: ConductorQueueEntry[] = [];
   let boxFull = false;
@@ -335,7 +359,11 @@ async function pumpUnlocked(deps: ConductorDeps): Promise<ConductorPumpReport> {
         board: e.board,
         cardId: e.cardId,
         model: policy.model,
-        name: `conductor-${e.cardId}`,
+        // A per-DISPATCH suffix (the recycle path's convention): a card re-dispatched after its conductor died gets a
+        // NEW tmux name, so the dead registry row — same card, same old name — never looks alive again through the
+        // new process (measured v0.9.0: the re-dispatched session resurrected the killed one and the board counted
+        // 2 conductors for 1, starving the next card of a slot).
+        name: conductorSessionSlug(e.cardId, (deps.now ?? Date.now)()),
         actor: "service:conductor",
         // The human's acceptance IS the go: the session is on the operator's behalf, not the copiloto's own
         // (only copilot-spawned sessions are the steward's to reap — a conductor waiting at a pause must not be).
