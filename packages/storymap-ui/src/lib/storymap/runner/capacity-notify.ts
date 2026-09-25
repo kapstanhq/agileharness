@@ -14,7 +14,7 @@ import { ALERT_URGENCY } from "@/lib/notifications/event";
 import { publishAgentAlert } from "@/lib/notifications/server/alert-bus";
 import { sendSlackAlert } from "@/lib/notifications/server/channels/slack-channel";
 
-export type CapacityCriticalKind = "latch" | "extra-usage" | "held-24h" | "meter-stale";
+export type CapacityCriticalKind = "latch" | "extra-usage" | "held-24h";
 
 export interface CapacityCriticalNotice {
   kind: CapacityCriticalKind;

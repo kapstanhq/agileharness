@@ -55,6 +55,13 @@ import {
 } from "./capacity-governor";
 import { notifyCapacityCritical, type CapacityCriticalNotice } from "./capacity-notify";
 
+/**
+ * Os avisos que o governador emite: os do notificador de capacidade + `meter-stale` (o medidor PARADO — ver
+ * {@link meterStallSince}; nome na política de push: `capacity-meter-stale`). Declarado aqui como união para o
+ * serviço não depender da forma exata do tipo do notificador, que é quem decide o destino de cada kind.
+ */
+export type GovernorNotice = CapacityCriticalNotice | { kind: "meter-stale"; title: string; body: string };
+
 /** O HALT do host quando `AGILEHARNESS_HALT_FILE` não diz outro. */
 export const DEFAULT_HALT_FILE = "/etc/agileharness/HALT";
 /** Quanto uma leitura do medidor é reaproveitada antes de uma nova ida ao proxy. */
@@ -254,7 +261,7 @@ export interface CapacityServiceDeps {
   readUsage?: (url: string) => Promise<UsageWindow | null>;
   stateDir?: () => string;
   haltPath?: () => string;
-  notify?: (n: CapacityCriticalNotice) => void;
+  notify?: (n: GovernorNotice) => void;
   log?: (msg: string) => void;
   readTtlMs?: number;
   /** a 1ª espera das re-tentativas de boot ({@link meterBootRetryDelays}); default 15 s */
@@ -294,7 +301,7 @@ export class CapacityGovernor implements CapacityGatePort {
   private readonly readUsage: (url: string) => Promise<UsageWindow | null>;
   private readonly dirOf: () => string;
   private readonly haltPathOf: () => string;
-  private readonly notify: (n: CapacityCriticalNotice) => void;
+  private readonly notify: (n: GovernorNotice) => void;
   private readonly log: (msg: string) => void;
   private readonly readTtlMs: number;
   private readonly bootRetryDelays: number[];
@@ -332,7 +339,7 @@ export class CapacityGovernor implements CapacityGatePort {
     this.readUsage = deps.readUsage ?? (async (url) => (await readHeadroomStats(url)).usage);
     this.dirOf = deps.stateDir ?? capacityStateDir;
     this.haltPathOf = deps.haltPath ?? (() => haltFilePath());
-    this.notify = deps.notify ?? ((n) => notifyCapacityCritical(n));
+    this.notify = deps.notify ?? ((n) => notifyCapacityCritical(n as CapacityCriticalNotice));
     this.log = deps.log ?? ((m) => console.log(m));
     this.readTtlMs = deps.readTtlMs ?? CAPACITY_READ_TTL_MS;
     this.bootRetryDelays = meterBootRetryDelays(deps.bootRetryBaseMs ?? METER_BOOT_RETRY_BASE_MS, deps.tickMs ?? CAPACITY_TICK_MS);

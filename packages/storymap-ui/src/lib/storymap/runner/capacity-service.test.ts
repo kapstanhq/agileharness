@@ -2,9 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CapacityGovernor, meterBootRetryDelays, meterKeepaliveArgv, readingFromUsage, type CapacityServiceDeps, type StoppedRun } from "./capacity-service";
+import { CapacityGovernor, meterBootRetryDelays, meterKeepaliveArgv, readingFromUsage, type CapacityServiceDeps, type GovernorNotice, type StoppedRun } from "./capacity-service";
 import { DAY_MS, DEFAULT_GOVERNOR_SETTINGS, HOUR_MS } from "./capacity-governor";
-import type { CapacityCriticalNotice } from "./capacity-notify";
 import type { GovernorSettings } from "@/lib/storymap/types";
 import type { UsageWindow } from "@/lib/vps/types";
 
@@ -54,7 +53,7 @@ function harness(
 ) {
   let now = T0;
   let current: UsageWindow | null = opts.usage === undefined ? usage() : opts.usage;
-  const notices: CapacityCriticalNotice[] = [];
+  const notices: GovernorNotice[] = [];
   const logs: string[] = [];
   // As re-tentativas de boot NUNCA disparam sozinhas no teste: ficam na fila até `fireRetry()` — nenhum
   // timer real sobrevive ao teste para reler um diretório já apagado.
