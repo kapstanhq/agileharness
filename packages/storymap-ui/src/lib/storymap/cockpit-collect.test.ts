@@ -67,6 +67,20 @@ describe("isStuckCardMetric — separa falha real de sucesso-com-aviso no Inbox"
     expect(isStuckCardMetric(m({ lastStatus: "max-turns" }))).toBe(false);
     expect(isStuckCardMetric(m({ lastStatus: null }))).toBe(false);
   });
+
+  // v0.9 — o cenário exato, de ponta a ponta sobre o store REAL (o mock do módulo acima só serve à dobra): um run de
+  // coluna falha, depois o PROXY responde a pergunta do card e o condutor tem a sessão contabilizada. O card segue
+  // TRAVADO — antes, o registro mais novo de QUALQUER papel virava "o último run" e escondia a falha.
+  it("run falhou e depois vieram registros de proxy e de sessão ⇒ segue travado", async () => {
+    const real = await vi.importActual<typeof import("./runner/telemetry")>("./runner/telemetry");
+    const t = new real.TelemetryStore({ load: async () => [], persist: async () => {} });
+    const base = { board: "b", cardId: "c1", durationMs: 1, turns: 1, inputTokens: 1, outputTokens: 1, costUSD: 0.1 };
+    await t.recordRun({ ...base, id: "run-1", trigger: "harness-do", startedAt: 100, status: "error" });
+    await t.recordRun({ ...base, id: "px-1", trigger: "harness-proxy", role: "proxy", startedAt: 200, status: "ok" });
+    await t.recordRun({ ...base, id: "session:1", trigger: "harness-conductor", role: "session", startedAt: 300, status: "ok" });
+    const [card] = (await t.boardSummary("b")).cards;
+    expect(isStuckCardMetric(card)).toBe(true);
+  });
 });
 
 describe("WS-12.2 (D16) — o Inbox carimba os itens de que o Jido desistiu", () => {
