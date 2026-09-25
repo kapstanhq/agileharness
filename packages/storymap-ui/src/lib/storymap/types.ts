@@ -1060,6 +1060,15 @@ export const MODEL_TIERS = ["haiku", "sonnet", "opus"] as const;
 export type ModelTier = (typeof MODEL_TIERS)[number];
 
 /**
+ * The model of a work SESSION (conductor, claude_new): a tier, optionally with the CLI's long-context variant
+ * `[1m]` (`opus[1m]`). A session carries a whole story in ONE context, and on a target whose context floor is
+ * high (measured on the reference target: ~104k tokens at turn 1) the 200k window thrashes auto-compact within
+ * a few reads — the variant is the fix, declared per board.
+ */
+export type SessionModel = ModelTier | `${ModelTier}[1m]`;
+export const SESSION_MODELS: readonly SessionModel[] = [...MODEL_TIERS, ...MODEL_TIERS.map((m) => `${m}[1m]` as const)];
+
+/**
  * Reasoning effort passed via `--effort`. Higher = deeper reasoning, more cost.
  * Mirrors the interactive `/effort` levels (no `--fast` headless → use `low`).
  */
@@ -2146,7 +2155,7 @@ export interface ConductorPolicy {
    */
   fromStatus: string | string[];
   maxSessions?: number;
-  model?: ModelTier;
+  model?: SessionModel;
 }
 
 /**

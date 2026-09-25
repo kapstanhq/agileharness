@@ -60,6 +60,7 @@ import type {
   Finding,
   GateId,
   ModelTier,
+  SessionModel,
   EffortLevel,
   IdeaFields,
   Persona,
@@ -101,6 +102,7 @@ import {
   isReopenMode,
   isRoutingDecidedBy,
   MODEL_TIERS,
+  SESSION_MODELS,
   ORCHESTRATOR_MODES,
   QUESTION_STATUSES,
   REVIEW_LENSES,
@@ -192,6 +194,11 @@ function coerceTrigger(value: unknown): TriggerId | undefined {
 
 function coerceModel(value: unknown): ModelTier | undefined {
   return MODEL_TIERS.includes(value as ModelTier) ? (value as ModelTier) : undefined;
+}
+
+/** A session model: a tier or its long-context variant (`opus[1m]`). Unknown ⇒ undefined (the default applies). */
+function coerceSessionModel(value: unknown): SessionModel | undefined {
+  return SESSION_MODELS.includes(value as SessionModel) ? (value as SessionModel) : undefined;
 }
 
 function coerceEffort(value: unknown): EffortLevel | undefined {
@@ -814,7 +821,7 @@ export function coerceConductor(raw: unknown): ConductorPolicy | undefined {
   const out: ConductorPolicy = { enabled: r.enabled === true, fromStatus };
   const max = Number(r.maxSessions);
   if (r.maxSessions != null && Number.isFinite(max) && max >= 1) out.maxSessions = Math.floor(max);
-  const model = coerceModel(r.model);
+  const model = coerceSessionModel(r.model);
   if (model) out.model = model;
   return out;
 }

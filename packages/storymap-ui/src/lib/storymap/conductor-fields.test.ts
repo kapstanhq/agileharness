@@ -65,6 +65,13 @@ describe("board `conductor` — type · coerce · contract · persist", () => {
     expect(coerceConductor({ enabled: true, fromStatus: "pronta", maxSessions: 0, model: "gpt" })).toEqual({ enabled: true, fromStatus: "pronta" });
   });
 
+  it("coerceConductor: o modelo aceita a variante de contexto longo `[1m]` de um tier conhecido (v0.8.2)", () => {
+    expect(coerceConductor({ enabled: true, fromStatus: "pronta", model: "opus[1m]" })?.model).toBe("opus[1m]");
+    expect(coerceConductor({ enabled: true, fromStatus: "pronta", model: "sonnet[1m]" })?.model).toBe("sonnet[1m]");
+    expect(coerceConductor({ enabled: true, fromStatus: "pronta", model: "gpt[1m]" })?.model).toBeUndefined();
+    expect(coerceConductor({ enabled: true, fromStatus: "pronta", model: "opus[2m]" })?.model).toBeUndefined();
+  });
+
   it("coerceConductor: fromStatus em LISTA — ids aparados, sem vazio/duplicata, na ordem autorada; lista vazia ⇒ sem bloco", () => {
     expect(coerceConductor({ enabled: true, fromStatus: [" interview ", "enriquecer", "", 7, "enriquecer", "corrigir"] })).toEqual({
       enabled: true,

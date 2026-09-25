@@ -667,3 +667,16 @@ describe("root-guard escape — IS_SANDBOX=1 só quando root + bypass herdado", 
     expect(commands[1].startsWith("'claude' ")).toBe(true);
   });
 });
+
+
+describe("o modelo da sessão com a variante de 1M (v0.8.2)", () => {
+  it("buildSessionClaudeArgs passa `--model opus[1m]` intacto (e depois do prompt, antes do --mcp-config)", () => {
+    const args = buildSessionClaudeArgs({ prompt: "/harness-conductor acme/story-1", model: "opus[1m]", mcpConfigPath: "/c.json" });
+    expect(args).toEqual(["/harness-conductor acme/story-1", "--model", "opus[1m]", "--mcp-config", "/c.json"]);
+    expect(buildSessionCommand("claude", args)).toContain("'--model' 'opus[1m]'");
+  });
+
+  it("o override do chamador (o condutor) com [1m] vence a rota do card", () => {
+    expect(resolveSessionRoute({ role: "implement", override: "opus[1m]", cardRoute: { model: "sonnet", effort: "high" } }).model).toBe("opus[1m]");
+  });
+});

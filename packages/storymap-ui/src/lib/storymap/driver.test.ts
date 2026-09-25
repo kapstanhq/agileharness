@@ -123,6 +123,10 @@ describe("resolveConductorPolicy", () => {
     });
   });
 
+  it("o modelo pode ser a variante de 1M — é o que o condutor usa num alvo de piso de contexto alto", () => {
+    expect(resolveConductorPolicy(board({ enabled: true, fromStatus: "pronta", model: "opus[1m]" }))?.model).toBe("opus[1m]");
+  });
+
   it("fromStatus em LISTA resolve para todos os ids (e uma lista vazia é desligado)", () => {
     expect(resolveConductorPolicy(board({ enabled: true, fromStatus: ["enriquecer", "pronta"] }))?.fromStatuses).toEqual([
       "enriquecer",

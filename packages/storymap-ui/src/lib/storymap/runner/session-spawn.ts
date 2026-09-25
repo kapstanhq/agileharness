@@ -54,7 +54,7 @@ import {
   type FleetQueueRow,
   type SessionWorktreeDeps,
 } from "./session-worktree";
-import type { CardDriver, EffortLevel, ModelTier } from "@/lib/storymap/types";
+import type { CardDriver, EffortLevel, ModelTier, SessionModel } from "@/lib/storymap/types";
 import { conductorCommand } from "@/lib/storymap/driver";
 import { CAPACITY_HELD_MARKER, type GateVerdict, type Initiator } from "./capacity-governor";
 
@@ -93,7 +93,7 @@ export function claimForRole(role: AgentRole): { kind: ClaimKind; scope: ClaimSc
 // ── the ROUTE (model, effort) ────────────────────────────────────────────────────────────────────────────
 
 export interface SessionRoute {
-  model?: ModelTier;
+  model?: SessionModel;
   effort?: EffortLevel;
   /** the one-line ARITHMETIC of why — the fleet view shows it, and "why is this on sonnet?" must be answerable. */
   why: string;
@@ -117,7 +117,7 @@ export interface SessionRoute {
  */
 export function resolveSessionRoute(input: {
   role: AgentRole;
-  override?: ModelTier;
+  override?: SessionModel;
   cardRoute?: { model?: ModelTier; effort?: EffortLevel } | null;
 }): SessionRoute {
   if (input.override) {
@@ -263,7 +263,7 @@ export function buildSessionPrompt(i: SessionPromptInput): string {
  */
 export function buildSessionClaudeArgs(input: {
   prompt: string;
-  model?: ModelTier;
+  model?: SessionModel;
   effort?: EffortLevel;
   mcpConfigPath?: string;
 }): string[] {
@@ -416,8 +416,8 @@ export interface SpawnSessionInput {
   task: string;
   board?: string;
   cardId?: string;
-  /** an explicit tier from the caller — always wins (see resolveSessionRoute). */
-  model?: ModelTier;
+  /** an explicit tier (or its `[1m]` variant) from the caller — always wins (see resolveSessionRoute). */
+  model?: SessionModel;
   /** a readable suffix for the tmux name; defaults to the session's short id. */
   name?: string;
   actor?: string;
@@ -663,7 +663,7 @@ export async function recycleSession(deps: SessionSpawnDeps, input: { sessionId:
 
   const card = cur.board && cur.cardId ? { board: cur.board, cardId: cur.cardId } : null;
   const cardRoute = card ? await deps.cardRoute(card.board, card.cardId).catch(() => null) : null;
-  const route = resolveSessionRoute({ role: cur.role, override: cur.model as ModelTier | undefined, cardRoute });
+  const route = resolveSessionRoute({ role: cur.role, override: cur.model as SessionModel | undefined, cardRoute });
   const mcpPath = await writeSessionMcpConfig(deps.fs, deps.stateDir, cur.sessionId, deps.mcpToken, deps.port).catch(
     () => null,
   );

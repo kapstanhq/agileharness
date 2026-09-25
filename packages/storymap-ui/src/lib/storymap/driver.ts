@@ -6,7 +6,7 @@
 // re-derived would be four chances for the answers to drift apart (one of them stays silent, another spawns).
 
 import { CONDUCTOR_DEFAULT_MAX_SESSIONS } from "./types";
-import type { BoardConfig, Card, CardDriver, CardRouting, ModelTier } from "./types";
+import type { BoardConfig, Card, CardDriver, CardRouting, ModelTier, SessionModel } from "./types";
 
 /** Is this card driven by a conductor session instead of the column cascade? PURE. */
 export function isConducted(card: Pick<Card, "routing"> | null | undefined): boolean {
@@ -82,7 +82,7 @@ export interface ResolvedConductorPolicy {
   /** every status whose ENTRY is the "go" — the string form resolves to a one-element list. */
   fromStatuses: string[];
   maxSessions: number;
-  model: ModelTier;
+  model: SessionModel;
 }
 
 /** The authored `fromStatus` (string or list) as a list of non-empty ids. PURE. */

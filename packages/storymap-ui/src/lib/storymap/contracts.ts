@@ -45,6 +45,7 @@ import {
   GATE_IDS,
   COLUMN_TRIGGER_IDS,
   MODEL_TIERS,
+  SESSION_MODELS,
   EFFORT_LEVELS,
   ENTRY_EFFECTS_IDS,
   REVIEW_LENSES,
@@ -587,7 +588,7 @@ export const BoardConfigSchema = z.object({
       // um status, ou a LISTA deles (o aceite manda o card a colunas diferentes por tipo).
       fromStatus: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]),
       maxSessions: z.number().int().positive().optional(),
-      model: oneOf(MODEL_TIERS).optional(),
+      model: oneOf(SESSION_MODELS).optional(),
     })
     .optional(),
   // A VISTA do Kanban em raias (lanes.ts): cada raia rotula um conjunto de status; o status real vira etiqueta.
