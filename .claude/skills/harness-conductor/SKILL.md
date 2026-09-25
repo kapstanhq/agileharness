@@ -2,17 +2,19 @@
 name: harness-conductor
 description: >-
   AgileHarness CONDUCTOR: ONE agent carries ONE story end to end, in ONE visible interactive
-  session (tmux, opened by the MCP tool `claude_new` with a worktree, an MCP token and the
-  card's CLAIM), instead of a fresh headless run per column. Four blocks in the SAME context:
+  session (tmux, opened by the board's conductor DISPATCH — board.yaml `conductor` — or by the MCP
+  tool `claude_new`, with a worktree, an MCP token and the card's CLAIM; the card carries
+  `routing.driver: conductor`), instead of a fresh headless run per column. Four blocks in the SAME context:
   MOLDAR (read card + PRD + board docs, investigate code/data first, ask only the few human
   choices as structured questions, write narrative + acceptance as a verifiable contract, and
   for a UI story draw 2-3 html variants with the style-guide tokens), CONSTRUIR (plan, tests
   first, then implementation with the board's specialists; tests locked), VERIFICAR (a
   CLEAN-context subagent reviews the diff with the review lenses and drives the running app at
   390px against the frozen contract; at most 2 loops back), PUBLICAR (worktree_submit ->
-  wait_for_submit through the merge train). The Kanban is a PROJECTION: the card is moved only
-  into columns that cannot spawn a column skill, with honest gate evidence, and in human-in-
-  control mode it stops at Aprovar entrega with a `## Prova da entrega` section. Never
+  wait_for_submit through the merge train). The Kanban is a PROJECTION: while the card carries
+  the driver no column skill runs on it, the card moves only with honest gate evidence (written on
+  main through MCP), and in human-in-control mode it stops at Aprovar entrega with a
+  `## Prova da entrega` section. Never
   deploys. Use when the user says "/harness conductor", "/harness-conductor", "conduzir a
   story", "conduzir o card", "condutor", or a claude_new session was opened on a card with
   this skill as its task. Writes board data through MCP and code (+ the card's pipeline
@@ -37,10 +39,31 @@ of work, and the work is split only where it must be — at a **human decision**
 
 > Read `storymap/README.md` (card schema, pipeline) once. You run as an interactive fleet
 > session: the operator watches your terminal, and every pause below ENDS YOUR TURN with a
-> message saying exactly what they must do. You are not a column trigger — no board column
-> spawns you (that is follow-up core work: `routing.driver: conductor`). The operator starts you.
+> message saying exactly what they must do. You are not a column trigger: the board's conductor
+> DISPATCH opens you when a story ENTERS a status, and your card carries `routing.driver:
+> conductor` — which is what silences the column cascade for it.
 
-## Starting a conductor (the operator)
+## Starting a conductor
+
+**By the board (the normal path).** The operator declares it once in the board's `board.yaml`:
+
+```yaml
+conductor:
+  enabled: true
+  fromStatus: pronta     # the status whose ENTRY is the "go" (e.g. where the human's acceptance lands it)
+  maxSessions: 2         # live conductors per board (default 2); the excess waits in a durable queue
+  model: opus            # optional (default opus): one context carries the whole story
+```
+
+When a story enters `fromStatus` (and the autorun master switch is on and the board is armed), the
+service stamps `routing.driver: conductor` on it and opens this session through the same door
+`claude_new` uses (admission + resource probe, worktree, claim `implement/both`, scoped MCP token,
+tmux `agent-conductor-<cardId>`, role `implement`), with `/harness-conductor <board>/<cardId>` as
+the first line of the prompt. A card waiting for a slot is dispatched when one frees (the fleet tick
+re-checks every minute). A conductor that DIES is not reopened automatically: the driver stays (no
+stale column run) and the operator decides.
+
+**By hand (the operator):**
 
 ```
 claude_new({ role: "implement", board: "<board>", cardId: "<id>",
@@ -48,13 +71,13 @@ claude_new({ role: "implement", board: "<board>", cardId: "<id>",
              model: "opus" })
 ```
 
-- `role` MUST be `implement` (or `free`): both reserve the card as `implement/both`, which is
-  the claim that refuses EVERY run on the card (see "The claim"). `review` would let the light
-  lane through.
-- `model` is optional; without it the tier comes from the card's current column (a card in an
-  early column gets a small tier for a whole-story job). One context carries the whole story.
-- `claude_new` is `run-free` — only the operator's `full` token can call it. The session
-  itself mounts the SCOPED `orch` token (G12): board writes, its own worktree, never a shell.
+- `role` MUST be `implement` (or `free`): both reserve the card as `implement/both`, the claim that
+  refuses every run on the card. `review` would let the light lane through.
+- `model` is optional; without it the tier comes from the card's current column (a small tier for a
+  whole-story job). One context carries the whole story.
+- `claude_new` is `run-free` — only the operator's `full` token can call it. The session itself
+  mounts the SCOPED `orch` token (G12): board writes, its own worktree, never a shell.
+- A hand-opened session does not carry the driver yet: PRE-VOO sets it (`set_card_driver`).
 
 ## The model in one table
 
@@ -79,93 +102,93 @@ the merge train (code → `stage`, board data → main, card merged 3-way per el
 | Through MCP (lands on main now) | Through your worktree (lands on submit) |
 |---|---|
 | `update_card`: title, `storyType`, narrative, acceptance, personas, systems, body | code + tests |
-| `move_card`: status, `parent`/`serves` (placement) | card PIPELINE fields: `tasks`, `techPlanReady`, `hasUiSurface`, `criteriaSpecs`, `findings`, structured `questions`, `reviewedAt`/`reviewCommit`/`commitRange`, clearing `mode` |
-| `write_sidecar` kind `wireframes` (the human must SEE the variants) and kind `plans` | — |
-| `ask_question`, `choose_wireframe`, `approve_qa` | — |
+| `move_card`: status, `parent`/`serves` (placement) | card PIPELINE fields with no MCP writer: `techPlanReady`, `hasUiSurface`, `criteriaSpecs`, `reviewedAt`/`reviewCommit`/`commitRange`, clearing `mode` |
+| `set_tasks` (the task list the `hasTasks`/`hasBuildEvidence` gates read — needs YOUR claim) | — |
+| `add_finding` (budget / verification findings, mid-build) | — |
+| `ask_question` — plain `texts` OR structured `questions` (options, one recommended, context) | — |
+| `write_sidecar` kind `wireframes` (validated: an error names the artifact) and kind `plans` | — |
+| `choose_wireframe`, `approve_qa`, `set_card_driver`, `release_claim` | — |
 
-`update_card` REJECTS pipeline fields and `status`; `tasks` has no MCP writer at all
-(`mark_tasks_done` was retired). Never hand-edit `status:` in any file, never run
-`advance-card.ts` (it writes the file in cwd; your moves go through `move_card`).
+`update_card` REJECTS pipeline fields and `status`. Never hand-edit `status:` in any file, never
+run `advance-card.ts` (it writes the file in cwd; your moves go through `move_card`). One writer
+path per field: once you set tasks with `set_tasks`, keep the worktree card's `tasks` equal to what
+you wrote (or leave them untouched there) so the train's 3-way merge has nothing to arbitrate.
 
 **Gates are evaluated against MAIN's card** (`checkGate` in `moveCardAction`; predicates in
 `packages/storymap-ui/src/lib/storymap/gates.ts` → `gate-core.js`). Evidence still sitting in
-your worktree does not exist for a gate. That is why CONSTRUIR opens with a **data-only
-checkpoint submit**: a submission whose diff touches only `storymap/boards/**` skips the code
-gate and merges straight to main (`verificationDemand` in `merge-queue.ts`). A checkpoint is
-legal ONLY while the branch carries no code; after any code commit, the next submit is the real
-one (PUBLICAR). `worktree_submit` runs `git add -A` — keep scratch files, screenshots and your
-state journal in gitignored paths (check with `git check-ignore -q <path>`).
+your worktree does not exist for a gate — which is why the gate evidence now goes through MCP
+(`set_tasks`, `add_finding`, `approve_qa`). A **data-only checkpoint submit** (a diff touching only
+`storymap/boards/**` skips the code gate and merges straight to main — `verificationDemand` in
+`merge-queue.ts`) is still available for the pipeline fields that have no MCP writer
+(`techPlanReady`, `hasUiSurface`, `criteriaSpecs`), legal ONLY while the branch carries no code.
+`worktree_submit` runs `git add -A` — keep scratch files, screenshots and your state journal in
+gitignored paths (check with `git check-ignore -q <path>`).
 
 After every checkpoint that lands — and right before you edit your copy of the card file —
 `worktree_refresh({sessionId})`: the branch rebases onto the fresh base (main's board data
 included), so your copy is current and an already-landed commit drops out.
 
-## The claim — what it stops and what it does not (verified in code)
+## The driver and the claim — what they stop and what they do not (verified in code)
 
-`claude_new` reserves the card as `session:<agentId>` with kind `implement`, scope `both`
-(`claimForRole` in `runner/session-spawn.ts`), TTL 60 min (`CLAIM_TTL_SESSION_MS`), renewed
+**The driver.** `routing.driver: conductor` on your card makes the column machinery SILENT for it:
+the cascade (`decideCascade` in `cascade-decision.ts`) never RUNs a column skill for it nor
+skip-forwards it (stop reason `conductor`, a debug line only — no card console line, no loop-guard
+finding), and the engine (`runSkill` in `engine.ts`) settles ANY dispatch for it — a human "Rodar
+agora", a recovery resume, a re-drive — as a clean `cancelled` before it reaches the claim: no
+process, no `$0 no-op`, nothing on Inbox. It is sticky: your session dying does not clear it (so the
+card never gets a stale column run); only you (at the end) or the operator clear it
+(`set_card_driver({board, cardId, driver: null})`). A scoped move of a conducted card into an armed
+column is `write-board`, not `run` (`moveRiskClass`). What still flows: column ENTRY EFFECTS
+(`onEnter`, e.g. promote-and-deploy), the train's trigger-less passages (`merge` → `stage` →
+`release`) and the deploy settle.
+
+**The claim.** Your session reserves the card as `session:<agentId>` with kind `implement`, scope
+`both` (`claimForRole` in `runner/session-spawn.ts`), TTL 60 min (`CLAIM_TTL_SESSION_MS`), renewed
 every ~60 s by the service's fleet reconcile while your tmux lives (`reconcileFleetNow` in
-`runner/fleet-deps.ts`).
+`runner/fleet-deps.ts`). A session opened by `worktree_open`/`adopt_session` has none: take it with
+`claim_card({board, cardId, sessionId})`. Give it back with `release_claim({board, cardId,
+sessionId})` — it only ever releases YOUR claim. The claim is the second lock (the driver is the
+first): it is what makes `set_tasks` yours alone, and what keeps a second implementer off the card.
 
 The engine reserves the card on EVERY dispatch (`runner/engine.ts`, the WS-4.2 block that
 calls `this.claims.acquire` with `actor: run:<sessionId>`, kind `claimKindFor(trigger)`, scope
 `code` for code skills / `board` for the light lane). Against your `implement/both` claim
 (`claimConflicts` in `runner/claims.ts`): code runs conflict (both touch code), light runs
-conflict (same kind `implement`), `harness-review`/`harness-qa` conflict (code). So while you
-hold the claim **no column skill runs on your card** — the dispatch order is: cascade decision →
-card budget + loop guard → enqueue → zero-token pre-check → capability preflight → **claim
-acquire refused** → settle as a **$0 `no-op`** whose summary carries `claim-refused: card
-reservado por session:<agentId> (implement/both)`. Consequences you must design around:
-
-- the card STAYS in the column it was moved to; the refusal is recorded as a no-op failure, so
-  it surfaces to the human on Inbox like any stuck card; the dispatch was journaled at enqueue,
-  so after `autorun.noProgressMax` (default 3) refusals in the same column the loop guard writes
-  a finding on the card and stops dispatching it;
-- `CLAIM_REFUSED_MARKER` keeps the pre-check from wedging the card, so **the next evaluation
-  after the claim is gone spawns the column skill normally** — a card left in an armed column
-  gets a stale run once you leave;
-- evaluations fire on every status change, on a run's completion and when the train integrates
-  something for the card (`onMergeDone`) — including YOUR submits: a checkpoint that lands while
-  the card rests in an armed column produces one more refused no-op.
+conflict (same kind `implement`), `harness-review`/`harness-qa` conflict (code). Without the driver (a
+card whose driver was cleared while you still hold the claim), the claim alone still refuses every
+column run — but noisily: each refusal settles as a `$0 no-op` (`claim-refused: …`) that shows on
+Inbox, and after `autorun.noProgressMax` refusals the loop guard writes a finding. With the driver,
+none of that happens. So: never clear the driver before you release the claim and leave.
 
 What the claim does NOT stop: a human's moves and UI buttons (claims are advisory for humans);
 column **entry effects** (`onEnter`, e.g. promote-and-deploy on Publicar); the merge train; a
-`triage`/`steward` actor on the same card (different kind, board scope — they coexist); the
-cascade's FORWARD writes (a card landing in a column its type skips is moved on by the engine —
-see below). The copiloto tick skips claimed cards. Only `claude_new` takes a claim:
-`worktree_open` and `adopt_session` do NOT. There is no MCP tool to release one: it ends when
-your tmux dies (released as `session-died` within ~1 min) or 60 min after the last renewal
-(`worktree_discard` deregisters you, which only stops the renewal).
+`triage`/`steward` actor on the same card (different kind, board scope — they coexist). The
+copiloto tick skips claimed cards. The claim ends when you `release_claim`, when your tmux dies
+(released as `session-died` within ~1 min) or 60 min after the last renewal (`worktree_discard`
+deregisters you, which stops the renewal — release first).
 
-Independently of the claim, a move by your scoped token into a column with `autorun: true` AND
-a `trigger` is risk class `run` (`moveRiskClass` in `entry-effect.ts`), whose default
-disposition is `ask`: the move is refused and an approval request opens. A column with
-`onEnter` is `deploy` — never yours.
+A move into a column with `onEnter` is risk class `deploy` — never yours.
 
 ## Safe landings (the projection rule)
 
 Resolve the board's pipeline: `list_statuses({board})` gives `id/name/gate/trigger/autorun/
-terminal`; `onEnter`, `skipForTypes` and `dispensable` are not in it — read
-`storymap/boards/_base/board.yaml` and `storymap/boards/<board>/board.yaml` in your worktree (the
-board's per-id deltas win; `inheritPipeline: false` means the board owns its statuses outright).
-A column is a **safe landing for THIS card** only if ALL hold:
+terminal`; `onEnter` is not in it — read `storymap/boards/_base/board.yaml` and
+`storymap/boards/<board>/board.yaml` in your worktree (the board's per-id deltas win;
+`inheritPipeline: false` means the board owns its statuses outright). With the driver set, an armed
+or skipped column spawns nothing and forwards nothing, so a column is a **safe landing for THIS
+card** when ALL hold:
 
 1. no `onEnter`, not terminal, not `release`/`deploy`, and not a train passage (`merge`/`stage`
-   belong to the train — the one exception is the final ULTRA hand-off into `merge`);
-2. NOT (`autorun: true` AND a `trigger`) — on some boards `desenvolver`, `revisar-codigo` or
-   `qa-automatizado` are armed (the `demo` fixture arms all three);
-3. NOT skipped for this card: its `storyType` is not in the column's `skipForTypes` and its id is
-   not in `card.routing.skips` (`routeSkip` in `skip-routing.ts`; `decideCascade` FORWARDS a
-   skipped card even out of an `autorun: false` column, possibly into an armed one — a
-   `technical` card left in `ready` is forwarded into `plano-tecnico` and refused there);
-4. its gate passes on MAIN's card;
-5. the card has no `reopenPending` (the reopen override fires `harness-fix`/`harness-refine` even
-   in manual columns — `triggerForCard`).
+   belong to the train — the one exception is the human's (or ULTRA's) hand-off into `merge`);
+2. its gate passes on MAIN's card;
+3. the card still carries `routing.driver: conductor` (`get_card` → `routing.driver`). Without it
+   the OLD rule is back: an armed column (`autorun: true` + `trigger`) or a skipped one is NOT safe.
 
-`move_card` validates only the DESTINATION's gate, so jump over unsafe columns. If the next
-safe landing needs evidence only an unsafe column can stamp (e.g. `approve_qa` works only with
-the card in `qa-automatizado` or `revisao`), stop at the last safe landing and hand it to the
-operator. Never leave the card in an unsafe column, not even for a moment.
+`move_card` validates only the DESTINATION's gate, so jump over unneeded columns. `approve_qa` /
+`approve_review` accept the card in the board's QA / review columns, resolved from its pipeline
+(the step that runs `harness-qa`, the step gated by `hasQaPassed`, the step that runs
+`harness-review`) — not from fixed ids. A reopen (`refine`/`fix`) clears the route and the driver:
+the reopen triage owns the card from there.
 
 ## MCP surface you use (verified shapes)
 
@@ -180,13 +203,17 @@ The AgileHarness server is mounted as `storymap` in a fleet session (`mcp__story
 | `list_claims` | `{board?, released?}` |
 | `update_card` | `{board, cardId, title?, storyType?, narrative?{role,want,soThat}, acceptance?[], personas?[], systems?[], body?}` — `body` REPLACES the whole body |
 | `move_card` | `{board, cardId, status?, parent?, serves?, release?, order?}` |
-| `ask_question` | `{board, cardId, texts[], askedBy?}` — plain text only (no options) |
-| `write_sidecar` | `{board, cardId, kind: "plans" \| "wireframes" \| "proposals", content}` — full file, ≤512KB |
+| `ask_question` | `{board, cardId, texts?[], questions?[], askedBy?}` — `questions[]`: `{text, context?, options?[{label, pros?[], cons?[], recommended?}], mode?: "single" \| "multi", recommendation?}` (2–8 options, at most ONE recommended; `recommendation` only without options) |
+| `write_sidecar` | `{board, cardId, kind: "plans" \| "wireframes" \| "proposals", content}` — full file, ≤512KB; `wireframes` is VALIDATED (bad JSON, `format: "html"` without html, html over 32KB or sanitized to nothing ⇒ error naming the artifact) and returns `avisos` for what the sanitizer strips / fixed widths over 390px |
+| `add_finding` | `{board, cardId, severity, title, detail?, lens?, id?, file?, line?, suggestion?}` — on MAIN; a stable `id` is idempotent (refreshes content, never the status) |
+| `set_tasks` | `{board, cardId, sessionId, tasks: [{id, title, done}]}` — REPLACES the list on MAIN; only the session holding the card's live claim |
+| `set_card_driver` | `{board, cardId, driver: "conductor" \| null}` — null hands the card back to the column cascade (nothing is spawned by the clear itself) |
+| `claim_card` / `release_claim` | `{board, cardId, sessionId}` — your session's OWN claim; release never touches another actor's |
 | `get_card_wireframes` | `{board, cardId, view?: "full" \| "text"}` — never write the `text` view back |
 | `choose_wireframe` | `{board, cardId, optionId}` — a `screen` artifact id; sets `wireframeChosen` |
 | `design_feedback` | `{board, cardId, artifactId?, note?, kind?: "change" \| "approve"}` |
-| `approve_qa` | `{board, cardId, qaPassed?, qaRanAt?, qaCommit?, visual?, comment?}` |
-| `runner_status` | `{board?, cardId?, limit?}` — with both ids: the card's run telemetry (`costUSD`) |
+| `approve_qa` | `{board, cardId, qaPassed?, qaRanAt?, qaCommit?, visual?, comment?}` — the card must sit in one of the board's QA landings (see "Safe landings") |
+| `runner_status` | `{board?, cardId?, limit?}` — with both ids: `history[]` (the card's ledger: runs AND ended conductor sessions, role `session`) and, while a conductor lives, `conductorSessions[]` (`estimatedCostUSD` from its transcripts) + `spentIncludingLiveSessionsUSD` |
 | `worktree_open` | `{board?, cardId?, task}` → `{sessionId, path, branch, baseCommit}` |
 | `worktree_submit` | `{sessionId, message?}` → `{entryId, pinnedSha, committed}` |
 | `wait_for_submit` | `{sessionId, timeoutMs?}` (≤600000) → `{state, status, detail?, next}` |
@@ -202,10 +229,12 @@ the SAME args. Never use `deploy`, `publish_when_idle`, `update_vps`, `write_doc
 
 1. From your spawn prompt: `sessionId`, the 8-char `agentId` prefix, `board/cardId`, the
    worktree path. `cd` into the worktree; everything you write lives there.
-2. **Claim**: `list_claims({board})` must show a live claim on your card whose actor starts with
-   `session:<agentId prefix>`, kind `implement`, scope `both`. No claim (a session not born from
-   `claude_new`, or it lapsed) ⇒ **P0**: the column skills are NOT held off — stop and tell the
-   operator (reopen via `claude_new`, or disarm the board with `set_board_autorun` first).
+2. **Driver + claim**: `get_card` must show `routing.driver: "conductor"` — if it does not (a hand-
+   opened session), set it NOW with `set_card_driver({board, cardId, driver: "conductor"})`, before
+   any other write. `list_claims({board})` must show a live claim on your card whose actor starts
+   with `session:<agentId prefix>`, kind `implement`, scope `both`; without one (a `worktree_open`/
+   `adopt_session` session, or it lapsed) take it: `claim_card({board, cardId, sessionId})`. Refused
+   (another actor holds it) ⇒ **P0**: tell the operator who holds it.
 3. **Tools**: no `storymap` MCP tools ⇒ P0 (the service has no `orch` token for sessions).
 4. **Write policy**: read `orchestrator.riskMatrix` in the board's `board.yaml`. Without
    `write-board: auto` every `update_card`/`move_card`/`write_sidecar`/`ask_question`/
@@ -215,9 +244,9 @@ the SAME args. Never use `deploy`, `publish_when_idle`, `update_vps`, `write_doc
    journal (step 7).
 6. `get_card({board, cardId, verbose: true})`. If `reopenPending: true` ⇒ P0: the reopen triage
    (`harness-fix`/`harness-refine`) owns this card first; ask the operator to close this session
-   so the claim frees. If the card sits in an unsafe column (e.g. `enriquecer`, `priorizar`,
-   `design-ux`, `plano-tecnico`), move it to `grill` NOW, before any other write (a move out of
-   the Triagem quarantine needs placement — pass `parent`/`serves`, see MOLDAR step 4).
+   so the claim frees. With the driver set, the column the card rests in spawns nothing; move it
+   to `grill` when you start asking (a move out of the Triagem quarantine needs placement — pass
+   `parent`/`serves`, see MOLDAR step 4).
 7. Create the state journal (gitignored, survives a `claude_recycle` because the tree is kept):
    `.artifacts/conductor/<cardId>.md` — block, pause, `baseCommit`, lock sha + locked test
    files, verified sha, loops used, pinned shas, cost notes. Update it at every block boundary.
@@ -242,12 +271,10 @@ the SAME args. Never use `deploy`, `publish_when_idle`, `update_vps`, `write_doc
    harness-conductor`, ids `q<N>` not colliding with existing ones). Money/price, vendor or new
    external dependency, external publication and PRD changes are ALWAYS human questions — mark
    them `[humano]` at the start of `context`.
-   - Structured path (preferred, legal while your branch has no code): write the `questions:`
-     entries into YOUR worktree's card file, commit, `worktree_submit` (data-only checkpoint),
-     `wait_for_submit` until `done`, then `worktree_refresh`.
-   - Fallback (a question mid-build, or the train is jammed): `ask_question({board, cardId,
-     texts: ["<pergunta curta> — opções: (a) … [recomendada] · (b) … — contexto: …"],
-     askedBy: "harness-conductor"})`.
+   - Ask them on MAIN at once: `ask_question({board, cardId, askedBy: "harness-conductor",
+     questions: [{text, context, options: [{label, pros, cons, recommended?}], mode}]})` (a
+     question without discrete options: `recommendation` in prose). It works mid-build too — no
+     checkpoint needed.
    - Move the card to `grill` (Dúvidas) if it is not there → **P1**.
    `technical`/`bug`/`chore`/`spike` stories: do NOT ask about what you can decide — record the
    decision as an assumption in `## Premissas` (what you assumed, why, how to reverse) and
@@ -273,18 +300,19 @@ the SAME args. Never use `deploy`, `publish_when_idle`, `update_vps`, `write_doc
    - each variant: `{id: "variante-a", kind: "screen", title, note, format: "html", viewport:
      "mobile", state: "populated", heightHint: 640–900, html}` (`DesignArtifact` in
      `types.ts`); `format: "html"` must be explicit.
-   - the html is a BODY FRAGMENT rendered in `<iframe sandbox="">` under CSP `default-src
-     'none'` (`wireframe-html/`): no `<html>/<head>/<body>` (a `<style>` inside `<head>` is
-     DROPPED with it — put `<style>` at the top of the fragment), no scripts, no
-     `src`/`href`/`url(...)` (stripped), no external fonts or images (images are styled divs;
-     webfonts cannot load — use the guide's family names with a system fallback). Hard cap 32KB
-     per artifact (above it the html is discarded, only a text projection survives); aim ≤10KB.
+   - the html is rendered as a BODY FRAGMENT in `<iframe sandbox="">` under CSP `default-src
+     'none'` (`wireframe-html/`): a full document is reduced to its body, and a `<style>` inside
+     `<head>` is KEPT (lifted to the top of the fragment); everything else in the head goes. No
+     scripts, no `src`/`href`/`url(...)` (stripped), no external fonts or images (images are
+     styled divs; webfonts cannot load — use the guide's family names with a system fallback).
+     Hard cap 32KB per artifact — `write_sidecar` REFUSES an artifact over it (naming it); aim
+     ≤10KB.
    - tokens: declare the guide's roles as CSS custom properties on a wrapper (`color.tokens`,
      `typography.scale`, `spacing.steps`, `shape.radii`) and style by role, never loose hex;
      copy honours `voice.lexicon` (forbidden words) and `antiPatterns`.
-   - phone-readable: the canvas renders mobile artifacts at most 375px wide — fluid layout
-     (`width:100%; max-width:390px; margin:0 auto`), no fixed width above 375, body text ≥14px,
-     AA contrast per the guide.
+   - phone-readable: the canvas renders mobile artifacts at 390px (the width you verify at) — fluid
+     layout (`width:100%; max-width:390px; margin:0 auto`), no fixed width above 390 (write_sidecar
+     warns), body text ≥14px, AA contrast per the guide.
    - `choose_wireframe({board, cardId, optionId: "<recommended>"})` — the gate `hasWireframe`
      needs a primary; it is only your RECOMMENDATION. Move the card to `com-design` (Aprovar
      design) → **P2**.
@@ -297,14 +325,14 @@ the SAME args. Never use `deploy`, `publish_when_idle`, `update_vps`, `write_doc
 1. **Worktree.** Use the one from your spawn prompt. Only if you have none, `worktree_open({board,
    cardId, task})` — and remember it takes no claim.
 2. **Budget check** (see "Budget").
-3. **Plan + tasks → checkpoint.** Write the plan with `write_sidecar({…, kind: "plans"})` —
-   Objetivo, Arquivos a tocar, Abordagem, Contratos, Riscos, Ordem das tasks, Plano de teste
-   (the `harness-plan` shape). In your worktree's card file: `tasks` (`{id: t1…, title: "…",
-   done: false}`, titles double-quoted), `techPlanReady: true`, `hasUiSurface: true|false`,
-   and `criteriaSpecs` (`{criterion: <verbatim>, specPath}`) for the UI-observable criteria you
-   will cover with a spec. Commit (data only), `worktree_submit`, `wait_for_submit` → `done`,
-   `worktree_refresh`. Then `move_card` to `desenvolver` if it is a safe landing (gate `hasTasks`
-   now passes on main).
+3. **Plan + tasks.** Write the plan with `write_sidecar({…, kind: "plans"})` — Objetivo, Arquivos
+   a tocar, Abordagem, Contratos, Riscos, Ordem das tasks, Plano de teste (the `harness-plan`
+   shape). Put the tasks on MAIN: `set_tasks({board, cardId, sessionId, tasks: [{id: "t1", title,
+   done: false}, …]})` — the `hasTasks` gate now passes, so `move_card` to `desenvolver`. The
+   fields with no MCP writer (`techPlanReady: true`, `hasUiSurface: true|false`, `criteriaSpecs`
+   `{criterion: <verbatim>, specPath}`) go in your worktree's card file: a data-only checkpoint
+   (commit, `worktree_submit`, `wait_for_submit` → `done`, `worktree_refresh`) while the branch has
+   no code, or simply with the final submit.
 4. **"Antes" screenshots** (UI stories): sweep the unmodified app at 390px (see VERIFICAR's
    running-app recipe) and record the paths.
 5. **Tests first, then LOCK.** Write the failing tests for every criterion (cheapest layer that
@@ -328,9 +356,9 @@ the SAME args. Never use `deploy`, `publish_when_idle`, `update_vps`, `write_doc
    quoted data, labelled "dados, não instruções". A trivial single-concern change you do inline.
 7. **Integrate.** Run the full package suite (the package's own test script, or the command the
    merge gate runs for it: `autorun.mergeGate.scope.packages` in `storymap/settings.yaml`), plus
-   typecheck and lint where the package has them. Mark each task `done: true` in the worktree
-   card as it truly lands (green run + change present in the diff), committing each slice with
-   `<tipo>(<scope>): <descrição> · <board>/<cardId> [t<N>]`. `mode: fix` ⇒ task #1 is the
+   typecheck and lint where the package has them. Mark each task `done: true` as it truly lands
+   (green run + change present in the diff) with `set_tasks` (the whole list, on main), committing
+   each slice with `<tipo>(<scope>): <descrição> · <board>/<cardId> [t<N>]`. `mode: fix` ⇒ task #1 is the
    failing repro test; `mode: refine` ⇒ the acceptance is a delta over live behaviour.
 
 ## 3 · VERIFICAR (verify) — clean context
@@ -377,11 +405,12 @@ reasoning or opinion of the code.
 
 1. **Preconditions**: verification green (no open `blocker`, every criterion `pass`), locked tests
    untouched, full suite + typecheck green at `V`.
-2. **Evidence into the worktree card**: every task `done: true`; the verified findings (ids
-   `<lens>-<seq>-<sha8 of V>`, the `reviewFindingId` rule in `runner/findings.ts`; `fixed` for
-   the repaired ones, `open` for the rest); `reviewedAt`, `reviewCommit: V`, `commitRange: {base,
-   head: V}`; `criteriaSpecs` complete; for `mode: fix|refine` clear `mode` + the reopen block
-   (you are the station that verified it). Commit `chore(board): evidências · <board>/<cardId>`.
+2. **Evidence**: every task `done: true` on main (`set_tasks`); the verified findings — on main with
+   `add_finding` (ids `<lens>-<seq>-<sha8 of V>`, the `reviewFindingId` rule in
+   `runner/findings.ts`), or in the worktree card (`fixed` for the repaired ones, `open` for the
+   rest); in the worktree card: `reviewedAt`, `reviewCommit: V`, `commitRange: {base, head: V}`,
+   `criteriaSpecs` complete, and for `mode: fix|refine` clear `mode` + the reopen block (you are the
+   station that verified it). Commit `chore(board): evidências · <board>/<cardId>`.
 3. `worktree_submit({sessionId, message})` → `pinnedSha`; `wait_for_submit({sessionId,
    timeoutMs: 600000})`, re-calling while `state` is `timeout`:
    - `done` → continue;
@@ -391,11 +420,12 @@ reasoning or opinion of the code.
    - `gate-failed`/`conflict`/`failed` → read `detail`, fix, verify, resubmit.
    The train stamps `stagedAt`: your code now waits in `stage`; publishing it is the board's
    release policy, never yours.
-4. **Projection** (each hop only if it is a safe landing; gates now pass honestly on main):
+4. **Projection** (gates now pass honestly on main; with the driver set no column skill fires):
    `desenvolver` -> `revisar-codigo` (`hasBuildEvidence`: every task done) -> `qa-automatizado`
    (`hasNoBlockers`), then `approve_qa({board, cardId, qaPassed: true, qaRanAt: <today>,
    qaCommit: V, visual: <true ONLY if the verifier swept, `readyAll` was true and the PNGs were
-   judged>})`, then `qa-automatizado` -> `revisao` (`hasQaPassed`).
+   judged>})`, then `qa-automatizado` -> `revisao` (`hasQaPassed`). Use the board's own ids
+   (`list_statuses`) — the canonical ones are shown.
 5. **`## Prova da entrega`** — append to the body with one `update_card` (read `verbose: true`
    first):
    ```
@@ -409,9 +439,12 @@ reasoning or opinion of the code.
    - **Custo até aqui:** runs US$ <x> + sessão ~US$ <y> (estimado) / orçamento <b|—>
    - **Riscos / o que não foi provado:** <…>
    ```
-6. **Human in control** (the default) → **P5**: keep the session, its worktree and the claim
-   alive while the human decides. On approval: `worktree_discard({sessionId})` and ask the
-   operator to close this session (the claim frees within a minute). ULTRA mode → see below.
+6. **Human in control** (the default) → **P5**: keep the session, its worktree, the claim and the
+   driver while the human decides. On approval (the card left `revisao` for `merge`): in THIS
+   order — `set_card_driver({board, cardId, driver: null})` (the card returns to the pipeline; it
+   now rests in the release policy's hands), `release_claim({board, cardId, sessionId})`,
+   `worktree_discard({sessionId})` (this also books your session's spend into the card's ledger),
+   then ask the operator to close this session. ULTRA mode → see below.
 
 ## Pauses — what the operator does
 
@@ -424,7 +457,7 @@ re-read the card (answers, `chosenOptionId`, feedback) before acting.
 |---|---|---|
 | P0 precondition | unchanged or `grill` | fixes what you named (claim, token, riskMatrix, reopen), or closes the session |
 | P1 questions | `grill` | answers on `/perguntas` (or the Inbox "Perguntas" lane), then says `continuar` |
-| P2 design choice | `com-design` | compares the variants on the card's canvas (phone is fine), switches the primary if needed, leaves per-artifact feedback or approvals, then says `continuar` or `ajustar: …`. Do NOT click "Pedir ajuste": it moves the card to `design-ux`/`design-ui`, whose skills are refused under the claim, stranding it there |
+| P2 design choice | `com-design` | compares the variants on the card's canvas (phone is fine), switches the primary if needed, leaves per-artifact feedback or approvals, then says `continuar` or `ajustar: …`. "Pedir ajuste" also works now: it moves the card to `design-ux`/`design-ui`, where nothing runs (the driver), and you read the feedback there on resume |
 | P3 verification exhausted | `desenvolver` | reads the findings/verdicts you summarized; decides: accept the risk, guide a fix, or stop |
 | P4 budget | last safe landing | raises the budget, approves continuing, or stops |
 | P5 delivery | `revisao` | reads `## Prova da entrega`; approves by moving the card to `merge` (Integrar) — it then rests in `release` (Liberar) under the release policy — or asks for changes here |
@@ -435,14 +468,15 @@ re-read the card (answers, `chosenOptionId`, feedback) before acting.
 - Ceiling: `autorun.cardBudgetUSD` in `storymap/settings.yaml` (the service env
   `AGILEHARNESS_AUTORUN_CARD_BUDGET_USD` overrides it and is invisible to you — ask when it
   matters). Absent ⇒ no ceiling, but still report cost.
-- Spent = Σ `runner_status({board, cardId}).history[].costUSD` (earlier headless runs on this
-  card) + your own session. The harness does NOT meter sessions: estimate from your transcript's
-  token usage × the model's price, or ask the operator for `/cost` at a pause; call it an
-  estimate.
+- Spent = `runner_status({board, cardId}).spentIncludingLiveSessionsUSD`: the card's ledger (earlier
+  headless runs + ended conductor sessions) plus YOUR live session, estimated from your worktree's
+  transcripts (sub-agents included) with an embedded, dated price table — call it an estimate. When
+  your session ends (discard or tmux death) its spend is booked into the ledger (role `session`), so
+  `autorun.cardBudgetUSD` sees it from then on.
 - At every block boundary: spent + the estimate of the remaining blocks > ceiling ⇒ stop AT the
-  boundary: write a finding `{id: "conductor-budget", lens: "general", severity: "high",
-  status: "open", title, detail}` into the worktree card (it rides the next submit), surface it
-  now with `ask_question`, and pause (P4). Never cross a boundary hoping it fits.
+  boundary: `add_finding({board, cardId, id: "conductor-budget", lens: "general", severity:
+  "high", title, detail})` (on main, now), surface it with `ask_question`, and pause (P4). Never
+  cross a boundary hoping it fits.
 - Scoped writes count against `orchestrator.maxActionsPerHour`: batch (one `update_card` per
   block, not per field).
 
@@ -484,12 +518,14 @@ riskMatrix`), so **absent or unknown ⇒ human in control**. When the flag exist
 
 ## Known limits (core follow-ups — do not pretend otherwise)
 
-`ask_question` takes plain text only (structured questions need the worktree + checkpoint);
-no MCP tool writes a finding onto main; no tool releases a claim, and `worktree_open`/
-`adopt_session` take none; session spend is unmetered, so `cardBudgetUSD` never sees the
-conductor; a claim refusal still records a no-op "stuck" card on Inbox; "Pedir ajuste" and
-cascade forwarding can strand a conductor card in an armed column; screenshots have no durable
-per-card home; the ULTRA flag and `routing.driver: conductor` do not exist yet.
+Screenshots have no durable per-card home; the ULTRA flag does not exist yet. A conductor that
+dies is never reopened automatically (the driver stays; the operator reopens with `claude_new` or
+clears it). The session's cost is an ESTIMATE (embedded price table; a model it does not know is
+priced by family or left unpriced), booked when the session ends — a tail spent after
+`worktree_discard` is not counted. The dispatch queue is re-checked on the fleet tick (disabled
+when `AGILEHARNESS_FLEET_RECONCILE_MS <= 0`), obeys the autorun master switch and the board's arm,
+and a hand-opened conductor does not count against `maxSessions`. `techPlanReady`, `hasUiSurface`
+and `criteriaSpecs` still have no MCP writer (worktree + submit).
 
 ## Report (end of each turn that closes a block)
 
