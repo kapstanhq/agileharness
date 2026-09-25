@@ -583,6 +583,134 @@ describe("medidor PARADO — o impasse vira UMA demanda crítica, e o keepalive 
   });
 });
 
+describe("runKeepaliveNow — o «Renovar agora» do operador no Inbox", () => {
+  // v0.9.2: o item do medidor parado era um muro de texto sem botão, que mandava o dono «fazer passar tráfego pelo
+  // proxy». O botão pede ao governador o keepalive do host AGORA e relê o medidor; o desfecho vira o toast.
+  const MIN = 60_000;
+  const stale = usage({ polledAt: T0 - MIN });
+  const ARGV = ["claude", "-p", "ok"];
+
+  /** Um governador com o medidor PARADO (visto fresco em T0, defasado há 40 min). */
+  async function stalled(opts: Parameters<typeof harness>[0] = {}) {
+    const h = harness({ usage: stale, keepaliveArgv: ARGV, ...opts });
+    await h.g.refresh();
+    h.setNow(T0 + 40 * MIN);
+    await h.g.refresh();
+    expect(h.g.snapshot().meterStall).not.toBeNull();
+    return h;
+  }
+
+  it("configurado: roda o keepalive JÁ, relê o medidor e o impasse acaba ⇒ `renewed`", async () => {
+    const calls: string[][] = [];
+    let h!: Awaited<ReturnType<typeof stalled>>;
+    h = await stalled({
+      runKeepalive: async (argv) => {
+        calls.push(argv);
+        h.setUsage(usage({ polledAt: T0 + 40 * MIN })); // o tráfego renovou o token: o proxy volta a medir
+        return { ok: true, detail: "ok" };
+      },
+    });
+    const r = await h.g.runKeepaliveNow();
+    expect(r).toEqual({ outcome: "renewed", detail: "ok" });
+    expect(calls).toEqual([ARGV]);
+    expect(h.g.snapshot().meterStall).toBeNull();
+    expect(h.g.admission("automation")).toMatchObject({ admit: true });
+    expect(h.logs.some((l) => l.includes("o operador pediu") && l.includes("rodando o keepalive"))).toBe(true);
+  });
+
+  it("basta o comando no ambiente — `governor.meterKeepalive` é a cadência do LAÇO, não uma permissão", async () => {
+    const calls: string[][] = [];
+    const h = await stalled({ runKeepalive: async (argv) => (calls.push(argv), { ok: true, detail: "" }) });
+    await h.g.flush();
+    expect(calls).toEqual([]); // sem a cadência no settings, o laço automático não rodou nada
+    await h.g.runKeepaliveNow();
+    expect(calls).toEqual([ARGV]);
+  });
+
+  it("fura a cadência do laço (clique deliberado) — e a execução do operador passa a contar como a última", async () => {
+    const calls: string[][] = [];
+    const h = harness({
+      usage: stale,
+      keepaliveArgv: ARGV,
+      settings: { meterKeepalive: { everyMinutes: 30 } },
+      runKeepalive: async (argv) => (calls.push(argv), { ok: true, detail: "" }),
+    });
+    await h.g.refresh();
+    h.setNow(T0 + 22 * MIN);
+    await h.g.refresh(); // o laço roda o 1º (defasada)
+    await h.g.flush();
+    expect(calls).toHaveLength(1);
+
+    h.setNow(T0 + 30 * MIN); // dentro da cadência: o laço NÃO rodaria…
+    await h.g.refresh();
+    await h.g.flush();
+    expect(calls).toHaveLength(1);
+    await h.g.runKeepaliveNow(); // …o operador roda
+    expect(calls).toHaveLength(2);
+
+    h.setNow(T0 + 55 * MIN); // 33 min depois do 1º, mas só 25 depois do do operador: o laço espera
+    await h.g.refresh();
+    await h.g.flush();
+    expect(calls).toHaveLength(2);
+    h.setNow(T0 + 61 * MIN);
+    await h.g.refresh();
+    await h.g.flush();
+    expect(calls).toHaveLength(3);
+  });
+
+  it("uma execução em voo é ESPERADA, nunca duplicada (dois cliques, dois celulares)", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const calls: string[][] = [];
+    const h = await stalled({
+      runKeepalive: async (argv) => {
+        calls.push(argv);
+        await gate;
+        return { ok: false, detail: "exit 1" };
+      },
+    });
+    const a = h.g.runKeepaliveNow();
+    const b = h.g.runKeepaliveNow();
+    release();
+    expect(await a).toEqual({ outcome: "failed", detail: "exit 1" });
+    expect(await b).toEqual({ outcome: "failed", detail: "exit 1" });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("sem comando no ambiente ⇒ `not-configured`, e nada roda", async () => {
+    const calls: string[][] = [];
+    const h = await stalled({ keepaliveArgv: null, runKeepalive: async (argv) => (calls.push(argv), { ok: true, detail: "" }) });
+    const r = await h.g.runKeepaliveNow();
+    expect(r.outcome).toBe("not-configured");
+    expect(r.detail).toContain("AGILEHARNESS_METER_KEEPALIVE");
+    expect(calls).toEqual([]);
+  });
+
+  it("o keepalive FALHA (ou lança) ⇒ `failed` com o que ele disse; o medidor segue parado", async () => {
+    const h = await stalled({
+      runKeepalive: async () => {
+        throw new Error("ENOENT claude");
+      },
+    });
+    expect(await h.g.runKeepaliveNow()).toEqual({ outcome: "failed", detail: "ENOENT claude" });
+    expect(h.g.snapshot().meterStall).not.toBeNull();
+  });
+
+  it("rodou sem erro, mas a leitura relida segue defasada ⇒ `still-stalled` (não mente «renovado»)", async () => {
+    const h = await stalled({ runKeepalive: async () => ({ ok: true, detail: "" }) });
+    const r = await h.g.runKeepaliveNow();
+    expect(r.outcome).toBe("still-stalled");
+    expect(h.g.snapshot().meterStall).not.toBeNull();
+  });
+
+  it("proxy desligado por ambiente ⇒ `no-meter`, e nada roda", async () => {
+    const calls: string[][] = [];
+    const h = harness({ statsUrl: null, keepaliveArgv: ARGV, runKeepalive: async (argv) => (calls.push(argv), { ok: true, detail: "" }) });
+    expect((await h.g.runKeepaliveNow()).outcome).toBe("no-meter");
+    expect(calls).toEqual([]);
+  });
+});
+
 describe("meterKeepaliveArgv — o comando vem SÓ do ambiente do host", () => {
   it("argv em JSON de strings não-vazias; qualquer outra forma é nula", () => {
     expect(meterKeepaliveArgv({ AGILEHARNESS_METER_KEEPALIVE: '["claude","-p","ok"]' })).toEqual(["claude", "-p", "ok"]);

@@ -73,7 +73,7 @@ import { listTrashManifests, readTrashManifest, removeTrashEntry, writeTrashMani
 import { ADDRESSES_REL, ideaFingerprint } from "@/lib/storymap/idea";
 import { makeCtx, validateLink } from "@/lib/storymap/link-graph";
 import { loadRunnerConfig, writeRunnerSettings } from "@/lib/storymap/runner/config";
-import { getCapacityGovernor } from "@/lib/storymap/runner/capacity-service";
+import { getCapacityGovernor, type KeepaliveNowResult } from "@/lib/storymap/runner/capacity-service";
 import type { GovernorSnapshot, LatchLevel } from "@/lib/storymap/runner/capacity-governor";
 import { findRepoRoot, runnerStateDir } from "@/lib/storymap/paths";
 import { buildRequeueEntry, isRequeueableStatus, requeueCandidates } from "@/lib/storymap/runner/requeue";
@@ -4245,6 +4245,30 @@ export async function engageCapacityLatchAction(input: { level: LatchLevel; reas
     const by = caller === "operator-session" ? "operator" : isScopedActor() ? "mcp:escopado" : caller;
     await g.engageLatch({ level: input?.level === "hard" ? "hard" : "soft", reason: String(input?.reason ?? ""), by });
     return { ok: true, data: { snapshot: g.snapshot() } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * "Renovar agora" — o botão do item do MEDIDOR DE COTA PARADO no Inbox. Pede ao governador que rode JÁ o keepalive
+ * declarado no ambiente do host (`AGILEHARNESS_METER_KEEPALIVE`) e releia o medidor; devolve o desfecho para a tela
+ * dizer o que aconteceu (renovado / rodou e segue parado / falhou / não configurado).
+ *
+ * SÓ o operador com sessão. O keepalive gasta cota da conta e fura a cadência do laço automático — é um clique
+ * deliberado de quem está olhando o impasse, não uma alavanca para um agente: pelo MCP (mesmo com o token `full`)
+ * e de dentro do próprio serviço a action RECUSA, a mesma régua de quem solta a trava (`mayClearLatch`). O comando
+ * nunca vem do pedido: é o do ambiente do host, lido pelo governador.
+ */
+export async function renewCapacityMeterAction(): Promise<Result<KeepaliveNowResult>> {
+  await requireSession("renewCapacityMeterAction");
+  // O guard deixa passar os TRÊS chamadores legítimos; aqui só um deles serve. Mesma régua do guard, relida.
+  const caller = (await resolveActionCaller()) ?? "desconhecido";
+  if (caller !== "operator-session") {
+    return { ok: false, error: `só o operador com sessão no painel renova o medidor de cota (chamador: ${caller})` };
+  }
+  try {
+    return { ok: true, data: await getCapacityGovernor().runKeepaliveNow() };
   } catch (e) {
     return fail(e);
   }

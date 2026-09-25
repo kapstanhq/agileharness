@@ -90,6 +90,21 @@ export const METER_KEEPALIVE_ENV = "AGILEHARNESS_METER_KEEPALIVE";
 export const METER_KEEPALIVE_TIMEOUT_MS = 120_000;
 
 /**
+ * O desfecho do "Renovar agora" do operador ({@link CapacityGovernor.runKeepaliveNow}):
+ *   renewed         o keepalive rodou e a leitura relida depois dele está FRESCA — o impasse acabou;
+ *   still-stalled   rodou sem erro, mas a leitura relida segue defasada (o tráfego não renovou o token);
+ *   failed          o keepalive terminou com erro (saída ≠ 0, teto de tempo, binário ausente);
+ *   not-configured  não há comando declarado no ambiente do host ({@link METER_KEEPALIVE_ENV});
+ *   no-meter        o proxy de uso está desligado por ambiente — não há leitura a renovar.
+ */
+export type KeepaliveNowOutcome = "renewed" | "still-stalled" | "failed" | "not-configured" | "no-meter";
+export interface KeepaliveNowResult {
+  outcome: KeepaliveNowOutcome;
+  /** o que o keepalive disse (saída/erro, curto) — ou o motivo de não ter rodado */
+  detail: string;
+}
+
+/**
  * O argv do keepalive declarado no ambiente (`AGILEHARNESS_METER_KEEPALIVE='["claude","-p","ok"]'`), ou null.
  * SÓ o ambiente: `settings.yaml` chega a main pelo train (um delta de agente que passa no gate), e um comando
  * lido AO VIVO de lá seria execução arbitrária como o uid do serviço. JSON de strings não-vazias; qualquer outra
@@ -328,6 +343,8 @@ export class CapacityGovernor implements CapacityGatePort {
   private hardStop: HardStopHook | null = null;
   private rearm: RearmHook | null = null;
   private keepaliveInflight: Promise<void> | null = null;
+  /** o desfecho da execução em voo — quem chega enquanto ela roda espera ESTA, nunca dispara outra */
+  private keepaliveRun: Promise<{ ok: boolean; detail: string }> | null = null;
   private lastKeepaliveAt = Number.NEGATIVE_INFINITY;
   /** meia-configuração do keepalive já avisada (uma chave sem a outra) — não repetir a cada tick */
   private keepaliveHalfWarned: string | null = null;
@@ -736,18 +753,63 @@ export class CapacityGovernor implements CapacityGatePort {
       return;
     }
     this.keepaliveHalfWarned = null;
-    if (this.keepaliveInflight || now - this.lastKeepaliveAt < s.meterKeepalive.everyMinutes * 60_000) return;
+    if (this.keepaliveRun || now - this.lastKeepaliveAt < s.meterKeepalive.everyMinutes * 60_000) return;
+    void this.startKeepalive(argv, now, "leitura defasada com o medidor já visto");
+  }
+
+  /**
+   * Roda o keepalive em segundo plano — ou devolve a execução que JÁ está em voo (uma por vez, venha o pedido do
+   * laço ou do operador). Nunca lança; ao terminar relê o medidor. Marca a cadência: o laço automático conta o
+   * seu `everyMinutes` a partir desta execução, seja ela dele ou do operador.
+   */
+  private startKeepalive(argv: string[], now: number, why: string): Promise<{ ok: boolean; detail: string }> {
+    if (this.keepaliveRun) return this.keepaliveRun;
     this.lastKeepaliveAt = now;
-    this.log(`[capacity] leitura defasada com o medidor já visto — rodando o keepalive (${argv[0]}) para gerar tráfego pelo proxy`);
-    this.keepaliveInflight = this.runKeepalive(argv)
+    this.log(`[capacity] ${why} — rodando o keepalive (${argv[0]}) para gerar tráfego pelo proxy`);
+    const run = this.runKeepalive(argv)
       .catch((err): { ok: boolean; detail: string } => ({ ok: false, detail: err instanceof Error ? err.message : String(err) }))
       .then((r) => {
         this.log(`[capacity] keepalive ${r.ok ? "concluído" : "FALHOU"}${r.detail ? `: ${r.detail}` : ""}`);
-      })
+        return r;
+      });
+    this.keepaliveRun = run;
+    this.keepaliveInflight = run
+      .then(() => undefined)
       .finally(() => {
+        this.keepaliveRun = null;
         this.keepaliveInflight = null;
         void this.refresh();
       });
+    return run;
+  }
+
+  /**
+   * O "Renovar agora" do operador (o item do medidor parado no Inbox): roda o keepalive declarado JÁ e relê o
+   * medidor. Difere do laço automático em DUAS coisas, e só nelas:
+   *   · fura a cadência `everyMinutes` — ela existe para o laço não gastar sozinho, não para negar um clique
+   *     deliberado de quem está olhando o impasse; a execução do operador também passa a contar como a última;
+   *   · basta o comando no ambiente do host: `governor.meterKeepalive` é a cadência do laço, não uma permissão.
+   * O resto é o mesmo: o comando vem SÓ do ambiente ({@link meterKeepaliveArgv} — nunca do pedido nem do
+   * settings), roda sem shell e com teto, e uma execução já em voo é ESPERADA em vez de duplicada. Quem pode
+   * chamar é decidido na server action (só o operador com sessão). Nunca lança.
+   */
+  async runKeepaliveNow(): Promise<KeepaliveNowResult> {
+    this.ensureLoaded();
+    if (!this.statsUrl()) {
+      return { outcome: "no-meter", detail: "o proxy de uso está desligado por ambiente neste host — não há leitura a renovar" };
+    }
+    const argv = this.keepaliveArgvOf();
+    if (!argv) return { outcome: "not-configured", detail: `${METER_KEEPALIVE_ENV} não está definido no ambiente do serviço` };
+    const run = await this.startKeepalive(argv, this.now(), "o operador pediu «Renovar agora»");
+    // A leitura que conta é a que COMEÇA depois do tráfego: uma já em voo pode ter partido antes dele terminar.
+    await this.inflight;
+    await this.refresh();
+    if (!run.ok) return { outcome: "failed", detail: run.detail || "o keepalive terminou com erro" };
+    if (this.isFresh(this.reading, this.now())) return { outcome: "renewed", detail: run.detail };
+    return {
+      outcome: "still-stalled",
+      detail: "o keepalive rodou, mas a leitura relida segue defasada — o tráfego não renovou o token do proxy de uso",
+    };
   }
 
   // ── a trava pelo operador/agente ──────────────────────────────────────────────────────────────────────
