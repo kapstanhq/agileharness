@@ -2776,6 +2776,20 @@ export interface GovernorSettings {
   latchFiveHourPct: number;
   /** leitura mais velha que isto (min) é DEFASADA ⇒ o trabalho automático espera (default 20). */
   staleMinutes: number;
+  /**
+   * Defasada há mais que isto (min) COM o medidor já visto neste host ⇒ o medidor está PARADO: não é uma
+   * espera, é um impasse (sem número a automação não roda; sem automação nada passa pelo proxy; sem tráfego o
+   * token que o proxy usa para ler a janela nunca se renova). Vira UM aviso crítico (`meter-stale`) e o estado
+   * `meterStall` do retrato, uma vez por episódio (default 30; nunca abaixo de `staleMinutes`).
+   */
+  meterStallMinutes: number;
+  /**
+   * A saída OPCIONAL do impasse: enquanto a leitura está defasada (o medidor já visto), rodar o comando de
+   * keepalive a cada `everyMinutes` para gerar tráfego pelo proxy. SÓ a cadência mora aqui — o COMANDO vem do
+   * ambiente do host (`AGILEHARNESS_METER_KEEPALIVE`, argv em JSON): este arquivo chega a main pelo train, e um
+   * comando lido ao vivo dele seria execução arbitrária como o uid do serviço. Sem o comando no ambiente, nada roda.
+   */
+  meterKeepalive?: { everyMinutes: number };
   /** fuso IANA que define o "dia" do ritmo diário; ausente ⇒ o fuso do host. */
   timezone?: string;
 }

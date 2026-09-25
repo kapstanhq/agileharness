@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CapacityGovernor, meterBootRetryDelays, readingFromUsage, type CapacityServiceDeps, type StoppedRun } from "./capacity-service";
+import { CapacityGovernor, meterBootRetryDelays, meterKeepaliveArgv, readingFromUsage, type CapacityServiceDeps, type StoppedRun } from "./capacity-service";
 import { DAY_MS, DEFAULT_GOVERNOR_SETTINGS, HOUR_MS } from "./capacity-governor";
 import type { CapacityCriticalNotice } from "./capacity-notify";
 import type { GovernorSettings } from "@/lib/storymap/types";
@@ -43,7 +43,14 @@ afterEach(async () => {
 });
 
 function harness(
-  opts: { usage?: UsageWindow | null; statsUrl?: string | null; settings?: Partial<GovernorSettings>; readUsage?: () => Promise<UsageWindow | null> } = {},
+  opts: {
+    usage?: UsageWindow | null;
+    statsUrl?: string | null;
+    settings?: Partial<GovernorSettings>;
+    readUsage?: () => Promise<UsageWindow | null>;
+    keepaliveArgv?: string[] | null;
+    runKeepalive?: (argv: string[]) => Promise<{ ok: boolean; detail: string }>;
+  } = {},
 ) {
   let now = T0;
   let current: UsageWindow | null = opts.usage === undefined ? usage() : opts.usage;
@@ -69,6 +76,9 @@ function harness(
     log: (m) => logs.push(m),
     readTtlMs: 60_000,
     schedule,
+    // o ambiente do host NUNCA vaza para o teste: sem argv declarado aqui, não há keepalive
+    keepaliveArgv: () => opts.keepaliveArgv ?? null,
+    runKeepalive: opts.runKeepalive ?? (async () => ({ ok: true, detail: "" })),
   };
   const g = new CapacityGovernor(deps);
   live.push(g);
@@ -245,9 +255,12 @@ describe("a trava automática", () => {
     h.setUsage(usage({ session: 87 })); // teto de 5h
     h.setNow(T0 + 2 * 60_000);
     await h.g.refresh();
-    h.setUsage(usage({ polledAt: T0 - 3 * HOUR_MS })); // defasada
+    // defasada (29 min > staleMinutes 20) mas ainda não PARADA (< meterStallMinutes 30): é o governador funcionando.
+    // Defasada além disso com o medidor já visto é o impasse — esse SIM avisa (ver «medidor PARADO» abaixo).
+    h.setUsage(usage({ polledAt: T0 - 25 * 60_000 }));
     h.setNow(T0 + 4 * 60_000);
     await h.g.refresh();
+    expect(h.g.admission("automation")).toMatchObject({ admit: false, reason: "stale" });
     expect(h.notices).toEqual([]);
   });
 });
@@ -423,5 +436,159 @@ describe("readingFromUsage", () => {
     expect(readingFromUsage({ ...u, polledAt: null }, T0)?.polledAt).toBe(0);
     expect(readingFromUsage({ ...u, week: null }, T0)).toBeNull();
     expect(readingFromUsage(null, T0)).toBeNull();
+  });
+});
+
+describe("medidor PARADO — o impasse vira UMA demanda crítica, e o keepalive é a saída opcional", () => {
+  // Medido na v0.8.0 no ar: o proxy só renova a leitura com o token OAuth que colhe do TRÁFEGO. Sem tráfego desde
+  // 22:17Z o token expirou, o poll falhava desde 01:48Z, a leitura ficou defasada, a automação foi retida — e,
+  // retida, nada passava pelo proxy: a frota parada para sempre, e o painel só dizia «leitura defasada».
+  const MIN = 60_000;
+  const stale = usage({ polledAt: T0 - MIN }); // o /stats segue servindo a janela VELHA — a ida "funciona"
+
+  it("defasada além de meterStallMinutes, com o medidor já visto ⇒ UM aviso `meter-stale`, o retrato e o log; uma medição fresca encerra sem novo push", async () => {
+    const h = harness({ usage: stale });
+    await h.g.refresh(); // leitura fresca em T0
+    h.setNow(T0 + 25 * MIN);
+    await h.g.refresh(); // defasada (>20), ainda não parada (<30)
+    expect(h.g.admission("automation")).toMatchObject({ admit: false, reason: "stale" });
+    expect(h.notices).toEqual([]);
+    expect(h.g.snapshot().meterStall).toBeNull();
+
+    h.setNow(T0 + 35 * MIN);
+    await h.g.refresh();
+    expect(h.notices.map((n) => n.kind)).toEqual(["meter-stale"]);
+    const snap = h.g.snapshot().meterStall!;
+    expect(snap.since).toBe(T0 - MIN);
+    expect(snap.detectedAt).toBe(T0 + 35 * MIN);
+    expect(snap.detail).toContain("medidor de cota parado desde 11:59");
+    expect(snap.detail).toContain("automação retida");
+    expect(h.logs.some((l) => l.includes("parado desde 11:59"))).toBe(true);
+
+    h.setNow(T0 + 50 * MIN);
+    await h.g.refresh(); // o MESMO episódio: nenhum segundo aviso
+    expect(h.notices).toHaveLength(1);
+
+    h.setUsage(usage({ polledAt: T0 + 50 * MIN - MIN })); // o proxy voltou a medir
+    await h.g.refresh();
+    expect(h.g.snapshot().meterStall).toBeNull();
+    expect(h.g.admission("automation")).toMatchObject({ admit: true });
+    expect(h.notices).toHaveLength(1); // a volta não empurra nada
+    expect(h.logs.some((l) => l.includes("o medidor voltou"))).toBe(true);
+  });
+
+  it("o episódio é PERSISTIDO: um restart no meio do impasse não re-avisa o celular — nem o esquece", async () => {
+    const h = harness({ usage: stale });
+    await h.g.refresh();
+    h.setNow(T0 + 40 * MIN);
+    await h.g.refresh();
+    expect(h.notices).toHaveLength(1);
+    await h.g.flush();
+    const h2 = new CapacityGovernor(h.deps);
+    live.push(h2);
+    await h2.refresh();
+    expect(h.notices).toHaveLength(1);
+    expect(h2.snapshot().meterStall?.since).toBe(T0 - MIN);
+  });
+
+  it("medidor NUNCA visto não é «parado» (é inerte), e proxy desligado por env também não", async () => {
+    const never = harness({ usage: null });
+    await never.g.refresh();
+    for (let i = 0; i < 5; i++) await never.fireRetry();
+    never.setNow(T0 + 3 * 60 * MIN);
+    await never.g.refresh();
+    expect(never.notices).toEqual([]);
+    expect(never.g.snapshot().meterStall).toBeNull();
+
+    const off = harness({ statsUrl: null });
+    off.setNow(T0 + 3 * 60 * MIN);
+    await off.g.refresh();
+    expect(off.notices).toEqual([]);
+  });
+
+  it("[NÃO-VACUIDADE] sem as DUAS chaves nada roda — e a metade que falta é dita UMA vez no log", async () => {
+    const calls: string[][] = [];
+    const run = async (argv: string[]) => (calls.push(argv), { ok: true, detail: "" });
+    // nenhuma chave
+    const none = harness({ usage: stale, runKeepalive: run });
+    await none.g.refresh();
+    none.setNow(T0 + 40 * MIN);
+    await none.g.refresh();
+    // só a cadência no settings
+    const cadence = harness({ usage: stale, runKeepalive: run, settings: { meterKeepalive: { everyMinutes: 30 } } });
+    await cadence.g.refresh();
+    cadence.setNow(T0 + 40 * MIN);
+    await cadence.g.refresh();
+    await cadence.g.refresh();
+    // só o comando no ambiente
+    const cmd = harness({ usage: stale, runKeepalive: run, keepaliveArgv: ["claude", "-p", "ok"] });
+    await cmd.g.refresh();
+    cmd.setNow(T0 + 40 * MIN);
+    await cmd.g.refresh();
+    await Promise.all([none, cadence, cmd].map((x) => x.g.flush()));
+
+    expect(calls).toEqual([]);
+    expect(none.logs.some((l) => l.includes("NÃO roda") || l.includes("rodando o keepalive"))).toBe(false);
+    expect(cadence.logs.filter((l) => l.includes("sem comando no ambiente"))).toHaveLength(1);
+    expect(cmd.logs.filter((l) => l.includes("governor.meterKeepalive ausente"))).toHaveLength(1);
+  });
+
+  it("armado: roda SÓ com a leitura defasada, respeita a cadência, relê o medidor ao terminar — e o impasse se desfaz", async () => {
+    const calls: string[][] = [];
+    let h!: ReturnType<typeof harness>;
+    const renew = async (argv: string[]) => {
+      calls.push(argv);
+      // o tráfego do keepalive renovou o token: o proxy volta a medir
+      h.setUsage(usage({ polledAt: T0 + 22 * MIN }));
+      return { ok: true, detail: "ok" };
+    };
+    h = harness({ usage: stale, runKeepalive: renew, keepaliveArgv: ["claude", "-p", "ok"], settings: { meterKeepalive: { everyMinutes: 30 } } });
+    await h.g.refresh(); // fresca: nada roda
+    expect(calls).toEqual([]);
+
+    h.setNow(T0 + 22 * MIN);
+    await h.g.refresh(); // defasada ⇒ o keepalive roda, e ao terminar relê
+    await h.g.flush();
+    expect(calls).toEqual([["claude", "-p", "ok"]]);
+    expect(h.g.admission("automation")).toMatchObject({ admit: true });
+    expect(h.logs.some((l) => l.includes("keepalive concluído"))).toBe(true);
+
+    // defasa de novo DENTRO da cadência: não roda outra vez
+    h.setUsage(usage({ polledAt: T0 + 22 * MIN }));
+    h.setNow(T0 + 45 * MIN);
+    await h.g.refresh();
+    await h.g.flush();
+    expect(calls).toHaveLength(1);
+    // passada a cadência, roda
+    h.setNow(T0 + 53 * MIN);
+    await h.g.refresh();
+    await h.g.flush();
+    expect(calls).toHaveLength(2);
+  });
+
+  it("um keepalive que FALHA é dito no log e não derruba o laço", async () => {
+    const h = harness({
+      usage: stale,
+      keepaliveArgv: ["claude", "-p", "ok"],
+      settings: { meterKeepalive: { everyMinutes: 30 } },
+      runKeepalive: async () => {
+        throw new Error("ENOENT claude");
+      },
+    });
+    await h.g.refresh();
+    h.setNow(T0 + 25 * MIN);
+    await h.g.refresh();
+    await h.g.flush();
+    expect(h.logs.some((l) => l.includes("keepalive FALHOU: ENOENT claude"))).toBe(true);
+    expect(h.g.admission("automation")).toMatchObject({ admit: false, reason: "stale" });
+  });
+});
+
+describe("meterKeepaliveArgv — o comando vem SÓ do ambiente do host", () => {
+  it("argv em JSON de strings não-vazias; qualquer outra forma é nula", () => {
+    expect(meterKeepaliveArgv({ AGILEHARNESS_METER_KEEPALIVE: '["claude","-p","ok"]' })).toEqual(["claude", "-p", "ok"]);
+    for (const bad of [undefined, "", "claude -p ok", "[]", '["claude",""]', '{"a":1}', "[1,2]"]) {
+      expect(meterKeepaliveArgv({ AGILEHARNESS_METER_KEEPALIVE: bad }), String(bad)).toBeNull();
+    }
   });
 });

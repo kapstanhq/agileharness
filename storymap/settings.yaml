@@ -268,6 +268,19 @@ governor:
   latchWeekPct: 92
   latchFiveHourPct: 90
   staleMinutes: 20
+  # MEDIDOR PARADO — o impasse que a espera por defasagem não enxerga: o proxy de uso só renova a leitura com o
+  # token que colhe do TRÁFEGO; sem tráfego ele expira, a leitura fica defasada, a automação é retida (certo), e
+  # retida nada passa pelo proxy — o token nunca se renova. Defasada há mais que isto (min), com o medidor já
+  # visto neste host, vira UM aviso crítico (`meter-stale` → push `capacity-meter-stale`) e o painel de
+  # capacidade diz «medidor parado desde HH:MM», uma vez por episódio. Nunca abaixo de staleMinutes.
+  meterStallMinutes: 30
+  # A saída OPCIONAL e barata: enquanto a leitura estiver defasada (medidor já visto), rodar um keepalive a cada
+  # N min para gerar tráfego pelo proxy. SÓ a cadência mora aqui — o COMANDO vem do ambiente do host, argv em JSON
+  # e sem shell, porque este arquivo chega a main pelo train e um comando lido dele rodaria como o serviço:
+  #   AGILEHARNESS_METER_KEEPALIVE='["env","ANTHROPIC_BASE_URL=http://127.0.0.1:8787","claude","-p","ok","--max-turns","1"]'
+  # Sem as DUAS chaves (esta cadência + o comando no ambiente), nada roda — e a metade que faltar é dita no log.
+  # meterKeepalive:
+  #   everyMinutes: 30
 mcpTokens:
   - tokenEnv: AGILEHARNESS_MCP_TOKEN_ORCH
     level: orch

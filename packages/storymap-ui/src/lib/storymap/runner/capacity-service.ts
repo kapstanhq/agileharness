@@ -19,6 +19,7 @@
 // durável deixam de valer. O HALT continua valendo: ele é uma parada de emergência do host, e desligar o
 // governador não pode ser a forma de ignorá-la.
 
+import { execFile } from "node:child_process";
 import { existsSync, readFileSync, statSync, promises as fsp } from "node:fs";
 import path from "node:path";
 import { runnerStateDir } from "@/lib/storymap/paths";
@@ -36,6 +37,7 @@ import {
   decideCapacity,
   effectiveLatch,
   mayClearLatch,
+  meterStallSince,
   pacingFor,
   projectWeekAtReset,
   rollBaseline,
@@ -73,6 +75,48 @@ export function meterBootRetryDelays(baseMs: number = METER_BOOT_RETRY_BASE_MS, 
   const out: number[] = [];
   for (let d = baseMs; d > 0 && d < tickMs; d *= 2) out.push(d);
   return out;
+}
+
+/** O comando do keepalive do medidor: SÓ do ambiente do host (argv em JSON). Ver {@link meterKeepaliveArgv}. */
+export const METER_KEEPALIVE_ENV = "AGILEHARNESS_METER_KEEPALIVE";
+/** Teto de uma execução do keepalive — ele gera tráfego, não trabalho. */
+export const METER_KEEPALIVE_TIMEOUT_MS = 120_000;
+
+/**
+ * O argv do keepalive declarado no ambiente (`AGILEHARNESS_METER_KEEPALIVE='["claude","-p","ok"]'`), ou null.
+ * SÓ o ambiente: `settings.yaml` chega a main pelo train (um delta de agente que passa no gate), e um comando
+ * lido AO VIVO de lá seria execução arbitrária como o uid do serviço. JSON de strings não-vazias; qualquer outra
+ * forma ⇒ null (e o serviço avisa). Roda SEM shell (execFile). PURA.
+ */
+export function meterKeepaliveArgv(env: Record<string, string | undefined> = process.env): string[] | null {
+  const raw = env[METER_KEEPALIVE_ENV]?.trim();
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw) as unknown;
+    if (Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === "string" && x.trim() !== "")) return v as string[];
+  } catch {
+    /* forma inválida ⇒ null */
+  }
+  return null;
+}
+
+/** Um horário legível no fuso do governador (o do "dia"): `HH:MM`, com a data quando não é hoje. PURA. */
+function clockIn(ms: number, now: number, tz: string | undefined): string {
+  const opts = tz ? { timeZone: tz } : {};
+  const day = (t: number) => new Intl.DateTimeFormat("pt-BR", { ...opts, year: "numeric", month: "2-digit", day: "2-digit" }).format(t);
+  const hm = new Intl.DateTimeFormat("pt-BR", { ...opts, hour: "2-digit", minute: "2-digit" }).format(ms);
+  return day(ms) === day(now) ? hm : `${new Intl.DateTimeFormat("pt-BR", { ...opts, day: "2-digit", month: "2-digit" }).format(ms)} ${hm}`;
+}
+
+/** O texto da demanda do medidor parado — o que o operador lê no painel, no aviso e no log. PURA. */
+export function meterStallDetail(since: number, now: number, s: Pick<GovernorSettings, "timezone" | "meterKeepalive">, keepaliveArmed: boolean): string {
+  const exit = keepaliveArmed
+    ? `o keepalive declarado roda a cada ${s.meterKeepalive?.everyMinutes ?? "?"} min enquanto isso durar`
+    : "saída: gere tráfego pelo proxy (uma sessão interativa basta) ou arme o keepalive (governor.meterKeepalive + AGILEHARNESS_METER_KEEPALIVE)";
+  return (
+    `medidor de cota parado desde ${clockIn(since, now, s.timezone)} — automação retida; causa provável: sem tráfego pelo ` +
+    `proxy de uso (o token que ele colhe do tráfego expirou) ou o proxy fora do ar; ${exit}`
+  );
 }
 
 /** O caminho do HALT do host. */
@@ -129,10 +173,15 @@ interface GovernorState {
   /** a condição de trava automática que o operador reconheceu ao soltar — não re-engata na MESMA borda */
   ackedLatchReason: AutoLatchReason | null;
   stopped: Array<StoppedRun & { at: number }>;
+  /**
+   * O episódio de medidor PARADO em curso (desde a última medição fresca; quando foi declarado). Persistido: um
+   * restart no meio do impasse não pode re-avisar o celular pelo mesmo episódio — nem esquecê-lo.
+   */
+  meterStall: { since: number; detectedAt: number } | null;
 }
 
 function emptyState(): GovernorState {
-  return { version: 1, baseline: null, meterSeenAt: null, lastReading: null, held: {}, extraUsageNotified: false, ackedLatchReason: null, stopped: [] };
+  return { version: 1, baseline: null, meterSeenAt: null, lastReading: null, held: {}, extraUsageNotified: false, ackedLatchReason: null, stopped: [], meterStall: null };
 }
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -170,6 +219,8 @@ function coerceState(raw: unknown): GovernorState {
   if (o.ackedLatchReason === "week" || o.ackedLatchReason === "five-hour" || o.ackedLatchReason === "extra-usage") {
     out.ackedLatchReason = o.ackedLatchReason;
   }
+  const ms = o.meterStall as Record<string, unknown> | null | undefined;
+  if (ms && isNum(ms.since) && isNum(ms.detectedAt)) out.meterStall = { since: ms.since, detectedAt: ms.detectedAt };
   if (Array.isArray(o.stopped)) {
     for (const s of o.stopped as Array<Record<string, unknown>>) {
       if (s && typeof s.board === "string" && typeof s.cardId === "string" && typeof s.trigger === "string") {
@@ -212,7 +263,23 @@ export interface CapacityServiceDeps {
   tickMs?: number;
   /** agenda `fn` em `ms` e devolve o cancelador (DI: o teste dispara à mão); default `setTimeout` com `unref` */
   schedule?: (fn: () => void, ms: number) => () => void;
+  /** o argv do keepalive do medidor; default {@link meterKeepaliveArgv} sobre o ambiente do processo */
+  keepaliveArgv?: () => string[] | null;
+  /** roda o keepalive (sem shell, com teto); default `execFile`. Nunca lança — devolve o desfecho. */
+  runKeepalive?: (argv: string[]) => Promise<{ ok: boolean; detail: string }>;
 }
+
+const defaultRunKeepalive = (argv: string[]): Promise<{ ok: boolean; detail: string }> =>
+  new Promise((resolve) => {
+    try {
+      execFile(argv[0], argv.slice(1), { timeout: METER_KEEPALIVE_TIMEOUT_MS, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+        const out = `${stderr || stdout || ""}`.replace(/\s+/g, " ").trim().slice(0, 200);
+        resolve(err ? { ok: false, detail: `${err.message.split("\n")[0]}${out ? ` — ${out}` : ""}`.slice(0, 240) } : { ok: true, detail: out });
+      });
+    } catch (err) {
+      resolve({ ok: false, detail: err instanceof Error ? err.message : String(err) });
+    }
+  });
 
 const defaultSchedule = (fn: () => void, ms: number): (() => void) => {
   const h = setTimeout(fn, ms);
@@ -232,6 +299,8 @@ export class CapacityGovernor implements CapacityGatePort {
   private readonly readTtlMs: number;
   private readonly bootRetryDelays: number[];
   private readonly schedule: (fn: () => void, ms: number) => () => void;
+  private readonly keepaliveArgvOf: () => string[] | null;
+  private readonly runKeepalive: (argv: string[]) => Promise<{ ok: boolean; detail: string }>;
 
   private loadedDir: string | null = null;
   private state: GovernorState = emptyState();
@@ -251,6 +320,10 @@ export class CapacityGovernor implements CapacityGatePort {
   private inertLogged = false;
   private hardStop: HardStopHook | null = null;
   private rearm: RearmHook | null = null;
+  private keepaliveInflight: Promise<void> | null = null;
+  private lastKeepaliveAt = Number.NEGATIVE_INFINITY;
+  /** meia-configuração do keepalive já avisada (uma chave sem a outra) — não repetir a cada tick */
+  private keepaliveHalfWarned: string | null = null;
 
   constructor(deps: CapacityServiceDeps = {}) {
     this.now = deps.now ?? Date.now;
@@ -264,6 +337,8 @@ export class CapacityGovernor implements CapacityGatePort {
     this.readTtlMs = deps.readTtlMs ?? CAPACITY_READ_TTL_MS;
     this.bootRetryDelays = meterBootRetryDelays(deps.bootRetryBaseMs ?? METER_BOOT_RETRY_BASE_MS, deps.tickMs ?? CAPACITY_TICK_MS);
     this.schedule = deps.schedule ?? defaultSchedule;
+    this.keepaliveArgvOf = deps.keepaliveArgv ?? (() => meterKeepaliveArgv());
+    this.runKeepalive = deps.runKeepalive ?? defaultRunKeepalive;
   }
 
   /** A trava dura para os runs em voo por AQUI (a composição — instrumentation — liga o engine). */
@@ -360,6 +435,8 @@ export class CapacityGovernor implements CapacityGatePort {
 
   /** Espera as gravações pendentes (testes e desligamento). */
   async flush(): Promise<void> {
+    await this.inflight;
+    await this.keepaliveInflight;
     await this.inflight;
     await this.writeChain;
   }
@@ -590,7 +667,29 @@ export class CapacityGovernor implements CapacityGatePort {
       this.inertLogged = false;
     }
 
-    // 6) A automação voltou a poder entrar ⇒ acorda quem espera (o engine re-pumpa na hora).
+    // 6) O medidor PARADO — o impasse que a espera por defasagem sozinha não enxerga (ver meterStallSince): UMA
+    //    borda por episódio (persistida), aviso crítico `meter-stale`; e a volta de uma medição fresca o encerra.
+    const s = this.settings();
+    const stallSince = this.statsUrl() ? meterStallSince({ reading: this.reading, meterSeenAt: this.state.meterSeenAt, now }, s) : null;
+    if (stallSince != null && !this.state.meterStall) {
+      this.state.meterStall = { since: stallSince, detectedAt: now };
+      const detail = meterStallDetail(stallSince, now, s, this.keepaliveArmed(s));
+      this.log(`[capacity] ${detail}`);
+      this.notify({ kind: "meter-stale", title: "Medidor de cota PARADO — automação retida", body: detail });
+    } else if (stallSince == null && this.state.meterStall) {
+      this.log(
+        `[capacity] o medidor voltou (estava parado desde ${clockIn(this.state.meterStall.since, now, s.timezone)}) — a automação volta a ser governada pela janela da conta.`,
+      );
+      this.state.meterStall = null;
+    }
+
+    // 7) A saída OPCIONAL do impasse: com a leitura defasada e o medidor já visto, o keepalive declarado gera
+    //    tráfego pelo proxy — no máximo um por `everyMinutes`, um em voo por vez, e só com as DUAS chaves.
+    if (verdict.kind === "hold" && verdict.reason === "stale" && this.state.meterSeenAt != null && this.statsUrl()) {
+      this.maybeKeepalive(s, now);
+    }
+
+    // 8) A automação voltou a poder entrar ⇒ acorda quem espera (o engine re-pumpa na hora).
     const admits = admissionFor("automation", this.verdictAt(now), this.latchAt()).admit;
     const flippedOpen = admits && this.lastAutomationAdmit === false;
     this.lastAutomationAdmit = admits;
@@ -603,6 +702,45 @@ export class CapacityGovernor implements CapacityGatePort {
         }
       }
     }
+  }
+
+  /** As DUAS chaves do keepalive estão dadas? (cadência no settings + comando no ambiente do host) */
+  private keepaliveArmed(s: GovernorSettings): boolean {
+    return !!s.meterKeepalive && !!this.keepaliveArgvOf();
+  }
+
+  /**
+   * Dispara o keepalive se ele está armado e a cadência permite. Nunca bloqueia o laço (roda em segundo plano),
+   * nunca lança, e ao terminar relê o medidor — é a leitura nova que diz se o impasse acabou. Uma chave sem a
+   * outra é dita UMA vez: nada roda sem as duas.
+   */
+  private maybeKeepalive(s: GovernorSettings, now: number): void {
+    const argv = this.keepaliveArgvOf();
+    if (!s.meterKeepalive || !argv) {
+      const half = s.meterKeepalive ? "settings-sem-comando" : argv ? "comando-sem-settings" : null;
+      if (half && this.keepaliveHalfWarned !== half) {
+        this.keepaliveHalfWarned = half;
+        this.log(
+          half === "settings-sem-comando"
+            ? `[capacity] governor.meterKeepalive declarado, mas sem comando no ambiente (${METER_KEEPALIVE_ENV}, argv em JSON) — o keepalive NÃO roda.`
+            : `[capacity] ${METER_KEEPALIVE_ENV} definido, mas governor.meterKeepalive ausente no settings — o keepalive NÃO roda.`,
+        );
+      }
+      return;
+    }
+    this.keepaliveHalfWarned = null;
+    if (this.keepaliveInflight || now - this.lastKeepaliveAt < s.meterKeepalive.everyMinutes * 60_000) return;
+    this.lastKeepaliveAt = now;
+    this.log(`[capacity] leitura defasada com o medidor já visto — rodando o keepalive (${argv[0]}) para gerar tráfego pelo proxy`);
+    this.keepaliveInflight = this.runKeepalive(argv)
+      .catch((err): { ok: boolean; detail: string } => ({ ok: false, detail: err instanceof Error ? err.message : String(err) }))
+      .then((r) => {
+        this.log(`[capacity] keepalive ${r.ok ? "concluído" : "FALHOU"}${r.detail ? `: ${r.detail}` : ""}`);
+      })
+      .finally(() => {
+        this.keepaliveInflight = null;
+        void this.refresh();
+      });
   }
 
   // ── a trava pelo operador/agente ──────────────────────────────────────────────────────────────────────
@@ -679,6 +817,10 @@ export class CapacityGovernor implements CapacityGatePort {
       projectionAtResetPct: reading && fresh ? projectWeekAtReset(reading, now) : null,
       held: { count: held.length, oldestSince: held.length ? Math.min(...held.map((h) => h.since)) : null },
       latch: this.latchAt(),
+      meterStall:
+        this.state.meterStall && this.statsUrl()
+          ? { ...this.state.meterStall, detail: meterStallDetail(this.state.meterStall.since, now, s, this.keepaliveArmed(s)) }
+          : null,
       caps: {
         weekCapPct: s.weekCapPct,
         weekCapLast24hPct: s.weekCapLast24hPct,

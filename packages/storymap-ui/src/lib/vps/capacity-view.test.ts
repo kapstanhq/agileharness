@@ -19,6 +19,7 @@ function snap(over: Partial<GovernorSnapshot> = {}): GovernorSnapshot {
     projectionAtResetPct: 71.2,
     held: { count: 0, oldestSince: null },
     latch: null,
+    meterStall: null,
     caps: CAPS,
     ...over,
   };
@@ -81,5 +82,23 @@ describe("capacityView", () => {
     const v = capacityView(snap({ reading: { ...base.reading!, stale: true, usage5hPct: null } }), NOW)!;
     expect(v.rows.find((r) => r.key === "week")?.muted).toBe(true);
     expect(v.rows.find((r) => r.key === "session")).toMatchObject({ value: "—", pct: null });
+  });
+
+  it("medidor PARADO: é o impasse, não uma espera — tom de perigo, a manchete diz, o detalhe traz o desde-quando e a saída", () => {
+    const detail = "medidor de cota parado desde 01:48 — automação retida; causa provável: sem tráfego pelo proxy de uso";
+    const v = capacityView(
+      snap({
+        verdict: { kind: "hold", reason: "stale", detail: "leitura de uso defasada (90min, limite 20min)", retryAt: NOW + 300_000 },
+        reading: { usage7dPct: 42.3, usage5hPct: 20, resetsAt7d: NOW + 3 * 86_400_000, resetsAt5h: NOW + 3_600_000, polledAt: NOW - 90 * 60_000, extraUsageEnabled: false, stale: true },
+        meterStall: { since: NOW - 90 * 60_000, detectedAt: NOW - 60 * 60_000, detail },
+      }),
+      NOW,
+    )!;
+    expect(v.tone).toBe("danger");
+    expect(v.headline).toBe("Medidor de cota PARADO — automação retida");
+    expect(v.detail).toBe(detail);
+    // a trava, quando existe, continua vencendo (é ela que o operador precisa soltar)
+    const locked = capacityView(snap({ meterStall: { since: 0, detectedAt: 0, detail }, latch: { level: "soft", reason: "7d ≥ 92%", at: NOW, trippedBy: "auto:week", source: "file" } }), NOW)!;
+    expect(locked.headline).toBe("Travado (mole)");
   });
 });
