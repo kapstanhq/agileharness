@@ -16,6 +16,7 @@ import { readSessionContext } from "@/lib/vps/transcript-usage";
 import { ensureDetachedSession, hasSession, killSession, listSessions, probeLiveTmuxSessions } from "@/lib/vps/tmux";
 import { readBoardConfig, readCard } from "@/lib/storymap/repo";
 import { resolveCardRoute } from "./config";
+import { getCapacityGovernor } from "./capacity-service";
 import { resolvedClaudeBin } from "./claude-bin";
 import { pollSessionAlive, spawnWorkSession, type SessionSpawnDeps } from "./session-spawn";
 import { isSessionAlive } from "./session-liveness";
@@ -196,6 +197,8 @@ export const sessionSpawnDeps = (): SessionSpawnDeps => {
     // drive the pipeline and publish, but never open a shell through MCP nor delete.
     mcpToken: process.env.AGILEHARNESS_MCP_TOKEN_ORCH,
     port: SERVICE_PORT,
+    // O governador de capacidade: a sessão aberta pela AUTOMAÇÃO (o copiloto) passa pela janela da conta.
+    admission: (initiator) => getCapacityGovernor().admission(initiator),
   };
 };
 
@@ -242,6 +245,8 @@ export function defaultConductorDeps(): ConductorDeps {
     },
     spawn: (input) => spawnWorkSession(sessionSpawnDeps(), input),
     masterEnabled: () => loadRunnerConfig().autorun.enabled,
+    // A despacho do condutor é AUTOMAÇÃO para a janela da conta (ver ConductorDeps.admission).
+    admission: () => getCapacityGovernor().admission("automation"),
   };
 }
 

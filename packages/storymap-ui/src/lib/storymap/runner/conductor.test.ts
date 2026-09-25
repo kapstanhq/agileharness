@@ -67,6 +67,7 @@ function harness(opts: { spawn?: (i: SpawnSessionInput) => SpawnSessionResult; c
   const findings: Array<{ cardId: string; detail: string }> = [];
   const config = { value: opts.config ?? cfg() };
   const master = { on: true };
+  const gate = { admit: true };
   let n = 0;
   const defaultSpawn = (i: SpawnSessionInput): SpawnSessionResult => {
     n += 1;
@@ -109,9 +110,13 @@ function harness(opts: { spawn?: (i: SpawnSessionInput) => SpawnSessionResult; c
       return (opts.spawn ?? defaultSpawn)(i);
     },
     masterEnabled: () => master.on,
+    admission: () =>
+      gate.admit
+        ? { admit: true, reason: "admit", detail: "ok", retryAt: null }
+        : { admit: false, reason: "latch", detail: "trava 92/90", retryAt: null },
     log: () => {},
   };
-  return { deps, queue, spawns, sessions, live, cards, marked, cleared, findings, config, master };
+  return { deps, queue, spawns, sessions, live, cards, marked, cleared, findings, config, master, gate };
 }
 
 describe("admitConductorCard — driver primeiro, fila durável, idempotente", () => {
@@ -199,6 +204,19 @@ describe("pumpConductorQueue — o cap POR BOARD, a espera e a vaga que volta", 
     expect(paused.spawned).toEqual([]);
     expect(h.queue.entries).toHaveLength(1);
     h.master.on = true;
+    expect((await pumpConductorQueue(h.deps)).spawned).toHaveLength(1);
+  });
+
+  it("governador retém (cota/trava): a fila ESPERA sem spawn e anda quando a janela libera", async () => {
+    const h = harness();
+    h.cards.set("s1", conducted("s1"));
+    await admitConductorCard(h.deps, "b", "s1");
+    h.gate.admit = false;
+    const held = await pumpConductorQueue(h.deps);
+    expect(held.spawned).toEqual([]);
+    expect(h.spawns).toEqual([]);
+    expect(h.queue.entries).toHaveLength(1);
+    h.gate.admit = true;
     expect((await pumpConductorQueue(h.deps)).spawned).toHaveLength(1);
   });
 

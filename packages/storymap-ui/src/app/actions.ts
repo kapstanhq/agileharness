@@ -7,6 +7,7 @@
 // (operador com cookie · agente MCP com token · o próprio serviço fora de request), estão em
 // `lib/auth/action-guard.ts`; a exaustividade é congelada por `action-guard-exhaustiveness.test.ts`.
 import { requireSession } from "@/lib/auth/action-guard";
+import { resolveActionCaller } from "@/lib/auth/action-guard";
 import { revalidatePath } from "next/cache";
 import { listBoards, readBoardConfig, readCard, readCards } from "@/lib/storymap/repo";
 import { applyReopen, isReopenDestination, REOPEN_KINDS, type ReopenDestination } from "@/lib/storymap/reopen";
@@ -73,6 +74,8 @@ import { listTrashManifests, readTrashManifest, removeTrashEntry, writeTrashMani
 import { ADDRESSES_REL, ideaFingerprint } from "@/lib/storymap/idea";
 import { makeCtx, validateLink } from "@/lib/storymap/link-graph";
 import { loadRunnerConfig, writeRunnerSettings } from "@/lib/storymap/runner/config";
+import { getCapacityGovernor } from "@/lib/storymap/runner/capacity-service";
+import type { GovernorSnapshot, LatchLevel } from "@/lib/storymap/runner/capacity-governor";
 import { findRepoRoot, runnerStateDir } from "@/lib/storymap/paths";
 import { buildRequeueEntry, isRequeueableStatus, requeueCandidates } from "@/lib/storymap/runner/requeue";
 import { getRunnerEngine } from "@/lib/storymap/runner/engine";
@@ -2157,6 +2160,9 @@ export async function approveDataDeletionAction(input: {
     }
     const res = getRunnerEngine().runSkill(input.boardId, approved.id, def.trigger, def, {
       headroomUrl: resolveHeadroomUrl(config, process.env),
+      // Uma APROVAÇÃO é decisão do operador: o run que ela dispara não espera o governador de capacidade (sem
+      // origin explícita o engine o leria como autorun). Um agente escopado que chegasse aqui seguiria automação.
+      initiator: isScopedActor() ? "automation" : "operator",
     });
     if (!res.ok) {
       return { ok: false, error: res.reason === "in-flight" ? "Esse card já está rodando." : res.detail };
@@ -4052,6 +4058,48 @@ export async function discardSessionAction(input: { sessionId: string }): Promis
     const res = await discardSessionWorktree(sessionSpawnDeps().worktree, { sessionId });
     if (!res.ok) return { ok: false, error: res.reason };
     return { ok: true, data: { detail: res.detail } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+// ── O GOVERNADOR DE CAPACIDADE — a trava pelo painel ────────────────────────────────────────────────────────
+
+/**
+ * SOLTA a trava do governador de capacidade. É a ÚNICA porta de saída da trava (fora apagar o arquivo HALT no
+ * host), e ela exige o OPERADOR COM SESSÃO — não basta passar pelo guard: um agente pelo MCP (mesmo com o token
+ * `full`) e o próprio serviço são chamadores legítimos das outras actions, e aqui são RECUSADOS
+ * (`mayClearLatch`). Motivo obrigatório, registrado no `latch-audit.jsonl`. Devolve o retrato novo para o painel
+ * se redesenhar sem esperar o próximo quadro do SSE.
+ */
+export async function clearCapacityLatchAction(input: { reason: string }): Promise<Result<{ snapshot: GovernorSnapshot }>> {
+  await requireSession("clearCapacityLatchAction");
+  try {
+    // O guard acima deixa passar os TRÊS chamadores legítimos; esta action precisa saber QUAL deles é, porque
+    // só um solta a trava. Mesma régua do guard (`resolveActionCaller`), relida aqui.
+    const caller = (await resolveActionCaller()) ?? "desconhecido";
+    const g = getCapacityGovernor();
+    const r = await g.clearLatch({ caller, reason: String(input?.reason ?? "") });
+    if (!r.ok) return { ok: false, error: r.why };
+    return { ok: true, data: { snapshot: g.snapshot() } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * ENGATA a trava do governador de capacidade pelo painel (o freio de mão do operador). Engatar é o sentido
+ * SEGURO: qualquer chamador que passe o guard pode puxar o freio; soltar é que é só do operador. `hard` também
+ * para os runs automáticos em voo (voltam quando a trava sair).
+ */
+export async function engageCapacityLatchAction(input: { level: LatchLevel; reason: string }): Promise<Result<{ snapshot: GovernorSnapshot }>> {
+  await requireSession("engageCapacityLatchAction");
+  try {
+    const caller = (await resolveActionCaller()) ?? "desconhecido";
+    const g = getCapacityGovernor();
+    const by = caller === "operator-session" ? "operator" : isScopedActor() ? "mcp:escopado" : caller;
+    await g.engageLatch({ level: input?.level === "hard" ? "hard" : "soft", reason: String(input?.reason ?? ""), by });
+    return { ok: true, data: { snapshot: g.snapshot() } };
   } catch (e) {
     return fail(e);
   }

@@ -325,4 +325,6 @@ export interface BlockedEntry {
   failedDeps: Set<string>;
   /** epoch ms the entry was registered (observability). */
   blockedSince: number;
+  /** quem enfileirou (fixado no enfileiramento) — o governador de capacidade lê isto quando o card é liberado. */
+  initiator?: "operator" | "automation";
 }

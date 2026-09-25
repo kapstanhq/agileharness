@@ -51,6 +51,7 @@ import {
 } from "./session-worktree";
 import type { CardDriver, EffortLevel, ModelTier } from "@/lib/storymap/types";
 import { conductorCommand } from "@/lib/storymap/driver";
+import { CAPACITY_HELD_MARKER, type GateVerdict, type Initiator } from "./capacity-governor";
 
 /** How the fleet names a session's tmux: `agent-<slug|short id>`. The `agent-` prefix is what tells the
  *  reaper, the /processes lanes and a human at a keyboard that the tool owns this session. */
@@ -378,6 +379,9 @@ export interface SessionSpawnDeps {
   mcpToken?: string;
   port: number;
   now?: () => number;
+  /** O GOVERNADOR DE CAPACIDADE — consultado SÓ para sessão aberta por AUTOMAÇÃO (`spawnedBy: "copilot"`); a
+   *  sessão do operador nunca espera. Ausente ⇒ sem governador (legado). */
+  admission?: (initiator: Initiator) => GateVerdict;
 }
 
 export interface SpawnSessionInput {
@@ -413,7 +417,7 @@ export interface SpawnSessionInput {
  *                     way: `tmux new-session` exiting 0 does NOT mean the agent lives).
  *  - `spawn_failed` → the plumbing itself failed (git/tmux/fs).
  */
-export type SpawnFailureCode = "no_capacity" | "card_claimed" | "name_taken" | "session_lost" | "spawn_failed";
+export type SpawnFailureCode = "no_capacity" | "card_claimed" | "name_taken" | "session_lost" | "spawn_failed" | "capacity_held";
 
 export type SpawnSessionResult =
   | {
@@ -444,6 +448,14 @@ const nowOf = (deps: SessionSpawnDeps): number => (deps.now ?? Date.now)();
 export async function spawnWorkSession(deps: SessionSpawnDeps, input: SpawnSessionInput): Promise<SpawnSessionResult> {
   const wantsTree = roleNeedsWorktree(input.role);
   const claimSpec = claimForRole(input.role);
+
+  // 0 — a janela da CONTA, antes de qualquer efeito (claim, árvore, tmux): uma sessão que a AUTOMAÇÃO abre
+  // passa pelo governador de capacidade; a do operador (`human`) nunca. Uma recusa aqui não deixa nada pela
+  // metade, e o chamador (um agente) re-tenta no próximo ciclo dele.
+  if (input.spawnedBy === "copilot" && deps.admission) {
+    const gate = deps.admission("automation");
+    if (!gate.admit) return { ok: false, code: "capacity_held", reason: `${CAPACITY_HELD_MARKER}: ${gate.detail}` };
+  }
 
   // 1 — is the card already taken? A read, not a reservation: the authoritative answer is step 3, but paying
   // for a worktree just to lose the race is waste we can see coming.

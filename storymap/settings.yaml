@@ -167,6 +167,24 @@ orchestrator:
   # Defaults 40 / US$ 4 / 12 min (abaixo do TTL de 20 min do lease). Só o dinheiro aceita 0 (desliga);
   # um tick morto pelo relógio é cobrado no orçamento do dia pelo teto, marcado como estimado.
   # tick: { maxTurns: 40, maxBudgetUSD: 4, timeoutMinutes: 12 }
+# O GOVERNADOR DE CAPACIDADE (runner/capacity-governor.ts): a admissão do trabalho AUTOMÁTICO pela janela REAL
+# da assinatura (7 dias e 5 horas, em %), que o dono também usa interativamente — o custo em dólar do ledger é
+# nocional; o limite que existe são essas janelas. Os percentuais são do uso TOTAL da conta (dono + frota).
+#   · até weekCapPct da semana; nas últimas 24h antes do reset, até weekCapLast24hPct (só com a 5h folgada);
+#   · a janela de 5h até fiveHourCapPct;
+#   · RITMO DIÁRIO: cota de hoje = (teto − uso na 1ª leitura do dia) ÷ dias até o reset; o "dia" é o de `timezone`;
+#   · TRAVA (latch) em latchWeekPct / latchFiveHourPct, ou com o uso extra PAGO ligado — só o operador a solta;
+#   · leitura mais velha que staleMinutes ⇒ o automático espera. SEM medidor (sem o proxy de uso) ⇒ inerte.
+# O trabalho iniciado pelo operador e as sessões interativas NUNCA são retidos. Kill switch: AGILEHARNESS_GOVERNOR=off.
+# timezone ausente = o fuso do host (ex.: timezone: America/Sao_Paulo).
+governor:
+  enabled: true
+  weekCapPct: 80
+  weekCapLast24hPct: 90
+  fiveHourCapPct: 85
+  latchWeekPct: 92
+  latchFiveHourPct: 90
+  staleMinutes: 20
 mcpTokens:
   - tokenEnv: AGILEHARNESS_MCP_TOKEN_ORCH
     level: orch

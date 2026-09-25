@@ -152,6 +152,10 @@ export const SUFIXOS_NATIVOS: readonly string[] = [
   "DEPLOY_RECIPES",
   "DEPLOY_RECIPE_RUNNERS",
   "DEV",
+  // o governador de capacidade (runner/capacity-governor.ts + capacity-service.ts): o kill switch e o caminho
+  // do HALT do host — nasceram AGILEHARNESS_, sem grafia legada.
+  "GOVERNOR",
+  "HALT_FILE",
   "HOST",
   "JUST",
   "OPS_REPORT_SCRIPT",

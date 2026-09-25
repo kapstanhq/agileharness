@@ -32,11 +32,13 @@ const ALERTS_BY_TIER: Record<CopilotTier, Record<AgentAlertKind, boolean>> = {
     "terminal-waiting": true,
     "terminal-quiet": true,
     "publish-blocked": true,
+    "capacity-critical": true,
   },
   copiloto: {
     "terminal-waiting": true,
     "terminal-quiet": true,
     "publish-blocked": true,
+    "capacity-critical": true,
   },
   autonomo: {
     "terminal-waiting": true,
@@ -47,6 +49,9 @@ const ALERTS_BY_TIER: Record<CopilotTier, Record<AgentAlertKind, boolean>> = {
     // E este TRAVA: a publicação não sai sozinha (ou o trabalho sobreposto integra, ou alguém dispensa
     // o embargo). Passa nos três modos pela regra da linha acima.
     "publish-blocked": true,
+    // A trava da conta PARA a frota inteira (ou a conta passou a gastar dinheiro de verdade): é o aviso que
+    // o modo autônomo mais precisa, porque nele ninguém está olhando o painel.
+    "capacity-critical": true,
   },
 };
 

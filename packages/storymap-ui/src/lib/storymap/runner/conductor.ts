@@ -41,6 +41,7 @@ import { conductorCommand, conductorTask, CONDUCTOR_SKILL, isConducted, resolveC
 import type { BoardConfig, Card } from "@/lib/storymap/types";
 import type { AgentSession } from "./session-worktree";
 import type { SpawnSessionInput, SpawnSessionResult } from "./session-spawn";
+import type { GateVerdict } from "./capacity-governor";
 
 // ── PURE policy (lives in ../driver.ts — isomorphic, so the move risk class can ask it too) ──────────────
 export {
@@ -154,6 +155,13 @@ export interface ConductorDeps {
   spawn(input: SpawnSessionInput): Promise<SpawnSessionResult>;
   /** the live autorun master switch (settings.yaml `autorun.enabled` / AGILEHARNESS_AUTORUN). */
   masterEnabled(): boolean;
+  /**
+   * The ACCOUNT window (capacity-governor). The session is spawned as `human` (the acceptance is the go, and
+   * the steward must not reap a conductor waiting at a pause), but the DISPATCH is automation: nobody is at a
+   * keyboard when it fires. So it asks the governor as automation — held ⇒ the entry WAITS in the queue (never
+   * dropped) and the next pump re-asks. Absent ⇒ admitted (tests / an adopter without a meter).
+   */
+  admission?(): GateVerdict;
   now?(): number;
   log?(line: string): void;
 }
@@ -269,6 +277,11 @@ async function pumpUnlocked(deps: ConductorDeps): Promise<ConductorPumpReport> {
     }
     if ((liveCount.get(e.board) ?? 0) >= policy.maxSessions) {
       wait(e, `${policy.maxSessions} condutor(es) vivo(s) no board — esperando uma vaga`);
+      continue;
+    }
+    const gate = deps.admission?.();
+    if (gate && !gate.admit) {
+      wait(e, `janela da conta: ${gate.detail}`);
       continue;
     }
 

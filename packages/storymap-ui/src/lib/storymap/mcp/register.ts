@@ -141,6 +141,11 @@ const TOOL_ANNOTATIONS: Record<string, ToolHints> = {
   enqueue: EXEC_EXT, // enqueues ONE card on the engine → spawns a headless `claude`
   enqueue_batch: EXEC_EXT, // enqueues N cards with a dependency graph → spawns headless `claude`s
   cancel_run: DESTRUCTIVE, // SIGTERM-kills a run's process (+ reaps its worktree) — não-reversível
+  // O governador de capacidade: ENGATA a trava (nenhum trabalho automático novo). WRITE_IDEM ⇒ `write-board`:
+  // o efeito é PARAR, o sentido seguro, e repetir a chamada não muda nada (engatar nunca rebaixa). Escopo REPO
+  // (scope.ts): a trava é da conta, não de um board — sob token escopado decide a matriz do settings.yaml.
+  // SOLTAR não tem tool: é só do operador com sessão no painel.
+  engage_capacity_latch: WRITE_IDEM,
   resolve_merge: DESTRUCTIVE, // drena/aborta head pausado da merge train — abort apaga o branch run/<id>
   // --- board destructive ---
   // (autonomo-liberdade-humana M2, 2026-07-18) delete_* seguem com o HINT `destructive` (é uma mutação

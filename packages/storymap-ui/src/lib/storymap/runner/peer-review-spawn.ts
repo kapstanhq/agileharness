@@ -30,6 +30,8 @@
 // every one returns `{ error }` and approves NOTHING. This module never throws; the caller turns an error into
 // "the draft stays pending for a human". No verdict ⇒ no approval, always.
 
+import { getCapacityGovernor } from "./capacity-service";
+import { CAPACITY_HELD_MARKER, type GateVerdict, type Initiator } from "./capacity-governor";
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -90,6 +92,9 @@ export interface PeerReviewRequest {
   cardContext?: string;
   /** the run that AUTHORED the proposal — the reviewer's runId must differ (anti-self-review, checked in code). */
   proponentRunId?: string;
+  /** quem PEDIU a revisão (o governador de capacidade lê). Ausente ⇒ automação (o conservador: o revisor é
+   *  pedido em banda por um agente autônomo, e o operador que quer um par o pede pelo token dele). */
+  initiator?: Initiator;
 }
 
 /** The reviewer's decision. `verdict` is validated (never coerced); `error` means fail-closed (approve nothing). */
@@ -219,6 +224,9 @@ export interface PeerReviewSpawnDeps {
   /** O teto de custo do revisor (`--max-budget-usd`). Ausente ⇒ settings `autorun.surfaceMaxBudgetUSD.peerReview`
    *  (default 2); `null`/`0` ⇒ sem teto. Um revisor cortado não escreve veredito ⇒ nada aprovado (fail-closed). */
   maxBudgetUSD?: number | null;
+  /** O GOVERNADOR DE CAPACIDADE (DI). Ausente ⇒ o singleton do processo. Retido ⇒ nenhum revisor nasce e a
+   *  proposta segue PENDENTE para o humano — o mesmo fail-closed de um revisor que falha. */
+  admission?: (initiator: Initiator) => GateVerdict;
 }
 
 /**
@@ -319,6 +327,11 @@ export async function spawnPeerReview(req: PeerReviewRequest, deps: PeerReviewSp
   if (req.proponentRunId && req.proponentRunId === runId) {
     return { runId, error: "revisor coincidiu com o proponente — auto-revisão recusada" };
   }
+
+  // 1b — a janela da CONTA: um revisor pedido por automação passa pelo governador de capacidade. Retido, nada
+  // nasce e nada é aprovado; a proposta fica com o humano (o chamador já diz isso ao agente).
+  const gate = (deps.admission ?? ((i: Initiator) => getCapacityGovernor().admission(i)))(req.initiator ?? "automation");
+  if (!gate.admit) return { runId, error: `${CAPACITY_HELD_MARKER}: ${gate.detail}` };
 
   let dir: string | undefined;
   const teardown = async () => {

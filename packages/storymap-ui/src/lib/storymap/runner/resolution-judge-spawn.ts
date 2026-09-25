@@ -28,6 +28,8 @@
 // JSON, a verdict for a file that was never in the divergence — every one of them returns `error` and
 // resolves NOTHING. This module never throws; the ladder above turns an error into an escalation.
 
+import { getCapacityGovernor } from "./capacity-service";
+import { CAPACITY_HELD_MARKER, type GateVerdict, type Initiator } from "./capacity-governor";
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -188,6 +190,9 @@ export interface JudgeSpawnDeps {
   /** O teto de custo do juiz (`--max-budget-usd`). Ausente ⇒ settings `autorun.surfaceMaxBudgetUSD.resolutionJudge`
    *  (default 2); `null`/`0` ⇒ sem teto. Um juiz cortado não escreve veredito ⇒ nada resolvido (fail-closed). */
   maxBudgetUSD?: number | null;
+  /** O GOVERNADOR DE CAPACIDADE (DI). Ausente ⇒ o singleton. O juiz é sempre AUTOMAÇÃO (quem o chama é o train
+   *  ou o release). Retido ⇒ nenhum worktree, nenhum spawn, e o veredito sai marcado `held` (ver climbLadder). */
+  admission?: (initiator: Initiator) => GateVerdict;
 }
 
 /**
@@ -310,6 +315,10 @@ export async function spawnResolutionJudge(req: JudgeRequest, deps: JudgeSpawnDe
   const worktreePath = path.join(deps.repoRoot, ".worktrees", `resolve-${short}`);
   const tag = `[harness-resolve ${short}]`;
   let created = false;
+
+  // 0 — a janela da CONTA. Antes de cortar worktree: um juiz retido não custa nem um `git worktree add`.
+  const gate = (deps.admission ?? ((i: Initiator) => getCapacityGovernor().admission(i)))("automation");
+  if (!gate.admit) return { hunks: [], runId, error: `${CAPACITY_HELD_MARKER}: ${gate.detail}`, held: true };
 
   const teardown = async () => {
     if (!created) return;

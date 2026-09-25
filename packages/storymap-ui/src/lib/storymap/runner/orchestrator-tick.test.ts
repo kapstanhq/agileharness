@@ -208,3 +208,28 @@ describe("startOrchestratorTick — re-arming timer", () => {
     expect(clearTimer).toHaveBeenCalled();
   });
 });
+
+// O GOVERNADOR DE CAPACIDADE no tick: o spawn do copiloto é trabalho AUTOMÁTICO e passa pela janela da conta.
+// Consultado por ÚLTIMO (o steward, a $0, ainda roda) e um tick retido NÃO debita o budget do dia.
+describe("runOrchestratorTick — governador de capacidade", () => {
+  it("retido ⇒ skipped-capacity: sem spawn, sem débito de budget, mas o steward ($0) rodou", async () => {
+    const spawn = vi.fn(async () => {});
+    const recordTick = vi.fn(async () => {});
+    const recordOutcome = vi.fn(async () => {});
+    const stewardPass = vi.fn(async () => {});
+    const r = await runOrchestratorTick(
+      baseDeps({ spawn, recordTick, recordOutcome, stewardPass, capacityHeld: () => "a cota de hoje acabou" }),
+    );
+    expect(r).toEqual(["skipped-capacity"]);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(recordTick).not.toHaveBeenCalled();
+    expect(recordOutcome).toHaveBeenCalledWith("storymap", "skipped-capacity");
+    expect(stewardPass).toHaveBeenCalledWith("storymap");
+  });
+
+  it("liberado (null) ⇒ o tick segue e spawna", async () => {
+    const spawn = vi.fn(async () => {});
+    expect(await runOrchestratorTick(baseDeps({ spawn, capacityHeld: async () => null }))).toEqual(["ran"]);
+    expect(spawn).toHaveBeenCalled();
+  });
+});

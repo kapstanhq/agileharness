@@ -167,6 +167,34 @@ async function registerImpl(): Promise<void> {
   //    clobber an interrupted entry mid-resolve). Gated by autorun + resumeOnBoot.
   let recovered = { interrupted: 0, respawned: 0, dropped: 0, skipped: 0, deferred: 0 };
   const engine = getRunnerEngine();
+
+  // 0.5) O GOVERNADOR DE CAPACIDADE (runner/capacity-service.ts) — ANTES da recuperação, para a primeira
+  //      leitura da janela da conta já estar em voo quando a recuperação re-despachar runs automáticos (eles
+  //      esperam essa leitura, em vez de gastar às cegas). O laço relê o medidor a cada 5min mesmo com a frota
+  //      ociosa: é ele que toma a primeira leitura do DIA, engata a trava automática e avisa o que é crítico.
+  //      A trava DURA para os runs automáticos em voo pelo engine; quando ela sai, os parados voltam pelo MESMO
+  //      caminho de uma entrada de coluna (evaluateAutorunOnEntry) — nada fica parado para sempre.
+  try {
+    const [{ startCapacityGovernor }, { evaluateAutorunOnEntry }] = await Promise.all([
+      import("@/lib/storymap/runner/capacity-service"),
+      import("@/lib/notifications/server/channels/autorun-eval"),
+    ]);
+    startCapacityGovernor({
+      hardStop: (reason) => engine.stopAutomationRuns(reason),
+      rearm: async (items) => {
+        for (const it of items) {
+          // o cancelamento da trava armou o freio anti-cascata do card; o re-arme é a retomada explícita
+          engine.clearRecentlyCancelled(it.board, it.cardId);
+          await evaluateAutorunOnEntry(it.board, it.cardId).catch((err) =>
+            console.error(`[capacity] re-arme de ${it.board}/${it.cardId} falhou:`, err instanceof Error ? err.message : err),
+          );
+        }
+      },
+    });
+    console.log("[harness-boot] governador de capacidade armado (janela da conta; o operador nunca espera)");
+  } catch (err) {
+    console.error("[harness-boot] governador de capacidade não armou:", err instanceof Error ? err.message : err);
+  }
   // Build the recovery deps FRESH each call so the periodic sweep (step 2.5) re-reads settings (cfg)
   // per tick — a `enabled`/`resumeOnBoot` toggle takes effect without a restart. Boot reuses it too.
   const makeRecoveryDeps = (): RecoveryDeps => {

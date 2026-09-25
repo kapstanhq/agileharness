@@ -18,6 +18,8 @@ import { ToastProvider } from "./Toast";
 import type { Board, BoardSummary } from "@/lib/storymap/types";
 import type { BoardMetricsSummary, CardMetrics } from "@/lib/storymap/runner/telemetry";
 import type { RunOutcome } from "@/lib/storymap/runner/journal";
+import type { GovernorSnapshot } from "@/lib/storymap/runner/capacity-governor";
+import { CapacityPanel } from "./CapacityPanel";
 
 // Exhaustive over RunOutcome — TS now flags a future outcome that forgets a badge here (story-vbkazs:
 // a loose Record<string,string> let `cancelled` render as an unstyled raw-English badge).
@@ -57,10 +59,13 @@ export function BoardMetricsView({
   board,
   boards,
   summary,
+  capacity,
 }: {
   board: Board;
   boards: BoardSummary[];
   summary: BoardMetricsSummary;
+  /** o retrato do governador de capacidade (a janela REAL da conta); null = indisponível */
+  capacity?: GovernorSnapshot | null;
 }) {
   const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: "totalCostUSD", dir: "desc" });
 
@@ -100,6 +105,13 @@ export function BoardMetricsView({
               </div>
             }
           />
+
+          {/* A CAPACIDADE vem antes do custo: numa assinatura o dólar abaixo é nocional, e o que limita o
+              trabalho é a janela de uso — o mesmo painel do medidor da barra de topo. */}
+          <section className="mb-4 rounded-lg border border-line bg-surface px-4 py-3" aria-label="Capacidade da frota">
+            <h2 className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-fg-subtle">Capacidade da frota</h2>
+            <CapacityPanel snapshot={capacity} />
+          </section>
 
           {rows.length === 0 ? (
             <div className="rounded-lg border border-dashed border-line bg-surface px-4 py-12 text-center text-sm text-fg-subtle">

@@ -2484,15 +2484,18 @@ export function registerDevTools(server: McpServer): void {
         // or re-prioritise?) or the holder (take another card). `isError` would hide the structure from it.
         return json({
           ok: false,
-          error: res.holder ? "card_claimed" : res.queue ? "no_capacity" : "spawn_failed",
+          error: res.code === "capacity_held" ? "capacity_held" : res.holder ? "card_claimed" : res.queue ? "no_capacity" : "spawn_failed",
           motivo: res.reason,
           ...(res.queue ? { fila: res.queue } : {}),
           ...(res.holder ? { holder: { actor: res.holder.actor, kind: res.holder.kind, expiresAt: res.holder.expiresAt } } : {}),
-          proximo: res.queue
-            ? "espere uma vaga (claude_sessions mostra quem está rodando) ou rode um papel sem árvore (triage/steward)"
-            : res.holder
-              ? "suggest_work({board}) devolve o próximo card livre"
-              : undefined,
+          proximo:
+            res.code === "capacity_held"
+              ? "a janela de uso da conta está retendo trabalho automático — encerre o ciclo e tente no próximo; o operador vê o motivo no painel de capacidade"
+              : res.queue
+                ? "espere uma vaga (claude_sessions mostra quem está rodando) ou rode um papel sem árvore (triage/steward)"
+                : res.holder
+                  ? "suggest_work({board}) devolve o próximo card livre"
+                  : undefined,
         });
       }
       return json({

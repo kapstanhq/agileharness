@@ -13,7 +13,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { defineTool } from "./register";
-import { currentMcpActor } from "./actor";
+import { currentMcpActor, isScopedActor } from "./actor";
 import { docIsCanonical, isPrdSection, prdSectionKeys, readGovernedValue } from "@/lib/storymap/doc/doc-governance";
 
 import { listBoards, readBoardConfig, readCard, readCards } from "@/lib/storymap/repo";
@@ -93,6 +93,7 @@ import { SIDECAR_KINDS, listGovernanceDrafts, readGovernanceDraft, readStyleGuid
 import { wireframeDocTextView } from "@/lib/storymap/design-canvas";
 import { PEER_REVIEW_ENABLED } from "@/lib/storymap/copilot/tier";
 import { makePeerReviewPort, type PeerReviewRequest } from "@/lib/storymap/runner/peer-review-spawn";
+import { getCapacityGovernor } from "@/lib/storymap/runner/capacity-service";
 import { governanceConflicts, withdrawRefusal } from "@/lib/storymap/governance";
 import { checkAA } from "@/lib/storymap/style-guide";
 import { styleGuideDriftAction } from "@/app/design-actions";
@@ -1732,6 +1733,35 @@ export function registerStorymapTools(server: McpServer): void {
     },
   );
 
+  // O GOVERNADOR DE CAPACIDADE — a trava pelo MCP. Esta tool só ENGATA: puxar o freio é o sentido seguro (a frota
+  // para de iniciar trabalho automático; o do operador segue). SOLTAR não existe aqui, e não pode existir — é
+  // uma server action que exige o operador com sessão no painel (clearCapacityLatchAction / mayClearLatch).
+  defineTool(server,
+    "engage_capacity_latch",
+    {
+      title: "Engatar a trava de capacidade (parar o trabalho automático)",
+      description:
+        "Engata a TRAVA do governador de capacidade: nenhum trabalho AUTOMÁTICO novo começa (autorun, copiloto, " +
+        "revisor par, juiz, sessões abertas por agente); o que o operador inicia nunca é retido. `soft` deixa os " +
+        "runs automáticos em voo terminarem; `hard` também os PARA (eles voltam ao pipeline quando a trava sair). " +
+        "Use quando a janela de uso da conta precisar ser preservada. Engatar nunca rebaixa uma trava dura. " +
+        "Esta tool NÃO solta a trava: soltar é só do operador, no painel de capacidade, com motivo.",
+      inputSchema: {
+        level: z.enum(["soft", "hard"]).describe("soft = sem spawns automáticos novos; hard = também para os em voo"),
+        reason: z.string().min(3).max(500).describe("por que travar — vai para o registro e para o aviso ao operador"),
+      },
+    },
+    async ({ level, reason }) => {
+      const who = currentMcpActor();
+      try {
+        const latch = await getCapacityGovernor().engageLatch({ level, reason, by: `mcp:${who?.level ?? "interno"}` });
+        return json({ ok: true, latch, nota: "trava engatada — só o operador a solta, no painel de capacidade" });
+      } catch (e) {
+        return fail(e instanceof Error ? e.message : String(e));
+      }
+    },
+  );
+
   defineTool(server,
     "resolve_merge",
     {
@@ -2685,6 +2715,9 @@ FORMATO DO CANVAS (Lean Canvas): um bloco NÃO é mais um paragrafão — é uma
         draftId,
         changes: draft.changes.map((c) => ({ artifact: c.artifact, field: c.field, label: c.label, before: c.before, after: c.after })),
         cardContext,
+        // Quem pediu o par: um agente escopado (o copiloto) é AUTOMAÇÃO e passa pelo governador de capacidade; o
+        // token full do operador não. Lido AQUI, na cadeia do request, onde o ator MCP existe.
+        initiator: isScopedActor() ? "automation" : "operator",
       };
       const verdict = await makePeerReviewPort({ claudeBin: resolvedClaudeBin({ name: loadRunnerConfig().autorun.claudeBin }) })(req);
       if (verdict.error) return fail(`Revisão por par não concluiu (${verdict.error}) — a proposta segue pendente para o humano.`);
