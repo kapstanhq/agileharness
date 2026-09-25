@@ -602,9 +602,13 @@ deploy). "O detalhe de cada etapa aparece como etiqueta dentro do card, não com
 
 - **Quem decide o modo:** `autonomy.mode` do board; a story pode ter a sua exceção (`autonomyMode`, via
   `set_card_autonomy`). Ausente = `human` (comportamento de sempre).
-- **Categoria:** a pergunta estruturada leva `category` (`ask_question`). Só `interview` e `ui-choice` vão
-  ao proxy; `money` NUNCA — e um piso determinístico também segura o que o autor marcou `[humano]` ou
-  que fala de preço/fornecedor/gasto. Pergunta sem categoria é do dono.
+- **Categoria:** toda pergunta leva `category` — o `harness-grill`, o `harness-review`, o orquestrador e o
+  condutor a declaram, o steward marca as dele `delivery`, e o `ask_question` a EXIGE em cada pergunta
+  estruturada. Só `interview` e `ui-choice` vão ao proxy; `money` e `delivery` NUNCA — e um piso
+  determinístico também segura o que o autor marcou `[humano]` ou que fala de preço/fornecedor/gasto.
+  Pergunta sem categoria (um `texts` livre, uma skill que esqueceu) é do dono: o único default automático é
+  o CONSERVADOR do texto livre — fala de dinheiro ⇒ `money`; o resto fica sem categoria. Nada é
+  classificado como proxiável por palpite.
 - **O proxy:** uma execução headless SEPARADA, com contexto LIMPO (diretório temporário, nenhum token nem
   servidor MCP, postura contida), que recebe o PRD (`docs/prd.md`), as personas, o guia de estilo, as
   respostas passadas do DONO no board e as variantes — sem a recomendação de quem perguntou. A saída é um

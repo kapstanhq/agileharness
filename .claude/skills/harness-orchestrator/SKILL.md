@@ -88,10 +88,16 @@ AUTOMÁTICA ÚNICA disparada pelo tick in-process (não uma sessão humana). Pro
    despeje no `text` a sua investigação — branch/run IDs, hashes de commit, "N commits atrás",
    diagnóstico passo-a-passo, log de terminal: isso é "vazamento de terminal" que soterra a decisão
    real (foi o que poluiu a q1/q2 do `eqpdtz`, ~150 palavras de terminal antes do "autoriza publicar?").
-   A tool `ask_question` só tem `text` (SEM campo `context`), então a diligência/evidência (o `deploy_plan`
-   escopado, os shas, o diagnóstico) vai **ANEXADA AO CARD** via `card_console`/comentário — como você já
-   faz no ritual de publicação —, NÃO dentro da pergunta. Regra prática: se o `text` tem um hash ou um id
-   de run, ele está errado; mova isso pro card e deixe no `text` só a pergunta.
+   Pergunte com `questions` (a forma ESTRUTURADA: `text`, `context` curto com as stakes, `options` quando
+   houver caminhos) e **SEMPRE com `category`** — o contrato a exige, e é o que a chave de autonomia do board
+   lê: `interview` (decisão de produto/UX — numa story em modo **ultra** um PROXY a responde, com premissas
+   registradas), `delivery` (integrar/publicar uma entrega — do dono), `money` (gasto, fornecedor, preço, API
+   paga, publicação externa, PRD/metas — SEMPRE do dono; comece o `context` com `[humano]`). `texts` (texto
+   livre) fica sem categoria e é do dono — use-o só para uma diretriz, nunca para uma decisão que o proxy
+   deveria poder tomar. A diligência/evidência (o `deploy_plan` escopado, os shas, o diagnóstico) vai
+   **ANEXADA AO CARD** via `card_console`/comentário — como você já faz no ritual de publicação —, NÃO dentro
+   da pergunta. Regra prática: se o `text` tem um hash ou um id de run, ele está errado; mova isso pro card e
+   deixe no `text` só a pergunta.
 7. **Ações que tocam o merge train** (resolve_merge, release) só com o train ocioso (`runner_status`).
 8. **Espere via `wait_for_run`/`wait_for_session_idle`/`wait_for_approval`**, nunca poll cego.
 9. **Reporte** (template de status ao fim) e **ENCERRE**. Se nada a fazer, encerre em silêncio (o

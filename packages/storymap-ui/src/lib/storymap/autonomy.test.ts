@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyProxyAnswers,
   auditDraw,
+  defaultQuestionCategory,
   effectiveAutonomy,
   isOwnerOnlyQuestion,
   isPendingProxyAudit,
@@ -215,5 +216,54 @@ describe("markProxyDeclined — o proxy DEVOLVE a pergunta ao dono, gravado na p
     expect(markProxyDeclined(already, [{ questionId: "q1", reason: "de novo" }])).toBe(already);
     const list = [q("q1", { category: "interview" })];
     expect(markProxyDeclined(list, [{ questionId: "q9", reason: "?" }])).toBe(list);
+  });
+});
+
+// v0.9 — a pergunta SEM categoria é do dono, em todo modo, venha de onde vier. O grill (o maior escritor de perguntas)
+// passou a declarar a categoria; o que sobra sem ela — um texto livre, uma skill que esqueceu — nunca vai ao proxy, e
+// o único classificador automático (o de quem genuinamente não sabe) só sabe apontar para o DONO.
+describe("defaultQuestionCategory — o default conservador só aponta para o dono", () => {
+  it("palavras de dinheiro / marcador [humano] ⇒ money; o resto ⇒ nenhuma categoria (do dono)", () => {
+    expect(defaultQuestionCategory({ text: "Assinamos o plano pago do fornecedor de SMS?" })).toBe("money");
+    expect(defaultQuestionCategory({ text: "Qual o preço do plano anual?" })).toBe("money");
+    expect(defaultQuestionCategory({ text: "Mudamos a meta?", context: "[humano] mexe no PRD" })).toBe("money");
+    expect(defaultQuestionCategory({ text: "A leitora quer filtrar por gênero?" })).toBeUndefined();
+  });
+
+  it("NUNCA devolve uma categoria proxiável — nem para a prosa mais 'de produto' que houver", () => {
+    const prosa = [
+      "Quem é a persona desta tela?",
+      "Qual das três variantes de layout você prefere?",
+      "O escopo inclui o estado vazio?",
+      "Aprovar a entrega?",
+      "Pode publicar?",
+      "",
+    ];
+    for (const text of prosa) {
+      const cat = defaultQuestionCategory({ text });
+      expect(cat === undefined || cat === "money").toBe(true);
+    }
+  });
+});
+
+describe("pergunta sem categoria fica com o dono — de ponta a ponta no modo ultra", () => {
+  // a forma exata que um grill antigo (ou uma skill que esqueceu) grava no frontmatter: sem `category`
+  const grillQ = q("q1", { text: "Dedup no feed curado ou corrigir o pipeline?", askedBy: "harness-grill", options: [{ id: "o1", label: "Feed" }, { id: "o2", label: "Pipeline" }] });
+  const card = { id: "c", autonomyMode: undefined, questions: [grillQ] };
+
+  it("o proxy recusa (motivo: sem categoria) e a seleção dele sai vazia", () => {
+    expect(proxyRefusal(grillQ, card, ultra)).toMatch(/sem categoria/);
+    expect(proxiableQuestions(card, ultra)).toEqual([]);
+  });
+
+  it("o escritor do proxy também recusa: uma resposta para ela não aterrissa", () => {
+    const out = applyProxyAnswers(card, ultra, "b", "c", [{ questionId: "q1", answer: "Feed", selectedOptionIds: ["o1"], assumptions: "PRD", confidence: 0.9 }], { today: "2026-09-25" });
+    expect(out.applied).toEqual([]);
+    expect(out.questions[0]).toMatchObject({ status: "open" });
+    expect(out.questions[0]).not.toHaveProperty("answeredBy");
+  });
+
+  it("a mesma pergunta COM categoria interview é do proxy — a categoria é o que decide", () => {
+    expect(proxiableQuestions({ ...card, questions: [{ ...grillQ, category: "interview" }] }, ultra).map((x) => x.id)).toEqual(["q1"]);
   });
 });

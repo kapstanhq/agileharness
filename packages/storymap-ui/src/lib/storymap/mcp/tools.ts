@@ -1230,14 +1230,16 @@ export function registerStorymapTools(server: McpServer): void {
         "`texts` = perguntas de texto livre (o formato de sempre). `questions` = perguntas ESTRUTURADAS, o formato " +
         "que a fila /perguntas renderiza: `context` (o que está em jogo), 2–8 `options` com `pros`/`cons` curtos e " +
         "NO MÁXIMO UMA `recommended: true`, `mode` single|multi; sem opções, `recommendation` em prosa; e a " +
-        "`category` da decisão (interview/ui-choice/delivery/money). Numa story em modo ULTRA, uma pergunta " +
-        "interview/ui-choice é respondida por um PROXY (contexto limpo, guiado pelo PRD/personas/decisões do dono, " +
-        "com premissas registradas); money NUNCA — espera o dono sem travar o resto do board. Os dois campos " +
+        "`category` da decisão — OBRIGATÓRIA em cada pergunta estruturada (interview/ui-choice/delivery/money). " +
+        "Numa story em modo ULTRA, uma pergunta interview/ui-choice é respondida por um PROXY (contexto limpo, " +
+        "guiado pelo PRD/personas/decisões do dono, com premissas registradas); money e delivery NUNCA — esperam o " +
+        "dono sem travar o resto do board. `texts` não carrega categoria: fica com o DONO (money quando fala de " +
+        "dinheiro) — para uma pergunta que o proxy pode responder, use `questions` com a categoria. Os dois campos " +
         "podem vir juntos; ao menos um é obrigatório.",
       inputSchema: {
         board: z.string(),
         cardId: z.string(),
-        texts: z.array(z.string()).optional().describe("perguntas/diretrizes de texto livre"),
+        texts: z.array(z.string()).optional().describe("perguntas/diretrizes de texto livre — SEM categoria: ficam com o dono (money quando falam de dinheiro)"),
         questions: z
           .array(
             z.object({
@@ -1255,14 +1257,15 @@ export function registerStorymapTools(server: McpServer): void {
                 .optional(),
               mode: z.enum(["single", "multi"]).optional().describe("single (padrão) = escolhe uma; multi = várias"),
               recommendation: z.string().optional().describe("só para pergunta SEM opções: a resposta que você recomenda"),
+              // OBRIGATÓRIA: quem escreve uma pergunta estruturada SABE o tipo da decisão — e uma pergunta sem tipo
+              // nunca vai ao proxy, então esquecê-la travava uma story ultra no dono em silêncio.
               category: z
                 .enum(["interview", "ui-choice", "delivery", "money"])
-                .optional()
                 .describe(
-                  "O TIPO da decisão (a chave de autonomia lê daqui): interview (produto/usuário), ui-choice (qual " +
-                    "variante de tela), delivery (aprovar entrega), money (gasto, fornecedor, preço, publicação " +
-                    "externa, PRD/metas — SEMPRE do dono). Numa story ULTRA, interview/ui-choice vão a um PROXY; sem " +
-                    "categoria a pergunta é do dono.",
+                  "OBRIGATÓRIA — o TIPO da decisão (a chave de autonomia lê daqui): interview (produto/usuário/escopo), " +
+                    "ui-choice (qual variante de tela), delivery (aprovar/integrar/publicar uma entrega), money " +
+                    "(gasto, fornecedor, preço, API paga, publicação externa, PRD/metas — SEMPRE do dono). Numa story " +
+                    "ULTRA, interview/ui-choice vão a um PROXY; as outras esperam o dono.",
                 ),
             }),
           )

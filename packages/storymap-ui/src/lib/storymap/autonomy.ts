@@ -84,6 +84,18 @@ export function isOwnerOnlyQuestion(q: Pick<CardQuestion, "category" | "text" | 
   return MONEY_TERMS.test(text);
 }
 
+/**
+ * The CONSERVATIVE default category — only for the writer that genuinely cannot know: a PLAIN free-text question
+ * (`ask_question` `texts`, a follow-up typed with no structure). Every other writer declares the category itself
+ * (the grill/review/conductor skills, the structured `ask_question`, the steward). This can only ever point a
+ * question at the OWNER: `money` when the owner-only floor matches (money words, the `[humano]` marker), and
+ * NOTHING otherwise — an uncategorized question is the owner's ({@link proxyRefusal}), and guessing `interview`
+ * from prose would hand a decision to the proxy on a hunch. It never returns a proxiable category. PURE.
+ */
+export function defaultQuestionCategory(q: Pick<CardQuestion, "text" | "context">): QuestionCategory | undefined {
+  return isOwnerOnlyQuestion({ text: q.text, context: q.context }) ? "money" : undefined;
+}
+
 /** Why a question is not the proxy's — or null when it is. PURE (the dispatcher logs it; tests pin it). */
 export function proxyRefusal(
   q: Pick<CardQuestion, "status" | "category" | "text" | "context" | "proxy">,

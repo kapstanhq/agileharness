@@ -27,7 +27,6 @@ import { sessionSpawnDeps } from "@/lib/storymap/mcp/dev-tools";
 import { logHumanActionAction } from "./audit-actions";
 import { resolveRouteProfile, routeSkipsValidationError, triggerForCard } from "@/lib/storymap/skip-routing";
 import {
-  addQuestions,
   addStructuredQuestions,
   answerQuestion,
   openQuestions,
@@ -142,7 +141,7 @@ import {
   sanitizeIntakeText,
 } from "@/lib/storymap/triage/parse";
 import type { TriageOutcome, TriageReport } from "@/lib/storymap/triage/types";
-import { effectiveAutonomy, resolveProxyAudit } from "@/lib/storymap/autonomy";
+import { defaultQuestionCategory, effectiveAutonomy, resolveProxyAudit } from "@/lib/storymap/autonomy";
 import { isAutonomyMode } from "@/lib/storymap/types";
 import type {
   AutonomyMode,
@@ -296,15 +295,23 @@ export async function askQuestionsAction(input: {
       if (err) return { ok: false, error: `Pergunta estruturada inválida — ${err}.` };
     }
     const askedBy = input.askedBy || "operator";
+    // Every question lands CATEGORIZED when its writer knows the category (the structured ones carry it). A plain
+    // free-text question is the one writer that cannot know: it gets the CONSERVATIVE default (autonomy.ts), which
+    // only ever points at the owner — `money` on the owner-only floor, else nothing (uncategorized = the owner's).
+    const asked: StructuredQuestionInput[] = [...texts.map((text): StructuredQuestionInput => ({ text })), ...structured].map((q) => {
+      if (q.category) return q;
+      const category = defaultQuestionCategory(q);
+      return category ? { ...q, category } : q;
+    });
     const card = await updateCardOnDisk(input.boardId, input.cardId, (prev) => ({
       ...prev,
-      questions: addStructuredQuestions(addQuestions(prev.questions ?? [], texts, askedBy, today()), structured, askedBy, today()),
+      questions: addStructuredQuestions(prev.questions ?? [], asked, askedBy, today()),
     }));
     if (!card) return { ok: false, error: `card não encontrado: ${input.cardId}` };
     revalidateBoard(input.boardId);
     // ULTRA: a categorized question lands ⇒ offer it to the proxy NOW (an ultra conductor then waits seconds, not
     // for a human). The dispatcher re-judges everything (mode, category, money) — this is only the doorbell.
-    if (structured.some((q) => q.category)) nudgeProxyFor(input.boardId, input.cardId);
+    if (asked.some((q) => q.category)) nudgeProxyFor(input.boardId, input.cardId);
     return { ok: true, data: { card } };
   } catch (e) {
     return fail(e);

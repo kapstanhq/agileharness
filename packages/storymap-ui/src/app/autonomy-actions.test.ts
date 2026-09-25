@@ -114,4 +114,26 @@ describe("askQuestionsAction — a campainha do proxy", () => {
     await flush();
     expect(nudgeProxy).not.toHaveBeenCalled();
   });
+
+  // v0.9 — o texto livre é o único escritor que não sabe a categoria: recebe o default CONSERVADOR, que só aponta
+  // para o dono. Uma pergunta neutra continua SEM categoria (do dono) e nunca vira proxiável — nem num card ultra.
+  it("texto livre neutro fica sem categoria e, mesmo numa story ULTRA, não é do proxy", async () => {
+    cardOnDisk = { ...cardOnDisk, autonomyMode: "ultra" };
+    await askQuestionsAction({ boardId: "b", cardId: "story-x", texts: ["A leitora filtra por gênero?"] });
+    const asked = cardOnDisk.questions![0];
+    expect(asked).toMatchObject({ text: "A leitora filtra por gênero?", status: "open" });
+    expect(asked).not.toHaveProperty("category");
+    const { proxiableQuestions } = await import("@/lib/storymap/autonomy");
+    expect(proxiableQuestions(cardOnDisk, { autonomy: { mode: "ultra" } })).toEqual([]);
+  });
+
+  it("texto livre que fala de dinheiro ganha category money (do dono, explícito no Inbox)", async () => {
+    await askQuestionsAction({ boardId: "b", cardId: "story-x", texts: ["Assinamos o plano pago do fornecedor?"] });
+    expect(cardOnDisk.questions![0]).toMatchObject({ category: "money" });
+  });
+
+  it("a categoria declarada pelo autor nunca é sobrescrita pelo default", async () => {
+    await askQuestionsAction({ boardId: "b", cardId: "story-x", questions: [{ text: "Integrar agora?", category: "delivery" }] });
+    expect(cardOnDisk.questions![0]).toMatchObject({ category: "delivery" });
+  });
 });

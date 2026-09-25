@@ -145,9 +145,12 @@ async function moveCard(board: string, cardId: string, to: string): Promise<{ ok
   return r.ok ? { ok: true } : { ok: false, error: r.error };
 }
 
+/** The steward only ever asks about INTEGRATION (a parked merge, a dead session's preserved branch): a decision
+ *  about getting a delivery in, so category `delivery` — the owner's in every mode (never proxied). It knows the
+ *  category, so it declares it instead of leaving the question to the conservative default. */
 async function askQuestion(board: string, cardId: string, text: string): Promise<void> {
   const { askQuestionsAction } = await import("@/app/actions");
-  await askQuestionsAction({ boardId: board, cardId, texts: [text], askedBy: STEWARD_ACTOR });
+  await askQuestionsAction({ boardId: board, cardId, questions: [{ text, category: "delivery" }], askedBy: STEWARD_ACTOR });
 }
 
 /** The card's expected delta (`commitRange`, else `diffSnapshot` — expectedDeltaOf owns the precedence),
