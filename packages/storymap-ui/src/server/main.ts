@@ -522,10 +522,23 @@ async function sondasDoHost() {
     }
   })();
 
+  // AS SKILLS DISTRIBUÍDAS: a árvore `.claude/skills/harness-*` do checkout da FERRAMENTA contra a do ALVO.
+  // Medido aqui (fs) e julgado lá (preflight puro). Sem a raiz da ferramenta resolvida, "não medi".
+  const { measureSkills } = await import("@/lib/storymap/skills-drift");
+  const skills = await (async () => {
+    try {
+      const { findToolRoot } = await import("@/lib/storymap/paths");
+      return measureSkills(findToolRoot(), raiz);
+    } catch {
+      return null;
+    }
+  })();
+
   return {
     repoRoot: raiz,
     env: envMedido,
     gateSeal,
+    skills,
     // O env DESTE processo, ao lado do medido: e o que deixa o relatorio dizer QUANDO os dois
     // divergem. Uma instancia subindo AO LADO de um servico vivo lia a porta do vizinho sem
     // saber (medido em 2026-08-27: subiu em 3044, o relatorio disse 3008).

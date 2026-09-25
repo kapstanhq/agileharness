@@ -99,6 +99,8 @@ export const ONBOARDING_GUIDE = [
   "- set_card_autonomy — a exceção da story à chave de autonomia do board: \"ultra\" (entrevista e escolha de",
   "  tela vão a um PROXY com contexto limpo), \"human\" ou null (segue o board). Decisão do dono (só token full).",
   "- resolve_proxy_audit — o dono confirma ou reabre uma resposta do proxy que caiu na amostra de auditoria.",
+  "- sync_skills — copia para o ALVO as skills `harness-*` da ferramenta que faltam lá (pelo merge train; nunca",
+  "  sobrescreve uma que difere sem `overwrite: [nomes]`). O preflight `skills.distributed` diz quais. Só token full.",
   "",
   "## Princípios de trabalho (siga sempre)",
   "1. O board é a fonte da verdade de produto — leia antes de agir.",

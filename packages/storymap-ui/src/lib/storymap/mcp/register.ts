@@ -262,6 +262,10 @@ const TOOL_ANNOTATIONS: Record<string, ToolHints> = {
   // auditoria do proxy apagaria a revisão que o dono pediu. Decisão do dono ⇒ DESTRUCTIVE ⇒ só `full`.
   set_card_autonomy: DESTRUCTIVE,
   resolve_proxy_audit: DESTRUCTIVE,
+  // v0.9 — as skills que a ferramenta distribui, no ALVO: copiar as que faltam é aditivo, mas SOBRESCREVER uma que
+  // difere troca a instrução que o agente do alvo segue — decisão do operador. E a skill é o prompt de todo agente
+  // do alvo: um token escopado que instalasse instruções estaria escrevendo o próprio prompt. Só `full`.
+  sync_skills: DESTRUCTIVE,
   wait_for_approval: RO, // blocks until a pending ApprovalRequest is decided/expires (event wait, like wait_for_run)
 };
 
@@ -436,6 +440,7 @@ const RISK_CLASS_EXCEPTIONS: Record<string, RiskClass> = {
   // A chave de autonomia e a auditoria do proxy: decisões do dono pelo mesmo motivo (ver TOOL_ANNOTATIONS).
   set_card_autonomy: "destructive",
   resolve_proxy_audit: "destructive",
+  sync_skills: "destructive",
 };
 
 /** Classe de risco DERIVADA dos presets de anotação (uma fonte). Pura — exportada p/ o guard e o teste. */

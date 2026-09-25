@@ -59,6 +59,7 @@ export const REPO_SCOPED_TOOLS: ReadonlySet<string> = new Set([
   "term_new", // abre um shell na caixa
   "run_task", // spawna um `claude` com Bash pleno na caixa
   "engage_capacity_latch", // a trava do governador de capacidade é da CONTA (uma janela de uso por host), não de um board
+  "sync_skills", // as skills `.claude/skills/harness-*` são do REPOSITÓRIO alvo, lidas por todo board dele
 ]);
 
 /** As chaves de argumento das quais um board é derivável — a heurística, agora com um nome e um teste. */

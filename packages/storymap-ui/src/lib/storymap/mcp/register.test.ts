@@ -70,6 +70,9 @@ const DESTRUCTIVE_SURFACE = [
   // são decisões do dono — um agente que se pusesse em `ultra` se auto-responderia pelo proxy.
   "set_card_autonomy",
   "resolve_proxy_audit",
+  // v0.9 (revisão exigida por este teste): sincronizar as skills no alvo escreve a INSTRUÇÃO que todo agente dele
+  // segue, e sobrescrever uma customizada é decisão do operador — só `full`.
+  "sync_skills",
 ];
 
 // `reversible-delete` (M2) — soft-delete de board-data: move para `.trash/`, GC 7d, restore_deleted. Montável em

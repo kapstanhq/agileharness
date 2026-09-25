@@ -137,6 +137,13 @@ The host measurement is available on its own, with no agent involved:
 node dist/ah-server.mjs --preflight
 ```
 
+Among other things it compares the `harness-*` skills this release ships (`.claude/skills/`) with the
+ones your repository carries — your agents run from **your** copies. A skill the release has and your
+repository lacks is `degraded` (the engine could dispatch a role with no instructions); one that differs
+is a warning, since you may have customized it. The MCP tool `sync_skills` copies only the missing ones,
+through a session worktree and the merge train; it overwrites a differing skill only when you name it
+(`overwrite: ["harness-qa"]`).
+
 **Requirements.** [Bun](https://bun.sh), Node 20+, and the **Claude Code CLI** — not bundled, not
 optional, and the reason it isn't is [its own section](./docs/how-it-works.md#built-on-claude-code).
 Change the port with `AGILEHARNESS_PORT` and the CLI's location with `AGILEHARNESS_CLAUDE`.

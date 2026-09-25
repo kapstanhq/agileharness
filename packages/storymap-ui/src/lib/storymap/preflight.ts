@@ -48,8 +48,14 @@ import {
 } from "./cutover-checks";
 import { CONTRATO_DE_ENV, chavesFaltantes } from "./env-contract";
 import { ROOT_MARKERS } from "./paths";
+import { SKILLS_DIR, skillDrift, type SkillsProbe } from "./skills-drift";
 
-export type CheckStatus = "ok" | "degraded" | "missing" | "unknown";
+/**
+ * `warn` passou a existir com as skills distribuídas (v0.9): uma skill do alvo que DIFERE da da ferramenta pode
+ * ser customização legítima — não é defeito (`degraded`), mas também não é verde calado. Aparece no bloco do boot
+ * como aviso, e não piora o `worst` além disso.
+ */
+export type CheckStatus = "ok" | "warn" | "degraded" | "missing" | "unknown";
 
 export interface PreflightCheck {
   /** estável, e é a chave que a skill de onboarding usa para casar item ↔ conserto. */
@@ -134,12 +140,17 @@ export interface PreflightProbes {
    * módulo à mão; este arquivo não arrasta nada.
    */
   gateSeal?: { ok: boolean; detail: string } | null;
+  /**
+   * As skills `harness-*` que a FERRAMENTA distribui e as que o ALVO carrega, já medidas (skills-drift.ts
+   * `measureSkills`). Ausente ⇒ o check não existe; `null` ⇒ "não medi" (uma das árvores não pôde ser lida).
+   */
+  skills?: SkillsProbe | null;
 }
 
 /** O piso declarado em `package.json#engines`. Duplicar aqui é ruim; medir contra nada é pior. */
 export const NODE_FLOOR_MAJOR = 20;
 
-const PIOR: Record<CheckStatus, number> = { ok: 0, degraded: 1, unknown: 2, missing: 3 };
+const PIOR: Record<CheckStatus, number> = { ok: 0, warn: 1, degraded: 2, unknown: 3, missing: 4 };
 
 function pior(a: CheckStatus, b: CheckStatus): CheckStatus {
   return PIOR[b] > PIOR[a] ? b : a;
@@ -801,6 +812,13 @@ export function runPreflight(probes: PreflightProbes = {}): PreflightReport {
     }
   }
 
+  // ── AS SKILLS QUE A FERRAMENTA DISTRIBUI ──────────────────────────────────────────────────────
+  // Medido em 2026-09-25 no alvo de referência: as sessões dele carregam CÓPIAS das skills `harness-*`
+  // versionadas no repositório DELE, congeladas desde a inversão — e o condutor, criado depois, abria sessão
+  // sem a própria skill. FALTA é defeito (o motor despacha um papel sem instrução); DIFERE é aviso (pode ser
+  // customização do alvo, e nada é sobrescrito sozinho). Ver skills-drift.ts.
+  if (probes.skills !== undefined) checks.push(skillsCheck(probes.skills));
+
   // ── AS VERSÕES ───────────────────────────────────────────────────────────────────────────────
   const nodeV = probes.versions?.node ?? process.versions.node;
   const major = Number.parseInt((nodeV ?? "").split(".")[0] ?? "", 10);
@@ -832,18 +850,80 @@ export function runPreflight(probes: PreflightProbes = {}): PreflightReport {
   return { checks, worst: checks.reduce<CheckStatus>((acc, c) => pior(acc, c.status), "ok") };
 }
 
-const SINAL: Record<CheckStatus, string> = { ok: "OK  ", degraded: "~~  ", missing: "!!  ", unknown: "??  " };
+/** O check das skills distribuídas, sobre a sonda já medida. PURO — exportado para o teste. */
+export function skillsCheck(probe: SkillsProbe | null): PreflightCheck {
+  const id = "skills.distributed";
+  const title = "as skills `harness-*` que a ferramenta distribui, no alvo";
+  if (!probe) {
+    return {
+      id,
+      title,
+      status: "unknown",
+      observed: "não medido — a árvore de skills da ferramenta ou a do alvo não pôde ser lida",
+      remedy: `confira \`${SKILLS_DIR}/\` no checkout da ferramenta (AGILEHARNESS_TOOL_ROOT) e no alvo (AGILEHARNESS_TARGET).`,
+    };
+  }
+  if (probe.toolRoot === probe.targetRoot) {
+    return { id, title, status: "ok", observed: `o alvo É o checkout da ferramenta (${probe.toolRoot}) — as skills são as mesmas` };
+  }
+  if (probe.tool.length === 0) {
+    return {
+      id,
+      title,
+      status: "unknown",
+      observed: `a ferramenta não traz nenhuma skill em ${probe.toolRoot}/${SKILLS_DIR}`,
+      remedy: "o checkout da ferramenta parece incompleto (sem .claude/skills/harness-*). Reinstale a release ou declare AGILEHARNESS_TOOL_ROOT.",
+    };
+  }
+  const d = skillDrift(probe.tool, probe.target);
+  const differ = d.differ.map((x) => `${x.name} (${x.files.join(", ")})`);
+  if (d.missing.length) {
+    return {
+      id,
+      title,
+      status: "degraded",
+      observed:
+        `FALTAM no alvo ${d.missing.length} de ${probe.tool.length}: ${d.missing.join(", ")}` +
+        (differ.length ? ` · DIFEREM ${differ.length}: ${differ.join("; ")}` : ""),
+      remedy:
+        "as sessões do alvo carregam as skills do REPOSITÓRIO DO ALVO; sem estas, o motor despacha um papel sem " +
+        "instrução. Rode a tool MCP `sync_skills` (token full): ela copia SÓ as que faltam, por um worktree de " +
+        "sessão e pelo merge train — nunca direto no checkout de runtime, e nunca sobrescreve uma que difere. " +
+        "Sem o serviço de pé (instalação nova), copiar os diretórios que faltam à mão e commitá-los também vale.",
+    };
+  }
+  if (differ.length) {
+    return {
+      id,
+      title,
+      status: "warn",
+      observed: `DIFEREM da versão da ferramenta ${differ.length}: ${differ.join("; ")}`,
+      remedy:
+        "pode ser customização legítima do alvo — nada é sobrescrito sozinho. Para adotar a versão da ferramenta " +
+        "de uma delas, nomeie-a: `sync_skills({overwrite: [\"<nome>\"]})`. Revise o diff antes: a skill é a " +
+        "instrução que o agente segue.",
+    };
+  }
+  return { id, title, status: "ok", observed: `${d.same.length} skill(s) da ferramenta presentes e idênticas no alvo` };
+}
+
+const SINAL: Record<CheckStatus, string> = { ok: "OK  ", warn: "~   ", degraded: "~~  ", missing: "!!  ", unknown: "??  " };
 
 /**
  * O bloco humano. Vazio quando está TUDO ok — quem chama imprime a linha afirmativa de PASS, pela
  * mesma razão que a auditoria de bind imprime a dela: uma auto-checagem que só fala quando reprova
- * não deixa provar que rodou.
+ * não deixa provar que rodou. Um AVISO (`warn`) aparece, mas não conta como reprovação.
  */
 export function preflightMessage(r: PreflightReport): string {
-  const ruins = r.checks.filter((c) => c.status !== "ok");
+  const reprovados = r.checks.filter((c) => c.status !== "ok" && c.status !== "warn");
+  const avisos = r.checks.filter((c) => c.status === "warn");
+  const ruins = [...reprovados, ...avisos];
   if (ruins.length === 0) return "";
   const linhas = [
-    `[ah-server] preflight: ${ruins.length} de ${r.checks.length} verificação(ões) de ambiente NÃO passaram.`,
+    reprovados.length
+      ? `[ah-server] preflight: ${reprovados.length} de ${r.checks.length} verificação(ões) de ambiente NÃO passaram` +
+        (avisos.length ? `, e ${avisos.length} aviso(s).` : ".")
+      : `[ah-server] preflight: as ${r.checks.length} verificações passaram, com ${avisos.length} aviso(s).`,
   ];
   for (const c of ruins) {
     linhas.push(`  ${SINAL[c.status]}${c.id} — ${c.title}`);
