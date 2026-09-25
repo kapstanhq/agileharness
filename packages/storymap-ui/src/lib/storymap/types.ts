@@ -678,8 +678,10 @@ export interface Card {
   reviewCommit?: string | null;
   /**
    * harness-qa proved the acceptance criteria end-to-end (E2E + headless visual) →
-   * gate hasQaPassed. Only `user` stories with a UI-observable criterion require
-   * it; technical/spike/chore/bug pass the gate freely (no deadlock on infra cards).
+   * gate hasQaPassed. Required by a card with a UI surface AND by any card that carries
+   * CODE (declaresCode: stagedAt/commitRange) — the latter together with `qaEvidence`
+   * saying what was proven. A card with neither passes the gate freely (no deadlock on
+   * board-only chores/spikes).
    */
   qaPassed?: boolean;
   /** when the last QA run ran (YYYY-MM-DD) + the commit/HEAD it validated. */
@@ -958,7 +960,7 @@ export const GATE_IDS = [
   "hasCriteriaSpecs", // revisar-codigo (ADR-063 2c): every UI-observable acceptance criterion has an authored spec (shift-left; default-satisfied on absent)
   "hasBuildEvidence", // revisar-codigo (C2/ny4v26): every declared task done + delegates hasCriteriaSpecs — build evidence before review; via the pre-write hook it binds ANY writer, including a manual status flip
   "hasNoBlockers", // qa-automatizado: code review left no open blocker
-  "hasQaPassed", // revisao: automated acceptance/E2E + visual QA is green (user stories)
+  "hasQaPassed", // revisao: QA green — UI surface ⇒ visual proof; carries code ⇒ qaEvidence (suite/visual)
   "hasRefineBrief", // refinar: a refinement must carry a free-text brief
   "hasBugReport", // corrigir: a bug fix must carry a free-text report
   "hasRetireBrief", // descontinuar: a retirement must carry a free-text reason

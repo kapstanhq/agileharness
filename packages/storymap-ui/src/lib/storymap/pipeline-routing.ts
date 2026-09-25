@@ -11,8 +11,9 @@
 // This module encodes the ONE branch that makes the pipeline storyType-aware:
 // which statuses a card of a given storyType actually traverses. The cascade
 // kernel (cascade-decision.ts) consumes it to FORWARD a non-user card past the
-// design block straight to plano-tecnico; the hasQaPassed gate (gates.ts) already
-// lets non-user cards clear QA without an E2E run; and the harness-ux/harness-qa skills
+// design block straight to plano-tecnico; the hasQaPassed gate (gates.ts) lets a non-user
+// card clear QA without an E2E run — with the SUITE as its proof when it carries code
+// (qaEvidence.suite; a code card is never exempt); and the harness-ux/harness-qa skills
 // mirror it in prose (short-circuit + suite-as-QA-gate).
 
 import type { StoryType } from "./frameworks";
@@ -29,8 +30,9 @@ export const UI_DESIGN_STATUSES = ["design-ux", "com-design"] as const;
 
 /**
  * Does a story of `storyType` need the UI-design columns? Only `user` stories do.
- * Mirrors the `hasQaPassed` gate invariant (`storyType !== "user"` passes freely),
- * so the design-skip and the QA-skip stay in lockstep. A null storyType
+ * Mirrors the `hasQaPassed` gate's UI half (a non-user card needs no VISUAL proof — though a
+ * code-bearing one still needs suite evidence), so the design-skip and the QA-skip stay in
+ * lockstep. A null storyType
  * (activity/step, or an unset legacy story) is treated as non-UI — but in practice
  * only stories reach the build cascade and coerceCard defaults a story to "user".
  */

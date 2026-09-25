@@ -122,9 +122,11 @@ serving the product yourself, use the in-jail script route. See "Execute + visua
         any `mode`, and advance to `revisao`. Do NOT seed a stack or drive the browser.
      3. **RED** → record a `findings[]` entry `{ lens: "testing", severity: "blocker",
         status: "open", title, detail }`, leave `qaPassed` unset, and keep the card in
-        `qa-automatizado` (or route it back to `desenvolver`). The `hasQaPassed` gate
-        passing "by type" does NOT excuse a red suite — a non-user card never advances
-        to `revisao` with its suite failing.
+        `qa-automatizado` (or route it back to `desenvolver`). The `hasQaPassed` gate no
+        longer passes a CODE card "by type": a card that carries code (`stagedAt`/
+        `commitRange`) needs `qaPassed: true` **and** `qaEvidence.suite: true` to enter
+        `revisao` — so the green-suite stamp above is load-bearing, and a red suite can
+        never be papered over.
      If the suite genuinely has no coverage of the delta, extend it at the cheapest
      layer (unit/integration) so the acceptance is actually verified before going
      green — never set `qaPassed` on an unproven delta.

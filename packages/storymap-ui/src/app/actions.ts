@@ -3035,6 +3035,9 @@ export async function approveQaAction(input: {
   /** "eu OLHEI a tela renderizada" — grava qaEvidence.visual, a prova que o gate cobra de um card cujo
    *  diff tocou superfície. Omitido ⇒ a evidência existente fica intacta. */
   visual?: boolean;
+  /** "eu RODEI a suíte e ela passou" — grava qaEvidence.suite, a prova que o gate cobra de um card COM
+   *  CÓDIGO (stagedAt/commitRange), tenha tela ou não. Omitido ⇒ a evidência existente fica intacta. */
+  suite?: boolean;
   /** optional note (not persisted on the card; surfaced in the result for the caller's log). */
   comment?: string;
 }): Promise<Result<{ card: Card }>> {
@@ -3057,11 +3060,14 @@ export async function approveQaAction(input: {
         // olhou; quando quem olhou foi o operador (e não o sweep headless), é AQUI que ele diz isso —
         // `visual: true` é uma afirmação assinada, não um flag de conveniência. Sem `visual` informado
         // a evidência anterior é preservada intacta: aprovar de novo não apaga o que o QA registrou.
-        ...(input.visual !== undefined
+        // `suite` é a mesma coisa para a SUÍTE: um card com código precisa de prova de que ela rodou, e
+        // quando quem rodou foi o operador, é aqui que ele assina.
+        ...(input.visual !== undefined || input.suite !== undefined
           ? {
               qaEvidence: {
                 ...(card.qaEvidence ?? {}),
-                visual: input.visual,
+                ...(input.visual !== undefined ? { visual: input.visual } : {}),
+                ...(input.suite !== undefined ? { suite: input.suite } : {}),
                 at: new Date().toISOString(),
                 by: "human",
               },

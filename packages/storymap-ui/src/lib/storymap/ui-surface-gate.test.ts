@@ -18,7 +18,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { GATES, hasUiSurface, qaVisualProof } from "./gate-core";
+import { GATES, hasUiSurface, qaHasEvidence, qaVisualProof } from "./gate-core";
 import { coerceCard } from "./repo";
 import { pathsTouchUiSurface, uiSurfacePaths } from "./runner/staging";
 import { UI_SURFACE_PATTERNS } from "./runner/config";
@@ -145,6 +145,55 @@ describe("hasQaPassed — o vazamento fechado, sem travar card em voo", () => {
   });
 });
 
+describe("hasQaPassed — card COM CÓDIGO exige prova de suíte, tenha tela ou não (gate honesto)", () => {
+  // O furo: a isenção "sem superfície ⇒ passa" era VÁCUA para código. Um `chore` que reescrevia lógica
+  // atravessava para a Revisão — e dali para o merge — sem qaPassed e sem suíte nenhuma provada.
+  const range = { commitRange: { base: "aaa", head: "bbb" } };
+  const suite = { qaEvidence: { suite: true, visual: false, at: "2026-09-25T10:00:00.000Z" } };
+
+  it("REPRO: chore sem tela COM código e sem QA nenhum → BLOQUEIA (antes passava por tipo)", () => {
+    expect(okWith({ storyType: "chore", ...range })).toBe(false);
+    expect(okWith({ storyType: "technical", stagedAt: "2026-09-25" })).toBe(false);
+  });
+
+  it("qaPassed SEM evidência não basta para código — o bit não diz o que foi provado", () => {
+    expect(okWith({ storyType: "chore", qaPassed: true, ...range })).toBe(false);
+  });
+
+  it("qaPassed + qaEvidence.suite → PASSA (o ramo só-suíte do harness-qa já grava isto)", () => {
+    expect(okWith({ storyType: "chore", qaPassed: true, ...range, ...suite })).toBe(true);
+  });
+
+  it("uma user story COM tela e COM código precisa das DUAS provas quando a tela foi medida", () => {
+    const base = { storyType: "user", qaPassed: true, ...range, ...measured(true) };
+    expect(okWith({ ...base, ...suite })).toBe(false); // suíte sem tela
+    expect(okWith({ ...base, qaEvidence: { suite: true, visual: true, at: "x" } })).toBe(true);
+  });
+
+  it("uma user story com código mas SEM medição de tela: a evidência de suíte fecha", () => {
+    expect(okWith({ storyType: "user", qaPassed: true, ...range })).toBe(false);
+    expect(okWith({ storyType: "user", qaPassed: true, ...range, ...suite })).toBe(true);
+  });
+
+  it("[NÃO-REGRESSÃO] card SEM código e sem tela segue isento — um chore de board não deadlocka", () => {
+    expect(okWith({ storyType: "chore" })).toBe(true);
+    expect(okWith({ storyType: "spike", qaPassed: false })).toBe(true);
+  });
+
+  it("qaHasEvidence: `at` obrigatório, só booleano true conta", () => {
+    expect(qaHasEvidence(card({ qaEvidence: { suite: true, at: "x" } }))).toBe(true);
+    expect(qaHasEvidence(card({ qaEvidence: { visual: true, at: "x" } }))).toBe(true);
+    expect(qaHasEvidence(card({ qaEvidence: { suite: false, visual: false, at: "x" } }))).toBe(false);
+    expect(qaHasEvidence(card({ qaEvidence: { suite: true } }))).toBe(false);
+    expect(qaHasEvidence(card({}))).toBe(false);
+  });
+
+  it("a mensagem do gate diz o que um card com código precisa (e a saída humana)", () => {
+    expect(GATES.hasQaPassed.message).toMatch(/COM CÓDIGO/);
+    expect(GATES.hasQaPassed.fix).toMatch(/approve_qa com `suite: true`/);
+  });
+});
+
 describe("PRODUTOR — o teste que faltava (uma trava sem produtor não é trava)", () => {
   // D1 nasceu assim: um campo LIDO por um gate e escrito por ninguém em código. O gate parecia existir
   // e nunca disparava. Este teste falha se a evidência voltar a não ter quem a escreva.
@@ -168,6 +217,13 @@ describe("PRODUTOR — o teste que faltava (uma trava sem produtor não é trava
   it("qaEvidence tem um produtor humano (approve_qa) — a saída quando a skill não coopera", () => {
     const writers = sources.filter((f) => /qaEvidence:\s*\{/.test(f.text));
     expect(writers.some((f) => f.p.includes("app/actions.ts"))).toBe(true);
+  });
+
+  it("approve_qa grava `suite` também — sem isto um card com código QA'd à mão nunca passaria o gate", () => {
+    const actions = readFileSync(join(SRC, "app", "actions.ts"), "utf8");
+    expect(actions).toMatch(/suite: input\.suite/);
+    const tools = readFileSync(join(SRC, "lib", "storymap", "mcp", "tools.ts"), "utf8");
+    expect(tools).toMatch(/approveQaAction\(\{[^}]*\bsuite\b/);
   });
 
   it("ambos sobrevivem a um write (serializer) — campo sem serializer é descartado no disco", () => {
