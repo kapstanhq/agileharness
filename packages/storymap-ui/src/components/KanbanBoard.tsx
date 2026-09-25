@@ -26,6 +26,7 @@ import {
   kanbanColumnStatuses,
   kanbanStories,
 } from "@/lib/storymap/views";
+import { boardLanes, groupStoriesByLane, laneDropStatus, laneStatusTags, laneViewProblems, type ResolvedLane } from "@/lib/storymap/lanes";
 import { useLocalToggle } from "@/lib/useLocalToggle";
 import { navItemForView, type BoardView, type NavItem } from "@/components/nav/nav-groups";
 import type { Board, BoardConfig, BoardSummary, Card, ColumnDef, StatusDef } from "@/lib/storymap/types";
@@ -173,6 +174,16 @@ function KanbanBoardInner({ board, boards }: { board: Board; boards: BoardSummar
     return groups;
   }, [config.columns, columns]);
 
+  // The LANE VIEW (board.yaml `view.lanes`, lanes.ts): when declared, the board renders lanes instead of the
+  // status/phase columns — a VIEW, the cards keep their statuses (shown as tags). Absent ⇒ null and nothing below
+  // changes: the legacy Kanban renders exactly as before.
+  const declaredLanes = useMemo(() => boardLanes(config), [config]);
+  const laneView = useMemo(
+    () => (declaredLanes ? groupStoriesByLane(stories, config, declaredLanes) : null),
+    [declaredLanes, stories, config],
+  );
+  const laneProblems = useMemo(() => (declaredLanes ? laneViewProblems(config) : []), [declaredLanes, config]);
+
   const activeCard = activeId ? cards.find((c) => c.id === activeId) ?? null : null;
   // The ColumnDef id of the card being dragged — so a phase can suppress its "valid drop" highlight when
   // the dragged card already belongs to it (a same-phase drop is a no-op; don't promise a drop we won't honor).
@@ -264,6 +275,34 @@ function KanbanBoardInner({ board, boards }: { board: Board; boards: BoardSummar
     if (!over) return;
     const card = cards.find((c) => c.id === String(active.id));
     if (!card || card.type !== "story") return;
+
+    // LANE VIEW: a drop means "put this card in this LANE" ⇒ the lane's first droppable status (the gate still
+    // decides, in moveCardAction). A same-lane drop is a no-op; "Outros" accepts no drop.
+    if (laneView) {
+      const overId = String(over.id);
+      const laneOf = (id: string): string | null => {
+        if (id.startsWith(LANE_DROP_PREFIX)) return id.slice(LANE_DROP_PREFIX.length);
+        for (const [laneId, list] of laneView.byLane) if (list.some((c) => c.id === id)) return laneId;
+        return null;
+      };
+      const toLane = laneView.lanes.find((l) => l.id === laneOf(overId));
+      if (!toLane || toLane.id === laneOf(card.id)) return;
+      const laneStatus = laneDropStatus(toLane, config);
+      if (!laneStatus || laneStatus === card.status) return;
+      const siblings = (laneView.byLane.get(toLane.id) ?? []).filter((c) => c.id !== card.id);
+      const laneOrder = midpoint(siblings[siblings.length - 1]?.order, undefined);
+      const moved: Card = { ...card, status: laneStatus, order: laneOrder, updatedMs: Date.now() };
+      const before = cards;
+      setCards((cs) => cs.map((c) => (c.id === moved.id ? moved : c)));
+      const r = await moveCardAction({ boardId: config.id, cardId: moved.id, status: laneStatus, order: laneOrder });
+      if (!r.ok) {
+        setCards(before);
+        moveRejectedToast(card, laneStatus, r.error);
+        return;
+      }
+      offerUndo(card, before, laneStatus);
+      return;
+    }
 
     const overCol = columnOfOver(String(over.id));
     if (!overCol) return;
@@ -392,6 +431,19 @@ function KanbanBoardInner({ board, boards }: { board: Board; boards: BoardSummar
         <div className="board-scroll flex-1 overflow-auto bg-canvas p-4">
           {/* Fit-to-screen: phases FLEX to share the width (empty ones collapse to compact strips), so on
               desktop all columns fit without horizontal scroll; it still scrolls on narrow/many-column boards. */}
+          {laneView ? (
+            <LaneBoard
+              lanes={laneView.lanes}
+              byLane={laneView.byLane}
+              problems={laneProblems}
+              config={config}
+              cardsById={cardsById}
+              onOpen={handleOpen}
+              onAdvance={onAdvance}
+              showMeta={showMeta}
+              activeLaneId={activeId ? ([...laneView.byLane].find(([, l]) => l.some((c) => c.id === activeId))?.[0] ?? null) : null}
+            />
+          ) : (
           <div className="flex h-full gap-4">
             {stageGroups.map((group, gi) =>
               group.stage ? (
@@ -430,6 +482,7 @@ function KanbanBoardInner({ board, boards }: { board: Board; boards: BoardSummar
               ),
             )}
           </div>
+          )}
         </div>
 
         <DragOverlay>
@@ -459,6 +512,142 @@ function KanbanBoardInner({ board, boards }: { board: Board; boards: BoardSummar
         />
       )}
     </div>
+  );
+}
+
+/** Droppable ids of the lane view are namespaced so a lane id can never collide with a status or card id. */
+const LANE_DROP_PREFIX = "lane:";
+
+/**
+ * The LANE VIEW (board.yaml `view.lanes`): one flat column per lane, each card tagged with its REAL status (and
+ * `integrando`/`publicando` when it rests in a train passage / the deploy step). The step detail lives on the
+ * card as a tag, not as a column. A declared map that is wrong (a status in no lane, in two, unknown…) is SAID
+ * here, above the lanes, in the lint's own words — the cards it strands sit in the visible "Outros" lane.
+ */
+function LaneBoard({
+  lanes,
+  byLane,
+  problems,
+  config,
+  cardsById,
+  onOpen,
+  onAdvance,
+  showMeta,
+  activeLaneId,
+}: {
+  lanes: ResolvedLane[];
+  byLane: Map<string, Card[]>;
+  problems: string[];
+  config: BoardConfig;
+  cardsById?: Map<string, Card>;
+  onOpen: (id: string) => void;
+  onAdvance?: (cardId: string, toStatus: string) => void;
+  showMeta?: boolean;
+  activeLaneId: string | null;
+}) {
+  return (
+    <div className="flex h-full flex-col gap-3">
+      {problems.length > 0 && <LaneProblems problems={problems} />}
+      <div className="flex min-h-0 flex-1 gap-4">
+        {lanes.map((lane) => (
+          <LaneColumn
+            key={lane.id}
+            lane={lane}
+            cards={byLane.get(lane.id) ?? []}
+            config={config}
+            cardsById={cardsById}
+            onOpen={onOpen}
+            onAdvance={onAdvance}
+            showMeta={showMeta}
+            acceptsActive={!lane.others && activeLaneId !== lane.id}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** The lint of the lane map, legible to whoever declared it (collapsed to one line; opens to the list). */
+function LaneProblems({ problems }: { problems: string[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="shrink-0 rounded-lg border border-amber-300/60 bg-amber-50 px-3 py-2 text-[12px] text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+      <button type="button" onClick={() => setOpen((o) => !o)} className="w-full text-left font-medium">
+        {problems.length === 1 ? "1 problema" : `${problems.length} problemas`} no mapa de raias (board.yaml `view.lanes`){open ? "" : " — ver"}
+      </button>
+      {open && (
+        <ul className="mt-1.5 list-disc space-y-0.5 pl-5">
+          {problems.map((p) => (
+            <li key={p}>{p}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function LaneColumn({
+  lane,
+  cards,
+  config,
+  cardsById,
+  onOpen,
+  onAdvance,
+  showMeta,
+  acceptsActive,
+}: {
+  lane: ResolvedLane;
+  cards: Card[];
+  config: BoardConfig;
+  cardsById?: Map<string, Card>;
+  onOpen: (id: string) => void;
+  onAdvance?: (cardId: string, toStatus: string) => void;
+  showMeta?: boolean;
+  acceptsActive?: boolean;
+}) {
+  const dropId = `${LANE_DROP_PREFIX}${lane.id}`;
+  const { setNodeRef, isOver } = useDroppable({ id: dropId, disabled: lane.others === true });
+  const sorted = useMemo(() => [...cards].sort(byUpdatedDesc), [cards]);
+  const hint = lane.others
+    ? "Cards cujo status nenhuma raia declara — confira o mapa de raias."
+    : `${lane.statuses.length} etapa${lane.statuses.length === 1 ? "" : "s"}${lane.demand ? " · recebe todo card que espera você" : ""}`;
+  if (sorted.length === 0 && !lane.others) return <CompactColumn name={lane.label} dropId={dropId} acceptsActive={acceptsActive} />;
+  return (
+    <section className="group flex h-full min-w-[180px] max-w-[420px] flex-1 flex-col px-1">
+      <header className="mb-2 shrink-0 px-0.5">
+        <div className="flex items-center gap-1.5">
+          <span className="min-w-0 shrink truncate text-[13.5px] font-semibold tracking-tight text-fg">{lane.label}</span>
+          <CountChip n={sorted.length} />
+        </div>
+        <div className="mt-2 flex h-[26px] items-start">
+          <span className="truncate text-[11.5px] leading-snug text-fg-subtle" title={lane.statuses.join(", ") || undefined}>
+            {hint}
+          </span>
+        </div>
+      </header>
+      <div
+        ref={setNodeRef}
+        className={cn(
+          "col-scroll flex min-h-[56px] flex-1 flex-col gap-2 overflow-y-auto rounded-lg p-1.5 transition",
+          isOver && acceptsActive !== false && "bg-accent/10 ring-1 ring-inset ring-accent/40",
+        )}
+      >
+        <SortableContext id={dropId} items={sorted.map((c) => c.id)} strategy={verticalListSortingStrategy}>
+          {sorted.map((c) => (
+            <KanbanCard
+              key={c.id}
+              card={c}
+              config={config}
+              cardsById={cardsById}
+              onOpen={onOpen}
+              onAdvance={onAdvance}
+              showMeta={showMeta}
+              laneTags={laneStatusTags(c, config)}
+            />
+          ))}
+        </SortableContext>
+      </div>
+    </section>
   );
 }
 

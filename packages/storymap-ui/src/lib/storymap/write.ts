@@ -78,6 +78,9 @@ export function cardToFrontmatter(card: Card): Record<string, unknown> {
           },
         }
       : {}),
+    // The per-story autonomy exception — sparse (absent ⇒ the board decides). Without this line the very next
+    // app write would erase an `ultra`/`human` override the owner set through set_card_autonomy.
+    ...(card.autonomyMode ? { autonomyMode: card.autonomyMode } : {}),
     release: card.release ?? null,
     // SM-02: sparse — only emitted when the story was routed to the unmapped backlog.
     ...(card.unplaced ? { unplaced: true } : {}),
@@ -174,6 +177,21 @@ export function cardToFrontmatter(card: Card): Record<string, unknown> {
             ...(q.selectedOptionIds?.length ? { selectedOptionIds: q.selectedOptionIds } : {}),
             ...(q.context ? { context: q.context } : {}),
             ...(q.recommendation ? { recommendation: q.recommendation } : {}),
+            // the autonomy key's primary signal + the proxy's audit trail (premissas/confiança/amostra).
+            ...(q.category ? { category: q.category } : {}),
+            ...(q.proxy
+              ? {
+                  proxy: {
+                    assumptions: q.proxy.assumptions,
+                    confidence: q.proxy.confidence,
+                    ...(q.proxy.runId ? { runId: q.proxy.runId } : {}),
+                    ...(q.proxy.declined ? { declined: true } : {}),
+                    ...(q.proxy.audit ? { audit: true } : {}),
+                    ...(q.proxy.auditedAt ? { auditedAt: q.proxy.auditedAt } : {}),
+                    ...(q.proxy.auditOutcome ? { auditOutcome: q.proxy.auditOutcome } : {}),
+                  },
+                }
+              : {}),
           })),
         }
       : {}),

@@ -143,13 +143,17 @@ export type BudgetSurface = keyof NonNullable<RunnerSettings["autorun"]["surface
 /**
  * Os tetos default das superfícies — conservadores, porque cada uma faz UMA coisa estreita: o revisor par
  * lê um diff e escreve um veredito; o juiz lê hunks e escreve um veredito; a captura devolve um JSON; o
- * agente de deploy roda a receita do dono (o único que executa comandos longos, daí o dobro).
+ * agente de deploy roda a receita do dono (o único que executa comandos longos, daí o dobro). O PROXY do modo
+ * ultra (runner/proxy.ts) é o mais estreito de todos: lê um contexto já montado (PRD, personas, decisões
+ * passadas) e escreve UM arquivo de respostas — e é disparado sozinho por cada pergunta que um agente abre num
+ * card ultra, então o teto dele é o menor.
  */
 export const DEFAULT_SURFACE_BUDGET_USD: Readonly<Record<BudgetSurface, number>> = {
   peerReview: 2,
   resolutionJudge: 2,
   deployAgent: 4,
   smartCapture: 2,
+  proxy: 1.5,
 };
 const BUDGET_SURFACES = Object.keys(DEFAULT_SURFACE_BUDGET_USD) as BudgetSurface[];
 

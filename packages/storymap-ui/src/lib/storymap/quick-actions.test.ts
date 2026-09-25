@@ -64,11 +64,12 @@ const KIND_OVERRIDES: Record<CockpitItemKind, Record<string, unknown>> = {
   "deploy-unsettled": { deployFiredAt: "2026-01-01T00:00:00Z" },
   "release-aging": { stagedAt: "2026-01-01", ageDays: 3 },
   "merge-failed": { runId: "r1", branch: "run/r1", failureReason: "boom" },
+  "proxy-audit": { id: "c1:pa:q1", lane: "aprovar", questionId: "q1", prompt: "?", answer: "a", assumptions: "p", confidence: 0.9 },
 };
 
 const ALL_KINDS: CockpitItemKind[] = [
   "question", "blocker", "finding", "deploy-failed", "gate", "approval", "review", "stuck", "conflict", "proposal", "design", "governance",
-  "deploy-unsettled", "release-aging", "merge-failed",
+  "deploy-unsettled", "release-aging", "merge-failed", "proxy-audit",
 ];
 
 const deployCfg = mkConfig([st("release", "Publicar", { onEnter: "promote-and-deploy" }), st("live", "No ar", { terminal: true })]);

@@ -1004,6 +1004,8 @@ describe("(6) LINT DE DÍVIDA — varre TODO o src, casa OS DOIS sinais, e a lis
     "lib/storymap/mcp/dev-tools.ts",
     "lib/storymap/runner/deploy-agent-spawn.ts",
     "lib/storymap/runner/peer-review-spawn.ts",
+    // lanes-ultra: nasceu JÁ na postura (a forma do revisor par) — o env só existe dentro da válvula explícita.
+    "lib/storymap/runner/proxy-spawn.ts",
     "lib/storymap/runner/resolution-judge-spawn.ts",
     "lib/storymap/smart-capture/claude.ts",
   ] as const;
@@ -1101,6 +1103,9 @@ describe("(6) LINT DE DÍVIDA — varre TODO o src, casa OS DOIS sinais, e a lis
       // run produziu, sem humano). Deixá-las para trás era embarcar um caminho de escalação de dentro
       // da fronteira para fora.
       "lib/storymap/runner/peer-review-spawn.ts": "migrada para a postura; o env só existe dentro da válvula explícita",
+      // O proxy do ultra nasceu na postura (nunca emitiu a flag): o env existe só dentro da válvula explícita, pelo
+      // mesmo motivo do revisor par — sem ele o CLI recusaria a flag da válvula como root.
+      "lib/storymap/runner/proxy-spawn.ts": "nasceu na postura; o env só existe dentro da válvula explícita",
       "lib/storymap/runner/resolution-judge-spawn.ts": "migrada para a postura; o env só existe dentro da válvula explícita",
     };
     const orfaos = DIVIDA_ENV.filter(

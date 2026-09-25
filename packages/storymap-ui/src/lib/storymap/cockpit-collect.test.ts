@@ -171,6 +171,29 @@ describe("collectActionableCockpit — o acionável do tick é condicional ao TI
     expect((await collectActionableCockpit("acme")).ids).toEqual(["story-xfleex:approval:release"]);
   });
 
+  it("card CONDUZIDO ⇒ fora do trabalho do tick (em qualquer tier), mas SEGUE no Inbox do humano", async () => {
+    const conducted = coerceCard(
+      "story-cond",
+      {
+        type: "story",
+        status: "release",
+        qaPassed: true,
+        routing: { skips: [], decidedBy: "rules", decidedAt: "2026-09-25", driver: "conductor" },
+        findings: [{ id: "f9", lens: "general", severity: "blocker", status: "open", title: "achado do condutor" }],
+      },
+      "",
+    );
+    const orchestrator = { mode: "autonomous" as const, riskMatrix: { deploy: "auto" as const } };
+    mockGetBoard.mockResolvedValue({ config: config(orchestrator), cards: [...cards, conducted] });
+    mockReadBoardConfig.mockResolvedValue(config(orchestrator));
+    const { ids, itemCards } = await collectActionableCockpit("acme");
+    expect(ids).toEqual(["story-xfleex:approval:release", "story-xfleex:b:f1"]);
+    expect(itemCards.some((i) => i.cardId === "story-cond")).toBe(false);
+    // o humano continua vendo tudo: a exclusão é só do conjunto acionável do tick
+    const inbox = await collectBoardCockpitItems("acme");
+    expect(inbox.filter((i) => i.cardId === "story-cond").map((i) => i.id).sort()).toEqual(["story-cond:approval:release", "story-cond:b:f9"]);
+  });
+
   it("policy ILEGÍVEL (board.yaml sumiu) ⇒ fail-safe no conservador, não no Autônomo", async () => {
     mockGetBoard.mockResolvedValue({ config: config({ mode: "autonomous", riskMatrix: { deploy: "auto" } }), cards });
     mockReadBoardConfig.mockRejectedValue(new Error("ENOENT"));

@@ -19,6 +19,7 @@ import { coerceWsjf } from "./wsjf";
 import { DEPLOY_STEP_ID, releaseModeOf, withDerivedDeployAutorun } from "./release-policy";
 import { mergeById } from "./gate-core";
 import { conductorConfigProblem } from "./driver";
+import { laneViewProblems } from "./lanes";
 import {
   isBugSeverity,
   isBugFrequency,
@@ -46,8 +47,13 @@ import type {
   CardRouting,
   CardType,
   ColumnDef,
+  AutonomyPolicy,
+  BoardViewConfig,
   ConductorPolicy,
   CommitRange,
+  LaneDef,
+  LaneDemand,
+  ProxyAnswerRecord,
   CriterionSpec,
   DiffSnapshot,
   FailureClass,
@@ -87,8 +93,11 @@ import {
   FINDING_SEVERITIES,
   FINDING_STATUSES,
   GATE_IDS,
+  isAutonomyMode,
   isCardDriver,
   isCardProvenance,
+  isQuestionCategory,
+  LANE_DEMANDS,
   isReopenMode,
   isRoutingDecidedBy,
   MODEL_TIERS,
@@ -244,6 +253,27 @@ function coerceCriteriaSpecs(raw: unknown): CriterionSpec[] | undefined {
   return out.length ? out : undefined;
 }
 
+/**
+ * The PROXY's audit trail on an answered question (ultra mode). Strict where it matters: without non-empty
+ * premissas or a finite 0..1 confidence the record is DROPPED whole — a proxy answer that cannot say what it
+ * assumed is not auditable, and a hand-authored husk must not pass for one. Tolerant on the rest.
+ */
+function coerceProxyAnswer(raw: unknown): ProxyAnswerRecord | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const r = raw as Record<string, unknown>;
+  const assumptions = typeof r.assumptions === "string" ? r.assumptions.trim() : "";
+  const confidence = Number(r.confidence);
+  if (!assumptions || r.confidence == null || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) return undefined;
+  const out: ProxyAnswerRecord = { assumptions, confidence };
+  if (r.runId != null && String(r.runId)) out.runId = String(r.runId);
+  if (r.declined === true) out.declined = true;
+  if (r.audit === true) out.audit = true;
+  const auditedAt = r.auditedAt != null ? toDateString(r.auditedAt) : null;
+  if (auditedAt) out.auditedAt = auditedAt;
+  if (r.auditOutcome === "confirmed" || r.auditOutcome === "reopened") out.auditOutcome = r.auditOutcome;
+  return out;
+}
+
 /** Coerce the card's HITL questions (tolerant; drops text-less entries). Returns undefined when none
  * so the field stays sparse on lean cards (mirrors labels/severity). */
 function coerceQuestions(raw: unknown): CardQuestion[] | undefined {
@@ -293,6 +323,10 @@ function coerceQuestions(raw: unknown): CardQuestion[] | undefined {
       if (o.context != null && String(o.context)) question.context = String(o.context);
       if (o.recommendation != null && String(o.recommendation))
         question.recommendation = String(o.recommendation);
+      // The autonomy key reads the asker's CATEGORY; an unknown one is dropped (uncategorized ⇒ the owner's).
+      if (isQuestionCategory(o.category)) question.category = o.category;
+      const proxy = coerceProxyAnswer(o.proxy);
+      if (proxy) question.proxy = proxy;
       return question;
     })
     .filter((q) => q.text);
@@ -767,13 +801,70 @@ export function coerceOrchestrator(raw: unknown): OrchestratorPolicy | undefined
 export function coerceConductor(raw: unknown): ConductorPolicy | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const r = raw as Record<string, unknown>;
-  const fromStatus = typeof r.fromStatus === "string" ? r.fromStatus.trim() : "";
+  // A string (one status) or a LIST (the acceptance routes by type). The list keeps its non-empty, trimmed,
+  // de-duplicated ids in the authored order; a list with none left is "no fromStatus" (dropped whole, like
+  // an empty string). The SHAPE is kept as authored so a save round-trips what the owner wrote.
+  let fromStatus: string | string[] | null = null;
+  if (typeof r.fromStatus === "string") fromStatus = r.fromStatus.trim() || null;
+  else if (Array.isArray(r.fromStatus)) {
+    const ids = [...new Set(r.fromStatus.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean))];
+    fromStatus = ids.length ? ids : null;
+  }
   if (!fromStatus) return undefined;
   const out: ConductorPolicy = { enabled: r.enabled === true, fromStatus };
   const max = Number(r.maxSessions);
   if (r.maxSessions != null && Number.isFinite(max) && max >= 1) out.maxSessions = Math.floor(max);
   const model = coerceModel(r.model);
   if (model) out.model = model;
+  return out;
+}
+
+/**
+ * The board VIEW (board.yaml `view:`) — today only `lanes`. Tolerant on shape: a lane needs a non-empty `id` and
+ * `label` (else it is dropped — a lane with no name cannot be rendered honestly); `statuses` keeps its trimmed
+ * string ids; `demand` is `true` or a list of KNOWN demand kinds (unknown kinds dropped; nothing left ⇒ no
+ * demand). Whether every status maps to exactly one lane is the lint's job (lanes.ts `laneViewProblems`), not
+ * the reader's: a view never makes a board go dark. Absent/empty ⇒ undefined (byte-identical legacy Kanban).
+ */
+export function coerceBoardView(raw: unknown): BoardViewConfig | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const r = raw as Record<string, unknown>;
+  if (!Array.isArray(r.lanes)) return undefined;
+  const lanes: LaneDef[] = [];
+  for (const item of r.lanes) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const l = item as Record<string, unknown>;
+    const id = typeof l.id === "string" ? l.id.trim() : "";
+    const label = typeof l.label === "string" ? l.label.trim() : "";
+    if (!id || !label) continue;
+    const statuses = Array.isArray(l.statuses)
+      ? l.statuses.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean)
+      : [];
+    const lane: LaneDef = { id, label, statuses };
+    if (l.demand === true) lane.demand = true;
+    else if (Array.isArray(l.demand)) {
+      const kinds = l.demand.filter((x): x is LaneDemand => typeof x === "string" && (LANE_DEMANDS as string[]).includes(x));
+      if (kinds.length) lane.demand = [...new Set(kinds)];
+    }
+    lanes.push(lane);
+  }
+  return lanes.length ? { lanes } : undefined;
+}
+
+/**
+ * The board's AUTONOMY KEY (board.yaml `autonomy:`). Strict on the one value that matters: an unknown `mode`
+ * drops the block whole (⇒ `human`, the owner decides) — a typo must never silently hand decisions to a proxy.
+ * `proxyModel` keeps a known tier; `auditSampleRate` keeps a finite number clamped to [0, 1]. Absent ⇒ undefined.
+ */
+export function coerceAutonomy(raw: unknown): AutonomyPolicy | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const r = raw as Record<string, unknown>;
+  if (!isAutonomyMode(r.mode)) return undefined;
+  const out: AutonomyPolicy = { mode: r.mode };
+  const model = coerceModel(r.proxyModel);
+  if (model) out.proxyModel = model;
+  const rate = Number(r.auditSampleRate);
+  if (r.auditSampleRate != null && r.auditSampleRate !== "" && Number.isFinite(rate)) out.auditSampleRate = Math.min(1, Math.max(0, rate));
   return out;
 }
 
@@ -994,6 +1085,8 @@ export function coerceCard(
       data.serves != null && String(data.serves).trim() ? String(data.serves).trim() : undefined,
     // Per-instance routing override (pipeline-owned) — sparse: null when no skip set is persisted.
     routing: coerceRouting(data.routing),
+    // The per-story autonomy exception (sparse): only a known mode survives the read.
+    autonomyMode: isAutonomyMode(data.autonomyMode) ? data.autonomyMode : undefined,
     release: data.release != null ? String(data.release) : null,
     // SM-02: sparse flag — only retained when explicitly true on disk.
     unplaced: data.unplaced === true ? true : undefined,
@@ -1603,6 +1696,8 @@ async function resolveBoardConfigFromOwnRaw(
   // passo `Publicar`, que é DERIVADO daqui em vez de autorado (ver `withDerivedDeployAutorun`).
   const releaseMode = releaseModeOf(parsed as Pick<BoardConfig, "release">);
   const conductor = coerceConductor((parsed as { conductor?: unknown }).conductor);
+  const view = coerceBoardView((parsed as { view?: unknown }).view);
+  const autonomy = coerceAutonomy((parsed as { autonomy?: unknown }).autonomy);
   const config: BoardConfig = {
     id: parsed.id ?? boardId,
     name: parsed.name ?? boardId,
@@ -1637,6 +1732,10 @@ async function resolveBoardConfigFromOwnRaw(
     // que os vizinhos (`deploy`, `faceUrl`, `sharedPackages`) documentam: yaml declara, Zod aceita, o
     // coerce (whitelist) descarta. Spread condicional para board sem o bloco não carregar chave fantasma.
     ...(conductor ? { conductor } : {}),
+    // A VISTA em raias e a CHAVE DE AUTONOMIA — mesmas razões (whitelist): sem estas linhas o bloco seria
+    // declarado, aceito pelo contrato e INERTE. Spread condicional: board sem o bloco não carrega chave fantasma.
+    ...(view ? { view } : {}),
+    ...(autonomy ? { autonomy } : {}),
     // Strategy bench artifacts (owner:human) — declared in BoardConfigSchema but historically dropped
     // here, which broke the governance round-trip (approve→write→read showed the stale value). Coerced +
     // persisted (deriveBoardConfigForPersist) so the strategy ladder (Posicionamento/Métrica/Resultado-alvo)
@@ -1670,6 +1769,9 @@ async function resolveBoardConfigFromOwnRaw(
   // declarado, aceito pelo contrato e INERTE — o pior modo de falha. Grita; nunca apaga o board por isso.
   const conductorProblem = conductorConfigProblem(config);
   if (conductorProblem) console.error(`[storymap] board "${boardId}": ${conductorProblem}`);
+  // E para a vista em raias: status sem raia (ou em duas) é mapa torto — o card cai em "outros" e o dono não
+  // sabe por quê. O mesmo texto aparece na própria vista (KanbanBoard), legível para quem declarou.
+  for (const problem of laneViewProblems(config)) console.error(`[storymap] board "${boardId}" view.lanes: ${problem}`);
   return config;
 }
 
@@ -1810,6 +1912,9 @@ export async function deriveBoardConfigForPersist(
   // A dispatch do condutor é board-local (o `_base` não declara nenhuma): um save de qualquer outra coisa
   // (vocab/canvas/estratégia) não pode apagar a linha do disco — o defeito D15 do kill-switch abaixo.
   if (config.conductor) out.conductor = config.conductor;
+  // A vista em raias e a chave de autonomia: board-locais pelo mesmo motivo — um save de outra coisa não apaga.
+  if (config.view) out.view = config.view;
+  if (config.autonomy) out.autonomy = config.autonomy;
   // story-fr5bnt kill-switch — board-local operational flag (never inherited from _base): persist when
   // set, else ANY board.yaml save (vocab/canvas/strategy) silently DELETED the line from disk (D15).
   if (config.autorunDisabled) out.autorunDisabled = true;

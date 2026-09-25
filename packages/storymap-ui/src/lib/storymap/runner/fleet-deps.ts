@@ -34,6 +34,7 @@ import { recordSessionSpend, type SessionTelemetryDeps } from "./session-telemet
 import { getTelemetryStore } from "./telemetry";
 import type { AgentSession } from "./session-worktree";
 import { withDriver, withoutDriver } from "@/lib/storymap/driver";
+import { maybeSweepProxy } from "./proxy-deps";
 import type { CollectFleetDeps } from "./fleet-view";
 import type { CardClaim } from "./claims";
 
@@ -130,6 +131,9 @@ export async function reconcileFleetNow(): Promise<FleetReconcileResult> {
     console.error("[session-cost] registro dos óbitos falhou:", err instanceof Error ? err.message : err),
   );
   void pumpConductorsNow().catch((err) => console.error("[conductor] pump falhou:", err instanceof Error ? err.message : err));
+  // A rede de segurança do PROXY do modo ultra (runner/proxy.ts): pergunta proxiável que nenhum ask anunciou (uma
+  // skill que escreveu direto no card, um restart no meio) é oferecida ao proxy aqui — no máximo a cada 5 min.
+  void maybeSweepProxy().catch((err) => console.error("[proxy] varredura falhou:", err instanceof Error ? err.message : err));
   return res;
 }
 

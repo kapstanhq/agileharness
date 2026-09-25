@@ -72,6 +72,8 @@ import {
   savePersonaAction,
   saveSystemAction,
   setCardDriverAction,
+  setCardAutonomyAction,
+  resolveProxyAuditAction,
   setCardLinksAction,
   setCardRouteAction,
   setTasksAction,
@@ -100,6 +102,7 @@ import { EFFORT_LEVELS, GOVERNANCE_ARTIFACTS, MODEL_TIERS } from "@/lib/storymap
 import { CANVAS_BLOCK_KEYS } from "@/lib/storymap/canvas-blocks";
 import type { EffortLevel, ModelTier } from "@/lib/storymap/types";
 import { openQuestions } from "@/lib/storymap/questions";
+import { effectiveAutonomy, isOwnerOnlyQuestion } from "@/lib/storymap/autonomy";
 import { PIPELINE_OWNED_FIELDS } from "@/lib/storymap/card-merge";
 import {
   BUG_SEVERITY_IDS,
@@ -521,7 +524,12 @@ export function registerStorymapTools(server: McpServer): void {
       const card = await readCard(board, cardId);
       if (!card) return fail(`card não encontrado: ${board}/${cardId}`);
       // story-33nwyy: por padrão (verbose:false) omite o body pesado; verbose:true devolve o card intacto.
-      const projected = projectCardForGet(card, verbose ?? false);
+      const base = projectCardForGet(card, verbose ?? false);
+      // A CHAVE DE AUTONOMIA efetiva (autonomy.ts) — só quando o board ou o card a declaram (ausente ⇒ a saída de
+      // sempre, byte-idêntica). O condutor lê daqui se a story é ultra (P1/P2/P5 vão ao proxy) ou human.
+      const autonomyCfg = card.autonomyMode ? null : await readBoardConfig(board).catch(() => null);
+      const projected =
+        card.autonomyMode || autonomyCfg?.autonomy ? { ...base, _autonomy: effectiveAutonomy(card, autonomyCfg) } : base;
       // audit #11: when a run is in flight for this card, the on-disk (main) snapshot above is the state
       // from BEFORE the run — under worktree isolation the skill's edits accumulate in its worktree and
       // reach main only at the merge-back. Surface it so the agent doesn't act on stale data nor clobber
@@ -1186,6 +1194,14 @@ export function registerStorymapTools(server: McpServer): void {
       },
     },
     async ({ board, cardId, questionId, answer }) => {
+      // DINHEIRO É DO DONO, em todo modo (autonomy.ts): gasto, fornecedor, preço, publicação externa, PRD. Quem
+      // responde por aqui é um AGENTE — então a pergunta só-do-dono é recusada aqui, e o dono responde pela UI.
+      const target = (await readCard(board, cardId))?.questions?.find((q) => q.id === questionId);
+      if (target && target.status === "open" && isOwnerOnlyQuestion(target)) {
+        return fail(
+          `a pergunta ${questionId} é decisão só do dono (dinheiro/[humano]) — um agente não a responde; ela espera o dono no Inbox (/perguntas).`,
+        );
+      }
       // F6.3 — quem responde via MCP é o AGENTE (copiloto/tick), nunca o humano (o humano usa a UI
       // /perguntas). Carimba answeredBy: "copilot" server-side para a autoria não depender do modelo.
       const r = await answerQuestionAction({ boardId: board, cardId, questionId, answer, answeredBy: "copilot" });
@@ -1204,8 +1220,11 @@ export function registerStorymapTools(server: McpServer): void {
         "loop do agente; a próxima skill as lê como contexto. Dedup por texto (não empilha duplicatas). " +
         "`texts` = perguntas de texto livre (o formato de sempre). `questions` = perguntas ESTRUTURADAS, o formato " +
         "que a fila /perguntas renderiza: `context` (o que está em jogo), 2–8 `options` com `pros`/`cons` curtos e " +
-        "NO MÁXIMO UMA `recommended: true`, `mode` single|multi; sem opções, `recommendation` em prosa. Os dois " +
-        "campos podem vir juntos; ao menos um é obrigatório.",
+        "NO MÁXIMO UMA `recommended: true`, `mode` single|multi; sem opções, `recommendation` em prosa; e a " +
+        "`category` da decisão (interview/ui-choice/delivery/money). Numa story em modo ULTRA, uma pergunta " +
+        "interview/ui-choice é respondida por um PROXY (contexto limpo, guiado pelo PRD/personas/decisões do dono, " +
+        "com premissas registradas); money NUNCA — espera o dono sem travar o resto do board. Os dois campos " +
+        "podem vir juntos; ao menos um é obrigatório.",
       inputSchema: {
         board: z.string(),
         cardId: z.string(),
@@ -1227,6 +1246,15 @@ export function registerStorymapTools(server: McpServer): void {
                 .optional(),
               mode: z.enum(["single", "multi"]).optional().describe("single (padrão) = escolhe uma; multi = várias"),
               recommendation: z.string().optional().describe("só para pergunta SEM opções: a resposta que você recomenda"),
+              category: z
+                .enum(["interview", "ui-choice", "delivery", "money"])
+                .optional()
+                .describe(
+                  "O TIPO da decisão (a chave de autonomia lê daqui): interview (produto/usuário), ui-choice (qual " +
+                    "variante de tela), delivery (aprovar entrega), money (gasto, fornecedor, preço, publicação " +
+                    "externa, PRD/metas — SEMPRE do dono). Numa story ULTRA, interview/ui-choice vão a um PROXY; sem " +
+                    "categoria a pergunta é do dono.",
+                ),
             }),
           )
           .optional()
@@ -1333,6 +1361,52 @@ export function registerStorymapTools(server: McpServer): void {
           ? { proximo: "o card voltou à cascata — a próxima entrada de coluna (ou run_skill) roda a skill da coluna" }
           : {}),
       });
+    },
+  );
+
+  // ---- A CHAVE DE AUTONOMIA (autonomy.ts) — decisões do DONO: montadas só no token `full` ----------------
+
+  defineTool(server,
+    "set_card_autonomy",
+    {
+      title: "Definir o modo de autonomia da story (human × ultra)",
+      description:
+        "A EXCEÇÃO por story à chave de autonomia do board (board.yaml `autonomy.mode`). `ultra`: as perguntas de " +
+        "entrevista e de escolha de tela desta story vão a um PROXY (execução headless com contexto limpo, guiada " +
+        "pelo PRD, personas e decisões passadas do dono; respostas com premissas e amostra de auditoria no Inbox). " +
+        "`human`: o dono responde tudo, mesmo num board ultra. `null`: volta a seguir o board. Dinheiro nunca vai " +
+        "ao proxy em modo nenhum. Decisão do DONO (só o token full monta esta tool).",
+      inputSchema: {
+        board: z.string(),
+        cardId: z.string(),
+        mode: z.enum(["human", "ultra"]).nullable().describe("\"human\", \"ultra\" ou null (segue o board)"),
+      },
+    },
+    async ({ board, cardId, mode }) => {
+      const r = await setCardAutonomyAction({ boardId: board, cardId, mode });
+      if (!r.ok) return fail(r.error);
+      return json({ ok: true, cardId, autonomyMode: r.data?.card.autonomyMode ?? null, effective: r.data?.effective, changed: r.data?.changed ?? false });
+    },
+  );
+
+  defineTool(server,
+    "resolve_proxy_audit",
+    {
+      title: "Fechar a auditoria de uma resposta do proxy",
+      description:
+        "O dono revisa uma resposta que o PROXY (modo ultra) deu no lugar dele e que caiu na amostra de auditoria " +
+        "(Inbox → Auditoria do proxy). `confirmed` mantém a resposta; `reopened` devolve a pergunta ao dono (aberta " +
+        "de novo, com o que o proxy assumiu no contexto — e o proxy nunca mais a responde). Decisão do DONO.",
+      inputSchema: {
+        board: z.string(),
+        cardId: z.string(),
+        questionId: z.string(),
+        outcome: z.enum(["confirmed", "reopened"]),
+      },
+    },
+    async ({ board, cardId, questionId, outcome }) => {
+      const r = await resolveProxyAuditAction({ boardId: board, cardId, questionId, outcome });
+      return r.ok ? json({ ok: true, cardId, questionId, outcome }) : fail(r.error);
     },
   );
 

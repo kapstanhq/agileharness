@@ -1,4 +1,5 @@
 import { getBoard, readBoardConfig } from "@/lib/storymap/repo";
+import { conductedCardIds } from "@/lib/storymap/driver";
 import { AUTONOMO_DOCTRINE_VERSION, copilotTier } from "@/lib/storymap/copilot/tier";
 import {
   boardCockpitItems,
@@ -22,7 +23,7 @@ import {
 } from "@/lib/storymap/inbox-seen";
 import { listGovernanceDrafts, readProposal, readWireframe } from "@/lib/storymap/sidecars";
 import { listApprovalRequests } from "@/lib/storymap/approvals";
-import type { WireframeDoc } from "@/lib/storymap/types";
+import type { Card, WireframeDoc } from "@/lib/storymap/types";
 import type { ProposalDoc } from "@/lib/storymap/smart-capture/types";
 import { getTelemetryStore, type CardMetrics } from "@/lib/storymap/runner/telemetry";
 import { getRunnerRegistry } from "@/lib/storymap/runner/registry";
@@ -71,8 +72,14 @@ export function isStuckCardMetric(m: Pick<CardMetrics, "lastStatus" | "lastAdvan
  * reads) — server-only.
  */
 export async function collectBoardCockpitItems(boardId: string): Promise<CockpitItem[]> {
+  return (await collectBoardCockpit(boardId)).items;
+}
+
+/** {@link collectBoardCockpitItems} + the cards it read — for a caller that must judge items BY their card (the
+ *  tick's conducted-card guard) without a second board read that could disagree with the first. */
+async function collectBoardCockpit(boardId: string): Promise<{ items: CockpitItem[]; cards: Card[] }> {
   const board = await getBoard(boardId);
-  if (!board) return [];
+  if (!board) return { items: [], cards: [] };
 
   const { config, cards } = board;
 
@@ -180,7 +187,7 @@ export async function collectBoardCockpitItems(boardId: string): Promise<Cockpit
     .catch(() => ({} as Record<string, NoopStreak>));
 
   // Merge all items and re-sort: lane urgency (travado<pergunta<aprovar) then age (oldest-first).
-  return [
+  const items = [
     ...cardItems,
     ...stuckLive,
     ...conflictItems,
@@ -204,6 +211,7 @@ export async function collectBoardCockpitItems(boardId: string): Promise<Cockpit
         (LANE_RANK[a.lane] ?? 9) - (LANE_RANK[z.lane] ?? 9) ||
         (a.since || "9999").localeCompare(z.since || "9999"),
     );
+  return { items, cards };
 }
 
 /**
@@ -252,7 +260,14 @@ export async function collectActionableCockpit(
   boardId: string,
 ): Promise<{ count: number; sig: string; ids: string[]; itemCards: Array<{ id: string; cardId: string }> }> {
   const tier = copilotTier(await readBoardConfig(boardId).then((c) => c.orchestrator).catch(() => null));
-  const items = (await collectBoardCockpitItems(boardId)).filter((i) => isCopilotActionable(i, tier));
+  const { items: all, cards } = await collectBoardCockpit(boardId);
+  // A card a CONDUCTOR drives (`routing.driver: conductor`) is not the tick's: its conductor session owns its work
+  // AND its placement, and the operator owns it when that session dies (a copiloto answering its question,
+  // re-driving it or pushing it through a gate would race the conductor — or overrule the operator). Filtered HERE,
+  // at the one source of the tick's work set, so `hasWork`, the per-item noop attribution and the steward's item
+  // map all agree that these items are not work. They stay on the Inbox for the human (collectBoardCockpitItems).
+  const conducted = conductedCardIds(cards);
+  const items = all.filter((i) => isCopilotActionable(i, tier) && !(i.cardId && conducted.has(i.cardId)));
   const ids = items.map((i) => i.id).sort();
   return { count: items.length, sig: ids.join("|"), ids, itemCards: items.map((i) => ({ id: i.id, cardId: i.cardId })) };
 }

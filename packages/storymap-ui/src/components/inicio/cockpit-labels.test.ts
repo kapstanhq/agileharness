@@ -103,6 +103,7 @@ const SNIPPET_FIXTURE: Record<CockpitItemKind, Record<string, unknown>> = {
   "deploy-unsettled": { deployFiredAt: "2026-07-22T10:00:00.000Z" },
   "release-aging": { stagedAt: "2026-07-18T10:00:00.000Z", ageDays: 4 },
   "merge-failed": { runId: "r1", branch: "failed/run/r1", failureReason: "o gate reprovou" },
+  "proxy-audit": { prompt: "Quem é o público?", answer: "Leitoras", assumptions: "PRD", confidence: 0.8 },
 };
 
 const ALL_KINDS = Object.keys(SNIPPET_FIXTURE) as CockpitItemKind[];

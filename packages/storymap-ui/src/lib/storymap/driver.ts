@@ -13,6 +13,11 @@ export function isConducted(card: Pick<Card, "routing"> | null | undefined): boo
   return card?.routing?.driver === "conductor";
 }
 
+/** The ids of the conducted cards among `cards` — what the copiloto tick and the steward must leave alone. PURE. */
+export function conductedCardIds(cards: ReadonlyArray<Pick<Card, "id" | "routing">>): Set<string> {
+  return new Set(cards.filter((c) => isConducted(c)).map((c) => c.id));
+}
+
 /**
  * The card's routing with `driver` set — or null when it already carries that driver (no write needed, which
  * keeps a re-dispatch or a watcher echo from producing a card write that re-triggers the watcher). An absent
@@ -74,9 +79,16 @@ export function conductorCommand(board: string, cardId: string): string {
 
 /** A board's conductor policy with the defaults applied. */
 export interface ResolvedConductorPolicy {
-  fromStatus: string;
+  /** every status whose ENTRY is the "go" — the string form resolves to a one-element list. */
+  fromStatuses: string[];
   maxSessions: number;
   model: ModelTier;
+}
+
+/** The authored `fromStatus` (string or list) as a list of non-empty ids. PURE. */
+export function conductorFromStatuses(fromStatus: string | string[] | null | undefined): string[] {
+  const raw = Array.isArray(fromStatus) ? fromStatus : fromStatus ? [fromStatus] : [];
+  return [...new Set(raw.filter((s) => typeof s === "string" && s.trim()).map((s) => s.trim()))];
 }
 
 /** The tier a conductor runs on when the board names none: one context carries the whole story. */
@@ -85,9 +97,10 @@ export const CONDUCTOR_DEFAULT_MODEL: ModelTier = "opus";
 /** The board's conductor policy, resolved — or null when absent or not enabled. PURE. */
 export function resolveConductorPolicy(config: Pick<BoardConfig, "conductor"> | null | undefined): ResolvedConductorPolicy | null {
   const c = config?.conductor;
-  if (!c || c.enabled !== true || !c.fromStatus) return null;
+  const fromStatuses = conductorFromStatuses(c?.fromStatus);
+  if (!c || c.enabled !== true || !fromStatuses.length) return null;
   return {
-    fromStatus: c.fromStatus,
+    fromStatuses,
     maxSessions: c.maxSessions && c.maxSessions >= 1 ? Math.floor(c.maxSessions) : CONDUCTOR_DEFAULT_MAX_SESSIONS,
     model: c.model ?? CONDUCTOR_DEFAULT_MODEL,
   };
@@ -108,7 +121,9 @@ export type ConductorEntryVerdict = { dispatch: true } | { dispatch: false; reas
 export function conductorEntryVerdict(card: Pick<Card, "type" | "status" | "capture" | "container">, config: BoardConfig): ConductorEntryVerdict {
   const policy = resolveConductorPolicy(config);
   if (!policy) return { dispatch: false, reason: "conductor desligado neste board" };
-  if (card.status !== policy.fromStatus) return { dispatch: false, reason: `status '${card.status}' ≠ fromStatus '${policy.fromStatus}'` };
+  if (!card.status || !policy.fromStatuses.includes(card.status)) {
+    return { dispatch: false, reason: `status '${card.status}' fora de fromStatus [${policy.fromStatuses.join(", ")}]` };
+  }
   if (card.type !== "story") return { dispatch: false, reason: `card do tipo '${card.type}' não é conduzido (só story)` };
   if (card.capture || card.container) return { dispatch: false, reason: "contêiner (captura/guia) não é conduzido" };
   if (config.statuses.find((s) => s.id === card.status)?.terminal) return { dispatch: false, reason: "fromStatus é terminal" };
@@ -125,8 +140,12 @@ export function conductorEntryVerdict(card: Pick<Card, "type" | "status" | "capt
 export function conductorConfigProblem(config: Pick<BoardConfig, "conductor" | "statuses">): string | null {
   const c = config.conductor;
   if (!c?.enabled) return null;
-  const st = config.statuses.find((s) => s.id === c.fromStatus);
-  if (!st) return `conductor.fromStatus '${c.fromStatus}' não é um status deste board — a dispatch do condutor NUNCA dispararia`;
-  if (st.terminal) return `conductor.fromStatus '${c.fromStatus}' é terminal — um card pronto nunca ganha condutor`;
+  // Each id of the list is judged on its own: ONE typo in a list of four is a quarter of the acceptances that
+  // never get a conductor — as inert as a wrong single status, just harder to notice.
+  for (const id of conductorFromStatuses(c.fromStatus)) {
+    const st = config.statuses.find((s) => s.id === id);
+    if (!st) return `conductor.fromStatus '${id}' não é um status deste board — a dispatch do condutor NUNCA dispararia para ele`;
+    if (st.terminal) return `conductor.fromStatus '${id}' é terminal — um card pronto nunca ganha condutor`;
+  }
   return null;
 }

@@ -85,6 +85,7 @@ describe("MCP containment is STRUCTURAL — no spawn site may inherit the host's
     "engine.ts",
     "deploy-agent-spawn.ts",
     "peer-review-spawn.ts",
+    "proxy-spawn.ts", // lanes-ultra — o proxy do modo ultra (zero MCP: mcpContainmentFlags sem mounts)
     "resolution-judge-spawn.ts",
     "orchestrator-spawn.ts",
   ];

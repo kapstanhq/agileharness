@@ -10,6 +10,7 @@ import { STORY_TYPE_BY_ID, DISPOSITION_BY_ID } from "@/lib/storymap/frameworks";
 import Link from "next/link";
 import { isDeliveryStory, needsPlacement, servesTarget } from "@/lib/storymap/unplaced";
 import { cardDemands, dominantDemand } from "@/lib/storymap/demands";
+import { effectiveAutonomy } from "@/lib/storymap/autonomy";
 import type { BoardConfig, Card, StatusDef } from "@/lib/storymap/types";
 import { VocabChips } from "./Chip";
 import {
@@ -54,6 +55,9 @@ interface KanbanCardProps {
   /** ADR-059 delivery stepper: advance this card to the next delivery step (Aprovar/Publicar). Only
    *  wired by the DeliveryStepperLane — a card in a `laneStep` status shows the inline stepper + buttons. */
   onAdvance?: (cardId: string, toStatus: string) => void;
+  /** LANE VIEW (lanes.ts): the card's real status (+ integrando/publicando) as tags — the lane folds the steps
+   *  away, so the card carries them. Absent (the legacy Kanban) ⇒ the phase progress line as before. */
+  laneTags?: string[];
 }
 
 function KanbanCardImpl({
@@ -65,6 +69,7 @@ function KanbanCardImpl({
   focused = false,
   cardsById,
   onAdvance,
+  laneTags,
 }: KanbanCardProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: card.id,
@@ -135,7 +140,9 @@ function KanbanCardImpl({
   const laneRoutine = isTerminal || !!def?.laneStep;
   const signalDemands = cardDemands(card, config, config.id).filter((d) => !(laneRoutine && d.type === "gate"));
   const cardSignal = dominantDemand(signalDemands);
-  const showStatus = !overlay && !isTerminal && !def?.laneStep && !!def;
+  const showStatus = !overlay && !isTerminal && !def?.laneStep && !!def && !laneTags;
+  // The AUTONOMY KEY on the card (autonomy.ts): an `ultra` story says so — its proxiable decisions go to the proxy.
+  const autonomy = effectiveAutonomy(card, config);
 
   return (
     <div
@@ -187,6 +194,18 @@ function KanbanCardImpl({
             sinal — construído e invisível; o stepper de coluna sozinho mentia por omissão. */}
         <div className="flex items-center gap-2">
           <KanbanTypeLabel card={card} />
+          {autonomy.mode === "ultra" && (
+            <span
+              title={
+                autonomy.source === "card"
+                  ? "Modo ultra (exceção desta story): o proxy responde entrevista e escolha de tela; dinheiro segue com você."
+                  : "Modo ultra (do board): o proxy responde entrevista e escolha de tela; dinheiro segue com você."
+              }
+              className="rounded px-1 py-px text-[9.5px] font-semibold uppercase tracking-wide text-accent ring-1 ring-inset ring-accent/40"
+            >
+              ultra
+            </span>
+          )}
           {!overlay && !isTerminal && (
             <span className="ml-auto flex min-w-0 items-center gap-1.5 text-[11px]">
               <RunSubstateBadge boardId={config.id} cardId={card.id} size="sm" substate={substate} />
@@ -246,6 +265,24 @@ function KanbanCardImpl({
             <span className="min-w-0 truncate">{def!.name}</span>
           </div>
         ) : null}
+
+        {/* LANE VIEW — the step the lane folds away, as quiet tags: the real status first, then the train /
+            publish state it rests in. */}
+        {laneTags && laneTags.length > 0 && !overlay && (
+          <div className="mt-2 flex flex-wrap items-center gap-1" title={`Status: ${laneTags[0]}`}>
+            {laneTags.map((t, i) => (
+              <span
+                key={t}
+                className={cn(
+                  "rounded px-1.5 py-0.5 text-[10.5px] font-medium leading-none",
+                  i === 0 ? "bg-surface-hover text-fg-muted" : "bg-fg/[0.06] uppercase tracking-wide text-fg-subtle",
+                )}
+              >
+                {t}
+              </span>
+            ))}
+          </div>
+        )}
 
         {/* ADR-059 entrega: the delivery stepper — evolving step text + counter + Aprovar/Publicar. Only
             renders for a card sitting in a `laneStep` step (the entrega lane); a no-op everywhere else. */}
@@ -321,6 +358,8 @@ function kanbanCardPropsEqual(prev: KanbanCardProps, next: KanbanCardProps): boo
     prev.focused === next.focused &&
     prev.onOpen === next.onOpen &&
     prev.onAdvance === next.onAdvance &&
+    (prev.laneTags ?? []).join("\u0000") === (next.laneTags ?? []).join("\u0000") &&
+    a.autonomyMode === b.autonomyMode &&
     prev.config === next.config &&
     prev.cardsById === next.cardsById
   );
