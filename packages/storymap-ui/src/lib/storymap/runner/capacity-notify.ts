@@ -9,7 +9,8 @@
 //   · `extra-usage`— o uso extra PAGO foi ligado (e, se novo, travou a frota) → `capacity-extra-usage` (empurra);
 //   · `held-24h`   — um trabalho automático está retido há mais de 24h       → `capacity-held-24h` (só o painel);
 //   · `meter-stale`— o medidor de uso parou (a frota fica retida sem ninguém ver) → `capacity-meter-stale` (empurra).
-// Espera por ritmo diário, leitura defasada ou teto de 5h NÃO notificam: são o governador funcionando.
+// Espera por ritmo diário, leitura defasada por pouco tempo ou teto de 5h NÃO notificam: são o governador
+// funcionando. Uma leitura parada além de `governor.meterStallMinutes` já não é "defasada": é o `meter-stale`.
 
 import type { AgentAlert } from "@/lib/notifications/event";
 import { ALERT_URGENCY } from "@/lib/notifications/event";

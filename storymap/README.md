@@ -573,9 +573,13 @@ contexto; as colunas viram PROJEÇÃO do progresso dela.
   `runner_status({board, cardId})` mostra `conductorSessions[]` e `spentIncludingLiveSessionsUSD`.
 - **Ferramentas MCP do condutor:** `set_tasks` (tasks na main — só a sessão com o claim do card),
   `add_finding` (finding na main; id estável = idempotente), `ask_question` com `questions[]`
-  estruturadas, `set_card_driver`, `claim_card`/`release_claim` (o claim da PRÓPRIA sessão),
-  `approve_qa`/`approve_review` (colunas resolvidas pelo pipeline do board: o passo que roda
-  `harness-qa`, o com gate `hasQaPassed`, o que roda `harness-review`).
+  estruturadas, `set_card_driver`, `claim_card`/`release_claim` (o claim da PRÓPRIA sessão).
+- **O carimbo de QA do condutor** vai pelo MESMO caminho honesto da `harness-qa`: `qaPassed`/`qaRanAt`/
+  `qaCommit` + `qaEvidence {suite, visual, at}` no card do PRÓPRIO worktree, levados à main pelo train junto com o
+  código (o merge 3-way do card toma o lado do run nos campos de pipeline). `suite: true` só se ele rodou a
+  suíte do pacote no worktree e deu verde (comando e contagem de testes no journal); `visual: true` só se o
+  verificador de contexto limpo varreu a tela e julgou os PNGs. `approve_qa`/`approve_review` são do
+  OPERADOR (a saída humana do gate honesto): o condutor nunca os chama — sem a prova, ele PARA e diz qual falta.
 
 ### Vista em raias (`view.lanes`)
 
