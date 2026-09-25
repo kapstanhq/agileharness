@@ -48,6 +48,7 @@ import {
   type Card,
   type EffortLevel,
   type McpLevel,
+  type MergeGateUnitDecl,
   type ModelTier,
   type OrchestratorSettings,
   type RiskClass,
@@ -170,6 +171,10 @@ export const DEFAULT_RUNNER_SETTINGS: RunnerSettings = {
       // Typecheck DEFAULT ON (D8: gate nunca cego) — a atribuição por árvore o torna seguro: base
       // vermelha é perdoada e nomeada, nunca congela a fila. Só roda em unidade com tsconfig.json.
       typecheck: { enabled: true, command: GATE_TYPECHECK_COMMAND },
+      // O SELO DEFAULT ON (gate honesto): o código do delta roda numa unidade transiente do systemd. Só vale
+      // quando a SONDA prova o selo no host; sem systemd o gate cai para `none` com aviso — ligar por default
+      // não trava adotante nenhum, e desligar é uma declaração (`isolation: none`). Ver runner/gate-sandbox.ts.
+      isolation: "systemd",
     },
     // Merge-train re-drive (story-92ldyt): a conflict re-runs the generating skill against the updated
     // main instead of pausing, up to this cap, then degrades to the legacy `conflict` pause.
@@ -277,6 +282,96 @@ function coerceLane(raw: any, defaultMax: number): { maxConcurrent: number; memo
   return lane;
 }
 
+const GATE_REPORTERS = ["vitest-json", "junit-xml", "exit-code"] as const;
+type GateReporterName = (typeof GATE_REPORTERS)[number];
+
+/**
+ * UMA unidade declarada do gate (string legada OU objeto). Devolve `null` para a declaração inutilizável —
+ * e AVISA, nomeando a chave: uma unidade descartada em silêncio é um pacote que "tem gate" e não tem. O
+ * reporter desconhecido DESCARTA (em vez de cair no vitest): rodar uma suíte com o leitor errado é medir
+ * outra coisa. `network` inválido cai no default `deny`, o lado seguro. Exportada para teste.
+ */
+export function coerceGateUnit(key: string, raw: unknown): string | MergeGateUnitDecl | null {
+  if (typeof raw === "string") return raw.trim() ? raw.trim() : null;
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const command = asNonEmptyString(r.command);
+  if (!command) {
+    console.warn(`[storymap] mergeGate.scope: unidade "${key}" sem \`command\` — IGNORADA (o delta dela cai no fallback).`);
+    return null;
+  }
+  if (r.reporter !== undefined && !GATE_REPORTERS.includes(r.reporter as GateReporterName)) {
+    console.warn(
+      `[storymap] mergeGate.scope: unidade "${key}" com reporter desconhecido ${JSON.stringify(r.reporter)} — IGNORADA ` +
+        `(válidos: ${GATE_REPORTERS.join(", ")}). Rodar a suíte com o leitor errado seria medir outra coisa.`,
+    );
+    return null;
+  }
+  const junitPath = asNonEmptyString(r.junitPath);
+  const cwd = asNonEmptyString(r.cwd);
+  const triggers = asStringArray(r.triggers);
+  return {
+    command,
+    ...(r.reporter ? { reporter: r.reporter as GateReporterName } : {}),
+    ...(typeof r.affected === "boolean" ? { affected: r.affected } : {}),
+    ...(junitPath ? { junitPath } : {}),
+    ...(r.network === "allow" || r.network === "deny" ? { network: r.network } : {}),
+    ...(cwd ? { cwd } : {}),
+    ...(triggers.length ? { triggers } : {}),
+  };
+}
+
+/** O mapa `packages`/`units` inteiro: só entram as unidades que {@link coerceGateUnit} aceitou. */
+function coerceGateUnitMap(raw: unknown): Record<string, string | MergeGateUnitDecl> {
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<string, string | MergeGateUnitDecl> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    const u = coerceGateUnit(k, v);
+    if (u !== null) out[k] = u;
+  }
+  return out;
+}
+
+/**
+ * P-7 — o escopo do gate. Coerção EXPLÍCITA e não um spread: Zod/coerce que não conhece um campo o DROPA, e
+ * um campo dropado é uma capacidade INERTE que parece ligada (foi o que aconteceu com `deploy.surfaces`,
+ * inerte por dias porque o coerce não o carregava). Exportada para teste.
+ */
+export function coerceGateScope(sc: Record<string, unknown>): NonNullable<NonNullable<RunnerSettings["autorun"]["mergeGate"]>["scope"]> {
+  const units = coerceGateUnitMap(sc.units);
+  const fb = sc.fallback && typeof sc.fallback === "object" ? (sc.fallback as Record<string, unknown>) : null;
+  // Mesma disciplina: `cwd` não-vazio é o mínimo que torna a declaração do fallback útil; sem ele a entrada
+  // é ignorada e cai no default histórico, que é o comportamento de hoje. Os campos de medição (reporter,
+  // junitPath, network, affected) passam pela MESMA régua de uma unidade — o fallback também é uma unidade.
+  let fallback: { cwd: string; command?: string } & Omit<Partial<MergeGateUnitDecl>, "command" | "cwd" | "triggers"> | undefined;
+  if (fb && asNonEmptyString(fb.cwd)) {
+    const cmd = asNonEmptyString(fb.command);
+    const asUnit = coerceGateUnit("fallback", { ...fb, command: cmd ?? "(checkCommand)" });
+    fallback = { cwd: asNonEmptyString(fb.cwd)!, ...(cmd ? { command: cmd } : {}) };
+    if (asUnit && typeof asUnit === "object") {
+      if (asUnit.reporter) fallback.reporter = asUnit.reporter;
+      if (asUnit.affected !== undefined) fallback.affected = asUnit.affected;
+      if (asUnit.junitPath) fallback.junitPath = asUnit.junitPath;
+      if (asUnit.network) fallback.network = asUnit.network;
+    }
+  }
+  return {
+    packages: coerceGateUnitMap(sc.packages),
+    ...(Object.keys(units).length ? { units } : {}),
+    ...(asPosInt(sc.maxUnits) ? { maxUnits: asPosInt(sc.maxUnits)! } : {}),
+    ...(fallback ? { fallback } : {}),
+  };
+}
+
+/** `systemd`/`none`; qualquer outra coisa mantém o default (nunca desliga o selo por um typo). */
+function coerceGateIsolation(v: unknown, dflt: "systemd" | "none" | undefined): "systemd" | "none" | undefined {
+  if (v === "systemd" || v === "none") return v;
+  if (v !== undefined) {
+    console.warn(`[storymap] mergeGate.isolation ${JSON.stringify(v)} desconhecido (válidos: systemd, none) — mantido o default "${dflt}".`);
+  }
+  return dflt;
+}
+
 /** Coerce raw YAML into RunnerSettings, layered over defaults (no ENV yet). */
 export function coerceRunnerSettings(raw: unknown): RunnerSettings {
   const r = (raw && typeof raw === "object" ? raw : {}) as any;
@@ -350,11 +445,13 @@ export function coerceRunnerSettings(raw: unknown): RunnerSettings {
         retryOnNewFailure: typeof mg.retryOnNewFailure === "boolean" ? mg.retryOnNewFailure : (dmg.retryOnNewFailure ?? true),
         // Affected-only selection: opt-in per board. Requires a non-empty `command` template; else it
         // stays whatever the default carries (undefined ⇒ full suite). See runner/affected-gate.ts.
+        // O `command` deixou de ser obrigatório (é legado — a seleção agora é um sufixo por unidade), então um
+        // bloco `affected` sem ele é VÁLIDO; exigir o campo morto dropava o bloco inteiro em silêncio.
         affected:
-          mg.affected && typeof mg.affected === "object" && typeof mg.affected.command === "string" && mg.affected.command.trim()
+          mg.affected && typeof mg.affected === "object"
             ? {
                 enabled: typeof mg.affected.enabled === "boolean" ? mg.affected.enabled : false,
-                command: mg.affected.command.trim(),
+                ...(typeof mg.affected.command === "string" && mg.affected.command.trim() ? { command: mg.affected.command.trim() } : {}),
                 fullSuitePaths: asStringArray(mg.affected.fullSuitePaths),
               }
             : dmg.affected,
@@ -363,28 +460,18 @@ export function coerceRunnerSettings(raw: unknown): RunnerSettings {
         // `deploy.surfaces`, inerte por dias porque o coerce não o carregava). Só entram entradas cujo
         // valor é um comando string não-vazio; o resto é ignorado em silêncio e cai no fallback, que é o
         // comportamento de hoje.
-        scope:
-          mg.scope && typeof mg.scope === "object"
-            ? {
-                packages: Object.fromEntries(
-                  Object.entries((mg.scope.packages ?? {}) as Record<string, unknown>).filter(
-                    (e): e is [string, string] => typeof e[1] === "string" && e[1].trim().length > 0,
-                  ),
-                ),
-                ...(asPosInt(mg.scope.maxUnits) ? { maxUnits: asPosInt(mg.scope.maxUnits)! } : {}),
-                // Mesma disciplina do bloco acima: campo que o coerce não carrega vira capacidade INERTE que
-                // PARECE ligada. `cwd` não-vazio é o mínimo que torna a declaração útil; sem ele a entrada é
-                // ignorada e cai no default histórico, que é o comportamento de hoje.
-                ...(mg.scope.fallback && typeof mg.scope.fallback === "object" && asNonEmptyString((mg.scope.fallback as Record<string, unknown>).cwd)
-                  ? {
-                      fallback: {
-                        cwd: asNonEmptyString((mg.scope.fallback as Record<string, unknown>).cwd)!,
-                        ...(asNonEmptyString((mg.scope.fallback as Record<string, unknown>).command) ? { command: asNonEmptyString((mg.scope.fallback as Record<string, unknown>).command)! } : {}),
-                      },
-                    }
-                  : {}),
-              }
-            : dmg.scope,
+        scope: mg.scope && typeof mg.scope === "object" ? coerceGateScope(mg.scope as Record<string, unknown>) : dmg.scope,
+        // O selo: só os dois valores do contrato. Um valor desconhecido NÃO desliga o selo (cairia no lado
+        // inseguro por um typo) — fica o default, com aviso.
+        isolation: coerceGateIsolation(mg.isolation, dmg.isolation),
+        ...(mg.sealed && typeof mg.sealed === "object"
+          ? {
+              sealed: {
+                inaccessiblePaths: asStringArray((mg.sealed as Record<string, unknown>).inaccessiblePaths),
+                writablePaths: asStringArray((mg.sealed as Record<string, unknown>).writablePaths),
+              },
+            }
+          : {}),
         // Typecheck do gate — MESMA disciplina (coerção EXPLÍCITA, nunca spread): campo que o coerce não
         // carrega vira capacidade INERTE que parece ligada. E aqui o risco tem o sinal INVERTIDO do
         // habitual: o DEFAULT é LIGADO, então dropar a chave não desligaria uma capacidade — LIGARIA uma
@@ -956,6 +1043,13 @@ export function applyEnvOverrides(s: RunnerSettings): RunnerSettings {
     const base = next.autorun.mergeGate ?? { ...DEFAULT_RUNNER_SETTINGS.autorun.mergeGate! };
     next.autorun.mergeGate = { ...base, enabled: env.AGILEHARNESS_AUTORUN_MERGE_GATE === "1" };
   }
+  // O selo do gate: `systemd`/`none` por cima do arquivo. A alavanca de adotante sem systemd que quer
+  // silenciar o aviso de fallback, ou de operador que precisa desligar o selo sem editar o settings. Valor
+  // desconhecido é IGNORADO (nunca desliga o selo por um typo).
+  if (env.AGILEHARNESS_AUTORUN_GATE_ISOLATION === "systemd" || env.AGILEHARNESS_AUTORUN_GATE_ISOLATION === "none") {
+    const base = next.autorun.mergeGate ?? { ...DEFAULT_RUNNER_SETTINGS.autorun.mergeGate! };
+    next.autorun.mergeGate = { ...base, isolation: env.AGILEHARNESS_AUTORUN_GATE_ISOLATION };
+  }
   // Staged release (Fase 4a): a 1/0 master switch over the file value. Ensure the object exists (an old
   // file/default without the section) before flipping it, defaulting branch + codePrefixes. Boot-fixed —
   // the queue reads this once at construction, so this override takes effect on the next service start.
@@ -1118,6 +1212,7 @@ export function activeEnvOverrides(): string[] {
     "AGILEHARNESS_AUTORUN_EXTRA_ARGS",
     "AGILEHARNESS_AUTORUN_WORKTREE",
     "AGILEHARNESS_AUTORUN_MERGE_GATE",
+    "AGILEHARNESS_AUTORUN_GATE_ISOLATION",
     "AGILEHARNESS_AUTORUN_STAGING",
     "AGILEHARNESS_AUTORUN_LANE_LIGHT_MAX",
     "AGILEHARNESS_AUTORUN_LANE_HEAVY_MAX",

@@ -527,3 +527,27 @@ describe("host.unitPaths — a unit que já está quebrada, em silêncio", () =>
     expect(c?.status).toBe("unknown");
   });
 });
+
+describe("gate.isolation — o aviso de preflight do fallback do selo", () => {
+  it("sonda que prova o selo ⇒ ok, dizendo o que provou", () => {
+    const c = acha(runPreflight(saudavel({ gateSeal: { ok: true, detail: "selo provado de dentro" } })).checks, "gate.isolation");
+    expect(c.status).toBe("ok");
+    expect(c.observed).toContain("selo provado");
+  });
+
+  it("sonda que falha ⇒ degraded, com o risco e as duas saídas NOMEADAS", () => {
+    const r = runPreflight(saudavel({ gateSeal: { ok: false, detail: "plataforma darwin: sem systemd" } }));
+    const c = acha(r.checks, "gate.isolation");
+    expect(c.status).toBe("degraded");
+    expect(c.observed).toContain("darwin");
+    expect(c.remedy).toMatch(/SEM selo/);
+    expect(c.remedy).toContain("mergeGate.isolation: none");
+    expect(c.remedy).toContain("AGILEHARNESS_AUTORUN_GATE_ISOLATION");
+    expect(r.worst).not.toBe("ok");
+    expect(preflightMessage(r)).toContain("gate.isolation");
+  });
+
+  it("[NÃO-VACUIDADE] sem a sonda, o check não aparece — não medir não é passar", () => {
+    expect(runPreflight(saudavel()).checks.some((c) => c.id === "gate.isolation")).toBe(false);
+  });
+});

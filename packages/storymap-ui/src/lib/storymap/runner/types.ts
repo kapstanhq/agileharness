@@ -232,6 +232,46 @@ export interface MergeQueueEntry {
     truncatedFiles?: number;
     truncatedHunks?: number;
   };
+  /**
+   * O que o gate EXECUTOU na última tentativa desta entrada: isolamento efetivo e, por unidade, a argv exata,
+   * o reporter, o modo e QUANTOS testes rodaram. Existe porque "gate verde" sem contagem não prova nada —
+   * medido no alvo de referência: entradas integrando em ~20–50 s com zero testes do produto. Ausente ⇒ o
+   * gate não rodou suíte nenhuma nesta entrada (desligado, board-data, conflito, recusa).
+   */
+  gateReport?: GateReport;
+}
+
+/**
+ * O relatório de UMA unidade do gate numa rodada — é o que prova ao operador que N>0 testes rodaram, e ONDE.
+ * Persistido na entrada do train (`gateReport`), então sobrevive ao descarte da árvore e ao restart.
+ */
+export interface GateUnitReport {
+  label: string;
+  cwd: string;
+  reporter: "vitest-json" | "junit-xml" | "exit-code";
+  /** `affected` = o comando da unidade + `--changed <base> --passWithNoTests`; `full` = o comando dela, só */
+  mode: "full" | "affected";
+  network: "deny" | "allow";
+  isolation: "systemd" | "none";
+  /** a argv EXATA executada (no selo: o `systemd-run …` inteiro; sem selo: `/bin/sh -c <comando>`) */
+  argv: string[];
+  exitCode: number | null;
+  /** testes executados segundo o relatório; `null` = o reporter não conta (exit-code) ou não houve relatório */
+  tests: number | null;
+  /** falhas que o relatório identificou (0 para exit-code, que não identifica) */
+  failures: number;
+}
+
+/** O que a entrada do train guarda do gate: isolamento efetivo + as unidades da rodada que DECIDIU. */
+export interface GateReport {
+  isolation: "systemd" | "none";
+  /** por que este isolamento (o motivo do fallback, quando caiu para `none`) */
+  isolationReason: string;
+  /** soma dos testes executados nas unidades que contam; `null` quando NENHUMA unidade conta */
+  testsExecuted: number | null;
+  /** unidades cuja contagem é desconhecida (exit-code / sem relatório) — um total parcial se declara parcial */
+  uncountedUnits: number;
+  units: GateUnitReport[];
 }
 
 /** The live merge-queue picture: the ordered entries + whether the serial processor is busy. */

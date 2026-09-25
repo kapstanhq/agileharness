@@ -511,9 +511,21 @@ async function sondasDoHost() {
     }
   };
 
+  // O SELO DO GATE: a sonda roda o selo inteiro (uma unidade transiente) e prova cada propriedade de
+  // dentro — presença do `systemd-run` não é prova. Uma vez por boot; o gate usa a MESMA sonda memorizada.
+  const { cachedGateSandboxProbe } = await import("@/lib/storymap/runner/gate-sandbox");
+  const gateSeal = (() => {
+    try {
+      return cachedGateSandboxProbe();
+    } catch {
+      return null;
+    }
+  })();
+
   return {
     repoRoot: raiz,
     env: envMedido,
+    gateSeal,
     // O env DESTE processo, ao lado do medido: e o que deixa o relatorio dizer QUANDO os dois
     // divergem. Uma instancia subindo AO LADO de um servico vivo lia a porta do vizinho sem
     // saber (medido em 2026-08-27: subiu em 3044, o relatorio disse 3008).

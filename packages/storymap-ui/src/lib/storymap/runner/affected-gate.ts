@@ -10,27 +10,37 @@
  * worst under load; a kernel change (types/contracts/gate-core) already selects 30–50% of the suite, so
  * the fallback loses almost nothing exactly where the graph is least trustworthy.
  *
- * DEFAULT OFF: an absent/disabled spec always returns `fullCommand`, so the pre-perf behavior is
+ * DEFAULT OFF: an absent/disabled spec always runs every unit in full, so the pre-perf behavior is
  * byte-identical until a board opts in via `autorun.mergeGate.affected` in its settings.
+ *
+ * ── PER UNIT, APPENDED — never a global REPLACEMENT (honest gate) ──────────────────────────────────────
+ * The first version carried a global `affected.command` template that REPLACED the command of EVERY gate
+ * unit. Measured on the reference target: a pytest unit ran `vitest` in its directory (never its own
+ * suite), and a unit declared as `bunx vitest run --config vitest.unit.config.ts` lost its `--config` and
+ * ran the wrong project. The selection is now a SUFFIX (`--changed <baseSha> --passWithNoTests`) appended
+ * to the unit's OWN command, and only for units whose reporter is `vitest-json` (see gate-scope.ts
+ * `unitAcceptsAffected`) — every other reporter always runs full. `affected.command` is kept in the
+ * settings shape for back-compat but no longer drives anything.
  *
  * WHY `--changed <baseSha>` and not `vitest related <files>`: `--changed` natively includes changed
  * TEST files (a session that edits only a `*.test.ts` must still run it) AND the tests related to changed
  * SOURCE files; `related` only does source->test. `baseSha` is the pre-merge `main` HEAD (the accumulated
  * state the branch merged onto), so inside the merged staging tree `--changed <baseSha>` is EXACTLY the
- * branch's net diff — and at the attribution reset (tree back at `baseSha`) it selects nothing. The
- * command template MUST pass on an empty selection (e.g. vitest `--passWithNoTests`): a source file with
- * no importing test selects zero tests, and that is a PASS, not a gate failure.
+ * branch's net diff — and at the attribution reset (tree back at `baseSha`) it selects nothing.
+ * `--passWithNoTests` is part of the suffix because a source file with no importing test selects zero
+ * tests, and that is a PASS, not a gate failure.
  */
 
 /** Opt-in affected-only gate config, carried on `autorun.mergeGate.affected`. */
 export interface AffectedGateSpec {
-  /** master switch; absent/false ⇒ the gate always runs the full `checkCommand`. */
+  /** master switch; absent/false ⇒ the gate always runs every unit in full. */
   enabled: boolean;
   /**
-   * The command run in place of the full suite. `{base}` is substituted with the pre-merge `main` sha.
-   * MUST pass when zero tests match, e.g. `"bunx vitest run --changed {base} --passWithNoTests"`.
+   * LEGACY, ignored. It used to be a template (`{base}` = the pre-merge sha) that REPLACED every unit's
+   * command — the defect described at the top of this file. Accepted so an old settings.yaml still loads;
+   * the selection is now {@link AFFECTED_SUFFIX} appended to each eligible unit's own command.
    */
-  command: string;
+  command?: string;
   /**
    * Repo-relative patterns; a changed file matching ANY of them forces the FULL suite (blast radius).
    * Supports exact paths, `dir/` prefixes, and `*`/`**` globs (see {@link matchesGatePattern}).
@@ -38,15 +48,27 @@ export interface AffectedGateSpec {
   fullSuitePaths: string[];
 }
 
+/** The eligibility verdict for affected selection over ONE entry's delta (unit-independent). */
+export interface AffectedSelection {
+  /** true ⇒ each eligible (`vitest-json`, not opted out) unit runs `<its command> --changed <base> --passWithNoTests`. */
+  eligible: boolean;
+  /** human-readable justification, surfaced in the gate log. */
+  reason: string;
+}
+
 export interface AffectedGateDecision {
-  /** the command the gate should run — either the full `checkCommand` or the affected selection. */
+  /** the command the gate should run for THIS unit — its own command, possibly with the affected suffix. */
   command: string;
   mode: "full" | "affected";
   /** human-readable justification, surfaced in the gate log. */
   reason: string;
 }
 
-const BASE_TOKEN = "{base}";
+/** The selection suffix. `{base}` is the pre-merge sha. `--passWithNoTests` is load-bearing (see top). */
+export const AFFECTED_SUFFIX = "--changed {base} --passWithNoTests";
+
+/** The base is interpolated into a SHELL command line: only a shell-inert revision token gets there. */
+const SHA_RE = /^[A-Za-z0-9._-]{1,128}$/;
 
 /**
  * Match a repo-relative path against ONE pattern. `dir/` = prefix (the directory and everything under
@@ -67,31 +89,48 @@ export function matchesGatePattern(file: string, pattern: string): boolean {
 }
 
 /**
- * Decide the gate command. Fails SAFE to the full suite on every ambiguity (disabled, misconfigured
- * template, no base, empty diff, or any blast-radius hit) — the affected path is taken only when it is
- * unambiguously safe.
+ * Is affected-only selection SAFE for this entry at all? Fails SAFE to "full" on every ambiguity
+ * (disabled, no/invalid base, empty diff, or any blast-radius hit) — the affected path is taken only when
+ * it is unambiguously safe. Unit-independent: WHICH units get the suffix is {@link resolveAffectedGate}'s
+ * question. PURE.
  */
-export function resolveAffectedGate(
-  fullCommand: string,
+export function resolveAffectedSelection(
   baseSha: string,
-  changedFiles: string[],
+  changedFiles: readonly string[],
   spec: AffectedGateSpec | undefined,
-): AffectedGateDecision {
-  if (!spec?.enabled) return { command: fullCommand, mode: "full", reason: "affected gate off" };
-  if (!spec.command || !spec.command.includes(BASE_TOKEN)) {
-    return { command: fullCommand, mode: "full", reason: `affected command missing ${BASE_TOKEN} — full suite` };
-  }
-  if (!baseSha) return { command: fullCommand, mode: "full", reason: "no base sha — full suite" };
+): AffectedSelection {
+  if (!spec?.enabled) return { eligible: false, reason: "affected gate off" };
+  if (!baseSha) return { eligible: false, reason: "no base sha — full suite" };
+  if (!SHA_RE.test(baseSha)) return { eligible: false, reason: `base "${baseSha.slice(0, 20)}" is not a shell-inert revision — full suite` };
   const files = changedFiles.map((f) => f.trim()).filter(Boolean);
-  if (files.length === 0) return { command: fullCommand, mode: "full", reason: "empty diff — full suite" };
+  if (files.length === 0) return { eligible: false, reason: "empty diff — full suite" };
   const patterns = spec.fullSuitePaths ?? [];
   for (const f of files) {
     const hit = patterns.find((p) => matchesGatePattern(f, p));
-    if (hit) return { command: fullCommand, mode: "full", reason: `blast-radius: ${f} ~ ${hit}` };
+    if (hit) return { eligible: false, reason: `blast-radius: ${f} ~ ${hit}` };
   }
+  return { eligible: true, reason: `${files.length} changed file(s) — affected only` };
+}
+
+/**
+ * Decide the command for ONE unit. `unitCommand` is the unit's OWN command (flags included); when the
+ * entry is eligible AND the unit accepts selection, the result is that command with
+ * {@link AFFECTED_SUFFIX} appended — never a replacement. `unitAccepts` is gate-scope's
+ * `unitAcceptsAffected(unit)` (only `vitest-json` units, and not those that opted out). PURE.
+ */
+export function resolveAffectedGate(
+  unitCommand: string,
+  baseSha: string,
+  changedFiles: readonly string[],
+  spec: AffectedGateSpec | undefined,
+  unitAccepts = true,
+): AffectedGateDecision {
+  const sel = resolveAffectedSelection(baseSha, changedFiles, spec);
+  if (!sel.eligible) return { command: unitCommand, mode: "full", reason: sel.reason };
+  if (!unitAccepts) return { command: unitCommand, mode: "full", reason: "unit does not accept affected selection — full" };
   return {
-    command: spec.command.split(BASE_TOKEN).join(baseSha),
+    command: `${unitCommand} ${AFFECTED_SUFFIX.split("{base}").join(baseSha)}`,
     mode: "affected",
-    reason: `${files.length} changed file(s) — affected only`,
+    reason: sel.reason,
   };
 }

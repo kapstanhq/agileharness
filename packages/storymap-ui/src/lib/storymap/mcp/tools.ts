@@ -1413,6 +1413,9 @@ export function registerStorymapTools(server: McpServer): void {
             // P-1 — os arquivos que divergiram. Antes o desfecho era "código conflita com stage" e nada
             // mais, então quem lia esta superfície não tinha o que acionar.
             conflictFiles: e.conflict?.files,
+            // Gate honesto — quantos testes a última rodada do gate EXECUTOU (null = nenhuma unidade conta).
+            // Um `gate-failed` com 0 aqui é outra conversa que um com 400.
+            ...(e.gateReport ? { gateTestsExecuted: e.gateReport.testsExecuted, gateIsolation: e.gateReport.isolation } : {}),
           })),
         // P-8 — A MAIN VERMELHA, que o gate sempre mediu e ninguém nunca reportou. Enquanto ela existir,
         // NENHUM card é reprovado por essas falhas (a atribuição as absolve, corretamente) — e por isso

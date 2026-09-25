@@ -143,6 +143,8 @@ export const SUFIXOS_NATIVOS: readonly string[] = [
   "ALLOW_PUBLIC_BIND",
   "ALLOW_UNSANDBOXED_FULL",
   "AUTH_TOKEN",
+  // o selo do gate de integração (`mergeGate.isolation`, runner/gate-sandbox.ts) — nasceu AGILEHARNESS_.
+  "AUTORUN_GATE_ISOLATION",
   // o teto de custo POR RUN (`--max-budget-usd`, runner/run-budget.ts) — nasceu AGILEHARNESS_, sem grafia legada.
   "AUTORUN_MAX_BUDGET_USD",
   "BUN",

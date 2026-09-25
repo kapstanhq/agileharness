@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchesGatePattern, resolveAffectedGate, type AffectedGateSpec } from "./affected-gate";
+import { matchesGatePattern, resolveAffectedGate, resolveAffectedSelection, type AffectedGateSpec } from "./affected-gate";
 
 const FULL = "vitest run";
 const spec = (over: Partial<AffectedGateSpec> = {}): AffectedGateSpec => ({
@@ -27,20 +27,21 @@ describe("matchesGatePattern", () => {
   });
 });
 
-describe("resolveAffectedGate", () => {
+describe("resolveAffectedGate — the selection is a SUFFIX on the unit's OWN command", () => {
   it("disabled/absent spec → full suite, unchanged command", () => {
     expect(resolveAffectedGate(FULL, "sha1", ["x.ts"], undefined)).toMatchObject({ command: FULL, mode: "full" });
     expect(resolveAffectedGate(FULL, "sha1", ["x.ts"], spec({ enabled: false }))).toMatchObject({ command: FULL, mode: "full" });
   });
 
-  it("command template missing {base} → full suite (misconfig, fail safe)", () => {
-    const d = resolveAffectedGate(FULL, "sha1", ["x.ts"], spec({ command: "vitest run" }));
-    expect(d.mode).toBe("full");
-    expect(d.command).toBe(FULL);
-  });
-
   it("no base sha → full suite", () => {
     expect(resolveAffectedGate(FULL, "", ["x.ts"], spec())).toMatchObject({ command: FULL, mode: "full" });
+  });
+
+  it("a base that is not a shell-inert revision never reaches the command line → full suite", () => {
+    const d = resolveAffectedGate(FULL, "abc; rm -rf /", ["src/foo.ts"], spec());
+    expect(d.mode).toBe("full");
+    expect(d.command).toBe(FULL);
+    expect(d.command).not.toContain("rm -rf");
   });
 
   it("empty diff → full suite (never select zero by accident)", () => {
@@ -66,15 +67,42 @@ describe("resolveAffectedGate", () => {
     expect(d.mode).toBe("full");
   });
 
-  it("normal diff → affected command with {base} substituted", () => {
+  it("normal diff → the unit's command + `--changed <base> --passWithNoTests` (APPENDED, never replaced)", () => {
     const d = resolveAffectedGate(FULL, "abc123", ["packages/storymap-ui/src/lib/foo.ts"], spec());
     expect(d.mode).toBe("affected");
-    expect(d.command).toBe("bunx vitest --changed abc123 --run --passWithNoTests");
+    expect(d.command).toBe("vitest run --changed abc123 --passWithNoTests");
     expect(d.command).not.toContain("{base}");
   });
 
-  it("substitutes EVERY {base} occurrence", () => {
+  // O DEFEITO MEDIDO: o template global SUBSTITUÍA o comando de toda unidade — a unidade com config própria
+  // rodava a config errada. Esta é a asserção que falha se o sufixo voltar a ser substituição.
+  it("[REGRESSÃO] as flags da unidade SOBREVIVEM — `--config` própria não é trocada pelo template global", () => {
+    const own = "bunx vitest run --config vitest.unit.config.ts";
+    const d = resolveAffectedGate(own, "abc123", ["packages/web/src/a.ts"], spec({ command: "bunx vitest run --changed {base} --passWithNoTests" }));
+    expect(d.mode).toBe("affected");
+    expect(d.command).toBe("bunx vitest run --config vitest.unit.config.ts --changed abc123 --passWithNoTests");
+  });
+
+  it("the legacy `command` template is IGNORED — even a template without {base} no longer decides anything", () => {
     const d = resolveAffectedGate(FULL, "abc", ["src/foo.ts"], spec({ command: "x --changed {base} --base {base}" }));
-    expect(d.command).toBe("x --changed abc --base abc");
+    expect(d.command).toBe("vitest run --changed abc --passWithNoTests");
+    const semBase = resolveAffectedGate(FULL, "abc", ["src/foo.ts"], spec({ command: "vitest run" }));
+    expect(semBase.mode).toBe("affected");
+  });
+
+  it("a unit that does not accept selection (non-vitest reporter / opted out) always runs FULL", () => {
+    const d = resolveAffectedGate("pytest -q", "abc123", ["svc/app.py"], spec(), false);
+    expect(d).toMatchObject({ command: "pytest -q", mode: "full" });
+    expect(d.reason).toMatch(/does not accept/);
+  });
+});
+
+describe("resolveAffectedSelection — unit-independent eligibility", () => {
+  it("eligible only when enabled, with a base, a non-empty diff and no blast-radius hit", () => {
+    expect(resolveAffectedSelection("abc", ["src/a.ts"], spec()).eligible).toBe(true);
+    expect(resolveAffectedSelection("abc", ["src/a.ts"], undefined).eligible).toBe(false);
+    expect(resolveAffectedSelection("", ["src/a.ts"], spec()).eligible).toBe(false);
+    expect(resolveAffectedSelection("abc", [], spec()).eligible).toBe(false);
+    expect(resolveAffectedSelection("abc", ["packages/storymap-ui/package.json"], spec()).eligible).toBe(false);
   });
 });

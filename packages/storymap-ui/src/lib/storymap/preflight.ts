@@ -127,6 +127,13 @@ export interface PreflightProbes {
    * default. Ver a restrição 1 no topo.
    */
   claudeName?: string;
+  /**
+   * O resultado da SONDA do selo do gate de integração (runner/gate-sandbox.ts `probeGateSandbox`) — a
+   * sonda roda o selo inteiro e prova cada propriedade de dentro. Ausente ⇒ o check não opina (não é
+   * "passou": é "não medi"). Entra como RESULTADO, e não como função, pela restrição 1: quem chama tem o
+   * módulo à mão; este arquivo não arrasta nada.
+   */
+  gateSeal?: { ok: boolean; detail: string } | null;
 }
 
 /** O piso declarado em `package.json#engines`. Duplicar aqui é ruim; medir contra nada é pior. */
@@ -314,6 +321,30 @@ export function runPreflight(probes: PreflightProbes = {}): PreflightReport {
         });
       }
     }
+  }
+
+  // ── O SELO DO GATE DE INTEGRAÇÃO ──────────────────────────────────────────────────────────────
+  // O gate roda CÓDIGO ESCRITO POR AGENTE (a suíte do delta). `mergeGate.isolation: systemd` (o default)
+  // só sela quando a sonda PROVA o selo neste host; sem isso o gate cai para `none` — e isto é o aviso de
+  // preflight que o fallback promete: o adotante sem systemd fica sabendo ANTES do primeiro gate, não por
+  // um log de gate que ninguém lê.
+  if (probes.gateSeal) {
+    checks.push(
+      probes.gateSeal.ok
+        ? { id: "gate.isolation", title: "o selo do gate de integração", status: "ok", observed: probes.gateSeal.detail }
+        : {
+            id: "gate.isolation",
+            title: "o selo do gate de integração",
+            status: "degraded",
+            observed: probes.gateSeal.detail,
+            remedy:
+              "o gate vai rodar o código do delta SEM selo — como o uid do serviço e com a rede do host (só o env " +
+              "é neutralizado); `mergeGate.isolation: systemd` cai para `none` e avisa a cada gate. Para selar: " +
+              "Linux com systemd e o serviço como root (o `systemd-run` do gerenciador do sistema exige privilégio). " +
+              "Para declarar o risco aceito e silenciar: `mergeGate.isolation: none` no settings.yaml (ou " +
+              "`AGILEHARNESS_AUTORUN_GATE_ISOLATION=none`).",
+          },
+    );
   }
 
   // ── O GIT ─────────────────────────────────────────────────────────────────────────────────────
