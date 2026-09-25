@@ -399,10 +399,14 @@ describe.skipIf(!TRANSIENT_OK)("vitest REAL sob o selo — o config carrega sem 
   };
   const vitest = () => `${path.resolve(process.cwd(), "node_modules", ".bin", "vitest")} run --reporter=json`;
 
-  it("[CONTROLE] o loader default morre em EROFS no node_modules read-only — o teste discrimina", async () => {
+  it("[CONTROLE] o loader default morre ao gravar sob node_modules — o teste discrimina", async () => {
     const r = await runSealed(vitest());
     expect(r.ok).toBe(false);
-    expect(r.out).toMatch(/EROFS|read-only file system/i);
+    // A falha é a GRAVAÇÃO do config empacotado em node_modules/.vite-temp. Ela aparece como EROFS quando o alvo do
+    // link é visível só-leitura dentro do selo, e como ENOENT no mkdir quando o alvo nem é visível — depende do
+    // layout do checkout (medido: worktree de integração aninhado dá ENOENT, o da feature dá EROFS). As duas provam
+    // o mesmo: sem as flags o config não carrega. A discriminação está no par com o teste [SELADO] abaixo.
+    expect(r.out).toMatch(/EROFS|read-only file system|ENOENT[^\n]*mkdir[^\n]*\.vite-temp/i);
   }, 150_000);
 
   it("[SELADO] com as flags do selo o MESMO config carrega e a suíte roda, medida pelo relatório", async () => {
