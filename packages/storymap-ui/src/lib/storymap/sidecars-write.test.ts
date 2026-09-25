@@ -35,15 +35,19 @@ afterEach(async () => {
 
 describe("write_sidecar — o path é DERIVADO, nunca aceito do chamador (WS-3.2)", () => {
   it("grava cada kind da allowlist no path canônico do board", async () => {
-    const cases: Array<[(typeof SIDECAR_KINDS)[number], string]> = [
-      ["plans", "plans/story-abc123.md"],
-      ["wireframes", "wireframes/story-abc123.json"],
-      ["proposals", "proposals/story-abc123.json"],
+    // O conteúdo de `wireframes` precisa ser um doc JSON: desde o conductor-core o write VALIDA esse kind
+    // (wireframe-html/validate.ts — um html que o canvas degradaria em silêncio é recusado com o motivo). O
+    // assunto AQUI segue sendo o path derivado + o byte-a-byte gravado, por isso cada kind leva um conteúdo
+    // que ele aceita e a asserção compara exatamente esse conteúdo.
+    const cases: Array<[(typeof SIDECAR_KINDS)[number], string, string]> = [
+      ["plans", "plans/story-abc123.md", "conteúdo"],
+      ["wireframes", "wireframes/story-abc123.json", '{"cardId":"story-abc123","options":[],"note":"conteúdo"}'],
+      ["proposals", "proposals/story-abc123.json", "conteúdo"],
     ];
-    for (const [kind, expected] of cases) {
-      const res = await writeSidecarByKind("acme", "story-abc123", kind, "conteúdo");
+    for (const [kind, expected, content] of cases) {
+      const res = await writeSidecarByKind("acme", "story-abc123", kind, content);
       expect(res.path, `kind ${kind}`).toBe(expected);
-      expect(await fs.readFile(sidecarPathForKind(kind, "acme", "story-abc123"), "utf8")).toBe("conteúdo");
+      expect(await fs.readFile(sidecarPathForKind(kind, "acme", "story-abc123"), "utf8")).toBe(content);
     }
   });
 
@@ -106,5 +110,47 @@ describe("write_sidecar — o path é DERIVADO, nunca aceito do chamador (WS-3.2
     await writeSidecarByKind("acme", "story-abc123", "wireframes", JSON.stringify({ options: [] }));
     const entries = await fs.readdir(path.join(TMP_ROOT, "acme", "wireframes"));
     expect(entries).toEqual(["story-abc123.json"]);
+  });
+});
+
+// conductor-core — o write de `wireframes` VALIDA os artefatos html: o que o canvas degradaria em silêncio
+// (html acima do teto → só texto; format html sem html → só texto) é RECUSADO com o artefato nomeado, e nada
+// é gravado; o que a sanitização remove mas sobrevive vira AVISO na resposta.
+describe("write_sidecar (wireframes) — o html é validado na escrita", () => {
+  const doc = (artifact: Record<string, unknown>) =>
+    JSON.stringify({ cardId: "story-abc123", status: "draft", options: [], artifacts: [{ id: "variante-a", kind: "screen", title: "A", ...artifact }] });
+
+  it("html acima do teto por artefato: recusado nomeando o artefato, e o arquivo NÃO é escrito", async () => {
+    const big = `<div>${"x".repeat(33 * 1024)}</div>`;
+    await expect(writeSidecarByKind("acme", "story-abc123", "wireframes", doc({ format: "html", html: big }))).rejects.toThrow(
+      /variante-a.*teto/,
+    );
+    await expect(fs.readFile(sidecarPathForKind("wireframes", "acme", "story-abc123"), "utf8")).rejects.toThrow();
+  });
+
+  it("format html SEM html: recusado (o canvas mostraria só texto)", async () => {
+    await expect(writeSidecarByKind("acme", "story-abc123", "wireframes", doc({ format: "html" }))).rejects.toThrow(/variante-a.*html/);
+  });
+
+  it("html que a sanitização reduz a NADA: recusado", async () => {
+    await expect(
+      writeSidecarByKind("acme", "story-abc123", "wireframes", doc({ format: "html", html: "<script>x()</script><iframe src=a></iframe>" })),
+    ).rejects.toThrow(/sanitiza/);
+  });
+
+  it("html válido com vetores removíveis: grava e AVISA", async () => {
+    const res = await writeSidecarByKind(
+      "acme",
+      "story-abc123",
+      "wireframes",
+      doc({ format: "html", viewport: "mobile", html: `<div style="width:1200px">tela</div><script>x()</script>` }),
+    );
+    expect(res.path).toBe("wireframes/story-abc123.json");
+    expect(res.warnings?.join("\n")).toMatch(/script/);
+    expect(res.warnings?.join("\n")).toMatch(/1200px/);
+  });
+
+  it("JSON inválido: recusado com o motivo", async () => {
+    await expect(writeSidecarByKind("acme", "story-abc123", "wireframes", "{ não é json")).rejects.toThrow(/JSON/);
   });
 });

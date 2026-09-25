@@ -10,7 +10,7 @@
 
 import { useMemo } from "react";
 import { cn } from "@/lib/cn";
-import { buildWireframeSrcDoc, WIREFRAME_IFRAME_SANDBOX } from "@/lib/storymap/wireframe-html";
+import { buildWireframeSrcDoc, WIREFRAME_IFRAME_SANDBOX, WIREFRAME_MOBILE_WIDTH_PX } from "@/lib/storymap/wireframe-html";
 
 const MIN_H = 240;
 const MAX_H = 900;
@@ -39,11 +39,9 @@ export function HtmlArtifactFrame({
         loading="lazy"
         srcDoc={srcDoc}
         title={title}
-        style={{ height }}
-        className={cn(
-          "mx-auto block w-full overflow-hidden rounded-xl border border-line bg-white shadow-sm",
-          viewport === "mobile" ? "max-w-[375px]" : "max-w-full",
-        )}
+        // The mobile width is the ONE constant the variants are drawn and verified at (390px — frame.ts).
+        style={{ height, maxWidth: viewport === "mobile" ? WIREFRAME_MOBILE_WIDTH_PX : "100%" }}
+        className="mx-auto block w-full overflow-hidden rounded-xl border border-line bg-white shadow-sm"
       />
     </div>
   );

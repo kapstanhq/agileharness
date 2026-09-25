@@ -17,6 +17,14 @@ import { sanitizeWireframeHtml } from "./sanitize";
  *  operator's basic_auth session (which reaches exec/deploy routes). */
 export const WIREFRAME_IFRAME_SANDBOX = "";
 
+/**
+ * The width a MOBILE artifact renders at — 390px, the reference phone the conductor's variants are drawn and
+ * verified at (`--breakpoints 390x844`). It was 375, so a variant laid out for 390 was clipped or reflowed on
+ * the very canvas the human uses to choose between variants — they compared something other than what was
+ * drawn. ONE constant, read by the frame component (and locked by wireframe-html.test.ts).
+ */
+export const WIREFRAME_MOBILE_WIDTH_PX = 390;
+
 /** No network egress from inside the frame, styles inline-only. */
 const FRAME_CSP = "default-src 'none'; style-src 'unsafe-inline'";
 

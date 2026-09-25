@@ -47,7 +47,7 @@ import type { ProposalDoc, ProposedItem } from "./smart-capture/types";
 import { coerceGovernanceDraft } from "./governance";
 import { coerceNode, dslToText } from "./wireframe-dsl";
 import { coerceGraphToText } from "./flow-graph";
-import { htmlToText, MAX_HTML_ARTIFACT_BYTES } from "./wireframe-html";
+import { htmlToText, MAX_HTML_ARTIFACT_BYTES, validateWireframeDocContent } from "./wireframe-html";
 import { compileStyleGuideMd, parseStyleGuideMd } from "./style-guide";
 import type { StyleGuideDoc } from "./style-guide";
 
@@ -562,7 +562,7 @@ export async function writeSidecarByKind(
   cardId: string,
   kind: string,
   content: string,
-): Promise<{ path: string; bytes: number }> {
+): Promise<{ path: string; bytes: number; warnings?: string[] }> {
   if (!isSidecarKind(kind)) {
     throw new Error(`kind inválido: "${kind}" — use um de: ${SIDECAR_KINDS.join(", ")}`);
   }
@@ -573,10 +573,24 @@ export async function writeSidecarByKind(
   if (bytes > MAX_SIDECAR_BYTES) {
     throw new Error(`sidecar grande demais: ${bytes} bytes (teto ${MAX_SIDECAR_BYTES})`);
   }
+  // The wireframes doc is VALIDATED before it lands (wireframe-html/validate.ts): the read path forgives
+  // (degrades an oversize/empty html artifact to text), which is right for a reader and wrong as the writer's
+  // only feedback — so a doc that would render something other than what was drawn is REFUSED here, naming the
+  // artifact, and the lossy-but-survivable parts come back as warnings.
+  let warnings: string[] = [];
+  if (kind === "wireframes") {
+    const v = validateWireframeDocContent(content);
+    if (!v.ok) throw new Error(`wireframes recusado: ${v.error}`);
+    warnings = v.warnings;
+  }
   const file = sidecarPathForKind(kind, boardId, cardId);
   await fs.mkdir(path.dirname(file), { recursive: true });
   await atomicWriteFile(file, content);
-  return { path: path.relative(boardDir(boardId), file).split(path.sep).join("/"), bytes };
+  return {
+    path: path.relative(boardDir(boardId), file).split(path.sep).join("/"),
+    bytes,
+    ...(warnings.length ? { warnings } : {}),
+  };
 }
 
 /** Delete a consumed proposal sidecar (on accept). Idempotent — a missing file is fine. */
