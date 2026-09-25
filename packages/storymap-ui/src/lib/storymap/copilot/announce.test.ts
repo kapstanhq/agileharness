@@ -35,6 +35,7 @@ const ALERT: AgentAlert = {
   body: "Deseja executar este comando? · parado há 4min",
   tag: "terminal:shell",
   url: "/terminal?b=shell",
+  event: "terminal-waiting",
 };
 
 describe("announceEvent — o que o Jido conta sobre o board", () => {

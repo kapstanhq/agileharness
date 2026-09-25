@@ -908,7 +908,8 @@ async function registerImpl(): Promise<void> {
             tag: `publish-blocked-${req.board}`,
             url: `/board/${req.board}/entrega`,
             boardId: req.board,
-            push: true,
+            // se vai ao celular é a política de push (padrão: não — fica na tela aberta e na Entrega)
+            event: "publish-blocked",
           });
         },
       }).catch((err) => {

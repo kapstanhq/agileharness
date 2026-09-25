@@ -104,6 +104,8 @@ const SNIPPET_FIXTURE: Record<CockpitItemKind, Record<string, unknown>> = {
   "release-aging": { stagedAt: "2026-07-18T10:00:00.000Z", ageDays: 4 },
   "merge-failed": { runId: "r1", branch: "failed/run/r1", failureReason: "o gate reprovou" },
   "proxy-audit": { prompt: "Quem é o público?", answer: "Leitoras", assumptions: "PRD", confidence: 0.8 },
+  "delivery-audit": { sampledAt: "2026-09-25", proof: "- **O que mudou:** filtro por gênero na lista" },
+  "meter-stalled": { stalledSince: Date.UTC(2026, 8, 25, 3, 10), detectedAt: Date.UTC(2026, 8, 25, 3, 40), detail: "leitura com 30min" },
 };
 
 const ALL_KINDS = Object.keys(SNIPPET_FIXTURE) as CockpitItemKind[];
@@ -145,6 +147,14 @@ describe("cockpitItemSnippet", () => {
     const contentConflict = cockpitItemSnippet(fixture("conflict", { conflictKind: "merge-conflict" }));
     expect(gateFailed).not.toBe(contentConflict);
     expect(gateFailed).toContain("gate");
+  });
+
+  it("o medidor parado diz desde QUANDO (hora local de quem lê), o efeito e a causa provável", () => {
+    const since = Date.UTC(2026, 8, 25, 3, 10);
+    const hhmm = new Date(since).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+    expect(cockpitItemSnippet(fixture("meter-stalled", { stalledSince: since }))).toBe(
+      `medidor de cota parado desde ${hhmm} — automação retida; causa provável: sem tráfego pelo proxy / token expirado`,
+    );
   });
 
   it("carries the release age into the line", () => {

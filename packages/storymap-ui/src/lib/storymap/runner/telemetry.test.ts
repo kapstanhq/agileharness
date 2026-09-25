@@ -8,6 +8,7 @@ import {
   diskTelemetryStore,
   isSuccessWithWarning,
   lastToolGapByTrigger,
+  latestRunRecord,
   roleOf,
   type TelemetryPersistStore,
   type TelemetryRecord,
@@ -107,6 +108,53 @@ describe("TelemetryStore — advanced (sucesso-com-aviso durável, story-mzpzb0)
     const sum = await t.boardSummary("storymap");
     const card = sum.cards.find((c) => c.cardId === "card-w");
     expect(card).toMatchObject({ lastStatus: "exit", lastAdvanced: true });
+  });
+});
+
+// v0.9 — o veredito "último run" é do RUN de coluna. O ledger mistura papéis no mesmo card (o PROXY do modo ultra,
+// a SESSÃO do condutor contabilizada ao terminar, o steward): nenhum deles é "o último run do card". Antes, um run
+// que falhou seguido de uma resposta do proxy (ok) virava "último = ok" e o card travado SUMIA da lane TRAVADO.
+describe("o 'último run' que decide TRAVADO é só do papel run", () => {
+  it("run de coluna FALHOU e depois o proxy respondeu (ok) ⇒ lastStatus segue a falha", async () => {
+    const t = new TelemetryStore(makeMemStore().store);
+    await t.recordRun(rec({ id: "run", cardId: "card-s", startedAt: 100, status: "error" }));
+    await t.recordRun(rec({ id: "px", cardId: "card-s", startedAt: 200, status: "ok", role: "proxy", trigger: "harness-proxy" }));
+    const card = (await t.boardSummary("storymap")).cards.find((c) => c.cardId === "card-s");
+    expect(card).toMatchObject({ lastStatus: "error", lastRunAt: 100, lastAdvanced: false });
+    // o custo e a contagem seguem somando TODO papel — é gasto no card
+    expect(card).toMatchObject({ totalRuns: 2 });
+  });
+
+  it("run FALHOU e depois a sessão do condutor foi contabilizada ⇒ ainda travado", async () => {
+    const t = new TelemetryStore(makeMemStore().store);
+    await t.recordRun(rec({ id: "run", cardId: "card-s", startedAt: 100, status: "timeout" }));
+    await t.recordRun(rec({ id: "session:x", cardId: "card-s", startedAt: 300, status: "ok", role: "session", trigger: "harness-conductor" }));
+    const card = (await t.boardSummary("storymap")).cards.find((c) => c.cardId === "card-s");
+    expect(card).toMatchObject({ lastStatus: "timeout", lastRunAt: 100 });
+  });
+
+  it("o inverso: run ok e depois o PROXY falhou ⇒ o card não vira travado por um papel que não é run", async () => {
+    const t = new TelemetryStore(makeMemStore().store);
+    await t.recordRun(rec({ id: "run", cardId: "card-s", startedAt: 100, status: "ok" }));
+    await t.recordRun(rec({ id: "px", cardId: "card-s", startedAt: 200, status: "error", role: "proxy", trigger: "harness-proxy" }));
+    expect((await t.boardSummary("storymap")).cards[0]).toMatchObject({ lastStatus: "ok", lastRunAt: 100 });
+  });
+
+  it("card só com registros que não são run ⇒ sem veredito (null), nunca o de outro papel", async () => {
+    const t = new TelemetryStore(makeMemStore().store);
+    await t.recordRun(rec({ id: "px", cardId: "card-p", status: "error", role: "proxy", trigger: "harness-proxy" }));
+    expect((await t.boardSummary("storymap")).cards[0]).toMatchObject({ lastStatus: null, lastRunAt: null });
+  });
+
+  it("latestRunRecord: registro sem role é run (esparso); a ordem de entrada não importa", () => {
+    const rows = [
+      rec({ id: "s", startedAt: 900, role: "session" }),
+      rec({ id: "a", startedAt: 100 }),
+      rec({ id: "b", startedAt: 500, role: "run" }),
+      rec({ id: "st", startedAt: 800, role: "steward" }),
+    ];
+    expect(latestRunRecord(rows)?.id).toBe("b");
+    expect(latestRunRecord([rec({ role: "resolution" })])).toBeUndefined();
   });
 });
 

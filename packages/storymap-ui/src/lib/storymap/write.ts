@@ -81,6 +81,19 @@ export function cardToFrontmatter(card: Card): Record<string, unknown> {
     // The per-story autonomy exception — sparse (absent ⇒ the board decides). Without this line the very next
     // app write would erase an `ultra`/`human` override the owner set through set_card_autonomy.
     ...(card.autonomyMode ? { autonomyMode: card.autonomyMode } : {}),
+    // The owner's sampled audit of an autonomous delivery — sparse. Without this line the next app write would
+    // erase a pending audit (the Inbox item vanishes) or the owner's verdict on it.
+    ...(card.deliveryAudit
+      ? {
+          deliveryAudit: {
+            sampledAt: card.deliveryAudit.sampledAt,
+            ...(card.deliveryAudit.deliveredIn ? { deliveredIn: card.deliveryAudit.deliveredIn } : {}),
+            ...(card.deliveryAudit.auditedAt ? { auditedAt: card.deliveryAudit.auditedAt } : {}),
+            ...(card.deliveryAudit.outcome ? { outcome: card.deliveryAudit.outcome } : {}),
+            ...(card.deliveryAudit.note ? { note: card.deliveryAudit.note } : {}),
+          },
+        }
+      : {}),
     release: card.release ?? null,
     // SM-02: sparse — only emitted when the story was routed to the unmapped backlog.
     ...(card.unplaced ? { unplaced: true } : {}),

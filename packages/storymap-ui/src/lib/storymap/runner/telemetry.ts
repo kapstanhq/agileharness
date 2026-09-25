@@ -47,6 +47,24 @@ export function roleOf(record: Pick<TelemetryRecord, "role">): TelemetryRole {
 }
 
 /**
+ * The card's most-recent COLUMN RUN (role `run`), or undefined when it has none. PURE.
+ *
+ * The ledger mixes roles on the same card — the ultra PROXY answering its questions, a conductor SESSION booked
+ * when it ends, a steward/resolution pass — and none of them is "the card's last run". Anything that asks "did the
+ * card's automation stall?" (the TRAVADO lane, "was the last run cancelled?") must ask it of the runs alone: a
+ * failed column run followed by an `ok` proxy answer is still a stalled card, and a proxy that errored on a card
+ * whose last run was fine is not. Order-independent (max by `startedAt`).
+ */
+export function latestRunRecord<T extends Pick<TelemetryRecord, "role" | "startedAt">>(records: readonly T[]): T | undefined {
+  let latest: T | undefined;
+  for (const r of records) {
+    if (roleOf(r) !== "run") continue;
+    if (!latest || r.startedAt > latest.startedAt) latest = r;
+  }
+  return latest;
+}
+
+/**
  * What a record's `trigger` may name: a column/on-demand skill (a RUN), or the skill an agent SESSION ran
  * (`harness-conductor` — the conductor's own spend, recorded when its session ends, role `session`). Widened
  * instead of lying with a cast: a consumer that needs a real {@link TriggerId} (the handoff, the step history)
@@ -168,9 +186,10 @@ export interface CardMetrics {
   totalCostUSD: number;
   /** mean turns across runs that reported turns, or null when none did. */
   avgTurns: number | null;
-  /** epoch ms of the most-recent run, or null when none. */
+  /** epoch ms of the most-recent COLUMN run (role `run` — {@link latestRunRecord}), or null when none. */
   lastRunAt: number | null;
-  /** outcome of the most-recent run, or null when none. */
+  /** outcome of the most-recent COLUMN run (role `run`), or null when none. A proxy/session/steward record never
+   *  decides it: they are spend on the card, not its automation's verdict. */
   lastStatus: RunOutcome | null;
   /** story-mzpzb0 — whether the most-recent run was a SUCESSO-COM-AVISO (`TelemetryRecord.advanced`):
    * a non-clean outcome whose card advanced anyway. Lets the cockpit exclude it from the TRAVADO lane
@@ -297,8 +316,10 @@ export class TelemetryStore implements TelemetryPort {
     for (const [cardId, { runs }] of byCard) {
       const cardCost = runs.reduce((acc, r) => acc + (r.costUSD ?? 0), 0);
       const turns = runs.map((r) => r.turns).filter((t): t is number => t != null);
-      // records are most-recent first within the board scan, so runs[0] is the latest for this card.
-      const latest = runs.reduce((a, b) => (b.startedAt > a.startedAt ? b : a), runs[0]);
+      // Cost and turns count EVERY role (it is all spend on the card); the "last run" verdict — the one the TRAVADO
+      // lane reads — is the latest COLUMN run only. Before, a proxy answer or a conductor session booked after a
+      // failed run became the card's "last run" and the stalled card vanished from the lane.
+      const latest = latestRunRecord(runs);
       cards.push({
         cardId,
         totalRuns: runs.length,

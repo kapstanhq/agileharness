@@ -35,6 +35,11 @@ const ALERT_TONES: Record<AgentAlertKind, Tone> = {
   // duas notas graves e LONGAS, a segunda mais baixa — "a conta parou a frota". Nenhum outro aviso usa
   // notas tão longas: não pede um terminal nem uma entrega, pede que você olhe a capacidade.
   "capacity-critical": { freqs: [392.0, 293.66], step: 0.28, duration: 0.3 },
+  // queda de quinta, repetida — "o que foi aprovado não está no ar". Mais grave que o publish-blocked (que é a
+  // fila parada): aqui a publicação RODOU e falhou.
+  "deploy-failed": { freqs: [349.23, 233.08, 349.23, 233.08], step: 0.2, duration: 0.22 },
+  // três notas iguais, curtas e agudas — um sinal que o PRÓPRIO board declarou crítico (o produto pedindo socorro).
+  "critical-signal": { freqs: [880.0, 880.0, 880.0], step: 0.15, duration: 0.1 },
 };
 
 export class SoundChannel implements NotificationChannel {

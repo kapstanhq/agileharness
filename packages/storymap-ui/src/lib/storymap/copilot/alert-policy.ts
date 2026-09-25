@@ -33,12 +33,16 @@ const ALERTS_BY_TIER: Record<CopilotTier, Record<AgentAlertKind, boolean>> = {
     "terminal-quiet": true,
     "publish-blocked": true,
     "capacity-critical": true,
+    "deploy-failed": true,
+    "critical-signal": true,
   },
   copiloto: {
     "terminal-waiting": true,
     "terminal-quiet": true,
     "publish-blocked": true,
     "capacity-critical": true,
+    "deploy-failed": true,
+    "critical-signal": true,
   },
   autonomo: {
     "terminal-waiting": true,
@@ -52,6 +56,11 @@ const ALERTS_BY_TIER: Record<CopilotTier, Record<AgentAlertKind, boolean>> = {
     // A trava da conta PARA a frota inteira (ou a conta passou a gastar dinheiro de verdade): é o aviso que
     // o modo autônomo mais precisa, porque nele ninguém está olhando o painel.
     "capacity-critical": true,
+    // O trabalho aprovado NÃO está no ar (o deploy falhou e o card voltou): trava a entrega em qualquer modo.
+    "deploy-failed": true,
+    // O próprio board declarou este sinal crítico (monitor de fonte parada, de fornecedor sem crédito…): é o
+    // que o dono pediu para ouvir mesmo sem olhar. Coerente com a política de push, que o empurra por padrão.
+    "critical-signal": true,
   },
 };
 

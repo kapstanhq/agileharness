@@ -275,6 +275,16 @@ export const CardSchema = z.object({
   serves: z.string().nullable().optional(),
   routing: CardRoutingSchema.nullable().optional(),
   autonomyMode: oneOf(AUTONOMY_MODES).optional(),
+  // a auditoria por amostra de uma ENTREGA autônoma (modo ultra — delivery-audit.ts): pendente sem auditedAt.
+  deliveryAudit: z
+    .object({
+      sampledAt: z.string().min(1),
+      deliveredIn: z.string().optional(),
+      auditedAt: z.string().optional(),
+      outcome: z.enum(["confirmed", "reopened"]).optional(),
+      note: z.string().optional(),
+    })
+    .optional(),
   release: z.string().nullable(),
   unplaced: z.boolean().optional(),
   via: oneOf(CARD_PROVENANCES).optional(), // WS6 (F5) — creation provenance
@@ -612,6 +622,12 @@ export const BoardConfigSchema = z.object({
       mode: oneOf(AUTONOMY_MODES),
       proxyModel: oneOf(MODEL_TIERS).optional(),
       auditSampleRate: z.number().min(0).max(1).optional(),
+    })
+    .optional(),
+  // OS SINAIS CRÍTICOS do board (notifications/push-policy): um card que nasce com um destes prefixos vai ao dono.
+  notifications: z
+    .object({
+      criticalTitlePrefixes: z.array(z.string().min(1)).optional(),
     })
     .optional(),
   positioning: z.string().nullable().optional(),

@@ -244,10 +244,19 @@ export function registerResources(server: McpServer): void {
         raiz = null;
       }
       const { cachedGateSandboxProbe } = await import("@/lib/storymap/runner/gate-sandbox");
+      const { measureSkills } = await import("@/lib/storymap/skills-drift");
+      const { findToolRoot } = await import("@/lib/storymap/paths");
+      let toolRoot: string | null = null;
+      try {
+        toolRoot = findToolRoot();
+      } catch {
+        toolRoot = null;
+      }
       return runPreflight({
         repoRoot: raiz,
         claudeName: loadRunnerConfig().autorun.claudeBin,
         gateSeal: cachedGateSandboxProbe(),
+        skills: measureSkills(toolRoot, raiz),
         run: (cmd, args) => {
           try {
             const r = spawnSync(cmd, args, { encoding: "utf8", timeout: 1500 });

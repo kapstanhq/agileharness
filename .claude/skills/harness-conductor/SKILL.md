@@ -12,8 +12,10 @@ description: >-
   CLEAN-context subagent reviews the diff with the review lenses and drives the running app at
   390px against the frozen contract; at most 2 loops back), PUBLICAR (worktree_submit ->
   wait_for_submit through the merge train). The Kanban is a PROJECTION: while the card carries
-  the driver no column skill runs on it, the card moves only with honest gate evidence (written on
-  main through MCP), and in human-in-control mode it stops at Aprovar entrega with a
+  the driver no column skill runs on it, the card moves only with honest gate evidence (tasks and
+  findings on main through MCP; the QA stamp — qaPassed + qaEvidence — in its own worktree card,
+  carried to main by the train, the SAME path harness-qa uses; approve_qa is the operator's, never
+  the conductor's), and in human-in-control mode it stops at Aprovar entrega with a
   `## Prova da entrega` section. Never
   deploys. Use when the user says "/harness conductor", "/harness-conductor", "conduzir a
   story", "conduzir o card", "condutor", or a claude_new session was opened on a card with
@@ -107,7 +109,12 @@ the merge train (code → `stage`, board data → main, card merged 3-way per el
 | `add_finding` (budget / verification findings, mid-build) | — |
 | `ask_question` — plain `texts` OR structured `questions` (options, one recommended, context) | — |
 | `write_sidecar` kind `wireframes` (validated: an error names the artifact) and kind `plans` | — |
-| `choose_wireframe`, `approve_qa`, `set_card_driver`, `release_claim` | — |
+| `choose_wireframe`, `set_card_driver`, `release_claim` | the QA stamp: `qaPassed`, `qaRanAt`, `qaCommit`, `qaEvidence` (see PUBLICAR) |
+
+`approve_qa` (and `approve_review`) are NOT on your side of this table: since the honest gate (v0.7.0)
+`approve_qa` is the OPERATOR's exit — a human asserting what THEY proved — and a scoped call to it stops
+in the Inbox as an approval for the owner. QA is not one of the owner's decision points; you record what
+YOU proved, in your worktree, by the same path `harness-qa` does (PUBLICAR step 2).
 
 `update_card` REJECTS pipeline fields and `status`. Never hand-edit `status:` in any file, never
 run `advance-card.ts` (it writes the file in cwd; your moves go through `move_card`). One writer
@@ -116,8 +123,10 @@ you wrote (or leave them untouched there) so the train's 3-way merge has nothing
 
 **Gates are evaluated against MAIN's card** (`checkGate` in `moveCardAction`; predicates in
 `packages/storymap-ui/src/lib/storymap/gates.ts` → `gate-core.js`). Evidence still sitting in
-your worktree does not exist for a gate — which is why the gate evidence now goes through MCP
-(`set_tasks`, `add_finding`, `approve_qa`). A **data-only checkpoint submit** (a diff touching only
+your worktree does not exist for a gate UNTIL the train lands it — which is why the evidence you need
+MID-build goes through MCP (`set_tasks`, `add_finding`), and the QA stamp rides your final submit (the train's
+3-way card merge takes the run side for pipeline fields — `MERGE_BACK_PIPELINE_FIELDS` in `card-merge.ts` —
+so it lands on main next to the code it proves). A **data-only checkpoint submit** (a diff touching only
 `storymap/boards/**` skips the code gate and merges straight to main — `verificationDemand` in
 `merge-queue.ts`) is still available for the pipeline fields that have no MCP writer
 (`techPlanReady`, `hasUiSurface`, `criteriaSpecs`), legal ONLY while the branch carries no code.
@@ -184,10 +193,10 @@ card** when ALL hold:
 3. the card still carries `routing.driver: conductor` (`get_card` → `routing.driver`). Without it
    the OLD rule is back: an armed column (`autorun: true` + `trigger`) or a skipped one is NOT safe.
 
-`move_card` validates only the DESTINATION's gate, so jump over unneeded columns. `approve_qa` /
-`approve_review` accept the card in the board's QA / review columns, resolved from its pipeline
-(the step that runs `harness-qa`, the step gated by `hasQaPassed`, the step that runs
-`harness-review`) — not from fixed ids. A reopen (`refine`/`fix`) clears the route and the driver:
+`move_card` validates only the DESTINATION's gate, so jump over unneeded columns. (`approve_qa` /
+`approve_review` — the OPERATOR's tools, never yours — accept the card in the board's QA / review columns,
+resolved from its pipeline: the step that runs `harness-qa`, the step gated by `hasQaPassed`, the step that
+runs `harness-review` — not from fixed ids.) A reopen (`refine`/`fix`) clears the route and the driver:
 the reopen triage owns the card from there.
 
 ## MCP surface you use (verified shapes)
@@ -203,7 +212,7 @@ The AgileHarness server is mounted as `storymap` in a fleet session (`mcp__story
 | `list_claims` | `{board?, released?}` |
 | `update_card` | `{board, cardId, title?, storyType?, narrative?{role,want,soThat}, acceptance?[], personas?[], systems?[], body?}` — `body` REPLACES the whole body |
 | `move_card` | `{board, cardId, status?, parent?, serves?, release?, order?}` |
-| `ask_question` | `{board, cardId, texts?[], questions?[], askedBy?}` — `questions[]`: `{text, context?, options?[{label, pros?[], cons?[], recommended?}], mode?: "single" \| "multi", recommendation?, category?: "interview" \| "ui-choice" \| "delivery" \| "money"}` (2–8 options, at most ONE recommended; `recommendation` only without options). ALWAYS set `category`: it is what the autonomy key reads (see "ULTRA mode") |
+| `ask_question` | `{board, cardId, texts?[], questions?[], askedBy?}` — `questions[]`: `{text, context?, options?[{label, pros?[], cons?[], recommended?}], mode?: "single" \| "multi", recommendation?, category: "interview" \| "ui-choice" \| "delivery" \| "money"}` (2–8 options, at most ONE recommended; `recommendation` only without options). `category` is REQUIRED on every structured question (the tool refuses one without it): it is what the autonomy key reads (see "ULTRA mode"). Plain `texts` carry no category and stay with the owner |
 | `write_sidecar` | `{board, cardId, kind: "plans" \| "wireframes" \| "proposals", content}` — full file, ≤512KB; `wireframes` is VALIDATED (bad JSON, `format: "html"` without html, html over 32KB or sanitized to nothing ⇒ error naming the artifact) and returns `avisos` for what the sanitizer strips / fixed widths over 390px |
 | `add_finding` | `{board, cardId, severity, title, detail?, lens?, id?, file?, line?, suggestion?}` — on MAIN; a stable `id` is idempotent (refreshes content, never the status) |
 | `set_tasks` | `{board, cardId, sessionId, tasks: [{id, title, done}]}` — REPLACES the list on MAIN; only the session holding the card's live claim |
@@ -212,7 +221,7 @@ The AgileHarness server is mounted as `storymap` in a fleet session (`mcp__story
 | `get_card_wireframes` | `{board, cardId, view?: "full" \| "text"}` — never write the `text` view back |
 | `choose_wireframe` | `{board, cardId, optionId}` — a `screen` artifact id; sets `wireframeChosen` |
 | `design_feedback` | `{board, cardId, artifactId?, note?, kind?: "change" \| "approve"}` |
-| `approve_qa` | `{board, cardId, qaPassed?, qaRanAt?, qaCommit?, visual?, comment?}` — the card must sit in one of the board's QA landings (see "Safe landings") |
+| `approve_qa` | the OPERATOR's exit (`{board, cardId, qaPassed?, qaRanAt?, qaCommit?, visual?, suite?, comment?}`) — **never call it**: a scoped call stops in the Inbox as an approval for the owner, and QA is not the owner's decision. Your QA stamp goes in your worktree card (PUBLICAR step 2) |
 | `runner_status` | `{board?, cardId?, limit?}` — with both ids: `history[]` (the card's ledger: runs AND ended conductor sessions, role `session`) and, while a conductor lives, `conductorSessions[]` (`estimatedCostUSD` from its transcripts) + `spentIncludingLiveSessionsUSD` |
 | `worktree_open` | `{board?, cardId?, task}` → `{sessionId, path, branch, baseCommit}` |
 | `worktree_submit` | `{sessionId, message?}` → `{entryId, pinnedSha, committed}` |
@@ -237,8 +246,8 @@ the SAME args. Never use `deploy`, `publish_when_idle`, `update_vps`, `write_doc
    (another actor holds it) ⇒ **P0**: tell the operator who holds it.
 3. **Tools**: no `storymap` MCP tools ⇒ P0 (the service has no `orch` token for sessions).
 4. **Write policy**: read `orchestrator.riskMatrix` in the board's `board.yaml`. Without
-   `write-board: auto` every `update_card`/`move_card`/`write_sidecar`/`ask_question`/
-   `approve_qa` of yours becomes an Inbox approval. Tell the operator once (it is their file —
+   `write-board: auto` every `update_card`/`move_card`/`write_sidecar`/`ask_question` of yours
+   becomes an Inbox approval. Tell the operator once (it is their file —
    never edit `board.yaml`), then proceed, waiting on approvals as above.
 5. Resolve this board's safe landings for this card (see "Safe landings"); they go in the
    journal (step 7).
@@ -413,7 +422,22 @@ reasoning or opinion of the code.
    `runner/findings.ts`), or in the worktree card (`fixed` for the repaired ones, `open` for the
    rest); in the worktree card: `reviewedAt`, `reviewCommit: V`, `commitRange: {base, head: V}`,
    `criteriaSpecs` complete, and for `mode: fix|refine` clear `mode` + the reopen block (you are the
-   station that verified it). Commit `chore(board): evidências · <board>/<cardId>`.
+   station that verified it).
+   **The QA stamp — the SAME honest path `harness-qa` uses** (its "Verdict + write"): also in the worktree
+   card, `qaPassed: true`, `qaRanAt: <today>`, `qaCommit: V` and
+   `qaEvidence: { suite: <bool>, visual: <bool>, at: <ISO now>, by: harness-conductor }`, where each flag is a
+   CLAIM you can back:
+   - `suite: true` ONLY if YOU ran the package suite (the command the merge gate runs for it —
+     `autorun.mergeGate.scope.packages` — or the package's own test script) IN YOUR WORKTREE at `V`, it was
+     green, and the journal records the exact command and the count of tests executed (> 0). A suite you
+     did not run, one that ran zero tests, or one with a failure you "know is flaky" is `suite: false`.
+   - `visual: true` ONLY if the clean-context verifier swept the running app at 390px, the manifest said
+     `readyAll: true`, and the PNGs were judged against the contract. Anything less is `visual: false`.
+   A card that carries code (`commitRange`/`stagedAt`) only enters `revisao` with `qaPassed: true` AND one of
+   the two flags true (`hasQaPassed`, `qaHasEvidence` in `gate-core.js`); a card whose diff touched a
+   measured UI surface needs `visual: true`. If you cannot honestly set what the gate needs, do NOT stamp
+   around it: stop at P3 and say which proof is missing — the operator decides (and `approve_qa` is theirs).
+   Commit `chore(board): evidências · <board>/<cardId>`.
 3. `worktree_submit({sessionId, message})` → `pinnedSha`; `wait_for_submit({sessionId,
    timeoutMs: 600000})`, re-calling while `state` is `timeout`:
    - `done` → continue;
@@ -423,12 +447,15 @@ reasoning or opinion of the code.
    - `gate-failed`/`conflict`/`failed` → read `detail`, fix, verify, resubmit.
    The train stamps `stagedAt`: your code now waits in `stage`; publishing it is the board's
    release policy, never yours.
-4. **Projection** (gates now pass honestly on main; with the driver set no column skill fires):
-   `desenvolver` -> `revisar-codigo` (`hasBuildEvidence`: every task done) -> `qa-automatizado`
-   (`hasNoBlockers`), then `approve_qa({board, cardId, qaPassed: true, qaRanAt: <today>,
-   qaCommit: V, visual: <true ONLY if the verifier swept, `readyAll` was true and the PNGs were
-   judged>})`, then `qa-automatizado` -> `revisao` (`hasQaPassed`). Use the board's own ids
-   (`list_statuses`) — the canonical ones are shown.
+4. **Projection** (gates now pass honestly on main — the train landed your QA stamp with the code; with the
+   driver set no column skill fires): `get_card` and confirm main's card carries `qaPassed: true` and your
+   `qaEvidence`; then `desenvolver` -> `revisar-codigo` (`hasBuildEvidence`: every task done) ->
+   `qa-automatizado` (`hasNoBlockers`) -> `revisao` (`hasQaPassed`), or jump straight to `revisao` (only the
+   destination's gate is checked). **Never call `approve_qa`** — it is the operator's exit, and a scoped call
+   only parks an approval in the owner's Inbox. If `hasQaPassed` refuses, the refusal names what is missing:
+   a stamp that did not land (fix it in the worktree after `worktree_refresh` and submit again — the branch
+   now carries only card data, so it is a data-only submit), or a proof you do not have (P3). Use the
+   board's own ids (`list_statuses`) — the canonical ones are shown.
 5. **`## Prova da entrega`** — append to the body with one `update_card` (read `verbose: true`
    first):
    ```
@@ -461,7 +488,7 @@ re-read the card (answers, `chosenOptionId`, feedback) before acting.
 | P0 precondition | unchanged or `grill` | fixes what you named (claim, token, riskMatrix, reopen), or closes the session |
 | P1 questions | `grill` | answers on `/perguntas` (or the Inbox "Perguntas" lane), then says `continuar` |
 | P2 design choice | `com-design` | compares the variants on the card's canvas (phone is fine), switches the primary if needed, leaves per-artifact feedback or approvals, then says `continuar` or `ajustar: …`. "Pedir ajuste" also works now: it moves the card to `design-ux`/`design-ui`, where nothing runs (the driver), and you read the feedback there on resume |
-| P3 verification exhausted | `desenvolver` | reads the findings/verdicts you summarized; decides: accept the risk, guide a fix, or stop |
+| P3 verification exhausted, or a QA proof you cannot honestly stamp | `desenvolver` | reads the findings/verdicts you summarized (or which proof is missing); decides: accept the risk (`approve_qa` is THEIR tool), guide a fix, or stop |
 | P4 budget | last safe landing | raises the budget, approves continuing, or stops |
 | P5 delivery | `revisao` | reads `## Prova da entrega`; approves by moving the card to `merge` (Integrar) — it then rests in `release` (Liberar) under the release policy — or asks for changes here |
 | approval pending | unchanged | approves/rejects the Inbox request your write opened |
@@ -506,7 +533,13 @@ In **ultra**:
   any agent.
 - **P5 (delivery):** after the `## Prova da entrega`, move `revisao` -> `merge` (Integrar) yourself instead of
   pausing — unless the delivery touches an always-human category (money, auth/rules/payments, PRD), then P5.
-  Publishing stays with the board's release policy.
+  Publishing stays with the board's release policy. **Notice after, sampled audit:** when a story you delivered this
+  way reaches the board's `delivered` status ("No ar"), a deterministic sample (by card id, at `auditSampleRate`)
+  lands on the owner's Inbox as "Entrega autônoma" — with your `## Prova da entrega` as the evidence, so write it
+  for a reader who did not watch you work. The owner confirms it, or REOPENS it: the story comes back in
+  `mode: refine` with the owner's reason as the brief and an open `delivery-audit` finding (a reopen clears the
+  driver — the refine triage owns it from there; a later conductor treats that finding as part of the contract).
+  A delivery the owner moved out of the approval step themselves (a P5 you paused on) is never sampled.
 - A sample of the proxy's answers (`auditSampleRate`, default 0.2, plus every answer below 0.5 confidence) goes
   to the owner's audit list; a REOPENED answer returns to the owner and is never proxied again — treat its new
   answer as authoritative on resume.
@@ -514,7 +547,8 @@ In **ultra**:
 ## Guardrails
 
 - **Never deploy**, never enter `release`/`deploy`, never call `deploy`/`publish_when_idle`/
-  `update_vps`; never `git push`, force-push, rebase a submitted sha by hand, or create branches
+  `update_vps`; never call `approve_qa`/`approve_review` (the operator's exits — your proof is the stamp in
+  your worktree card, and a stamp you cannot back is a pause, not a workaround); never `git push`, force-push, rebase a submitted sha by hand, or create branches
   (the worktree tools own them).
 - **Never edit the runtime checkout or the `stage` worktree**; board data there only via MCP.
 - **Control paths are off-limits**: `storymap/settings.yaml`, any `board.yaml`,
@@ -530,15 +564,16 @@ In **ultra**:
 
 ## Known limits (core follow-ups — do not pretend otherwise)
 
-Screenshots have no durable per-card home; the ultra DELIVERY audit (sampling notices of autonomous
-deliveries) is not in core yet — only the proxy's answers are sampled. A conductor that
+Screenshots have no durable per-card home (the delivery audit shows the `## Prova da entrega` text, not the
+PNGs). A conductor that
 dies is never reopened automatically (the driver stays; the operator reopens with `claude_new` or
 clears it). The session's cost is an ESTIMATE (embedded price table; a model it does not know is
 priced by family or left unpriced), booked when the session ends — a tail spent after
 `worktree_discard` is not counted. The dispatch queue is re-checked on the fleet tick (disabled
 when `AGILEHARNESS_FLEET_RECONCILE_MS <= 0`), obeys the autorun master switch and the board's arm,
 and a hand-opened conductor does not count against `maxSessions`. `techPlanReady`, `hasUiSurface`
-and `criteriaSpecs` still have no MCP writer (worktree + submit).
+and `criteriaSpecs` still have no MCP writer (worktree + submit); the QA stamp (`qaPassed`/`qaEvidence`) is
+written there BY DESIGN — the same path `harness-qa` uses, carried to main by the train.
 
 ## Report (end of each turn that closes a block)
 

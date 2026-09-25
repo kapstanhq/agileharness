@@ -14,6 +14,7 @@
 
 import { openQuestions } from "./questions";
 import { isOwnerOnlyQuestion, isPendingProxyAudit, isProxiableQuestion } from "./autonomy";
+import { deliveryProofOf, isPendingDeliveryAudit } from "./delivery-audit";
 import { draftTitle, isGovernanceDraftStale } from "./governance";
 import { hasCanvasContent } from "./design-canvas";
 // type-only: apagado em runtime, então não cria ciclo (copilot/tier.ts não importa demands.ts) e mantém este
@@ -460,7 +461,12 @@ export type CockpitItemKind =
   /** WS-5 (D9) — entry TERMINAL `failed` do merge train (a mais recente do card): trabalho fora da main. */
   | "merge-failed"
   /** lanes-ultra — uma resposta que o PROXY (modo ultra) deu no lugar do dono e caiu na AMOSTRA de auditoria. */
-  | "proxy-audit";
+  | "proxy-audit"
+  /** v0.9 — uma ENTREGA AUTÔNOMA (modo ultra: ninguém aprovou antes) chegou ao ar e caiu na AMOSTRA de auditoria. */
+  | "delivery-audit"
+  /** v0.9 — o MEDIDOR de cota do governador PAROU: a automação inteira está retida. Fato do HOST, não de um card —
+   *  aparece uma vez no Inbox de todo board enquanto durar ({@link meterStallItem}). */
+  | "meter-stalled";
 
 interface CockpitItemBase {
   /** stable id, unique within the board (e.g. `<cardId>:q:<questionId>`) */
@@ -520,6 +526,65 @@ export interface ProxyAuditCockpitItem extends CockpitItemBase {
   assumptions: string;
   confidence: number;
   category?: QuestionCategory;
+}
+
+/**
+ * 🟢 v0.9 — an AUTONOMOUS DELIVERY on the owner's audit list (ultra mode — delivery-audit.ts): the story reached a
+ * `delivered` status with no one approving it first, and the deterministic sample picked it. The owner CONFIRMS it
+ * (it stands) or REOPENS it (the story goes back through refine, with the owner's reason as a finding). It is the
+ * owner's review of work shipped on their behalf: never the copiloto's.
+ */
+export interface DeliveryAuditCockpitItem extends CockpitItemBase {
+  kind: "delivery-audit";
+  /** when the delivery was sampled (YYYY-MM-DD). */
+  sampledAt: string;
+  /** the `## Prova da entrega` the conductor wrote (trimmed), when the card has one. */
+  proof?: string;
+}
+
+/**
+ * 🔴 v0.9 — o MEDIDOR de cota parou (runner/capacity-governor: a leitura de uso envelheceu depois de já ter sido
+ * vista). Com ele parado o governador RETÉM toda automação, e nada no board diz por quê — o token que renovaria a
+ * leitura só renova com tráfego, então o impasse não se desfaz sozinho. É um fato do HOST: sem card (`cardId` ""),
+ * o mesmo item em todo board, enquanto durar. O conserto é do operador (tráfego pelo proxy / renovar o token).
+ */
+export interface MeterStalledCockpitItem extends CockpitItemBase {
+  kind: "meter-stalled";
+  /** epoch ms da última leitura BOA — o "parado desde". */
+  stalledSince: number;
+  /** epoch ms em que o governador detectou a parada. */
+  detectedAt: number;
+  /** o que o governador mediu (texto dele, curto). */
+  detail: string;
+}
+
+/** O fato do governador que {@link meterStallItem} projeta (capacity-governor `snapshot().meterStall`). */
+export interface MeterStall {
+  since: number;
+  detectedAt: number;
+  detail: string;
+}
+
+/**
+ * O item do Inbox de um medidor de cota parado, para `boardId` — ou null quando o medidor está vivo. PURA. O id é
+ * estável por EPISÓDIO (a mesma parada é o mesmo item; uma nova parada é um item novo, que o "visto" não esconde).
+ */
+export function meterStallItem(stall: MeterStall | null | undefined, boardId: string): MeterStalledCockpitItem | null {
+  if (!stall || !Number.isFinite(stall.since)) return null;
+  return {
+    id: `host:meter-stalled:${stall.since}`,
+    kind: "meter-stalled",
+    boardId,
+    cardId: "",
+    cardTitle: "Medidor de cota",
+    status: null,
+    lane: "travado",
+    severity: "high",
+    since: new Date(stall.since).toISOString(),
+    stalledSince: stall.since,
+    detectedAt: stall.detectedAt,
+    detail: stall.detail,
+  };
 }
 
 /** 🔴 An open blocker finding (code review) keeping the card stuck. */
@@ -702,7 +767,9 @@ export type CockpitItem =
   | DeployUnsettledCockpitItem
   | ReleaseAgingCockpitItem
   | MergeFailedCockpitItem
-  | ProxyAuditCockpitItem;
+  | ProxyAuditCockpitItem
+  | DeliveryAuditCockpitItem
+  | MeterStalledCockpitItem;
 
 /**
  * 6.4 — quem pode ACIONAR cada kind do cockpit, POR TIER do copiloto. O princípio (herdado da F8) é um só:
@@ -767,6 +834,12 @@ const KIND_AUTONOMY: Record<CockpitItemKind, KindAutonomy> = {
   // um copiloto que a fechasse apagaria justamente o controle que a amostra existe para dar. (A tool que a fecha é
   // full-only também — as duas travas dizem a mesma coisa.)
   "proxy-audit": "never",
+  // v0.9 — a auditoria de uma ENTREGA autônoma é a mesma coisa um degrau acima: o dono revisando o que foi entregue
+  // em nome dele. Um copiloto que a confirmasse apagaria o único olhar humano sobre essa entrega.
+  "delivery-audit": "never",
+  // v0.9 — o medidor de cota parado: o conserto é tráfego pelo proxy ou renovar o token do medidor, mãos do
+  // operador no host. Nenhum tier tem a alavanca — acordar o tick por isto seria acordar para constatar impotência.
+  "meter-stalled": "never",
   approval: "never", // é o pedido que o PRÓPRIO copiloto abriu — ele aguarda VOCÊ. Se fosse acionável, o tick
   // acordaria por causa de si mesmo, veria "trabalho", e re-acordaria: laço. O gate DO CARD (que ele PODE
   // empurrar) é o kind `gate` — outro item, outra semântica.
@@ -892,6 +965,22 @@ export function cardCockpitItems(card: Card, config: BoardConfig, boardId: strin
         ...(q.category ? { category: q.category } : {}),
       });
     }
+  }
+
+  // v0.9 — the DELIVERY AUDIT list: an autonomous delivery sampled for the owner's review. Also BEFORE the terminal
+  // guard — the delivered status IS terminal ("No ar"), and that is exactly where this item has to show.
+  if (def && isPendingDeliveryAudit(card) && card.deliveryAudit) {
+    const proof = deliveryProofOf(card.body);
+    out.push({
+      ...base,
+      id: `${card.id}:da`,
+      kind: "delivery-audit",
+      lane: "aprovar",
+      severity: "low",
+      since: card.deliveryAudit.sampledAt,
+      sampledAt: card.deliveryAudit.sampledAt,
+      ...(proof ? { proof } : {}),
+    });
   }
 
   if (!def || def.terminal) return out;

@@ -27,6 +27,8 @@ export const COCKPIT_KIND_LABEL: Record<CockpitItemKind, string> = {
   "release-aging": "Release parada em stage",
   "merge-failed": "Merge falhou",
   "proxy-audit": "Resposta do proxy",
+  "delivery-audit": "Entrega autônoma",
+  "meter-stalled": "Medidor de cota parado",
 };
 
 /**
@@ -61,6 +63,8 @@ export const COCKPIT_DEMAND_LABEL: Record<CockpitItemKind, string> = {
   "release-aging": "Publicar release parada",
   "merge-failed": "Resolver merge que falhou",
   "proxy-audit": "Auditar resposta do proxy",
+  "delivery-audit": "Auditar entrega autônoma",
+  "meter-stalled": "Religar o medidor de cota",
 };
 
 /**
@@ -123,6 +127,15 @@ function firstText(...candidates: Array<string | null | undefined>): string {
  * without a branch here fails to compile — the same discipline as {@link COCKPIT_KIND_LABEL}.
  * Returns "" when the kind genuinely carries no prose; callers fall back to the kind label.
  */
+/**
+ * A frase do medidor de cota parado — a que o dono lê no Inbox, com a hora LOCAL da última leitura boa. Mora aqui
+ * (e não na projeção pura) porque a hora é do fuso de quem lê.
+ */
+export function meterStallLine(stalledSince: number): string {
+  const hhmm = new Date(stalledSince).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  return `medidor de cota parado desde ${hhmm} — automação retida; causa provável: sem tráfego pelo proxy / token expirado`;
+}
+
 export function cockpitItemSnippet(item: CockpitItem): string {
   switch (item.kind) {
     case "question":
@@ -165,6 +178,10 @@ export function cockpitItemSnippet(item: CockpitItem): string {
       return firstText(item.failureReason, `Branch ${item.branch} ficou fora da main.`);
     case "proxy-audit":
       return firstText(item.prompt && `${item.prompt} → ${item.answer}`, item.answer);
+    case "delivery-audit":
+      return firstText(item.proof, "Entregue sem aprovação prévia (modo ultra) — caiu na amostra de auditoria.");
+    case "meter-stalled":
+      return meterStallLine(item.stalledSince);
     default: {
       const exhaustive: never = item;
       return exhaustive;

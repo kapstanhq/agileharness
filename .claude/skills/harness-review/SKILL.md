@@ -232,6 +232,7 @@ questions:
     askedBy: harness-review
     askedAt: <YYYY-MM-DD de hoje>
     status: open
+    category: interview         # SEMPRE — interview (produto/UX) | money (sempre do dono) — ver abaixo
     context: <o PORQUÊ — o trade-off em jogo, o que muda conforme a escolha (1-2 linhas)>
     mode: single                # single (uma) | multi (várias)
     options:                    # 2–5 caminhos PLAUSÍVEIS (não fatos inventados)
@@ -249,6 +250,13 @@ questions:
 
 - **SEMPRE preencha `context:`** — as stakes, o que muda conforme a resposta. É o que
   deixa o Inbox decidir num toque sem reabrir o card.
+- **SEMPRE preencha `category:`** — é o que a chave de autonomia do board lê. Numa story
+  **ultra**, uma pergunta `interview` vai a um PROXY (contexto limpo, PRD + personas + decisões
+  passadas do dono, premissas registradas); sem `category` ela nunca vai — e trava a story no dono.
+  `interview` = decisão de produto/UX/comportamento (a hierarquia de ação do modal abaixo);
+  `money` = gasto, fornecedor, preço, API paga, publicação externa, PRD/metas, e decisões que tocam
+  auth/rules/pagamentos/dados pessoais — SEMPRE do dono (comece o `context:` com `[humano]`);
+  `ui-choice` = escolher entre variantes de tela já desenhadas. Na dúvida, `money`.
 - **Com opções discretas** → dê `options:` (2–5, ids `o1`,`o2`,…) com `mode:
   single|multi`, `pros`/`cons` curtos por opção, e marque a melhor com `recommended:
   true` (**no máximo UMA** em toda a pergunta). O texto livre do humano está sempre
@@ -295,6 +303,7 @@ questions:
     askedBy: harness-review
     askedAt: 2026-06-14
     status: open
+    category: interview
     context: >-
       Hoje header e toggle interno são dois caminhos de salvar com a mesma intenção,
       sem dono claro (dual-concluído). A escolha define a hierarquia de ação do modal

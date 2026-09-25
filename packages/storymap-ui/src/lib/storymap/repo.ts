@@ -48,6 +48,7 @@ import type {
   CardType,
   ColumnDef,
   AutonomyPolicy,
+  BoardNotificationsConfig,
   BoardViewConfig,
   ConductorPolicy,
   CommitRange,
@@ -55,6 +56,7 @@ import type {
   LaneDemand,
   ProxyAnswerRecord,
   CriterionSpec,
+  DeliveryAuditRecord,
   DiffSnapshot,
   FailureClass,
   Finding,
@@ -278,6 +280,27 @@ function coerceProxyAnswer(raw: unknown): ProxyAnswerRecord | undefined {
   const auditedAt = r.auditedAt != null ? toDateString(r.auditedAt) : null;
   if (auditedAt) out.auditedAt = auditedAt;
   if (r.auditOutcome === "confirmed" || r.auditOutcome === "reopened") out.auditOutcome = r.auditOutcome;
+  return out;
+}
+
+/**
+ * The owner's sampled audit of an autonomous delivery (delivery-audit.ts). Strict on the one field that makes it
+ * an audit — a valid `sampledAt` date — else the record is dropped whole; tolerant on the rest (an unknown
+ * `outcome` is dropped, leaving the audit pending — the owner is asked again rather than a verdict invented).
+ */
+function coerceDeliveryAudit(raw: unknown): DeliveryAuditRecord | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const r = raw as Record<string, unknown>;
+  const sampledAt = r.sampledAt != null ? toDateString(r.sampledAt) : null;
+  if (!sampledAt) return undefined;
+  const out: DeliveryAuditRecord = { sampledAt };
+  if (typeof r.deliveredIn === "string" && r.deliveredIn.trim()) out.deliveredIn = r.deliveredIn.trim();
+  const auditedAt = r.auditedAt != null ? toDateString(r.auditedAt) : null;
+  if (auditedAt && (r.outcome === "confirmed" || r.outcome === "reopened")) {
+    out.auditedAt = auditedAt;
+    out.outcome = r.outcome;
+  }
+  if (typeof r.note === "string" && r.note.trim()) out.note = r.note.trim();
   return out;
 }
 
@@ -876,6 +899,20 @@ export function coerceAutonomy(raw: unknown): AutonomyPolicy | undefined {
 }
 
 /**
+ * The board's NOTIFICATION declarations (board.yaml `notifications:`) — today the CRITICAL SIGNAL prefixes
+ * (notifications/push-policy `criticalSignalPrefix`). Keeps only non-empty strings (trimmed at the END only: a
+ * prefix like `[sinal:scraper:` is matched literally at the start of a title, so its own leading characters are
+ * the contract). Nothing left ⇒ undefined (no board-declared signal).
+ */
+export function coerceBoardNotifications(raw: unknown): BoardNotificationsConfig | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const list = (raw as Record<string, unknown>).criticalTitlePrefixes;
+  if (!Array.isArray(list)) return undefined;
+  const prefixes = [...new Set(list.filter((x): x is string => typeof x === "string").map((x) => x.trimEnd()).filter((x) => x.trim().length > 0))];
+  return prefixes.length ? { criticalTitlePrefixes: prefixes } : undefined;
+}
+
+/**
  * Deploy agnóstico (D-AG1) — coerce the board's deploy DESCRIPTOR from raw yaml. Tolerant on shape
  * (invalid block ⇒ undefined ⇒ legacy routing — a board never goes dark over a malformed descriptor;
  * the B1 drift alarm below surfaces it via BoardConfigSchema), strict on VALUES: an unknown `kind` or a
@@ -1094,6 +1131,8 @@ export function coerceCard(
     routing: coerceRouting(data.routing),
     // The per-story autonomy exception (sparse): only a known mode survives the read.
     autonomyMode: isAutonomyMode(data.autonomyMode) ? data.autonomyMode : undefined,
+    // The owner's sampled audit of an autonomous delivery (sparse): a husk without `sampledAt` is dropped.
+    deliveryAudit: coerceDeliveryAudit(data.deliveryAudit),
     release: data.release != null ? String(data.release) : null,
     // SM-02: sparse flag — only retained when explicitly true on disk.
     unplaced: data.unplaced === true ? true : undefined,
@@ -1705,6 +1744,7 @@ async function resolveBoardConfigFromOwnRaw(
   const conductor = coerceConductor((parsed as { conductor?: unknown }).conductor);
   const view = coerceBoardView((parsed as { view?: unknown }).view);
   const autonomy = coerceAutonomy((parsed as { autonomy?: unknown }).autonomy);
+  const notifications = coerceBoardNotifications((parsed as { notifications?: unknown }).notifications);
   const config: BoardConfig = {
     id: parsed.id ?? boardId,
     name: parsed.name ?? boardId,
@@ -1743,6 +1783,8 @@ async function resolveBoardConfigFromOwnRaw(
     // declarado, aceito pelo contrato e INERTE. Spread condicional: board sem o bloco não carrega chave fantasma.
     ...(view ? { view } : {}),
     ...(autonomy ? { autonomy } : {}),
+    // Os sinais críticos do board (push-policy): mesma whitelist — sem esta linha o bloco seria aceito e inerte.
+    ...(notifications ? { notifications } : {}),
     // Strategy bench artifacts (owner:human) — declared in BoardConfigSchema but historically dropped
     // here, which broke the governance round-trip (approve→write→read showed the stale value). Coerced +
     // persisted (deriveBoardConfigForPersist) so the strategy ladder (Posicionamento/Métrica/Resultado-alvo)
@@ -1922,6 +1964,7 @@ export async function deriveBoardConfigForPersist(
   // A vista em raias e a chave de autonomia: board-locais pelo mesmo motivo — um save de outra coisa não apaga.
   if (config.view) out.view = config.view;
   if (config.autonomy) out.autonomy = config.autonomy;
+  if (config.notifications) out.notifications = config.notifications;
   // story-fr5bnt kill-switch — board-local operational flag (never inherited from _base): persist when
   // set, else ANY board.yaml save (vocab/canvas/strategy) silently DELETED the line from disk (D15).
   if (config.autorunDisabled) out.autorunDisabled = true;

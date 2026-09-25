@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 
 // lanes-ultra — the MCP surface of the AUTONOMY KEY:
 //   • answer_question REFUSES a money/owner-only question (an MCP answer is always an agent's — the owner answers
@@ -30,11 +31,12 @@ import { registerStorymapTools } from "./tools";
 
 type ToolHandler = (args: Record<string, unknown>) => CallToolResult | Promise<CallToolResult>;
 
-function captureHandlers(): Map<string, ToolHandler> {
+function captureHandlers(metas?: Map<string, { inputSchema: z.ZodRawShape }>): Map<string, ToolHandler> {
   const handlers = new Map<string, ToolHandler>();
   const server = {
-    registerTool: (name: string, _meta: unknown, handler: ToolHandler) => {
+    registerTool: (name: string, meta: { inputSchema: z.ZodRawShape }, handler: ToolHandler) => {
       handlers.set(name, handler);
+      metas?.set(name, meta);
     },
   } as unknown as McpServer;
   registerStorymapTools(server);
@@ -85,6 +87,17 @@ describe("ask_question — a categoria do autor chega à action", () => {
     expect(askQuestionsAction).toHaveBeenCalledWith(
       expect.objectContaining({ questions: [expect.objectContaining({ category: "interview" })] }),
     );
+  });
+
+  // v0.9 — quem escreve uma pergunta ESTRUTURADA sabe o tipo da decisão, então o contrato a EXIGE: uma pergunta sem
+  // categoria nunca vai ao proxy, e esquecê-la travava uma story ultra no dono em silêncio. O texto livre segue sem.
+  it("category é OBRIGATÓRIA em cada pergunta estruturada (o SDK valida o inputSchema antes do handler)", () => {
+    const metas = new Map<string, { inputSchema: z.ZodRawShape }>();
+    captureHandlers(metas);
+    const schema = z.object(metas.get("ask_question")!.inputSchema);
+    expect(schema.safeParse({ board: "b", cardId: "c", questions: [{ text: "Quem é o público?" }] }).success).toBe(false);
+    expect(schema.safeParse({ board: "b", cardId: "c", questions: [{ text: "Quem é o público?", category: "interview" }] }).success).toBe(true);
+    expect(schema.safeParse({ board: "b", cardId: "c", texts: ["livre?"] }).success).toBe(true);
   });
 });
 

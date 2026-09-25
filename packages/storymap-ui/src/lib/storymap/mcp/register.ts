@@ -262,6 +262,11 @@ const TOOL_ANNOTATIONS: Record<string, ToolHints> = {
   // auditoria do proxy apagaria a revisão que o dono pediu. Decisão do dono ⇒ DESTRUCTIVE ⇒ só `full`.
   set_card_autonomy: DESTRUCTIVE,
   resolve_proxy_audit: DESTRUCTIVE,
+  // v0.9 — as skills que a ferramenta distribui, no ALVO. `write-board`, como as escritas de board-data: copiar as
+  // que FALTAM é aditivo (o conteúdo é o da release da ferramenta, não texto do chamador) e integra pelo train. O
+  // que é decisão do operador — SOBRESCREVER uma skill que o alvo customizou — a própria tool recusa a um token
+  // escopado (skills-sync.ts `overwriteRefusal`), então nenhum agente troca a instrução que ele mesmo segue.
+  sync_skills: WRITE_IDEM,
   wait_for_approval: RO, // blocks until a pending ApprovalRequest is decided/expires (event wait, like wait_for_run)
 };
 

@@ -6,19 +6,24 @@
 // zero-cost until the VAPID keys are configured (mirrors the Slack channel's opt-in
 // shape), so a dev without keys pays nothing.
 //
-// TWO trigger sources feed push, by user choice (see the AskUserQuestion that scoped
-// this): "advanced a column", the higher-priority "needs you" subset, and "run failed".
+// TWO trigger sources can feed push — and since v0.9 NEITHER pushes by default. Each fact below has a name in
+// the push POLICY (notifications/push-policy: "push só para o crítico"), and only the facts the owner lists as
+// critical (`settings.yaml` → `notifications.push.critical`) reach the phone; the rest wait in the Inbox:
 //   - AgileHarnessEvent (dispatcher): a card's pending DEMAND (event.demand — question/blocker/review/
-//     gate) → "precisa de você" push EVEN WITH NO move (story-rl5v03); plus card.moved → advanced.
-//     card.created (capture storms) and demand-less updated/deleted are NOT pushed.
-//   - RunnerFailure (registry): a headless harness-* run failed. The registry — NOT the
+//     gate) → `card-demand` EVEN WITH NO move (story-rl5v03); card.moved into a manual stop → `card-needs-you`;
+//     any other card.moved → `card-moved`. card.created (capture storms) and demand-less updated/deleted are
+//     never a push fact (a board-declared CRITICAL card is — through the alert bus, see critical-signal-channel).
+//   - RunnerFailure (registry): a headless harness-* run failed → `run-failed`. The registry — NOT the
 //     dispatcher — is the source, so we subscribe to it directly (non-invasive; the
 //     same public API the SSE route uses), de-duping by failure key.
 
 import type { NotificationChannel, AgileHarnessEvent } from "../../event";
 import { describeEvent } from "../../event";
+import { shouldPush, shouldSlack, type PushEventKind } from "../../push-policy";
 import { loadSubscriptions, removeSubscription } from "../push-store";
-import { readBoardConfig } from "@/lib/storymap/repo";
+import { currentPushPolicy } from "../push-policy-config";
+import { BOARD_EVENT_PUSH_KINDS, BoardEventPushClassifier, destinationOf } from "./board-event-push";
+import { sendSlackAlert } from "./slack-channel";
 import { getRunnerRegistry } from "@/lib/storymap/runner/registry";
 
 /** What the service worker receives (public/sw.js reads exactly these fields). */
@@ -106,11 +111,6 @@ export async function sendPush(payload: PushPayload): Promise<void> {
   );
 }
 
-// Dedup pending-demand pushes per card by demand TYPE — so repeated card.updated edits (or a count
-// changing within the same type, e.g. answering 1 of 2 questions) don't re-push; cleared when the
-// card has no demand, so a future re-appearance pushes again.
-const notifiedDemands = new Map<string, string>();
-
 /** Pure: a pending-demand event → its push payload (no dedup, no IO). null when the event carries no demand. */
 export function demandPushPayload(event: AgileHarnessEvent): PushPayload | null {
   if (!event.demand || !event.cardId) return null;
@@ -125,35 +125,12 @@ export function demandPushPayload(event: AgileHarnessEvent): PushPayload | null 
   };
 }
 
-/** Turn a board event into a push payload, or null when it shouldn't be pushed. */
-async function buildEventPayload(event: AgileHarnessEvent): Promise<PushPayload | null> {
-  // 1) A pending HUMAN DEMAND on the card (question/blocker/review/gate) — the highest-value push: it
-  //    fires even when the card did NOT move (harness-grill writes questions in place — story-rl5v03). Skip
-  //    card.created (a brain-dump capture would push a storm); dedupe per card by demand type.
-  if (event.demand && event.cardId && event.type !== "card.created") {
-    const key = `${event.boardId}/${event.cardId}`;
-    if (notifiedDemands.get(key) !== event.demand.type) {
-      notifiedDemands.set(key, event.demand.type);
-      return demandPushPayload(event);
-    }
-    return null; // same demand already pushed for this card
-  }
-  if (event.cardId && !event.demand) notifiedDemands.delete(`${event.boardId}/${event.cardId}`);
-
-  // 2) Otherwise: the original "advanced a column" / needs-you push on card.moved.
-  if (event.type !== "card.moved" || !event.cardId) return null;
-
-  const config = await readBoardConfig(event.boardId).catch(() => null);
-  const toDef = config?.statuses.find((s) => s.id === event.toStatus);
-  // "Needs you" = the card entered a NON-terminal status that does NOT autorun — the
-  // pipeline parks here and waits for a human (com-design / revisao / descontinuar).
-  // Derived from board.yaml (autorun !== true && !terminal), so it survives pipeline
-  // edits with zero hardcoded status ids.
-  const needsYou = !!toDef && toDef.autorun !== true && toDef.terminal !== true;
+/** Pure: a classified board event → its push payload. */
+export function boardEventPushPayload(kind: PushEventKind, event: AgileHarnessEvent): PushPayload | null {
+  if (kind === "card-demand") return demandPushPayload(event);
   const tag = `storymap:${event.boardId}:${event.cardId}`;
   const url = `/board/${event.boardId}`;
-
-  if (needsYou) {
+  if (kind === "card-needs-you") {
     const where = event.toStatusName ?? event.toStatus ?? "";
     const name = event.title ? `“${event.title}” ` : "";
     return {
@@ -164,18 +141,30 @@ async function buildEventPayload(event: AgileHarnessEvent): Promise<PushPayload 
       priority: "high",
     };
   }
-  // Plain "advanced a column".
-  const { title, body } = describeEvent(event);
-  return { title, body, tag, url, priority: "normal" };
+  if (kind === "card-moved") {
+    // Plain "advanced a column".
+    const { title, body } = describeEvent(event);
+    return { title, body, tag, url, priority: "normal" };
+  }
+  return null;
 }
 
-/** The dispatcher channel: pushes card.moved (advanced + needs-you). Null when push is off. */
+/**
+ * The dispatcher channel: a board event reaches the phone only as a fact the push POLICY lists as critical (by
+ * default none of the board-event facts is — the owner opens the Inbox when they want). Null when push is off.
+ */
 export function createWebPushChannel(): NotificationChannel | null {
   if (!isPushConfigured()) return null;
+  const classifier = new BoardEventPushClassifier();
   return {
     id: "web-push",
     async notify(event: AgileHarnessEvent) {
-      const payload = await buildEventPayload(event);
+      const policy = currentPushPolicy();
+      // The default policy lists no board-event fact: skip the board.yaml read entirely on the common path.
+      if (!BOARD_EVENT_PUSH_KINDS.some((k) => shouldPush(k, policy))) return;
+      const kind = classifier.classify(event, await destinationOf(event));
+      if (!kind || !shouldPush(kind, policy)) return;
+      const payload = boardEventPushPayload(kind, event);
       if (payload) await sendPush(payload);
     },
   };
@@ -189,20 +178,26 @@ export function createWebPushChannel(): NotificationChannel | null {
 let failurePushInit = false;
 const notifiedFailures = new Set<string>();
 
-/** Wire runner failures → push. Idempotent; no-op if push is unconfigured. */
+/** Wire runner failures → push/Slack (the `run-failed` fact — NOT critical by default: a failed run is a TRAVADO
+ *  item on the Inbox). Idempotent; no-op when neither push nor Slack is configured. */
 export function initRunnerFailurePush(): void {
   if (failurePushInit) return;
   failurePushInit = true;
-  if (!isPushConfigured()) return;
+  if (!isPushConfigured() && !process.env.AGILEHARNESS_SLACK_WEBHOOK_URL) return;
 
   getRunnerRegistry().subscribe((snapshot) => {
     for (const f of snapshot.failures) {
       const key = `${f.board}/${f.cardId}/${f.at}`;
       if (notifiedFailures.has(key)) continue;
       notifiedFailures.add(key);
+      const policy = currentPushPolicy();
+      const title = `❌ Run falhou — ${f.trigger}`;
+      const body = `${f.cardId} em ${f.board}${f.detail ? ` · ${f.detail}` : ""}`;
+      if (shouldSlack("run-failed", policy)) void sendSlackAlert(title, body);
+      if (!shouldPush("run-failed", policy)) continue;
       void sendPush({
-        title: `❌ Run falhou — ${f.trigger}`,
-        body: `${f.cardId} em ${f.board}${f.detail ? ` · ${f.detail}` : ""}`,
+        title,
+        body,
         tag: `storymap:fail:${f.board}:${f.cardId}`,
         url: `/board/${f.board}`,
         priority: "high",

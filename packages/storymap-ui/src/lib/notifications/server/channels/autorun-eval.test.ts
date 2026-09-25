@@ -606,6 +606,29 @@ describe("threadResumeSessionId — session threading policy (one agent, many ha
     // …and the legacy default (no cancel) still threads.
     expect(threadResumeSessionId("b", "c", c, next(c, "interview"), "harness-interview", "harness-enrich", false)).toBe("sess-1");
   });
+
+  // v0.9 — "the last run was cancelled" reads the latest COLUMN run, never the latest ledger record: a proxy answer
+  // (ultra) booked after the cancel is not a run and must not re-open the thread the operator cancelled.
+  it("WS-8.3 × v0.9 — a PROXY record after the cancelled run does not hide the cancel (kernel end to end)", async () => {
+    const c = { ...cfg(), id: "b", name: "B", releases: [], personas: [], systems: [], linkTypes: [] } as BoardConfig;
+    vi.mocked(readBoardConfig).mockResolvedValue(c);
+    vi.mocked(readCards).mockResolvedValue([card({ status: "interview", storyType: "user" })]);
+    const rows = (over: Array<Record<string, unknown>>) => over.map((o, i) => ({ id: `r${i}`, costUSD: 0, ...o }));
+    // most-recent first, like the store: the proxy answer (ok) is NEWER than the cancelled column run
+    mockListByCard.mockResolvedValue(rows([
+      { status: "ok", role: "proxy", startedAt: 200 },
+      { status: "cancelled", startedAt: 100 },
+    ]));
+    await evaluateAutorunOnEntry("b", "c", { suppressTrigger: "harness-enrich" });
+    expect(mockRunSkill).toHaveBeenCalledTimes(1);
+    expect(mockRunSkill.mock.calls[0][4]).not.toHaveProperty("resumeSessionId");
+
+    // the pair: the SAME kernel with no cancel among the runs threads as before
+    mockRunSkill.mockClear();
+    mockListByCard.mockResolvedValue(rows([{ status: "ok", role: "proxy", startedAt: 200 }, { status: "ok", startedAt: 100 }]));
+    await evaluateAutorunOnEntry("b", "c", { suppressTrigger: "harness-enrich" });
+    expect(mockRunSkill.mock.calls[0][4]).toMatchObject({ resumeSessionId: "sess-1" });
+  });
 });
 
 // conductor-core — the kernel is where the conductor is dispatched AND where a conducted card is left alone.

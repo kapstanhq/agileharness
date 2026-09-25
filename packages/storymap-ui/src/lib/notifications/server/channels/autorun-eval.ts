@@ -24,7 +24,7 @@ import { updateCardOnDisk } from "@/lib/storymap/write";
 import { resolveStaleQuestions } from "@/lib/storymap/questions";
 import { AUTORUN_DEDUPE_MS, getRunnerEngine, isCodeSkill } from "@/lib/storymap/runner/engine";
 import { getRunnerRegistry } from "@/lib/storymap/runner/registry";
-import { getTelemetryStore } from "@/lib/storymap/runner/telemetry";
+import { getTelemetryStore, latestRunRecord } from "@/lib/storymap/runner/telemetry";
 import { supersedeStaleTerminalBlockers, withCardBudgetFinding, withLoopGuardFinding } from "@/lib/storymap/runner/findings";
 import { ECONOMY_BLOCKED_AUTORUN_TRIGGERS, loadRunnerConfig } from "@/lib/storymap/runner/config";
 import { resolveHeadroomUrl } from "@/lib/storymap/runner/headroom";
@@ -358,10 +358,12 @@ export async function evaluateAutorunOnEntry(
 
     // WS-8.3 — was the card's MOST-RECENT run cancelled? Only relevant when threading (suppressTrigger set),
     // so the telemetry read is scoped to that path. A cancelled last run means don't re-seed the dead session.
+    // The latest COLUMN run (latestRunRecord), never the latest record: a proxy answer or a conductor session booked
+    // after the cancel is not a run, and must not re-open the thread the operator cancelled.
     let lastRunCancelled = false;
     if (opts.suppressTrigger) {
-      const recent = await getTelemetryStore().listByCard(boardId, card.id, 1).catch(() => []);
-      lastRunCancelled = recent[0]?.status === "cancelled";
+      const recent = await getTelemetryStore().listByCard(boardId, card.id, 20).catch(() => []);
+      lastRunCancelled = latestRunRecord(recent)?.status === "cancelled";
     }
     // Session threading (one-agent-many-hats): a same-column autorun continuation of a
     // `threadSession` column resumes the prior step's claude session instead of a fresh one.

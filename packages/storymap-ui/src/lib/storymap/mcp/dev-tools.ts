@@ -1211,6 +1211,77 @@ export function registerDevTools(server: McpServer): void {
     },
   );
 
+  // ── AS SKILLS DISTRIBUÍDAS (runner/skills-sync.ts) ──────────────────────────────────────────────────────────
+  // O alvo carrega as skills `harness-*` do REPOSITÓRIO DELE; uma que a ferramenta passou a distribuir depois (o
+  // condutor) simplesmente não existia onde o papel roda. O preflight mede (`skills.distributed`); esta tool leva
+  // as que FALTAM — pelo worktree de sessão e pelo merge train, nunca direto no checkout de runtime, e nunca
+  // sobrescrevendo uma que difere sem que ela seja nomeada em `overwrite`.
+  defineTool(server,
+    "sync_skills",
+    {
+      title: "Sincronizar as skills da ferramenta no alvo",
+      description:
+        "Compara as skills `harness-*` que a FERRAMENTA distribui (a árvore .claude/skills do checkout dela) com as do " +
+        "ALVO e COPIA para o alvo só as que FALTAM. Uma que DIFERE nunca é sobrescrita, a menos que você a nomeie em " +
+        "`overwrite` (o alvo pode ter customizado a instrução do agente dele). A escrita vai por um worktree de SESSÃO " +
+        "e pelo merge train (gate + split), como qualquer trabalho de sessão — nunca direto no checkout de runtime. " +
+        "`dryRun: true` só devolve o plano (faltam / diferem / iguais). Com submissão, acompanhe com " +
+        "wait_for_submit({sessionId}) e feche com worktree_discard({sessionId}). `overwrite` é decisão do operador: " +
+        "só o token full o usa.",
+      inputSchema: {
+        overwrite: z
+          .array(z.string())
+          .optional()
+          .describe("skills que DIFEREM e devem ser trocadas pela versão da ferramenta — só as nomeadas aqui"),
+        dryRun: z.boolean().optional().describe("true = só o plano, nada escrito"),
+      },
+    },
+    async ({ overwrite, dryRun }) => {
+      const { syncSkills } = await import("@/lib/storymap/runner/skills-sync");
+      const { readSkillTrees } = await import("@/lib/storymap/skills-drift");
+      const { findToolRoot } = await import("@/lib/storymap/paths");
+      const { existsSync } = await import("node:fs");
+      let toolRoot: string;
+      try {
+        toolRoot = findToolRoot();
+      } catch (err) {
+        return fail(`não resolvi o checkout da ferramenta: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      const who = currentMcpActor();
+      const res = await syncSkills(
+        {
+          toolRoot,
+          targetRoot: findRepoRoot(),
+          readTrees: (root) => readSkillTrees(root),
+          openWorktree: async (task) => {
+            const r = await openSessionWorktree(sessionDeps(), {
+              task,
+              actor: who ? `mcp:${who.level}${who.tokenEnv ? `(${who.tokenEnv})` : ""}` : undefined,
+            });
+            if (!r.ok) return { ok: false, reason: r.reason };
+            const where = r.session.worktreePath;
+            return where ? { ok: true, sessionId: r.session.sessionId, path: where } : { ok: false, reason: "a sessão aberta não tem worktree" };
+          },
+          exists: (p) => existsSync(p),
+          copyTree: async (from, to) => {
+            await fs.rm(to, { recursive: true, force: true });
+            await fs.cp(from, to, { recursive: true, dereference: false });
+          },
+          submit: async (sessionId, message) => {
+            const r = await submitSessionWork(sessionDeps(), { sessionId, message });
+            return r.ok ? { ok: true, pinnedSha: r.pinnedSha } : { ok: false, reason: r.reason };
+          },
+          discard: async (sessionId) => {
+            await discardSessionWorktree(sessionDeps(), { sessionId });
+          },
+        },
+        { overwrite, dryRun, scoped: isScopedActor() },
+      );
+      if (!res.ok) return fail(`${res.reason}\nplano: ${JSON.stringify(res.plan)}`);
+      return json(res);
+    },
+  );
+
   // ── the session's OWN reservation (runner/session-claims.ts) ─────────────────────────────────────────────
   // claude_new was the only door that took a claim, and nothing gave one back but a dying tmux or a lapsed TTL.
   // These two close both ends for any fleet session — first of all the conductor, whose claim is what holds

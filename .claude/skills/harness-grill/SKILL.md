@@ -204,6 +204,7 @@ what the human (and only the human) can give, before specification. So:
        askedBy: harness-grill
        askedAt: <YYYY-MM-DD de hoje>
        status: open
+       category: interview     # SEMPRE — o TIPO da decisão (ver abaixo); sem ela a pergunta nunca vai ao proxy
        context: <o PORQUÊ — as stakes/o que muda conforme a resposta (1-2 linhas)>   # SEMPRE
        recommendation: <a recomendação do agente em PROSA — análise honesta do caminho mais plausível>
      - id: q2
@@ -211,7 +212,8 @@ what the human (and only the human) can give, before specification. So:
        askedBy: harness-grill
        askedAt: <YYYY-MM-DD de hoje>
        status: open
-       context: <o PORQUÊ — o que está em jogo entre os caminhos (1-2 linhas)>        # SEMPRE
+       category: money         # SEMPRE — aqui: a escolha mexe em gasto/fornecedor ⇒ do dono
+       context: "[humano] <o PORQUÊ — o que está em jogo entre os caminhos (1-2 linhas)>"   # SEMPRE
        mode: single            # single (uma) | multi (várias)
        options:                 # CAMINHOS plausíveis pro humano escolher num toque (não respostas factuais inventadas)
          - id: o1
@@ -227,7 +229,7 @@ what the human (and only the human) can give, before specification. So:
 
    Use sequential ids (`q1`, `q2`, …) that don't collide with an existing question. Leave
    every `status: open` and DO NOT write an `answer` — you surface unknowns, never resolve
-   them.
+   them. Every entry carries a `category:` (rubric below) — never leave it out.
 
    **O `text` é a PERGUNTA, não a investigação — CURTO (1–3 frases).** É o CORPO que o
    operador lê primeiro no Inbox: comece pela pergunta aberta e dê só o mínimo pra
@@ -241,6 +243,23 @@ what the human (and only the human) can give, before specification. So:
 
    **SEMPRE preencha `context:`** — o PORQUÊ da pergunta: as stakes, o que muda no design/escopo
    conforme a resposta (1-2 linhas). É isso que deixa o Inbox decidir num toque sem reabrir o card.
+
+   **SEMPRE preencha `category:`** — o TIPO da decisão, que é o que a chave de autonomia do board lê
+   (`autonomy` no `board.yaml`; a exceção por story é `autonomyMode`). Numa story em modo **ultra**, uma
+   pergunta `interview` é respondida por um PROXY (contexto limpo, guiado pelo PRD, pelas personas e pelas
+   decisões passadas do dono, registrando premissas e confiança); as demais esperam o dono. Uma pergunta
+   **sem** `category` nunca vai ao proxy — ela TRAVA a story ultra no dono em silêncio, que é exatamente o
+   que esta linha existe para impedir:
+   - `interview` — decisão de produto/usuário/escopo/design que uma resposta informada pelo PRD e pelas
+     personas resolve (quem é o usuário, o JTBD, in/out de escopo, o trade-off "dedup no feed × corrigir o
+     pipeline"). É a categoria de quase toda pergunta do grill.
+   - `money` — gasto novo, fornecedor, preço, API externa paga, publicação externa, mudança de PRD/metas,
+     e decisões que tocam auth/rules/pagamentos/dados pessoais: SEMPRE do dono, em todo modo. Comece o
+     `context:` com `[humano]` (o piso que o código também lê).
+   - `ui-choice` — escolher entre variantes de tela JÁ desenhadas (raro no grill: ainda não há variantes).
+   - `delivery` — aprovar/integrar/publicar uma entrega (não é pergunta de grill).
+   Na dúvida entre `interview` e `money`, é `money`: um falso "do dono" custa uma resposta; um falso
+   "do proxy" deixaria um agente decidir o que só o dono decide.
 
    **Quando a pergunta tem opções discretas**, SUGIRA-as como `options:` (2–5, ids `o1`, `o2`, …)
    com `mode: single|multi`, e para CADA opção dê `pros:`/`cons:` curtos (1–3 bullets cada) e marque

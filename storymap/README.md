@@ -423,7 +423,9 @@ view:                        # opcional: o Kanban em RAIAS (ver "Vista em raias"
 autonomy:                    # opcional: a CHAVE DE AUTONOMIA (ver "Modo ultra", abaixo) — ausente = human
   mode: ultra                # human | ultra
   proxyModel: sonnet         # opcional (padrão sonnet)
-  auditSampleRate: 0.2       # opcional (padrão 0.2): fração das respostas do proxy que vai para a auditoria
+  auditSampleRate: 0.2       # opcional (padrão 0.2): fração das respostas do proxy E das entregas autônomas que vai para a auditoria
+notifications:               # opcional: os SINAIS CRÍTICOS do board (ver "Push só para o crítico", abaixo)
+  criticalTitlePrefixes: ["[sinal:scraper:", "[sinal:credits:"]  # card que NASCE com um destes prefixos vai ao dono (uma vez)
 linkTypes:  [{ id, name, from?: NodeKind[], to?: NodeKind[] }]
              # from/to opcional: ausente = sem restrição (legados). NodeKind = activity | step |
              # story | persona | release | desiredOutcome | inputMetric | opportunity | canvas.
@@ -571,9 +573,13 @@ contexto; as colunas viram PROJEÇÃO do progresso dela.
   `runner_status({board, cardId})` mostra `conductorSessions[]` e `spentIncludingLiveSessionsUSD`.
 - **Ferramentas MCP do condutor:** `set_tasks` (tasks na main — só a sessão com o claim do card),
   `add_finding` (finding na main; id estável = idempotente), `ask_question` com `questions[]`
-  estruturadas, `set_card_driver`, `claim_card`/`release_claim` (o claim da PRÓPRIA sessão),
-  `approve_qa`/`approve_review` (colunas resolvidas pelo pipeline do board: o passo que roda
-  `harness-qa`, o com gate `hasQaPassed`, o que roda `harness-review`).
+  estruturadas, `set_card_driver`, `claim_card`/`release_claim` (o claim da PRÓPRIA sessão).
+- **O carimbo de QA do condutor** vai pelo MESMO caminho honesto da `harness-qa`: `qaPassed`/`qaRanAt`/
+  `qaCommit` + `qaEvidence {suite, visual, at}` no card do PRÓPRIO worktree, levados à main pelo train junto com o
+  código (o merge 3-way do card toma o lado do run nos campos de pipeline). `suite: true` só se ele rodou a
+  suíte do pacote no worktree e deu verde (comando e contagem de testes no journal); `visual: true` só se o
+  verificador de contexto limpo varreu a tela e julgou os PNGs. `approve_qa`/`approve_review` são do
+  OPERADOR (a saída humana do gate honesto): o condutor nunca os chama — sem a prova, ele PARA e diz qual falta.
 
 ### Vista em raias (`view.lanes`)
 
@@ -602,9 +608,13 @@ deploy). "O detalhe de cada etapa aparece como etiqueta dentro do card, não com
 
 - **Quem decide o modo:** `autonomy.mode` do board; a story pode ter a sua exceção (`autonomyMode`, via
   `set_card_autonomy`). Ausente = `human` (comportamento de sempre).
-- **Categoria:** a pergunta estruturada leva `category` (`ask_question`). Só `interview` e `ui-choice` vão
-  ao proxy; `money` NUNCA — e um piso determinístico também segura o que o autor marcou `[humano]` ou
-  que fala de preço/fornecedor/gasto. Pergunta sem categoria é do dono.
+- **Categoria:** toda pergunta leva `category` — o `harness-grill`, o `harness-review`, o orquestrador e o
+  condutor a declaram, o steward marca as dele `delivery`, e o `ask_question` a EXIGE em cada pergunta
+  estruturada. Só `interview` e `ui-choice` vão ao proxy; `money` e `delivery` NUNCA — e um piso
+  determinístico também segura o que o autor marcou `[humano]` ou que fala de preço/fornecedor/gasto.
+  Pergunta sem categoria (um `texts` livre, uma skill que esqueceu) é do dono: o único default automático é
+  o CONSERVADOR do texto livre — fala de dinheiro ⇒ `money`; o resto fica sem categoria. Nada é
+  classificado como proxiável por palpite.
 - **O proxy:** uma execução headless SEPARADA, com contexto LIMPO (diretório temporário, nenhum token nem
   servidor MCP, postura contida), que recebe o PRD (`docs/prd.md`), as personas, o guia de estilo, as
   respostas passadas do DONO no board e as variantes — sem a recomendação de quem perguntou. A saída é um
@@ -617,7 +627,45 @@ deploy). "O detalhe de cada etapa aparece como etiqueta dentro do card, não com
 - **Auditoria:** `auditSampleRate` (padrão 0.2) das respostas — e toda resposta com confiança < 0,5 — cai
   no Inbox como "Resposta do proxy": o dono confirma, ou reabre (a pergunta volta para ele, com as
   premissas do proxy no contexto, e nunca mais vai ao proxy).
+- **Prova da entrega — aviso depois, auditoria por amostra:** quando uma story em ultra EFETIVO chega a um status
+  `delivered: true` ("No ar") por um caminho AUTÔNOMO — a última travessia do passo de aprovação de entrega (o
+  gate `hasQaPassed`, "Aprovar entrega") não foi de um humano; sem registro dela no ledger de transições, conta
+  como autônoma —, a mesma `auditSampleRate`, sorteada de forma DETERMINÍSTICA pelo id do card, a põe no Inbox
+  como "Entrega autônoma", com a `## Prova da entrega` do card à vista. **Confirmar** fecha; **Reabrir** pede o
+  motivo e devolve a story pelo refino (`mode: refine`, o motivo como brief, destino padrão `desenvolver`) com um
+  finding `delivery-audit` aberto. Nunca é do copiloto. O carimbo mora no card (`deliveryAudit`) e é posto pelo
+  observador de escritas (qualquer escritor que leve o card ao ar). Board sem status `delivered` declarado, ou
+  story em human: nada muda.
 - **O condutor** é avisado na sessão dele quando o proxy responde (o "continuar" que o dono diria).
+
+### Push só para o crítico (`notifications`)
+
+O dono abre o Inbox quando quer; o celular (web-push, chaves `AGILEHARNESS_VAPID_*`) e o Slack
+(`AGILEHARNESS_SLACK_WEBHOOK_URL`) recebem SÓ o crítico. Uma política única
+(`lib/notifications/push-policy.ts`) dá nome a cada fato que poderia interromper e decide, para cada um, se ele
+empurra — nenhum produtor decide sozinho:
+
+| Fato | Produtor | Padrão |
+|---|---|---|
+| `capacity-latch` · `capacity-extra-usage` | o governador: a trava engatou (cota, ou uso extra PAGO) | **empurra** |
+| `capacity-held-24h` | o governador: trabalho automático retido > 24h | painel de capacidade |
+| `capacity-meter-stale` | o governador: o MEDIDOR de cota parou (leitura envelhecida) — frota retida sem ninguém ver | **empurra** (e item no Inbox de todo board enquanto durar) |
+| `deploy-rollback` | o deploy rodou, falhou e o card voltou para Liberar (o aprovado não está no ar) | **empurra** |
+| `deploy-blocked` | publicação recusada antes de rodar (promoção, preflight de frescor) | Inbox (travado) |
+| `critical-signal` | card que NASCE com um prefixo de `notifications.criticalTitlePrefixes` do board | **empurra** (uma vez por card) |
+| `card-demand` · `card-needs-you` · `card-moved` | escrita de card (pergunta/bloqueio/gate, parada manual, coluna) | Inbox / Kanban |
+| `run-failed` | um run headless falhou | Inbox (travado) |
+| `publish-blocked` · `terminal-waiting` | fila de publicação parada · terminal num prompt | tela aberta / Entrega |
+| `terminal-quiet` | o sininho que VOCÊ armou numa página de terminal | empurra (é o seu pedido); nunca vai ao Slack |
+
+- **Trocar a lista:** `settings.yaml` → `notifications.push.critical: [...]` (substitui o padrão; vazia = nada
+  empurra além do sininho; nome desconhecido é descartado com aviso). O exemplo comentado no `settings.yaml` é o
+  padrão.
+- **Sinais do produto, genéricos:** o núcleo não sabe o que é "fonte parada" ou "fornecedor sem crédito" de
+  ninguém. O monitor do produto cria um card com um prefixo combinado (`[sinal:scraper:…] …`) e o board declara o
+  prefixo em `notifications.criticalTitlePrefixes` — casa pelo início do título, sensível a maiúsculas.
+- **Tela aberta ≠ bolso:** o som e a notificação do navegador seguem a régua do modo do Jido
+  (`copilot/alert-policy`); o que empurra também toca na tela, em todo modo.
 
 ### Protocolo ASK_HUMAN (qualquer `harness-*` pode pedir ajuda ao humano e PAUSAR o run)
 

@@ -174,7 +174,8 @@ export function useBoardNotifications(tier: CopilotTier): BoardNotifications {
 
   // O RÓTULO do canal é fixo ("No celular", em BoardMenu); o que varia é a linha de baixo — o que
   // ele faz, ou por que não dá. Antes o motivo do bloqueio ocupava o rótulo, e o operador via um
-  // item chamado "Push não suportado neste navegador" no lugar de um canal desligado.
+  // item chamado "Push não suportado neste navegador" no lugar de um canal desligado. "Só o crítico":
+  // o que vai ao celular é a política de push (notifications/push-policy) — o resto espera no Inbox.
   const pushHint =
     pushState === "unsupported"
       ? "Não suportado neste navegador"
@@ -182,7 +183,7 @@ export function useBoardNotifications(tier: CopilotTier): BoardNotifications {
         ? "Permissão negada no navegador"
         : pushBusy
           ? "Configurando…"
-          : "Chega mesmo com o app fechado";
+          : "Só o crítico — chega mesmo com o app fechado";
 
   return {
     soundOn,
