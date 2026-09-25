@@ -8,6 +8,8 @@ import {
   cockpitItemSnippet,
   cockpitItemTitle,
   cockpitItemWaitingMs,
+  docProposalHeadline,
+  docProposalNotices,
   governanceDecision,
   governanceSections,
   meterRenewMessage,
@@ -16,9 +18,11 @@ import {
 } from "./cockpit-labels";
 import { PRD_SCHEMA } from "@/lib/storymap/doc/schemas/prd";
 import type { KeepaliveNowOutcome } from "@/lib/storymap/runner/capacity-service";
-import type { GovernanceChange } from "@/lib/storymap/types";
+import type { GovernanceChange, GovernanceDraft } from "@/lib/storymap/types";
+import { inboxItemHref } from "@/lib/storymap/deep-links";
 import {
   COCKPIT_GROUP_ORDER,
+  governanceItemsFromDrafts,
   type CockpitItem,
   type CockpitItemKind,
 } from "@/lib/storymap/demands";
@@ -283,6 +287,74 @@ describe("governanceDecision", () => {
       conflicts: [],
     } as unknown as CockpitItem;
     expect(cockpitItemTitle(item)).toBe("Aprovar o PRD do board — 16 seções");
+  });
+});
+
+// ── A proposta pendente vista de DENTRO do documento ──────────────────────────────────────────────
+// O dono abriu o PRD e disse «parece que o prd ainda segue o mesmo»: a versão nova esperava no Inbox, e a
+// tela do documento não dava sinal nenhum. O aviso diz que existe, o tamanho, quem propôs — e leva ao item.
+
+describe("docProposalHeadline", () => {
+  it("uma: diz que existe e que o que está na tela é a versão aprovada", () => {
+    expect(docProposalHeadline(1)).toBe(
+      "Há uma proposta pendente para este documento — o que você vê abaixo é a versão aprovada.",
+    );
+  });
+
+  it("várias: contadas na mesma frase", () => {
+    expect(docProposalHeadline(3)).toBe(
+      "Há 3 propostas pendentes para este documento — o que você vê abaixo é a versão aprovada.",
+    );
+  });
+});
+
+describe("docProposalNotices", () => {
+  const draft = (over: Partial<GovernanceDraft> = {}): GovernanceDraft => ({
+    id: "85f2-draft",
+    board: "b",
+    status: "pending",
+    reason: "",
+    origin: { skill: "claude-code-session", cardId: null },
+    changes: fullPrd,
+    createdAt: "2026-09-25",
+    decidedAt: null,
+    ...over,
+  });
+
+  it("leva à página do MESMO item que o Inbox mostra — o id é o do cockpit, não uma segunda construção", () => {
+    const d = draft();
+    const [notice] = docProposalNotices([d], "b");
+    const [item] = governanceItemsFromDrafts([d], new Map(), "b", Date.parse("2026-09-25T12:00:00Z"));
+    expect(notice.href).toBe(inboxItemHref("b", item.id));
+    expect(notice.href).toBe("/board/b/inbox/gov%3A85f2-draft");
+    expect(notice.draftId).toBe("85f2-draft");
+  });
+
+  it("o detalhe: o tamanho na unidade do Inbox, quem propôs e o dia — «16 seções», como no título do item", () => {
+    expect(docProposalNotices([draft()], "b")[0].detail).toBe(
+      "16 seções · proposta por um agente (claude-code-session) · em 25/09",
+    );
+  });
+
+  it("sem `origin.skill` a proposta é de uma pessoa (a UI não o preenche, `propose_change` sim)", () => {
+    const humana = draft({ origin: null, changes: fullPrd.slice(0, 1) });
+    expect(docProposalNotices([humana], "b")[0].detail).toBe("1 seção · proposta por uma pessoa · em 25/09");
+  });
+
+  it("no Lean Canvas a unidade é o bloco; data ilegível some do detalhe em vez de virar lixo", () => {
+    const canvas = draft({
+      createdAt: "ontem",
+      changes: [
+        { artifact: "canvas", field: "problem", before: null, after: { items: [] } },
+        { artifact: "canvas", field: "solution", before: null, after: { items: [] } },
+      ],
+    });
+    expect(docProposalNotices([canvas], "b")[0].detail).toBe("2 blocos · proposta por um agente (claude-code-session)");
+  });
+
+  it("uma linha por proposta, na ordem recebida", () => {
+    const notices = docProposalNotices([draft({ id: "x" }), draft({ id: "y" })], "b");
+    expect(notices.map((n) => n.draftId)).toEqual(["x", "y"]);
   });
 });
 

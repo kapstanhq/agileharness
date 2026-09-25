@@ -3,7 +3,10 @@ import { getBoard, listBoards } from "@/lib/storymap/repo";
 import { PrdScreen } from "@/components/PrdScreen";
 import { PRD_DOC_TYPE } from "@/lib/storymap/doc/schemas/prd";
 import { loadDoc } from "@/lib/storymap/doc/schema-doc-io";
+import { pendingDraftsForDoc } from "@/lib/storymap/doc/doc-governance";
+import { listGovernanceDrafts } from "@/lib/storymap/sidecars";
 import { prdBacklogSeed } from "@/lib/storymap/board-strategy";
+import { docProposalNotices } from "@/components/inicio/cockpit-labels";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +29,11 @@ export default async function PrdPage(props: { params: Promise<{ boardId: string
   // devolveria uma proposta inventada com a mesma cara de uma boa.
   const backlogSeed = await prdBacklogSeed(board.config.id, board.config);
 
+  // O que está na tela é a versão APROVADA. Uma proposta de PRD pendente espera no Inbox — sem este aviso,
+  // quem abre o documento lê a versão velha achando que é a última.
+  const drafts = await listGovernanceDrafts(board.config.id);
+  const pendingProposals = docProposalNotices(pendingDraftsForDoc(drafts, PRD_DOC_TYPE), board.config.id);
+
   return (
     <PrdScreen
       board={board}
@@ -33,6 +41,7 @@ export default async function PrdPage(props: { params: Promise<{ boardId: string
       initialDoc={loaded.doc}
       initialViolations={loaded.violations}
       backlogSeed={backlogSeed}
+      pendingProposals={pendingProposals}
     />
   );
 }

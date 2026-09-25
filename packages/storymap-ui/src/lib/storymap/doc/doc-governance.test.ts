@@ -12,6 +12,9 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { PRD_DOC_TYPE } from "./schemas/prd";
+import { LEAN_CANVAS_DOC_TYPE } from "./schemas/lean-canvas";
+import type { GovernanceDraft } from "../types";
 
 const RAIZ = mkdtempSync(path.join(tmpdir(), "prd-gov-"));
 const BOARD = "acme";
@@ -177,5 +180,87 @@ describe("docIsCanonical — a régua que decide ONDE a aprovação grava", () =
     expect(await readGovernedValue(BOARD, "canvasTags", null)).toEqual([
       { id: "demanda", name: "Demanda", color: "#E8A13C" },
     ]);
+  });
+});
+
+// ── A proposta pendente vista de DENTRO do documento ──────────────────────────────────────────────
+//
+// O dono abriu o PRD e leu a versão velha sem saber que a nova esperava um clique no Inbox. A tela do
+// documento passa a avisar — e quem decide QUAIS propostas são deste documento é o mesmo mapa
+// artefato → documento que a aprovação usa, nunca uma segunda lista.
+
+describe("pendingDraftsForDoc — as propostas pendentes que mudam ESTE documento", () => {
+  const AGORA = Date.parse("2026-09-25T12:00:00Z");
+  const secao = (field: string) => ({ artifact: "prd" as const, field, before: "", after: "x" });
+  const draft = (id: string, over: Partial<GovernanceDraft> = {}): GovernanceDraft => ({
+    id,
+    board: BOARD,
+    status: "pending",
+    reason: "",
+    origin: { skill: "harness-plan", cardId: null },
+    changes: [secao("resumo")],
+    createdAt: "2026-09-25",
+    decidedAt: null,
+    ...over,
+  });
+
+  it("só a PENDENTE avisa: aprovada, rejeitada e retirada já não mudam nada", async () => {
+    const { pendingDraftsForDoc } = await import("./doc-governance");
+    const drafts = [
+      draft("pendente"),
+      draft("aprovada", { status: "approved", decidedAt: "2026-09-25" }),
+      draft("rejeitada", { status: "rejected", decidedAt: "2026-09-25" }),
+      draft("retirada", { status: "rejected", decidedAt: "2026-09-25", withdrawnBy: "agent" }),
+    ];
+    expect(pendingDraftsForDoc(drafts, PRD_DOC_TYPE, AGORA).map((d) => d.id)).toEqual(["pendente"]);
+  });
+
+  it("a VENCIDA não avisa — o Inbox já a escondeu, e o link cairia num item que não existe", async () => {
+    const { pendingDraftsForDoc } = await import("./doc-governance");
+    const velha = draft("velha", { createdAt: "2026-01-01" });
+    expect(pendingDraftsForDoc([velha], PRD_DOC_TYPE, AGORA)).toEqual([]);
+  });
+
+  it("o artefato decide o documento: prd → PRD; canvas e canvasTags → Lean Canvas; campo do board.yaml → nenhum", async () => {
+    const { pendingDraftsForDoc } = await import("./doc-governance");
+    const prd = draft("prd");
+    const canvas = draft("canvas", { changes: [{ artifact: "canvas", field: "problem", before: null, after: { items: [] } }] });
+    const tags = draft("tags", { changes: [{ artifact: "canvasTags", field: null, before: [], after: [] }] });
+    const yaml = draft("yaml", { changes: [{ artifact: "positioning", field: null, before: "a", after: "b" }] });
+    const todos = [prd, canvas, tags, yaml];
+
+    expect(pendingDraftsForDoc(todos, PRD_DOC_TYPE, AGORA).map((d) => d.id)).toEqual(["prd"]);
+    expect(pendingDraftsForDoc(todos, LEAN_CANVAS_DOC_TYPE, AGORA).map((d) => d.id).sort()).toEqual(["canvas", "tags"]);
+    expect(pendingDraftsForDoc(todos, "documento-que-nao-existe", AGORA)).toEqual([]);
+  });
+
+  it("a proposta MISTA aparece nos dois documentos, cada um com só as mudanças dele", async () => {
+    const { pendingDraftsForDoc } = await import("./doc-governance");
+    const mista = draft("mista", {
+      changes: [
+        secao("resumo"),
+        secao("problema"),
+        { artifact: "canvas", field: "problem", before: null, after: { items: [] } },
+        { artifact: "personas", field: null, before: [], after: [] },
+      ],
+    });
+
+    const noPrd = pendingDraftsForDoc([mista], PRD_DOC_TYPE, AGORA);
+    expect(noPrd).toHaveLength(1);
+    expect(noPrd[0].changes.map((c) => c.field)).toEqual(["resumo", "problema"]);
+    const noCanvas = pendingDraftsForDoc([mista], LEAN_CANVAS_DOC_TYPE, AGORA);
+    expect(noCanvas[0].changes.map((c) => c.artifact)).toEqual(["canvas"]);
+    // O recorte é uma CÓPIA: a proposta em si segue inteira para quem a decide.
+    expect(mista.changes).toHaveLength(4);
+  });
+
+  it("várias pendentes: todas, a mais nova primeiro (empate pelo id, para a ordem não depender do disco)", async () => {
+    const { pendingDraftsForDoc } = await import("./doc-governance");
+    const drafts = [
+      draft("b-antiga", { createdAt: "2026-09-20" }),
+      draft("c-nova", { createdAt: "2026-09-24" }),
+      draft("a-nova", { createdAt: "2026-09-24" }),
+    ];
+    expect(pendingDraftsForDoc(drafts, PRD_DOC_TYPE, AGORA).map((d) => d.id)).toEqual(["a-nova", "c-nova", "b-antiga"]);
   });
 });

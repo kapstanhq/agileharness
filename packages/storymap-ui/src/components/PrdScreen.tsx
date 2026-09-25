@@ -22,6 +22,7 @@ import { PRD_SCHEMA } from "@/lib/storymap/doc/schemas/prd";
 import type { SchemaDoc } from "@/lib/storymap/doc/schema-codec";
 import type { SchemaViolation } from "@/lib/storymap/doc/doc-schema";
 import type { Board, BoardSummary } from "@/lib/storymap/types";
+import type { DocProposalNotice } from "@/components/inicio/cockpit-labels";
 
 export interface PrdScreenProps {
   board: Board;
@@ -35,9 +36,11 @@ export interface PrdScreenProps {
    * uma captura semeada com nada devolveria uma proposta inventada, com a mesma cara de uma boa.
    */
   backlogSeed: string;
+  /** as propostas pendentes para o PRD (ver `SchemaDocScreenProps.pendingProposals`). */
+  pendingProposals?: DocProposalNotice[];
 }
 
-export function PrdScreen({ board, boards, initialDoc, initialViolations, backlogSeed }: PrdScreenProps) {
+export function PrdScreen({ board, boards, initialDoc, initialViolations, backlogSeed, pendingProposals }: PrdScreenProps) {
   const router = useRouter();
   const [capturaAberta, setCapturaAberta] = useState(false);
   const config = board.config;
@@ -51,6 +54,7 @@ export function PrdScreen({ board, boards, initialDoc, initialViolations, backlo
       title="PRD"
       initialDoc={initialDoc}
       initialViolations={initialViolations}
+      pendingProposals={pendingProposals}
       toolbarExtra={
         backlogSeed ? (
           <button

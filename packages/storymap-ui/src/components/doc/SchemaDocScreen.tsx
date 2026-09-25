@@ -23,8 +23,9 @@
 // digitado, e nenhuma delas tem caminho de escrita próprio.
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, FileText, LayoutGrid, MessagesSquare, Table2 } from "lucide-react";
+import { AlertTriangle, FileText, Inbox, LayoutGrid, MessagesSquare, Table2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { BoardHeader } from "@/components/BoardHeader";
 import { DocShell, type DocViewDef } from "@/components/doc/DocShell";
@@ -37,6 +38,7 @@ import { ChatDock, ChatDockGhost, useChatRailVisible } from "@/components/chat/C
 import { chatDockFor, chatSurfaceFor } from "@/lib/storymap/copilot/chat-surfaces";
 import { useToast } from "@/components/Toast";
 import { docChatContextAction, saveDocAction } from "@/app/doc-actions";
+import { docProposalHeadline, type DocProposalNotice } from "@/components/inicio/cockpit-labels";
 import { allowedBlocksFor, availableViews } from "@/lib/storymap/doc/view-contracts";
 import {
   collectSchemaDoc,
@@ -65,6 +67,11 @@ export interface SchemaDocScreenProps {
   toolbarExtra?: ReactNode;
   /** Camada sobreposta que a tela dona controla (um modal). Fica FORA do fluxo do documento. */
   overlay?: ReactNode;
+  /**
+   * As propostas de governança PENDENTES para este documento, resolvidas no servidor. Sem elas o que a
+   * tela mostra (a versão aprovada) parece ser a última palavra — e a nova espera no Inbox sem ninguém saber.
+   */
+  pendingProposals?: DocProposalNotice[];
 }
 
 export function SchemaDocScreen({
@@ -77,6 +84,7 @@ export function SchemaDocScreen({
   initialViolations,
   toolbarExtra,
   overlay,
+  pendingProposals = [],
 }: SchemaDocScreenProps) {
   const router = useRouter();
   const toast = useToast();
@@ -220,7 +228,15 @@ export function SchemaDocScreen({
             docType={schema.docType}
             title={title}
             views={views}
-            banner={violations.length > 0 ? <ViolationBanner violations={violations} /> : undefined}
+            // A proposta pendente vem ANTES das violações: é o que muda a leitura da página inteira.
+            banner={
+              pendingProposals.length > 0 || violations.length > 0 ? (
+                <>
+                  {pendingProposals.length > 0 && <ProposalNotice proposals={pendingProposals} />}
+                  {violations.length > 0 && <ViolationBanner violations={violations} />}
+                </>
+              ) : undefined
+            }
             markdown={{
               read: () => serializeSchemaDoc(draft, schema),
               write: (markdown) => {
@@ -328,6 +344,39 @@ function ViolationBanner({ violations }: { violations: SchemaViolation[] }) {
         </ul>
       </div>
     </div>
+  );
+}
+
+/**
+ * Há uma versão nova deste documento esperando decisão. Compacto de propósito — uma frase e, por proposta,
+ * uma linha com o tamanho, quem propôs e o botão —, para caber na primeira tela acima do documento: o
+ * rascunho em si se lê na página do item, onde também se aprova.
+ */
+function ProposalNotice({ proposals }: { proposals: DocProposalNotice[] }) {
+  return (
+    <section
+      aria-label="Proposta pendente"
+      data-doc-proposals={proposals.length}
+      className="mb-4 flex items-start gap-2 rounded-lg border border-accent/40 bg-accent/[0.06] px-3 py-2.5 text-[13px]"
+    >
+      <Inbox className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
+      <div className="min-w-0 flex-1 space-y-1.5">
+        <p className="font-medium leading-snug text-fg">{docProposalHeadline(proposals.length)}</p>
+        <ul className="space-y-1.5">
+          {proposals.map((p) => (
+            <li key={p.draftId} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+              <span className="min-w-0 flex-1 text-[12px] leading-snug text-fg-muted">{p.detail}</span>
+              <Link
+                href={p.href}
+                className="inline-flex h-7 shrink-0 items-center whitespace-nowrap rounded-md bg-primary px-2.5 text-[12px] font-medium text-primary-fg transition hover:bg-primary-hover"
+              >
+                Ver e aprovar
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </section>
   );
 }
 

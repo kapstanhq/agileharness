@@ -22,6 +22,7 @@ import { LEAN_CANVAS_SCHEMA } from "@/lib/storymap/doc/schemas/lean-canvas";
 import type { SchemaDoc } from "@/lib/storymap/doc/schema-codec";
 import type { SchemaViolation } from "@/lib/storymap/doc/doc-schema";
 import type { Board, BoardSummary } from "@/lib/storymap/types";
+import type { DocProposalNotice } from "@/components/inicio/cockpit-labels";
 
 export interface CanvasScreenProps {
   board: Board;
@@ -29,9 +30,11 @@ export interface CanvasScreenProps {
   /** o documento lido do disco — ou projetado do `board.yaml` enquanto o .md não existir. */
   initialDoc: SchemaDoc;
   initialViolations: SchemaViolation[];
+  /** as propostas pendentes para o canvas (ver `SchemaDocScreenProps.pendingProposals`). */
+  pendingProposals?: DocProposalNotice[];
 }
 
-export function CanvasScreen({ board, boards, initialDoc, initialViolations }: CanvasScreenProps) {
+export function CanvasScreen({ board, boards, initialDoc, initialViolations, pendingProposals }: CanvasScreenProps) {
   return (
     <SchemaDocScreen
       board={board}
@@ -41,6 +44,7 @@ export function CanvasScreen({ board, boards, initialDoc, initialViolations }: C
       title="Lean Canvas"
       initialDoc={initialDoc}
       initialViolations={initialViolations}
+      pendingProposals={pendingProposals}
     />
   );
 }

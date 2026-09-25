@@ -27,8 +27,9 @@ import { parseSchemaBody, replaceSectionBlocks, serializeSchemaDoc, sectionConte
 import { serializeDocMd } from "./md-codec";
 import { blockIdFactory } from "./doc-model";
 import { coerceCanvasBlock } from "../canvas";
+import { isGovernanceDraftStale } from "../governance";
 import type { DocSchema } from "./doc-schema";
-import type { BoardConfig, CanvasTag } from "../types";
+import type { BoardConfig, CanvasTag, GovernanceDraft } from "../types";
 
 /**
  * O mapa artefato → documento. `undefined` ⇒ o artefato é campo do `board.yaml` e segue o caminho de
@@ -39,6 +40,30 @@ export function governedDoc(artifact: string): { schema: DocSchema; as: "section
   if (artifact === "canvas") return { schema: LEAN_CANVAS_SCHEMA, as: "section" };
   if (artifact === "canvasTags") return { schema: LEAN_CANVAS_SCHEMA, as: "tags" };
   return undefined;
+}
+
+/**
+ * As propostas PENDENTES que mudam o documento `docType`, cada uma recortada às mudanças DELE — é o que a
+ * tela do documento avisa ("o que você vê é a versão aprovada; há uma nova esperando"). PURA.
+ *
+ * O documento de uma mudança é decidido por {@link governedDoc}, o mesmo mapa que a aprovação usa para
+ * gravar: uma segunda lista de "artefatos do PRD" divergiria dela no dia em que um artefato novo entrasse.
+ * A vencida fica de fora pelo mesmo critério do Inbox (`isGovernanceDraftStale`) — o Inbox não a mostra
+ * mais, e o aviso levaria a um item que não existe. A mais nova primeiro; empate pelo id, para a ordem não
+ * depender da ordem do `readdir`.
+ */
+export function pendingDraftsForDoc(
+  drafts: readonly GovernanceDraft[],
+  docType: string,
+  now: number = Date.now(),
+): GovernanceDraft[] {
+  const out: GovernanceDraft[] = [];
+  for (const draft of drafts) {
+    if (draft.status !== "pending" || isGovernanceDraftStale(draft, now)) continue;
+    const changes = draft.changes.filter((c) => governedDoc(c.artifact)?.schema.docType === docType);
+    if (changes.length > 0) out.push({ ...draft, changes });
+  }
+  return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
 }
 
 /**

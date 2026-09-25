@@ -1374,6 +1374,14 @@ export function designItemsFromWireframes(
 // cardId = originCardId ?? "" (no orphan items; row hides "Abrir card" when empty).
 
 /**
+ * The cockpit id of a draft's item — `gov:<draftId>`. ONE construction: the Inbox builds the item with it
+ * and the document pages link to that item's page with it (`inboxItemHref`), so the two can't drift apart.
+ */
+export function governanceItemId(draftId: string): string {
+  return `gov:${draftId}`;
+}
+
+/**
  * Project pending GovernanceDrafts into GovernanceCockpitItems (pure — no IO).
  * Only `pending` drafts generate an item; `approved` and `rejected` are silent.
  * `conflicts` is pre-computed by the caller (cockpit-collect reads the live config).
@@ -1394,7 +1402,7 @@ export function governanceItemsFromDrafts(
     if (isGovernanceDraftStale(draft, now)) continue;
     const conflicts = conflictsByDraftId.get(draft.id) ?? [];
     out.push({
-      id: `gov:${draft.id}`,
+      id: governanceItemId(draft.id),
       kind: "governance",
       boardId,
       cardId: draft.origin?.cardId ?? "",

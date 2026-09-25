@@ -3,6 +3,9 @@ import { getBoard, listBoards } from "@/lib/storymap/repo";
 import { CanvasScreen } from "@/components/CanvasScreen";
 import { LEAN_CANVAS_DOC_TYPE } from "@/lib/storymap/doc/schemas/lean-canvas";
 import { loadDoc } from "@/lib/storymap/doc/schema-doc-io";
+import { pendingDraftsForDoc } from "@/lib/storymap/doc/doc-governance";
+import { listGovernanceDrafts } from "@/lib/storymap/sidecars";
+import { docProposalNotices } from "@/components/inicio/cockpit-labels";
 
 export const dynamic = "force-dynamic";
 
@@ -19,12 +22,17 @@ export default async function CanvasPage(props: { params: Promise<{ boardId: str
   const loaded = await loadDoc(board.config.id, LEAN_CANVAS_DOC_TYPE, board.config);
   if (!loaded) notFound();
 
+  // A versão aprovada é o que está na tela; a proposta pendente (canvas/canvasTags) espera no Inbox.
+  const drafts = await listGovernanceDrafts(board.config.id);
+  const pendingProposals = docProposalNotices(pendingDraftsForDoc(drafts, LEAN_CANVAS_DOC_TYPE), board.config.id);
+
   return (
     <CanvasScreen
       board={board}
       boards={boards}
       initialDoc={loaded.doc}
       initialViolations={loaded.violations}
+      pendingProposals={pendingProposals}
     />
   );
 }

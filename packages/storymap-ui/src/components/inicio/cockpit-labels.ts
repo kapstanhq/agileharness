@@ -4,8 +4,10 @@
 // unit-tested without React.
 
 import type { CockpitGroup, CockpitItem, CockpitItemKind, GovernanceCockpitItem } from "@/lib/storymap/demands";
+import { governanceItemId } from "@/lib/storymap/demands";
+import { inboxItemHref } from "@/lib/storymap/deep-links";
 import { PRD_SCHEMA } from "@/lib/storymap/doc/schemas/prd";
-import type { GovernanceArtifact, GovernanceChange } from "@/lib/storymap/types";
+import type { GovernanceArtifact, GovernanceChange, GovernanceDraft } from "@/lib/storymap/types";
 import type { KeepaliveNowResult } from "@/lib/storymap/runner/capacity-service";
 
 /**
@@ -175,6 +177,20 @@ export function governanceSections(changes: readonly GovernanceChange[]): string
   return [...seen.values()];
 }
 
+/**
+ * O TAMANHO da proposta na unidade de quem lê: "16 seções" no PRD, "3 blocos" no Lean Canvas, "2 mudanças" no
+ * resto (e na proposta que mexe em mais de um artefato). PURA. É a mesma conta no título do item do Inbox e no
+ * aviso da tela do documento — o dono lê "16 seções" nos dois lugares, ou desconfia que são propostas diferentes.
+ */
+export function governanceScope(changes: readonly GovernanceChange[]): string {
+  const artifacts = new Set(changes.map((c) => c.artifact));
+  if (artifacts.size === 1 && artifacts.has("prd")) return plural(governanceSections(changes).length, "seção", "seções");
+  if (artifacts.size === 1 && artifacts.has("canvas") && changes.every((c) => c.field)) {
+    return plural(governanceSections(changes).length, "bloco", "blocos");
+  }
+  return plural(changes.length, "mudança", "mudanças");
+}
+
 export interface GovernanceDecision {
   /** o que está em decisão, numa linha: "Aprovar o PRD do board — 16 seções, 1 conflito". */
   headline: string;
@@ -193,20 +209,16 @@ export function governanceDecision(item: Pick<GovernanceCockpitItem, "changes" |
   if (changes.length === 0) return null;
   const sections = governanceSections(changes);
   const artifacts = [...new Set(changes.map((c) => c.artifact))];
+  const unit = governanceScope(changes);
 
   let headline: string;
-  let unit: string;
   if (artifacts.length > 1) {
     headline = `Aprovar mudanças no board — ${artifacts.map((a) => GOVERNANCE_SHORT[a]).join(" + ")}`;
-    unit = plural(changes.length, "mudança", "mudanças");
   } else if (artifacts[0] === "prd") {
-    unit = plural(sections.length, "seção", "seções");
     headline = `Aprovar ${GOVERNANCE_SUBJECT.prd} — ${unit}`;
   } else if (artifacts[0] === "canvas" && changes.every((c) => c.field)) {
-    unit = plural(sections.length, "bloco", "blocos");
     headline = `Aprovar ${GOVERNANCE_SUBJECT.canvas} — ${unit}`;
   } else {
-    unit = plural(changes.length, "mudança", "mudanças");
     headline = `Aprovar ${GOVERNANCE_SUBJECT[artifacts[0]]}${changes.length > 1 ? ` — ${unit}` : ""}`;
   }
 
@@ -218,6 +230,49 @@ export function governanceDecision(item: Pick<GovernanceCockpitItem, "changes" |
 
   const readLabel = artifacts.length === 1 && artifacts[0] === "prd" ? `Ler o rascunho completo (${unit})` : `Ver o antes e depois (${unit})`;
   return { headline, sections, readLabel };
+}
+
+// ── A proposta pendente vista de DENTRO do documento ─────────────────────────────────────────────
+//
+// O dono abriu o PRD e leu a versão aprovada sem saber que uma nova esperava um clique no Inbox. A tela de
+// um documento governado avisa: que existe, o tamanho, quem propôs — e leva à página do item, onde se decide.
+
+/** Uma linha do aviso: o que a proposta é e para onde o botão leva. Serializável (vai do servidor à tela). */
+export interface DocProposalNotice {
+  draftId: string;
+  /** a página do item de governança no Inbox — onde se lê o rascunho e se aprova. */
+  href: string;
+  /** "16 seções · proposta por um agente (harness-plan) · em 25/09". */
+  detail: string;
+}
+
+/** A frase do aviso. PURA. */
+export function docProposalHeadline(count: number): string {
+  const what = count === 1 ? "uma proposta pendente" : `${count} propostas pendentes`;
+  return `Há ${what} para este documento — o que você vê abaixo é a versão aprovada.`;
+}
+
+/**
+ * Uma linha por proposta, na ordem recebida. PURA. `drafts` já vem recortado às mudanças do documento
+ * (`pendingDraftsForDoc`), então o tamanho é o DESTE documento. Quem propôs sai de `origin.skill`: a UI não o
+ * preenche, `propose_change` sim — é a mesma régua que separa agente de humano em `withdrawRefusal`.
+ */
+export function docProposalNotices(
+  drafts: readonly Pick<GovernanceDraft, "id" | "changes" | "origin" | "createdAt">[],
+  boardId: string,
+): DocProposalNotice[] {
+  return drafts.map((d) => {
+    const skill = d.origin?.skill?.trim();
+    const day = /^\d{4}-(\d{2})-(\d{2})/.exec(d.createdAt);
+    const detail = [
+      governanceScope(d.changes),
+      skill ? `proposta por um agente (${skill})` : "proposta por uma pessoa",
+      day ? `em ${day[2]}/${day[1]}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    return { draftId: d.id, href: inboxItemHref(boardId, governanceItemId(d.id)), detail };
+  });
 }
 
 /**
