@@ -78,12 +78,26 @@ export type SkillsSyncResult =
     }
   | { ok: false; plan: SkillsSyncPlan; reason: string };
 
+/**
+ * SOBRESCREVER uma skill que o alvo customizou é decisão do OPERADOR — um token escopado (o copiloto, a frota) pode
+ * trazer as que faltam, nunca trocar a instrução que ele próprio segue. Null quando pode. PURA.
+ */
+export function overwriteRefusal(overwrite: readonly string[] | undefined, scoped: boolean): string | null {
+  if (!scoped || !overwrite?.some((n) => n.trim())) return null;
+  return (
+    "sobrescrever uma skill que o alvo customizou é decisão do operador: `overwrite` só com o token full. Sem ele, " +
+    "esta tool copia apenas as que FALTAM."
+  );
+}
+
 /** Executa o plano pelo worktree de sessão + merge train. `dryRun` só devolve o plano. Nunca lança. */
 export async function syncSkills(
   deps: SkillsSyncDeps,
-  opts: { overwrite?: readonly string[]; dryRun?: boolean } = {},
+  opts: { overwrite?: readonly string[]; dryRun?: boolean; scoped?: boolean } = {},
 ): Promise<SkillsSyncResult> {
   const plan = planSkillsSync(deps.readTrees(deps.toolRoot), deps.readTrees(deps.targetRoot), opts.overwrite);
+  const refused = overwriteRefusal(opts.overwrite, opts.scoped === true);
+  if (refused) return { ok: false, plan, reason: refused };
   if (plan.copy.length === 0 && plan.overwrite.length === 0) {
     return { ok: true, plan, submitted: false, reason: "nada a copiar: nenhuma skill da ferramenta falta no alvo (e nenhuma sobrescrita foi pedida)" };
   }

@@ -1225,7 +1225,8 @@ export function registerDevTools(server: McpServer): void {
         "`overwrite` (o alvo pode ter customizado a instrução do agente dele). A escrita vai por um worktree de SESSÃO " +
         "e pelo merge train (gate + split), como qualquer trabalho de sessão — nunca direto no checkout de runtime. " +
         "`dryRun: true` só devolve o plano (faltam / diferem / iguais). Com submissão, acompanhe com " +
-        "wait_for_submit({sessionId}) e feche com worktree_discard({sessionId}). Decisão do operador (token full).",
+        "wait_for_submit({sessionId}) e feche com worktree_discard({sessionId}). `overwrite` é decisão do operador: " +
+        "só o token full o usa.",
       inputSchema: {
         overwrite: z
           .array(z.string())
@@ -1273,7 +1274,7 @@ export function registerDevTools(server: McpServer): void {
             await discardSessionWorktree(sessionDeps(), { sessionId });
           },
         },
-        { overwrite, dryRun },
+        { overwrite, dryRun, scoped: isScopedActor() },
       );
       if (!res.ok) return fail(`${res.reason}\nplano: ${JSON.stringify(res.plan)}`);
       return json(res);

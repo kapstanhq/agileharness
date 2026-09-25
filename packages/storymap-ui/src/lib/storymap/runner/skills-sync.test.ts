@@ -3,7 +3,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import path from "node:path";
-import { planSkillsSync, syncSkills, type SkillsSyncDeps } from "./skills-sync";
+import { overwriteRefusal, planSkillsSync, syncSkills, type SkillsSyncDeps } from "./skills-sync";
 import type { SkillTree } from "@/lib/storymap/skills-drift";
 
 const tree = (name: string, body: string): SkillTree => ({ name, files: { "SKILL.md": body } });
@@ -112,5 +112,27 @@ describe("syncSkills", () => {
     const { deps, written } = fakes({ openWorktree: async () => ({ ok: false as const, reason: "máquina saturada" }) });
     expect(await syncSkills(deps)).toMatchObject({ ok: false, reason: expect.stringMatching(/máquina saturada/) });
     expect(written).toEqual([]);
+  });
+});
+
+describe("overwrite é do operador — um token escopado só traz as que faltam", () => {
+  it("escopado + overwrite ⇒ recusa, e nada é aberto nem escrito", async () => {
+    const { deps, calls, written } = fakes();
+    const r = await syncSkills(deps, { overwrite: ["harness-qa"], scoped: true });
+    expect(r).toMatchObject({ ok: false, reason: expect.stringMatching(/token full/) });
+    expect(calls).toEqual([]);
+    expect(written).toEqual([]);
+  });
+
+  it("escopado SEM overwrite ⇒ copia as que faltam normalmente", async () => {
+    const { deps } = fakes();
+    expect(await syncSkills(deps, { scoped: true })).toMatchObject({ ok: true, submitted: true, copied: ["harness-conductor"] });
+  });
+
+  it("overwriteRefusal: operador (não escopado) pode; lista vazia/em branco não conta como pedido", () => {
+    expect(overwriteRefusal(["harness-qa"], false)).toBeNull();
+    expect(overwriteRefusal([" "], true)).toBeNull();
+    expect(overwriteRefusal(undefined, true)).toBeNull();
+    expect(overwriteRefusal(["harness-qa"], true)).toMatch(/operador/);
   });
 });

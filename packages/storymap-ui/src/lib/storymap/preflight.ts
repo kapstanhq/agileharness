@@ -887,7 +887,7 @@ export function skillsCheck(probe: SkillsProbe | null): PreflightCheck {
         (differ.length ? ` · DIFEREM ${differ.length}: ${differ.join("; ")}` : ""),
       remedy:
         "as sessões do alvo carregam as skills do REPOSITÓRIO DO ALVO; sem estas, o motor despacha um papel sem " +
-        "instrução. Rode a tool MCP `sync_skills` (token full): ela copia SÓ as que faltam, por um worktree de " +
+        "instrução. Rode a tool MCP `sync_skills`: ela copia SÓ as que faltam, por um worktree de " +
         "sessão e pelo merge train — nunca direto no checkout de runtime, e nunca sobrescreve uma que difere. " +
         "Sem o serviço de pé (instalação nova), copiar os diretórios que faltam à mão e commitá-los também vale.",
     };
