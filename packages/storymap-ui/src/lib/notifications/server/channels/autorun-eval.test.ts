@@ -13,7 +13,10 @@ import type { RunnerJournalPort } from "@/lib/storymap/runner/journal";
 
 // Spies referenced inside the (hoisted) vi.mock factories — vi.hoisted guarantees they're
 // initialized before the factories run, sidestepping the ESM import-hoist TDZ.
-const { mockRunSkill, mockUpdateCardOnDisk, mockLastRun, mockListByCard, mockRecentlyCancelledAgeMs } = vi.hoisted(() => ({
+const { mockRunSkill, mockUpdateCardOnDisk, mockLastRun, mockListByCard, mockRecentlyCancelledAgeMs, mockDispatchConductor } = vi.hoisted(() => ({
+  // conductor-core: the conductor dispatch's ENTRY half (fleet-deps) — spied so a board with `conductor` can be
+  // driven without spawning anything; resolves like the real one (driver + queue awaited, pump fired).
+  mockDispatchConductor: vi.fn(async (..._a: unknown[]) => {}),
   mockRunSkill: vi.fn((..._args: unknown[]) => ({ ok: true as const })),
   // updateCardOnDisk(board, cardId, mutate): apply the forward's status delta to a disk-card stub so
   // the result is observable — mirrors the real LOCKED read-modify-write (audit unlocked-write fix).
@@ -66,6 +69,12 @@ vi.mock("@/lib/storymap/runner/config", async (orig) => {
   return { ...actual, loadRunnerConfig: vi.fn(() => on) };
 });
 
+// The conductor dispatch (conductor-core) — the real module would touch the fleet registry and tmux.
+vi.mock("@/lib/storymap/runner/fleet-deps", async (orig) => {
+  const actual = await orig<typeof import("@/lib/storymap/runner/fleet-deps")>();
+  return { ...actual, dispatchConductorOnEntry: mockDispatchConductor };
+});
+
 // Board + card reads — driven per test.
 vi.mock("@/lib/storymap/repo", async (orig) => {
   const actual = await orig<typeof import("@/lib/storymap/repo")>();
@@ -105,6 +114,7 @@ const card = (data: Record<string, unknown>): Card => coerceCard("c", { type: "s
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 beforeEach(() => {
+  mockDispatchConductor.mockClear();
   mockRunSkill.mockClear();
   mockUpdateCardOnDisk.mockClear();
   mockLastRun.mockClear();
@@ -595,5 +605,66 @@ describe("threadResumeSessionId — session threading policy (one agent, many ha
     expect(threadResumeSessionId("b", "c", c, next(c, "interview"), "harness-interview", "harness-enrich", true)).toBeUndefined();
     // …and the legacy default (no cancel) still threads.
     expect(threadResumeSessionId("b", "c", c, next(c, "interview"), "harness-interview", "harness-enrich", false)).toBe("sess-1");
+  });
+});
+
+// conductor-core — the kernel is where the conductor is dispatched AND where a conducted card is left alone.
+describe("evaluateAutorunOnEntry — o condutor", () => {
+  const driven = { skips: [], decidedBy: "rules", decidedAt: "2026-09-25", driver: "conductor" };
+  const withConductor = (statuses: StatusDef[]): BoardConfig => ({ ...cfg(statuses), conductor: { enabled: true, fromStatus: "pronta" } });
+
+  it("card CONDUZIDO numa coluna armada: nenhum run, nenhuma escrita (nem finding de loop-guard), nenhum log no card", async () => {
+    const config = cfg([{ id: "desenvolver", name: "Dev", trigger: "harness-do", autorun: true }]);
+    vi.mocked(readBoardConfig).mockResolvedValue(config);
+    vi.mocked(readCards).mockResolvedValue([card({ status: "desenvolver", routing: driven })]);
+    // o loop-guard estaria no teto se a cascata chegasse lá — e mesmo assim nada pode ser escrito
+    mockLastRun.mockResolvedValue({ column: "desenvolver", trigger: "harness-do", noProgressRuns: 99 });
+    const appendLog = vi.spyOn(getRunnerRegistry(), "appendLog");
+    try {
+      await evaluateAutorunOnEntry("b", "c");
+      expect(mockRunSkill).not.toHaveBeenCalled();
+      expect(mockUpdateCardOnDisk).not.toHaveBeenCalled();
+      expect(appendLog).not.toHaveBeenCalled();
+      expect(mockDispatchConductor).not.toHaveBeenCalled();
+    } finally {
+      appendLog.mockRestore();
+    }
+  });
+
+  it("story ENTRANDO em fromStatus num board com conductor: despacha o condutor e NÃO roda a cascata", async () => {
+    const config = withConductor([
+      { id: "pronta", name: "Pronta", trigger: "harness-prioritize", autorun: true }, // armada de propósito
+    ]);
+    vi.mocked(readBoardConfig).mockResolvedValue(config);
+    vi.mocked(readCards).mockResolvedValue([card({ status: "pronta" })]);
+    await evaluateAutorunOnEntry("b", "c");
+    expect(mockDispatchConductor).toHaveBeenCalledWith("b", "c");
+    expect(mockRunSkill).not.toHaveBeenCalled();
+  });
+
+  it("um card JÁ conduzido que re-entra/recebe re-avaliação em fromStatus NÃO re-despacha (condutor morto não renasce sozinho)", async () => {
+    const config = withConductor([{ id: "pronta", name: "Pronta", autorun: false }]);
+    vi.mocked(readBoardConfig).mockResolvedValue(config);
+    vi.mocked(readCards).mockResolvedValue([card({ status: "pronta", routing: driven })]);
+    await evaluateAutorunOnEntry("b", "c", { suppressTrigger: "harness-do" });
+    await evaluateAutorunOnEntry("b", "c");
+    expect(mockDispatchConductor).not.toHaveBeenCalled();
+    expect(mockRunSkill).not.toHaveBeenCalled();
+  });
+
+  it("master switch OFF: nem condutor nem cascata", async () => {
+    vi.mocked(loadRunnerConfig).mockReturnValue(settings(false));
+    vi.mocked(readBoardConfig).mockResolvedValue(withConductor([{ id: "pronta", name: "Pronta", autorun: false }]));
+    vi.mocked(readCards).mockResolvedValue([card({ status: "pronta" })]);
+    await evaluateAutorunOnEntry("b", "c");
+    expect(mockDispatchConductor).not.toHaveBeenCalled();
+  });
+
+  it("board sem `conductor`: a mesma entrada segue a cascata de sempre", async () => {
+    vi.mocked(readBoardConfig).mockResolvedValue(cfg([{ id: "pronta", name: "Pronta", trigger: "harness-prioritize", autorun: true }]));
+    vi.mocked(readCards).mockResolvedValue([card({ status: "pronta" })]);
+    await evaluateAutorunOnEntry("b", "c");
+    expect(mockDispatchConductor).not.toHaveBeenCalled();
+    expect(mockRunSkill).toHaveBeenCalledTimes(1);
   });
 });

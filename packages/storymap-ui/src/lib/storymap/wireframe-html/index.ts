@@ -2,7 +2,8 @@
 // components/wireframe/HtmlArtifactFrame.tsx and imports from here.
 
 export { sanitizeWireframeHtml } from "./sanitize";
-export { buildWireframeSrcDoc, WIREFRAME_IFRAME_SANDBOX } from "./frame";
+export { buildWireframeSrcDoc, WIREFRAME_IFRAME_SANDBOX, WIREFRAME_MOBILE_WIDTH_PX } from "./frame";
+export { validateWireframeDocContent, type WireframeValidation } from "./validate";
 export { htmlToText } from "./to-text";
 
 /** Hard per-artifact cap for `html` content, enforced at COERCE time (sidecars.ts): the sidecar-wide

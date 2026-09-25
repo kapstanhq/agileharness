@@ -43,6 +43,7 @@ import {
   type WorktreeFs,
 } from "./worktree";
 import type { MergeQueueEntry } from "./types";
+import type { CardDriver } from "@/lib/storymap/types";
 import { isSessionAlive, SESSION_HEARTBEAT_TTL_MS } from "./session-liveness";
 import { loadRunnerConfig } from "./config";
 
@@ -135,6 +136,13 @@ export interface AgentSession {
   heartbeatAt: string;
   /** the last submit's pinned sha + when — so /processes can say "submitted, waiting on the train". */
   lastSubmit?: { at: string; pinnedSha: string };
+  /**
+   * This session DRIVES its card (`conductor`) — opened by the conductor dispatch (runner/conductor.ts).
+   * It is what the dispatch COUNTS against the board's `conductor.maxSessions`, and what makes a recycle
+   * re-invoke the conductor skill. Absent ⇒ an ordinary fleet session (a hand-opened `claude_new` conductor
+   * included: the operator chose it, so it does not take one of the dispatch's slots).
+   */
+  driver?: CardDriver;
 }
 
 export interface SessionStore {
@@ -291,6 +299,12 @@ export interface SessionWorktreeDeps {
   probeResources?: () => VpsResources;
   thresholds?: SchedulerThresholds;
   ttlMs?: number;
+  /**
+   * Called with the registry row of a session that is about to LEAVE the fleet through `discardSessionWorktree`
+   * — the last moment its tree/transcripts are known (the conductor's spend is booked here: session-telemetry.ts).
+   * Best-effort, OUTSIDE the registry lock (it reads transcripts); a throw never blocks the discard.
+   */
+  onSessionEnd?: (session: AgentSession) => Promise<void>;
 }
 
 const nowOf = (deps: SessionWorktreeDeps): number => (deps.now ?? Date.now)();
@@ -346,6 +360,8 @@ export interface OpenSessionInput {
   /** WS-6.3 — RECYCLING: pass the previous agent's id so the new process inherits the SAME logical
    *  identity (its claims and its history follow it). Omitted ⇒ a brand-new agent (agentId = sessionId). */
   agentId?: string;
+  /** the session drives its card (see {@link AgentSession.driver}). */
+  driver?: CardDriver;
 }
 
 export type OpenSessionResult =
@@ -461,6 +477,7 @@ async function openSessionWorktreeUnlocked(
     spawnedBy: input.spawnedBy,
     model: input.model,
     tmuxSession: input.tmuxSession,
+    ...(input.driver ? { driver: input.driver } : {}),
     openedAt: at,
     heartbeatAt: at,
   };
@@ -636,6 +653,10 @@ export async function discardSessionWorktree(
   deps: SessionWorktreeDeps,
   input: { sessionId: string },
 ): Promise<DiscardSessionResult> {
+  if (deps.onSessionEnd) {
+    const row = (await deps.store.load().catch(() => [] as AgentSession[])).find((s) => s.sessionId === input.sessionId);
+    if (row) await deps.onSessionEnd(row).catch(() => {});
+  }
   return withSessionsLock(() => discardSessionWorktreeUnlocked(deps, input));
 }
 
@@ -781,6 +802,8 @@ export interface RegisterSessionInput {
    * the operator learned to ignore the warning — which is how a debt marker dies.
    */
   adopted?: boolean;
+  /** the session drives its card (see {@link AgentSession.driver}). */
+  driver?: CardDriver;
 }
 
 /**
@@ -818,6 +841,7 @@ async function registerSessionUnlocked(
     tmuxSession: input.tmuxSession,
     cwd: input.cwd,
     ...(input.adopted ? { adopted: true } : {}),
+    ...(input.driver ? { driver: input.driver } : {}),
     openedAt: at,
     heartbeatAt: at,
   };

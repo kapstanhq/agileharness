@@ -36,7 +36,8 @@ function unwrapTag(html: string, tag: string): string {
 /**
  * Reduce agent-authored HTML to an inert BODY FRAGMENT:
  * - strips doctype/html/head/body wrappers (a stray <head> would otherwise let the browser reparent
- *   OUR CSP <meta> out of the head we build in frame.ts, silently voiding layer 2);
+ *   OUR CSP <meta> out of the head we build in frame.ts, silently voiding layer 2) — KEEPING the head's
+ *   `<style>` blocks, lifted to the top of the fragment (the only part of a head a wireframe needs);
  * - drops script/iframe/object/embed/link/meta/base subtrees, all on* handlers, all URL-carrying
  *   attributes, javascript:/vbscript: leftovers, and non-data url() in inline CSS.
  * Pure and deliberately conservative: wireframes need structure + inline style, never real
@@ -45,6 +46,18 @@ function unwrapTag(html: string, tag: string): string {
 export function sanitizeWireframeHtml(raw: string): string {
   let html = String(raw ?? "");
   html = html.replace(/<!doctype[^>]*>/gi, "").replace(/<!--[\s\S]*?-->/g, "");
+  // A `<style>` authored inside `<head>` is the NATURAL place to write it in a full html document — and the head
+  // is dropped whole below (a stray head would let the browser reparent OUR CSP meta out of the frame's head).
+  // Dropping it silently took the artifact's whole styling with it: the variant rendered unstyled and the human
+  // compared layouts that were never the ones drawn. So the head's styles are LIFTED to the top of the fragment
+  // before the head goes — they then pass through every inline-CSS rule below (@import and url() stripped) like
+  // any body `<style>`, and nothing else from the head (meta/link/title/script) survives.
+  const headStyles: string[] = [];
+  html = html.replace(/<head\b[^>]*>([\s\S]*?)<\/head\s*>/gi, (_whole, inner: string) => {
+    for (const m of inner.matchAll(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi)) headStyles.push(m[0]);
+    return "";
+  });
+  if (headStyles.length) html = headStyles.join("\n") + html;
   for (const tag of DROP_WITH_CONTENT) html = dropTagWithContent(html, tag);
   for (const tag of VOID_DROP) html = html.replace(new RegExp(`<${tag}\\b[^>]*>`, "gi"), "");
   for (const tag of UNWRAP) html = unwrapTag(html, tag);

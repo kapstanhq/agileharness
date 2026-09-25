@@ -256,6 +256,7 @@ retorna `null` quando permitido ou a mensagem PT-BR de bloqueio).
 | `findings` | lista de `{ id, lens, severity, title, status, detail?, file?, line?, suggestion? }` | achados do `harness-review`. `lens`=firestore\|nextjs\|perf\|security\|testing\|general; `severity`=blocker\|high\|medium\|low; `status`=open\|acknowledged\|fixed\|wontfix. Um `blocker` `open` trava o gate `hasNoBlockers` (entrada em `qa-automatizado`). Só emitido quando ≥1. |
 | `reviewedAt` / `reviewCommit` | string \| omitido | quando o `harness-review` rodou + o commit/HEAD revisado. |
 | `questions` | lista de `{ id, text, status, askedBy?, askedAt?, answer?, answeredAt?, context?, mode?, options?, selectedOptionIds?, recommendation? }` \| omitido | perguntas HITL na **Pilotagem** — o canal agente↔orquestrador humano. Qualquer `harness-*` que bata numa decisão que **só o humano resolve** grava uma pergunta rica aqui e PAUSA o run (protocolo **ASK_HUMAN**, abaixo). `text`=a pergunta; `context`=o PORQUÊ/stakes (1-2 linhas); `options[]`=caminhos discretos, cada um com `pros[]`/`cons[]` e no máx. UMA com `recommended: true`; `mode`=`single`\|`multi`; `recommendation`=recomendação em prosa quando NÃO há opções discretas. `status: open` até o humano responder na Pilotagem; o free-text answer está sempre disponível. Setado por `harness-grill` e por qualquer skill via ASK_HUMAN; resolvido na UI `/perguntas`. |
+| `routing` | `{ skips, decidedBy, decidedAt, profile?, modelCap?, effortCap?, rationale?, driver? }` \| omitido | rota por instância (do pipeline — o drawer não edita). `driver: conductor` = o card é CONDUZIDO por uma sessão `harness-conductor`: a cascata e o engine não disparam skill de coluna nele (em silêncio — sem no-op, sem finding de travado). Posto pela dispatch do condutor (`board.yaml` `conductor`) ou por `set_card_driver`; só o condutor (ao terminar) ou o operador o limpa — a sessão morrer NÃO limpa. `set_card_route` preserva o driver. |
 | `order` | número | ordenação entre irmãos. Esparso (10, 20, 30…); arrastar insere o ponto médio |
 | `created` / `updated` | string `YYYY-MM-DD` | a UI atualiza `updated` ao salvar |
 
@@ -404,6 +405,11 @@ statuses:                    # pipeline; cada status pode ter gate, trigger e/ou
 releases:   [{ id, name, order }]   # linhas (slices); order define a sequência
 personas:   [{ id, name, color }]
 systems:    [{ id, name, color }]   # sistemas genéricos do board (sem marca)
+conductor:                   # opcional: UMA sessão condutora por story (ver "Condutor", abaixo)
+  enabled: true
+  fromStatus: pronta         # a ENTRADA neste status é o "vai"
+  maxSessions: 2             # condutores vivos por board (padrão 2); o excedente espera numa fila durável
+  model: opus                # opcional (padrão opus)
 linkTypes:  [{ id, name, from?: NodeKind[], to?: NodeKind[] }]
              # from/to opcional: ausente = sem restrição (legados). NodeKind = activity | step |
              # story | persona | release | desiredOutcome | inputMetric | opportunity | canvas.
@@ -519,6 +525,40 @@ A skill também roda em modo **pull** quando você a chama (`/harness-enrich …
   `AGILEHARNESS_AUTORUN_OPEN_TERMINAL` (=1 habilita "abrir terminal" do card).
 - **Terminal ao vivo (Fase B):** o spawn usa `--output-format stream-json --verbose --session-id <uuidv5>`;
   o card ganha um console read-only (ícone 🖥) e um botão para copiar `claude --resume <id>` (assumir a run).
+
+### Condutor (uma sessão carrega a story inteira)
+
+Com `conductor: { enabled: true, fromStatus: <status> }` no `board.yaml`, o Kanban deixa de ser o
+fluxo de controle para as stories que entram em `fromStatus`: quando uma story ENTRA ali, o serviço
+carimba `routing.driver: conductor` no card e abre UMA sessão interativa visível (tmux
+`agent-conductor-<id>`, a mesma porta do `claude_new`: admissão + sonda de recursos, worktree próprio,
+claim `implement/both`, token MCP escopado, papel `implement`) cujo prompt começa com
+`/harness-conductor <board>/<id>`. A skill executa Moldar → Construir → Verificar → Publicar num só
+contexto; as colunas viram PROJEÇÃO do progresso dela.
+
+- **Silêncio da cascata:** card com o driver não recebe skill de coluna — nem da cascata, nem de um
+  "Rodar agora"/`run_skill`, nem de recuperação/re-drive. Sem no-op, sem finding de loop-guard. Seguem
+  valendo: efeitos de entrada (`onEnter`), as passagens do train (`merge` → `stage` → `release`) e o
+  settle do deploy.
+- **Cap e fila:** até `maxSessions` condutores vivos por board; o excedente espera numa fila durável
+  (`storymap/.runner/conductor-queue.json`) e é despachado quando uma vaga abre — re-checada a cada
+  tick da frota (`AGILEHARNESS_FLEET_RECONCILE_MS`, 60s). Idempotente: nunca duas sessões por card.
+- **Chaves:** respeita o master switch do autorun e o `autorunDisabled` do board (a fila espera, não
+  descarta). Board que desliga o `conductor` com cards na fila: saem da fila e o driver que a dispatch
+  pôs é removido.
+- **Condutor que morre:** o driver FICA (nenhuma skill de coluna velha dispara) e ninguém é reaberto
+  sozinho — o operador reabre (`claude_new` com a tarefa do condutor) ou devolve o card ao pipeline
+  (`set_card_driver({board, cardId, driver: null})`). Três falhas seguidas de spawn deixam um finding
+  `conductor-dispatch` no card.
+- **Custo:** o gasto da sessão é estimado pelos transcripts do worktree dela (tabela de preços
+  embutida, datada) e entra no ledger do card (role `session`) quando ela termina — descarte do
+  worktree ou morte do tmux —, então `autorun.cardBudgetUSD` passa a vê-lo. Enquanto vive,
+  `runner_status({board, cardId})` mostra `conductorSessions[]` e `spentIncludingLiveSessionsUSD`.
+- **Ferramentas MCP do condutor:** `set_tasks` (tasks na main — só a sessão com o claim do card),
+  `add_finding` (finding na main; id estável = idempotente), `ask_question` com `questions[]`
+  estruturadas, `set_card_driver`, `claim_card`/`release_claim` (o claim da PRÓPRIA sessão),
+  `approve_qa`/`approve_review` (colunas resolvidas pelo pipeline do board: o passo que roda
+  `harness-qa`, o com gate `hasQaPassed`, o que roda `harness-review`).
 
 ### Protocolo ASK_HUMAN (qualquer `harness-*` pode pedir ajuda ao humano e PAUSAR o run)
 

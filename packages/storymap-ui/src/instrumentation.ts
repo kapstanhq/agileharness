@@ -309,6 +309,9 @@ async function registerImpl(): Promise<void> {
   //      Sem ninguém polando: heartbeat envelhecendo sob um agente que está trabalhando (e a varredura
   //      julga árvore por heartbeat), e card de sessão morta reservado até o TTL de 60min. Timer unref'd;
   //      a sonda de tmux é fail-closed (não sei ⇒ não julgo ninguém). AGILEHARNESS_FLEET_RECONCILE_MS (<=0 desliga).
+  //      Pegam carona na MESMA passada (fleet-deps.reconcileFleetNow): a fila do CONDUTOR é re-bombeada (a vaga
+  //      de um condutor que morreu volta a ser oferecida; a fila durável sobrevive a restart e anda no 1º tick)
+  //      e o gasto de um condutor que morreu é lançado no ledger do card (idempotente por sessão).
   const fleetMs = (() => {
     const raw = Number(process.env.AGILEHARNESS_FLEET_RECONCILE_MS);
     return Number.isFinite(raw) ? raw : 60_000;

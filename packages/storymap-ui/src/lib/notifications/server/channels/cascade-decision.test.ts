@@ -458,3 +458,49 @@ describe("decideCascade — mode-aware trigger override (reabertura R1, one-shot
     expect(decideCascade(c, cfgR1)).toEqual({ action: "run", trigger: "harness-review" });
   });
 });
+
+// conductor-core — a CONDUCTED card (routing.driver: conductor). The conductor session owns the work and the
+// placement; the cascade must never spawn a column skill into it nor skip-forward it under its feet — while
+// the delivery mechanics that follow a human approval (the train's passage, the deploy settle) keep flowing.
+describe("decideCascade — card conduzido (routing.driver: conductor)", () => {
+  const driven = { skips: [], decidedBy: "rules", decidedAt: "2026-09-25", driver: "conductor" };
+  const board = cfg([
+    { id: "grill", name: "Dúvidas", trigger: "harness-grill", autorun: false },
+    { id: "ready", name: "Pronta", autorun: false, skipForTypes: ["technical"] },
+    { id: "plano-tecnico", name: "Plano", trigger: "harness-plan", autorun: true },
+    { id: "desenvolver", name: "Dev", trigger: "harness-do", autorun: true },
+    { id: "merge", name: "Integrar", autorun: true },
+    { id: "release", name: "Liberar", autorun: false },
+    { id: "deploy", name: "Publicar", autorun: false, autoEnterTerminal: true },
+    { id: "concluida", name: "No ar", terminal: true },
+  ]);
+
+  it("coluna ARMADA com trigger: STOP 'conductor' (não roda a skill da coluna)", () => {
+    expect(decideCascade(card({ status: "desenvolver", routing: driven }), board)).toEqual({ action: "stop", reason: "conductor" });
+    // …e sem o driver o mesmo card roda (a regra é o driver, não a coluna).
+    expect(decideCascade(card({ status: "desenvolver" }), board)).toEqual({ action: "run", trigger: "harness-do" });
+  });
+
+  it("coluna manual com trigger: o motivo é 'conductor' (honesto), não 'manual'", () => {
+    expect(decideCascade(card({ status: "grill", routing: driven }), board)).toEqual({ action: "stop", reason: "conductor" });
+  });
+
+  it("status que o TIPO pula: não encaminha o card conduzido (o condutor é dono do lugar dele)", () => {
+    // technical em `ready` seria encaminhado para plano-tecnico (armado) — o encalhe que a skill mediu.
+    expect(decideCascade(card({ status: "ready", storyType: "technical" }), board)).toEqual({ action: "forward", to: "plano-tecnico" });
+    expect(decideCascade(card({ status: "ready", storyType: "technical", routing: driven }), board)).toEqual({
+      action: "stop",
+      reason: "conductor",
+    });
+  });
+
+  it("passagem sem trigger do train (merge) segue encaminhando depois da aprovação humana", () => {
+    expect(decideCascade(card({ status: "merge", routing: driven }), board)).toEqual({ action: "forward", to: "release" });
+  });
+
+  it("um reopen pendente não fura o driver (nenhuma skill de reabertura roda num card conduzido)", () => {
+    expect(
+      decideCascade(card({ status: "desenvolver", mode: "fix", reopenPending: true, routing: driven, bugReport: { brief: "x" } }), board),
+    ).toEqual({ action: "stop", reason: "conductor" });
+  });
+});

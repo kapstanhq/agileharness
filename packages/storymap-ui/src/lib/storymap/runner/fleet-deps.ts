@@ -5,15 +5,35 @@
 // is the half that knows about disk, tmux and the live merge train. It is also what keeps the Next page from
 // importing the MCP tool module just to reach a dep factory.
 
+import { promises as fsp } from "node:fs";
 import { getMergeQueue } from "./merge-queue";
 import { allSessions, defaultSessionWorktreeDeps, reconcileFleet, type FleetReconcileResult, type SessionWorktreeDeps } from "./session-worktree";
 import { getCardClaims } from "./claims";
 import { loadRunnerConfig } from "./config";
-import { findRepoRoot } from "@/lib/storymap/paths";
-import { RECYCLE_THRESHOLD } from "@/lib/vps/claude-transcript";
+import { findRepoRoot, runnerStateDir } from "@/lib/storymap/paths";
+import { findNewTranscript, RECYCLE_THRESHOLD } from "@/lib/vps/claude-transcript";
 import { readSessionContext } from "@/lib/vps/transcript-usage";
-import { listSessions, probeLiveTmuxSessions } from "@/lib/vps/tmux";
-import { readCard } from "@/lib/storymap/repo";
+import { ensureDetachedSession, hasSession, killSession, listSessions, probeLiveTmuxSessions } from "@/lib/vps/tmux";
+import { readBoardConfig, readCard } from "@/lib/storymap/repo";
+import { resolveCardRoute } from "./config";
+import { resolvedClaudeBin } from "./claude-bin";
+import { pollSessionAlive, spawnWorkSession, type SessionSpawnDeps } from "./session-spawn";
+import { isSessionAlive } from "./session-liveness";
+import { upsertFindingIfChanged } from "./findings";
+import {
+  admitConductorCard,
+  CONDUCTOR_DISPATCH_FINDING_ID,
+  diskConductorQueueStore,
+  pumpConductorQueue,
+  type ConductorDeps,
+  type ConductorPumpReport,
+} from "./conductor";
+import { updateCardOnDisk } from "@/lib/storymap/write";
+import { readWorktreeSessionCost } from "@/lib/vps/session-cost";
+import { recordSessionSpend, type SessionTelemetryDeps } from "./session-telemetry";
+import { getTelemetryStore } from "./telemetry";
+import type { AgentSession } from "./session-worktree";
+import { withDriver, withoutDriver } from "@/lib/storymap/driver";
 import type { CollectFleetDeps } from "./fleet-view";
 import type { CardClaim } from "./claims";
 
@@ -48,14 +68,33 @@ export function defaultFleetDeps(): CollectFleetDeps {
 export function defaultSessionDeps(): SessionWorktreeDeps {
   const mq = getMergeQueue();
   const autorun = loadRunnerConfig().autorun;
-  return defaultSessionWorktreeDeps({
-    repoRoot: findRepoRoot(),
-    ensureRunBase: () => mq.ensureRunBase(),
-    enqueueMerge: (entry) => mq.enqueueMerge(entry),
-    liveRunIds: () => mq.liveRunIds(),
-    maxWorktrees: autorun.sessions?.maxWorktrees,
-    thresholds: autorun.scheduler?.thresholds,
-  });
+  return {
+    ...defaultSessionWorktreeDeps({
+      repoRoot: findRepoRoot(),
+      ensureRunBase: () => mq.ensureRunBase(),
+      enqueueMerge: (entry) => mq.enqueueMerge(entry),
+      liveRunIds: () => mq.liveRunIds(),
+      maxWorktrees: autorun.sessions?.maxWorktrees,
+      thresholds: autorun.scheduler?.thresholds,
+    }),
+    // The session is LEAVING the registry (worktree_discard): the last moment the service still knows its tree,
+    // so a conductor's spend is booked here (session-telemetry.ts), and its conductor slot is re-offered to the
+    // queue right away instead of on the next fleet tick.
+    onSessionEnd: async (s) => {
+      await recordSessionSpend(sessionTelemetryDeps(), s).catch((err) =>
+        console.error("[session-cost] registro no descarte falhou:", err instanceof Error ? err.message : err),
+      );
+      if (s.driver === "conductor") void pumpConductorsNow().catch(() => {});
+    },
+  };
+}
+
+/** Production deps of the session-spend bookkeeping: the run ledger + the worktree's transcripts. */
+export function sessionTelemetryDeps(): SessionTelemetryDeps {
+  return {
+    telemetry: getTelemetryStore(),
+    readCost: (s: AgentSession) => readWorktreeSessionCost(s.worktreePath ?? s.cwd ?? null),
+  };
 }
 
 /**
@@ -73,7 +112,7 @@ export function defaultSessionDeps(): SessionWorktreeDeps {
 export async function reconcileFleetNow(): Promise<FleetReconcileResult> {
   const probe = await probeLiveTmuxSessions();
   const claims = getCardClaims();
-  return reconcileFleet(
+  const res = await reconcileFleet(
     {
       ...defaultSessionDeps(),
       sweepDeadActors: async (deadActors) => claims.sweepExpired(deadActors),
@@ -82,5 +121,143 @@ export async function reconcileFleetNow(): Promise<FleetReconcileResult> {
       renewClaim: (board, cardId, actor, ttlMs) => claims.renew(board, cardId, actor, ttlMs),
     },
     probe.ok ? probe.names : null,
+  );
+  // Uma sessão que MORREU (tmux sumiu) encerrou o seu gasto: o de um condutor entra no ledger do card agora
+  // (idempotente — o óbito se repete a cada tick enquanto a linha segue no registro). E a vaga que ela ocupava
+  // volta para a fila do condutor na MESMA passada — "re-checar quando uma sessão termina" é isto, sem outra
+  // fiação. Os dois são best-effort e nunca derrubam a reconciliação (que é a liveness da frota inteira).
+  void bookEndedSessions(res).catch((err) =>
+    console.error("[session-cost] registro dos óbitos falhou:", err instanceof Error ? err.message : err),
+  );
+  void pumpConductorsNow().catch((err) => console.error("[conductor] pump falhou:", err instanceof Error ? err.message : err));
+  return res;
+}
+
+/** The spend of the sessions a reconcile pass found dead, booked once each (session-telemetry.ts). */
+async function bookEndedSessions(res: FleetReconcileResult): Promise<void> {
+  if (!res.died.length) return;
+  const dead = new Set(res.died.map((d) => d.sessionId));
+  const rows = (await allSessions()).filter((s) => dead.has(s.sessionId));
+  const deps = sessionTelemetryDeps();
+  for (const s of rows) await recordSessionSpend(deps, s);
+}
+
+/** The port the AgileHarness MCP is served on — the SAME default the copiloto's spawn uses (orchestrator-spawn).
+ *  A spawned session mounts `http://localhost:<port>/api/mcp/<token>/mcp`, i.e. this very service. */
+const SERVICE_PORT = Number(process.env.PORT) || 3008;
+
+/**
+ * WS-6.2 — production deps for the work-oriented spawn (`spawnWorkSession`). Resolved PER CALL (never cached),
+ * like {@link defaultSessionDeps}: the cap, the thresholds and the claude binary come from the LIVE settings, so
+ * the operator retunes capacity without a restart.
+ *
+ * Moved here from `mcp/dev-tools.ts` for the same reason `defaultSessionDeps` was: it has TWO consumers now —
+ * the `claude_new` tool and the CONDUCTOR dispatch (runner/conductor.ts), which spawns a conductor session
+ * through exactly this door (same admission, same claim, same scoped token) and must not import the MCP tools
+ * module to reach it.
+ */
+export const sessionSpawnDeps = (): SessionSpawnDeps => {
+  const autorun = loadRunnerConfig().autorun;
+  const claims = getCardClaims();
+  return {
+    worktree: defaultSessionDeps(),
+    claims: {
+      conflictFor: (req) => claims.conflictFor(req),
+      acquire: (req) => claims.acquire(req),
+      release: (board, cardId, actor) => claims.release(board, cardId, actor),
+    },
+    // The card's OWN route — literally the runs' path (config.resolveCardRoute → deriveCardModelEffort).
+    // A card in a status the board no longer declares still yields its title (the prompt wants it) but no
+    // route: we would rather spawn on the CLI's default than invent a tier from a column that doesn't exist.
+    cardRoute: async (board, cardId) => {
+      const [card, config] = await Promise.all([readCard(board, cardId), readBoardConfig(board)]);
+      if (!card) return null;
+      const def = config.statuses.find((s) => s.id === card.status);
+      if (!def) return { title: card.title };
+      return { ...resolveCardRoute(card, def, loadRunnerConfig()), title: card.title };
+    },
+    tmux: {
+      exists: (name) => hasSession(name),
+      create: async (name, command, cwd) => {
+        const r = await ensureDetachedSession(name, command, cwd);
+        return { ok: r.ok, error: r.error };
+      },
+      survives: (name) => pollSessionAlive(() => hasSession(name)),
+      kill: async (name) => {
+        await killSession(name);
+      },
+    },
+    findTranscript: (since) => findNewTranscript(since),
+    fs: fsp,
+    claudeBin: resolvedClaudeBin({ name: autorun.claudeBin }),
+    repoRoot: findRepoRoot(),
+    stateDir: runnerStateDir(),
+    // G12 — the SCOPED `orch` token, never AGILEHARNESS_MCP_TOKEN (the operator's `full`): a spawned agent may
+    // drive the pipeline and publish, but never open a shell through MCP nor delete.
+    mcpToken: process.env.AGILEHARNESS_MCP_TOKEN_ORCH,
+    port: SERVICE_PORT,
+  };
+};
+
+/**
+ * The CONDUCTOR dispatch, wired to production (runner/conductor.ts is the DI-tested core). Resolved PER CALL,
+ * like the two factories above: the master switch and the spawn deps come from the LIVE settings.
+ */
+export function defaultConductorDeps(): ConductorDeps {
+  const today = () => new Date().toISOString().slice(0, 10);
+  return {
+    queue: diskConductorQueueStore(),
+    sessions: () => allSessions(),
+    liveTmux: async () => {
+      const probe = await probeLiveTmuxSessions();
+      return probe.ok ? new Set(probe.names) : null;
+    },
+    heartbeatAlive: (s) => isSessionAlive(s, Date.now()),
+    readCard: (board, cardId) => readCard(board, cardId),
+    readBoardConfig: (board) => readBoardConfig(board).catch(() => null),
+    markDriver: async (board, cardId) => {
+      await updateCardOnDisk(board, cardId, (card) => {
+        const routing = withDriver(card, "conductor", today());
+        return routing ? { ...card, routing } : null; // null ⇒ already conducted ⇒ no write (loop-safe)
+      });
+    },
+    clearDriver: async (board, cardId) => {
+      await updateCardOnDisk(board, cardId, (card) => {
+        const routing = withoutDriver(card);
+        return routing === undefined ? null : { ...card, routing };
+      });
+    },
+    stampDispatchFailure: async (board, cardId, detail) => {
+      await updateCardOnDisk(board, cardId, (card) => {
+        const findings = upsertFindingIfChanged(card.findings ?? [], {
+          id: CONDUCTOR_DISPATCH_FINDING_ID,
+          lens: "general",
+          severity: "high",
+          title: "o condutor não conseguiu abrir a sessão",
+          detail,
+          status: "open",
+        });
+        return findings ? { ...card, findings } : null;
+      });
+    },
+    spawn: (input) => spawnWorkSession(sessionSpawnDeps(), input),
+    masterEnabled: () => loadRunnerConfig().autorun.enabled,
+  };
+}
+
+/** One pump pass with the production deps — the fleet tick calls it (and the entry path fires it). */
+export function pumpConductorsNow(): Promise<ConductorPumpReport> {
+  return pumpConductorQueue(defaultConductorDeps());
+}
+
+/**
+ * The ENTRY half, for the autorun kernel: admit (driver + queue, awaited — every evaluation after this one sees
+ * a conducted card) and then fire a pump without holding the entry path (the spawn takes seconds).
+ */
+export async function dispatchConductorOnEntry(board: string, cardId: string): Promise<void> {
+  const deps = defaultConductorDeps();
+  await admitConductorCard(deps, board, cardId);
+  void pumpConductorQueue(deps).catch((err) =>
+    console.error(`[conductor] pump falhou:`, err instanceof Error ? err.message : err),
   );
 }

@@ -28,7 +28,9 @@
 // terminal do Jido (`mcp/dev-tools.ts`) e adoção/abertura de terminal (`app/actions.ts`) entregam a linha de
 // comando a `tmux new-session`, e ali o env do filho vem do SERVIDOR tmux, não deste processo: `sanitizeSpawnEnv`
 // é inaplicável por construção. Fechar aquilo exige `-e` por variável no tmux (ou não subir o servidor a partir
-// do serviço) e está fora deste recorte — fica dito em vez de fingido.
+// do serviço) e está fora deste recorte — fica dito em vez de fingido. Os CHAMADORES dessa família
+// (`spawnWorkSession`) têm o seu próprio censo em `session-spawn.test.ts` — desde que a dispatch do condutor
+// (fleet-deps) passou a abrir sessões sem uma chamada humana, um chamador novo não entra calado.
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";

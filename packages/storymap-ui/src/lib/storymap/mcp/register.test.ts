@@ -105,6 +105,11 @@ const PIPELINE_SURFACE = [
   "worktree_submit",
   "worktree_refresh",
   "worktree_discard",
+  // O claim da PRÓPRIA sessão (revisão exigida por este teste, conductor-core): classe `session`, como as 4
+  // acima — o chamador se nomeia pelo sessionId e o ator sai do registro, então a tool só reserva/solta o que
+  // é da sessão. Fora de `write` (um token que não é da frota não reserva card em nome de sessão), dentro de `orch`.
+  "claim_card",
+  "release_claim",
 ];
 const MERGE_SURFACE = ["resolve_merge", "reconcile_stage"]; // classe `merge-resolve`
 // classe `deploy` — publica o app DO BOARD (≠ update_vps, que é o serviço). O guia de estilo NÃO

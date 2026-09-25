@@ -90,3 +90,35 @@ export function nextBuildStatus(
   }
   return null;
 }
+
+// ── the human-approval landings (approve_qa / approve_review) ────────────────────────────────────────────
+//
+// Where a QA or a review APPROVAL makes sense is a property of the board's pipeline, not of two hardcoded ids.
+// The rule is read off the facets every board already declares:
+//   • QA approval    — the step that RUNS `harness-qa` (the QA column) and the step GATED by `hasQaPassed`
+//                      (the delivery approval, whose entry the approval unlocks);
+//   • review approval — the step that RUNS `harness-review`, plus the QA landings (a human may stamp the review
+//                      provenance retroactively while reconciling a card that already advanced).
+// The canonical `_base` pipeline resolves these to the historical ids (`qa-automatizado`, `revisao`,
+// `revisar-codigo`); a board with none of the facets falls back to those ids, so nothing that worked before
+// stops working.
+
+/** The historical QA-approval ids — the fallback for a board that declares neither facet. */
+export const LEGACY_QA_APPROVAL_STATUSES = ["qa-automatizado", "revisao"] as const;
+/** The historical review-approval ids — the fallback for a board that declares none of the facets. */
+export const LEGACY_REVIEW_APPROVAL_STATUSES = ["revisar-codigo", "qa-automatizado", "revisao"] as const;
+
+/** The statuses where approving QA is legal, in pipeline order. An unreadable config (null) keeps the
+ *  historical ids — the action degrades to exactly its old behaviour instead of refusing everything. PURE. */
+export function qaApprovalStatuses(config: Pick<BoardConfig, "statuses"> | null | undefined): string[] {
+  const ids = (config?.statuses ?? []).filter((s) => s.trigger === "harness-qa" || s.gate === "hasQaPassed").map((s) => s.id);
+  return ids.length ? ids : [...LEGACY_QA_APPROVAL_STATUSES];
+}
+
+/** The statuses where approving a code review is legal, in pipeline order (null config ⇒ legacy ids). PURE. */
+export function reviewApprovalStatuses(config: Pick<BoardConfig, "statuses"> | null | undefined): string[] {
+  const derived = (config?.statuses ?? [])
+    .filter((s) => s.trigger === "harness-review" || s.trigger === "harness-qa" || s.gate === "hasQaPassed")
+    .map((s) => s.id);
+  return derived.length ? derived : [...LEGACY_REVIEW_APPROVAL_STATUSES];
+}

@@ -37,6 +37,7 @@ import {
   OWNER_IDS,
 } from "./frameworks";
 import {
+  CARD_DRIVERS,
   CARD_TYPES,
   CARD_MODES,
   CARD_PROVENANCES,
@@ -119,6 +120,8 @@ const CardRoutingSchema = z.object({
   modelCap: oneOf(MODEL_TIERS).optional(),
   effortCap: oneOf(EFFORT_LEVELS).optional(),
   rationale: z.string().optional(),
+  // Quem conduz o card no lugar da cascata de colunas (hoje: `conductor`). Ortogonal a skips/tetos.
+  driver: oneOf(CARD_DRIVERS).optional(),
 });
 const CommitRangeSchema = z.object({ base: z.string(), head: z.string() });
 const DiffSnapshotSchema = z.object({ base: z.string(), mergeCommit: z.string() });
@@ -560,6 +563,15 @@ export const BoardConfigSchema = z.object({
   systems: z.array(SystemDefSchema),
   linkTypes: z.array(LinkTypeDefSchema),
   headroom: z.object({ enabled: z.boolean(), proxyUrl: z.string() }).optional(),
+  // A dispatch do CONDUTOR (runner/conductor.ts): entrar em `fromStatus` abre UMA sessão condutora por story.
+  conductor: z
+    .object({
+      enabled: z.boolean(),
+      fromStatus: z.string().min(1),
+      maxSessions: z.number().int().positive().optional(),
+      model: oneOf(MODEL_TIERS).optional(),
+    })
+    .optional(),
   positioning: z.string().nullable().optional(),
   businessMetric: z.string().nullable().optional(),
   desiredOutcome: z.string().nullable().optional(),
