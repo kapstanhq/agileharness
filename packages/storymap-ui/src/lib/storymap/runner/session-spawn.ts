@@ -27,9 +27,14 @@
 //  3. Workspace trust INHERITS into subdirectories of a trusted project. An agent tree lives at
 //     `<repoRoot>/.worktrees/agent-<id>` — under the trusted repo — so no trust dialog blocks the session.
 //     A tree OUTSIDE the repo root would hang forever on "Is this a project you trust?" with nobody to answer.
-//  4. `--dangerously-skip-permissions` is NOT needed (and is a root footgun): the box runs as root and the
-//     operator's global settings already default to bypass, which an interactive session inherits. Passing the
-//     flag explicitly is what trips the CLI's root guard.
+//  4. `--dangerously-skip-permissions` is NOT passed (it is a root footgun) — but inheriting the operator's
+//     global `defaultMode: bypassPermissions` is NOT the escape this line used to claim. MEASURED (v0.8.0, CLI
+//     2.1.281, as root): the guard fires on the ACTIVE MODE, flag or settings alike, and the session dies at birth
+//     with "--dangerously-skip-permissions cannot be used with root/sudo privileges" → `session_lost` on every
+//     conductor dispatch. The CLI's own escape is `IS_SANDBOX=1` — the one every headless spawn already sets when
+//     root (engine needsSandboxEnv, peer-review). So the session command carries it EXACTLY in that case: root AND
+//     the inherited mode is bypass ({@link hostNeedsRootBypass}); nowhere else (it changes other CLI behaviour).
+//     It rides the COMMAND line, not the caller's env — fact 2: tmux would drop an exported var.
 //
 // The IO is injected (the engine's DI convention) so the decisions below are unit-testable with no tmux, no
 // git and no service. SERVER-ONLY in production.
@@ -276,9 +281,11 @@ export function shellQuote(arg: string): string {
   return `'${arg.replace(/'/g, `'\\''`)}'`;
 }
 
-/** The one-line shell command tmux runs for the session. PURE. */
-export function buildSessionCommand(claudeBin: string, args: string[]): string {
-  return [claudeBin, ...args].map(shellQuote).join(" ");
+/** The one-line shell command tmux runs for the session. `rootBypass` prefixes the CLI's root-guard escape
+ *  (fact 4) as a shell assignment — a constant, never caller data. PURE. */
+export function buildSessionCommand(claudeBin: string, args: string[], opts: { rootBypass?: boolean } = {}): string {
+  const cmd = [claudeBin, ...args].map(shellQuote).join(" ");
+  return opts.rootBypass ? `IS_SANDBOX=1 ${cmd}` : cmd;
 }
 
 // ── the MCP surface (G12) ────────────────────────────────────────────────────────────────────────────────
@@ -382,6 +389,18 @@ export interface SessionSpawnDeps {
   /** O GOVERNADOR DE CAPACIDADE — consultado SÓ para sessão aberta por AUTOMAÇÃO (`spawnedBy: "copilot"`); a
    *  sessão do operador nunca espera. Ausente ⇒ sem governador (legado). */
   admission?: (initiator: Initiator) => GateVerdict;
+  /** The session inherits `bypassPermissions` AS ROOT ⇒ its command must carry `IS_SANDBOX=1` (fact 4). Resolved
+   *  per call by the production wiring ({@link hostNeedsRootBypass}); absent/false ⇒ the command is unchanged. */
+  rootBypass?: boolean;
+}
+
+/**
+ * Does a session spawned on this host die in the CLI's root guard unless it carries `IS_SANDBOX=1`? Only when
+ * the process is root (POSIX) AND the mode it will inherit is `bypassPermissions` (the operator's user settings
+ * `permissions.defaultMode`). PURE — the caller reads uid/platform/settings.
+ */
+export function hostNeedsRootBypass(h: { uid: number | undefined; platform: string; inheritedDefaultMode: unknown }): boolean {
+  return h.platform !== "win32" && h.uid === 0 && h.inheritedDefaultMode === "bypassPermissions";
 }
 
 export interface SpawnSessionInput {
@@ -574,6 +593,7 @@ export async function spawnWorkSession(deps: SessionSpawnDeps, input: SpawnSessi
   const command = buildSessionCommand(
     deps.claudeBin,
     buildSessionClaudeArgs({ prompt, model: route.model, effort: route.effort, mcpConfigPath: mcpPath ?? undefined }),
+    { rootBypass: deps.rootBypass },
   );
   const created = await deps.tmux.create(tmuxSession, command, cwd);
   if (!created.ok) {
@@ -673,6 +693,7 @@ export async function recycleSession(deps: SessionSpawnDeps, input: { sessionId:
     buildSessionCommand(
       deps.claudeBin,
       buildSessionClaudeArgs({ prompt, model: route.model, effort: route.effort, mcpConfigPath: mcpPath ?? undefined }),
+      { rootBypass: deps.rootBypass },
     ),
     cwd,
   );

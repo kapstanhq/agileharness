@@ -1007,6 +1007,13 @@ describe("(6) LINT DE DÍVIDA — varre TODO o src, casa OS DOIS sinais, e a lis
     // lanes-ultra: nasceu JÁ na postura (a forma do revisor par) — o env só existe dentro da válvula explícita.
     "lib/storymap/runner/proxy-spawn.ts",
     "lib/storymap/runner/resolution-judge-spawn.ts",
+    // v0.8.1 — DÍVIDA QUE JÁ EXISTIA, agora VISÍVEL. A sessão de trabalho (condutor, claude_new) sempre rodou
+    // em bypass total por HERANÇA do `defaultMode: bypassPermissions` do operador — invisível a este lint,
+    // que só vê o env/flag no código. Como root essa herança MATA a sessão no guard do CLI (medido: toda
+    // despacha do condutor terminava `session_lost`). O escape entra só quando root + bypass herdado
+    // (`hostNeedsRootBypass`), ou seja: não alarga a postura que a sessão já tinha, conserta o nascimento.
+    // Saída desta dívida: a sessão de trabalho migrar para `resolveAutonomyPosture` (contenção do SO).
+    "lib/storymap/runner/session-spawn.ts",
     "lib/storymap/smart-capture/claude.ts",
   ] as const;
 
@@ -1106,6 +1113,10 @@ describe("(6) LINT DE DÍVIDA — varre TODO o src, casa OS DOIS sinais, e a lis
       // O proxy do ultra nasceu na postura (nunca emitiu a flag): o env existe só dentro da válvula explícita, pelo
       // mesmo motivo do revisor par — sem ele o CLI recusaria a flag da válvula como root.
       "lib/storymap/runner/proxy-spawn.ts": "nasceu na postura; o env só existe dentro da válvula explícita",
+      // v0.8.1: a sessão de trabalho NÃO emite a flag (o fato 4 de session-spawn.ts) — o bypass vem HERDADO do
+      // defaultMode do operador, e o env é o escape do guard de root do CLI para essa herança, só quando root +
+      // bypass herdado (`hostNeedsRootBypass`). Sem ele toda sessão como root morre ao nascer.
+      "lib/storymap/runner/session-spawn.ts": "herda o bypass do settings do operador; o env é o escape do guard de root para essa herança",
       "lib/storymap/runner/resolution-judge-spawn.ts": "migrada para a postura; o env só existe dentro da válvula explícita",
     };
     const orfaos = DIVIDA_ENV.filter(

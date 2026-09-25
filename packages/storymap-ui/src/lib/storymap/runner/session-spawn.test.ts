@@ -20,6 +20,7 @@ import {
   shellQuote,
   recycleSession,
   spawnWorkSession,
+  hostNeedsRootBypass,
   writeSessionMcpConfig,
   type SessionSpawnDeps,
 } from "./session-spawn";
@@ -625,5 +626,44 @@ describe("censo — quem chama spawnWorkSession", () => {
       .map((f) => f.replace(/\\/g, "/"))
       .sort();
     expect(callers).toEqual(Object.keys(SPAWN_WORK_SESSION_CALLERS).sort());
+  });
+});
+
+
+// ── fact 4 (v0.8.1): as ROOT with an inherited `bypassPermissions`, the session dies at birth unless the command
+//    carries IS_SANDBOX=1 — measured: every conductor dispatch ended `session_lost` on the reference host.
+describe("root-guard escape — IS_SANDBOX=1 só quando root + bypass herdado", () => {
+  it("hostNeedsRootBypass: só root, POSIX e modo herdado bypassPermissions", () => {
+    expect(hostNeedsRootBypass({ uid: 0, platform: "linux", inheritedDefaultMode: "bypassPermissions" })).toBe(true);
+    expect(hostNeedsRootBypass({ uid: 1000, platform: "linux", inheritedDefaultMode: "bypassPermissions" })).toBe(false);
+    expect(hostNeedsRootBypass({ uid: 0, platform: "linux", inheritedDefaultMode: "acceptEdits" })).toBe(false);
+    expect(hostNeedsRootBypass({ uid: 0, platform: "linux", inheritedDefaultMode: undefined })).toBe(false);
+    expect(hostNeedsRootBypass({ uid: 0, platform: "win32", inheritedDefaultMode: "bypassPermissions" })).toBe(false);
+    expect(hostNeedsRootBypass({ uid: undefined, platform: "linux", inheritedDefaultMode: "bypassPermissions" })).toBe(false);
+  });
+
+  it("buildSessionCommand prefixa o escape como constante, e só quando pedido", () => {
+    const args = buildSessionClaudeArgs({ prompt: "/harness-conductor acme/story-1", model: "opus" });
+    expect(buildSessionCommand("claude", args, { rootBypass: true })).toBe(`IS_SANDBOX=1 ${buildSessionCommand("claude", args)}`);
+    expect(buildSessionCommand("claude", args)).not.toMatch(/IS_SANDBOX/);
+    expect(buildSessionCommand("claude", args, { rootBypass: false })).not.toMatch(/IS_SANDBOX/);
+  });
+
+  it("spawnWorkSession leva o escape até o comando do tmux quando a fiação diz rootBypass", async () => {
+    const commands: string[] = [];
+    const tmux = {
+      exists: async () => false,
+      create: async (_name: string, command: string) => {
+        commands.push(command);
+        return { ok: true };
+      },
+      survives: async () => true,
+      kill: async () => {},
+    };
+    const withEscape = await spawnWorkSession(spawnDeps({ rootBypass: true, tmux } as never), { role: "triage", task: "t" });
+    const without = await spawnWorkSession(spawnDeps({ tmux } as never), { role: "triage", task: "t" });
+    expect(withEscape.ok && without.ok).toBe(true);
+    expect(commands[0].startsWith("IS_SANDBOX=1 'claude' ")).toBe(true);
+    expect(commands[1].startsWith("'claude' ")).toBe(true);
   });
 });

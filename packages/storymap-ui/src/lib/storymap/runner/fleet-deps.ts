@@ -6,6 +6,7 @@
 // importing the MCP tool module just to reach a dep factory.
 
 import { promises as fsp } from "node:fs";
+import { readInheritedDefaultMode } from "./claude-settings";
 import { getMergeQueue } from "./merge-queue";
 import { allSessions, defaultSessionWorktreeDeps, reconcileFleet, type FleetReconcileResult, type SessionWorktreeDeps } from "./session-worktree";
 import { getCardClaims } from "./claims";
@@ -18,7 +19,7 @@ import { readBoardConfig, readCard } from "@/lib/storymap/repo";
 import { resolveCardRoute } from "./config";
 import { getCapacityGovernor } from "./capacity-service";
 import { resolvedClaudeBin } from "./claude-bin";
-import { pollSessionAlive, spawnWorkSession, type SessionSpawnDeps } from "./session-spawn";
+import { hostNeedsRootBypass, pollSessionAlive, spawnWorkSession, type SessionSpawnDeps } from "./session-spawn";
 import { isSessionAlive } from "./session-liveness";
 import { upsertFindingIfChanged } from "./findings";
 import {
@@ -200,6 +201,13 @@ export const sessionSpawnDeps = (): SessionSpawnDeps => {
     // G12 — the SCOPED `orch` token, never AGILEHARNESS_MCP_TOKEN (the operator's `full`): a spawned agent may
     // drive the pipeline and publish, but never open a shell through MCP nor delete.
     mcpToken: process.env.AGILEHARNESS_MCP_TOKEN_ORCH,
+    // Fact 4 of session-spawn.ts: as root with an inherited `bypassPermissions` the CLI dies at birth unless the
+    // command carries IS_SANDBOX=1 (the escape every headless spawn already uses). Re-read per call, like the rest.
+    rootBypass: hostNeedsRootBypass({
+      uid: process.getuid?.(),
+      platform: process.platform,
+      inheritedDefaultMode: readInheritedDefaultMode(findRepoRoot()),
+    }),
     port: SERVICE_PORT,
     // O governador de capacidade: a sessão aberta pela AUTOMAÇÃO (o copiloto) passa pela janela da conta.
     admission: (initiator) => getCapacityGovernor().admission(initiator),
