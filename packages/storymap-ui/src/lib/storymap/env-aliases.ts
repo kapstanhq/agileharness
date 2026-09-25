@@ -160,6 +160,9 @@ export const SUFIXOS_NATIVOS: readonly string[] = [
   "HALT_FILE",
   "HOST",
   "JUST",
+  // o comando do keepalive do medidor de uso (runner/capacity-service.ts) — argv em JSON; SÓ do ambiente do host,
+  // nunca do settings.yaml (que chega a main pelo train). Nasceu AGILEHARNESS_, sem grafia legada.
+  "METER_KEEPALIVE",
   "OPS_REPORT_SCRIPT",
   "ORIGIN_TRUST",
   "PORT",

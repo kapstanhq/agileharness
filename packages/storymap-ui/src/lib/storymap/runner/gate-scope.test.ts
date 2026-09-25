@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeUnitSpec, resolveGateUnits, unitAcceptsAffected, unitReporter, type GateScopeSpec, type GateUnit } from "./gate-scope";
+import { normalizeUnitSpec, resolveDataUnits, resolveGateUnits, unitAcceptsAffected, unitReporter, type GateScopeSpec, type GateUnit } from "./gate-scope";
 
 const FALLBACK: GateUnit = { cwd: "packages/storymap-ui", command: "vitest run", label: "packages/storymap-ui" };
 
@@ -157,5 +157,47 @@ describe("resolveGateUnits — a unidade DECLARA como é medida (gate honesto)",
     });
     expect(d.units).toEqual([FALLBACK]);
     expect(normalizeUnitSpec("  ")).toBeNull();
+  });
+});
+
+describe("resolveDataUnits — a metade que aterrissa em main, medida pelo que o operador DECLAROU", () => {
+  const DATA = {
+    "scripts/deploy": { command: "bunx vitest run scripts/deploy/__tests__", cwd: "." },
+    "scripts/ops": { command: "node --test", reporter: "junit-xml" as const, junitPath: "junit.xml" },
+    justfile: { command: "just --summary", reporter: "exit-code" as const, cwd: "." },
+  };
+
+  it("sem declaração, ou sem prefixo declarado no delta: NENHUMA unidade — o board-data segue como hoje", () => {
+    expect(resolveDataUnits(["scripts/deploy/a.js"], undefined).units).toEqual([]);
+    expect(resolveDataUnits(["storymap/boards/x/cards/c.md", "docs/a.md", "scripts/other/z.sh"], DATA).units).toEqual([]);
+  });
+
+  it("SEM fallback: um arquivo fora do mapa não puxa suíte nenhuma (senão todo board-data rodaria uma)", () => {
+    const d = resolveDataUnits(["scripts/ops/x.mjs", "storymap/boards/x/cards/c.md"], DATA);
+    expect(d.units.map((u) => u.label)).toEqual(["scripts/ops"]);
+  });
+
+  it("casa por PREFIXO de diretório e por arquivo exato; na ordem do MAPA, com a forma declarada", () => {
+    const d = resolveDataUnits(["justfile", "scripts/deploy/lib/x.js", "scripts/ops/y.mjs"], DATA);
+    expect(d.units.map((u) => [u.label, u.cwd, u.reporter ?? "vitest-json"])).toEqual([
+      ["scripts/deploy", ".", "vitest-json"],
+      ["scripts/ops", "scripts/ops", "junit-xml"],
+      ["justfile", ".", "exit-code"],
+    ]);
+    // `scripts/deployer` NÃO está sob `scripts/deploy`
+    expect(resolveDataUnits(["scripts/deployer/a.js"], DATA).units).toEqual([]);
+  });
+
+  it("um gatilho declarado também dispara — e o motivo diz qual", () => {
+    const d = resolveDataUnits(["tools/deploy.config.json"], {
+      "scripts/deploy": { command: "bunx vitest run", triggers: ["tools/deploy.*"] },
+    });
+    expect(d.units.map((u) => u.label)).toEqual(["scripts/deploy"]);
+    expect(d.reason).toContain("gatilho tools/deploy.*");
+  });
+
+  it("a string solta é a unidade legada (vitest-json); uma entrada sem comando é ignorada", () => {
+    const d = resolveDataUnits(["scripts/gc/a.mjs", "scripts/ops/b.mjs"], { "scripts/gc": "bunx vitest run", "scripts/ops": "  " });
+    expect(d.units).toEqual([{ cwd: "scripts/gc", command: "bunx vitest run", label: "scripts/gc" }]);
   });
 });

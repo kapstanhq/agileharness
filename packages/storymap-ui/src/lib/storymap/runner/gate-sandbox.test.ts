@@ -11,7 +11,7 @@
 // A metade real é pulada onde o host não roda UNIDADE TRANSIENTE nenhuma (CI sem root, macOS, container
 // sem systemd, ou esta suíte rodando DENTRO do selo do gate). Nunca pela sonda do selo — ver TRANSIENT_OK.
 import { exec as execCb, spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -27,10 +27,12 @@ import {
   resolveGateIsolation,
   sealProperties,
   stopUnitCommand,
+  withSealedVitestFlags,
   type GateSeal,
 } from "./gate-sandbox";
 import { parseJunitReport } from "./gate-reporters";
-import { makeDefaultGateRunner } from "./merge-queue";
+import { makeDefaultDataGateRunner, makeDefaultGateRunner } from "./merge-queue";
+import { resolveDataUnits } from "./gate-scope";
 import { defaultExec, defaultWorktreeFs, type ExecFn } from "./worktree";
 
 const execP = promisify(execCb);
@@ -131,6 +133,20 @@ describe("buildSealedInvocation — a argv que o exec roda", () => {
       expect(stopUnitCommand(bad as string)).toBeNull();
     }
     expect(stopUnitCommand("ah-gate-r1-abc.service")).toBe("systemctl stop 'ah-gate-r1-abc.service'");
+  });
+});
+
+describe("withSealedVitestFlags — vitest selado sem escrita em node_modules", () => {
+  it("anexa o loader em memória e desliga o cache de resultados", () => {
+    expect(withSealedVitestFlags("bunx vitest run --reporter=json")).toBe("bunx vitest run --reporter=json --configLoader runner --no-cache");
+  });
+  it("nunca repete o que o comando já declarou (`--configLoader x`, `--configLoader=x`, `--cache`/`--no-cache`)", () => {
+    expect(withSealedVitestFlags("vitest run --configLoader native")).toBe("vitest run --configLoader native --no-cache");
+    expect(withSealedVitestFlags("vitest run --configLoader=bundle --no-cache")).toBe("vitest run --configLoader=bundle --no-cache");
+    expect(withSealedVitestFlags("vitest run --cache")).toBe("vitest run --cache --configLoader runner");
+  });
+  it("um caminho que só CONTÉM a palavra não conta como a flag", () => {
+    expect(withSealedVitestFlags("vitest run --config x--configLoader.ts")).toBe("vitest run --config x--configLoader.ts --configLoader runner --no-cache");
   });
 });
 
@@ -343,6 +359,59 @@ test("subprocesso + git init/commit numa pasta temporária", () => {
   });
 });
 
+// ── vitest SELADO de verdade: o node_modules da árvore é LINK para o checkout (read-only no selo) ─────────
+describe.skipIf(!TRANSIENT_OK)("vitest REAL sob o selo — o config carrega sem gravar em node_modules", () => {
+  let root: string;
+  let tree: string;
+  beforeAll(() => {
+    root = mkdtempSync(path.join(os.tmpdir(), "ah-gate-vitest-"));
+    tree = path.join(root, "tree");
+    mkdirSync(tree);
+    // a MESMA forma da árvore do gate: node_modules é um link para o checkout (aqui, o deste pacote — sob
+    // /root, que o selo monta read-only), e o config usa import.meta.url como o de um alvo real.
+    symlinkSync(path.resolve(process.cwd(), "node_modules"), path.join(tree, "node_modules"));
+    writeFileSync(path.join(tree, "package.json"), JSON.stringify({ name: "gate-vitest-fixture", private: true, type: "module" }));
+    writeFileSync(
+      path.join(tree, "vitest.config.ts"),
+      `import { fileURLToPath } from "node:url";\nimport { defineConfig } from "vitest/config";\n` +
+        `export default defineConfig({ resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } }, test: { include: ["*.test.ts"] } });\n`,
+    );
+    writeFileSync(path.join(tree, "a.test.ts"), `import { expect, it } from "vitest";\nit("soma", () => { expect(1 + 1).toBe(2); });\n`);
+  });
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  const runSealed = async (command: string): Promise<{ ok: boolean; out: string }> => {
+    const inv = buildSealedInvocation({
+      command,
+      cwd: tree,
+      env: { ...process.env },
+      timeoutMs: 90_000,
+      seal: seal({ treePath: tree, repoRoot: root, inaccessiblePaths: [], runId: "vitest" }),
+      nonce: Math.random().toString(36).slice(2, 8),
+    });
+    try {
+      const r = await execP(inv.command, { env: inv.env, cwd: tree, timeout: 120_000 });
+      return { ok: true, out: `${r.stdout}${r.stderr}` };
+    } catch (err) {
+      const e = err as { stdout?: string; stderr?: string };
+      return { ok: false, out: `${e.stdout ?? ""}${e.stderr ?? ""}` };
+    }
+  };
+  const vitest = () => `${path.resolve(process.cwd(), "node_modules", ".bin", "vitest")} run --reporter=json`;
+
+  it("[CONTROLE] o loader default morre em EROFS no node_modules read-only — o teste discrimina", async () => {
+    const r = await runSealed(vitest());
+    expect(r.ok).toBe(false);
+    expect(r.out).toMatch(/EROFS|read-only file system/i);
+  }, 150_000);
+
+  it("[SELADO] com as flags do selo o MESMO config carrega e a suíte roda, medida pelo relatório", async () => {
+    const r = await runSealed(withSealedVitestFlags(vitest()));
+    expect(r.ok, r.out.slice(-600)).toBe(true);
+    expect(r.out).toContain('"numPassedTests":1');
+  }, 150_000);
+});
+
 // ── E O GATE INTEIRO, selado, contra um repositório git real ────────────────────────────────────────────
 describe.skipIf(!TRANSIENT_OK)("o gate de ponta a ponta SELADO — árvore real, unidade junit + unidade exit-code", () => {
   let root: string;
@@ -408,5 +477,61 @@ describe.skipIf(!TRANSIENT_OK)("o gate de ponta a ponta SELADO — árvore real,
     expect(res.log).toContain("3 teste(s) executado(s)");
     // a árvore do gate foi descartada
     expect(existsSync(path.join(repo, ".worktrees", "gate-e2e"))).toBe(false);
+  });
+});
+
+// ── o gate de DADOS, selado, contra main — a mesma contenção vale para a árvore de main ──────────────────────
+describe.skipIf(!TRANSIENT_OK)("o gate de DADOS SELADO — árvore de main + a metade de dados, unidade junit", () => {
+  let root: string;
+  let repo: string;
+  const gitEnv = () => ({ ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: "1", GIT_CEILING_DIRECTORIES: root, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" });
+  const git = (args: string) => execP(`git ${args}`, { cwd: repo, env: gitEnv() });
+
+  beforeAll(async () => {
+    root = mkdtempSync(path.join(os.tmpdir(), "ah-data-gate-sealed-"));
+    repo = path.join(root, "repo");
+    mkdirSync(path.join(repo, "scripts", "ops"), { recursive: true });
+    writeFileSync(path.join(repo, "scripts", "ops", "lib.mjs"), "export const add = (a, b) => a + b;\n");
+    writeFileSync(
+      path.join(repo, "scripts", "ops", "lib.test.mjs"),
+      `import test from "node:test"; import assert from "node:assert"; import { add } from "./lib.mjs"; test("soma", () => assert.equal(add(1, 2), 3));\n`,
+    );
+    await git("init -q -b main");
+    await git("add -A");
+    await git("commit -q -m base");
+    await git("checkout -q -b run/d");
+    writeFileSync(path.join(repo, "scripts", "ops", "lib.mjs"), "// selado\nexport const add = (a, b) => a + b;\n");
+    await git("add -A");
+    await git("commit -q -m delta");
+    await git("checkout -q main");
+  });
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  it("aprova com os testes de main executados SELADOS, a argv do systemd-run registrada e a unidade marcada `data`", async () => {
+    const exec: ExecFn = (cmd, o) => (cmd.startsWith("git ") ? defaultExec(cmd, { ...o, env: gitEnv() }) : defaultExec(cmd, o));
+    const mainSha = (await git("rev-parse main")).stdout.trim();
+    const d = resolveDataUnits(["scripts/ops/lib.mjs"], {
+      "scripts/ops": { command: `${process.execPath} --test --test-reporter=junit --test-reporter-destination=junit.xml`, reporter: "junit-xml", junitPath: "junit.xml" },
+    });
+    const res = await makeDefaultDataGateRunner(defaultWorktreeFs)({
+      exec,
+      repoRoot: repo,
+      runId: "dsealed",
+      mainSha,
+      deltaBase: mainSha,
+      deltaHead: "run/d",
+      dataFiles: ["scripts/ops/lib.mjs"],
+      carvedCards: [],
+      units: d.units,
+      reason: d.reason,
+      timeoutMs: 60_000,
+      isolation: { mode: "systemd", reason: "sonda ok (e2e dados)" },
+    });
+    expect(res.passed, res.log).toBe(true);
+    const u = res.report!.units[0];
+    expect(u).toMatchObject({ label: "scripts/ops", half: "data", isolation: "systemd", tests: 1, failures: 0 });
+    expect(u.argv[0]).toBe("systemd-run");
+    expect(u.argv).toContain("--property=PrivateNetwork=yes");
+    expect(existsSync(path.join(repo, ".worktrees", "gate-dsealed"))).toBe(false);
   });
 });

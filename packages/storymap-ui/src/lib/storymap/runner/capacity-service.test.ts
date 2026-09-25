@@ -2,9 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CapacityGovernor, readingFromUsage, type CapacityServiceDeps, type StoppedRun } from "./capacity-service";
+import { CapacityGovernor, meterBootRetryDelays, meterKeepaliveArgv, readingFromUsage, type CapacityServiceDeps, type GovernorNotice, type StoppedRun } from "./capacity-service";
 import { DAY_MS, DEFAULT_GOVERNOR_SETTINGS, HOUR_MS } from "./capacity-governor";
-import type { CapacityCriticalNotice } from "./capacity-notify";
 import type { GovernorSettings } from "@/lib/storymap/types";
 import type { UsageWindow } from "@/lib/vps/types";
 
@@ -42,22 +41,43 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function harness(opts: { usage?: UsageWindow | null; statsUrl?: string | null; settings?: Partial<GovernorSettings> } = {}) {
+function harness(
+  opts: {
+    usage?: UsageWindow | null;
+    statsUrl?: string | null;
+    settings?: Partial<GovernorSettings>;
+    readUsage?: () => Promise<UsageWindow | null>;
+    keepaliveArgv?: string[] | null;
+    runKeepalive?: (argv: string[]) => Promise<{ ok: boolean; detail: string }>;
+  } = {},
+) {
   let now = T0;
   let current: UsageWindow | null = opts.usage === undefined ? usage() : opts.usage;
-  const notices: CapacityCriticalNotice[] = [];
+  const notices: GovernorNotice[] = [];
   const logs: string[] = [];
+  // As re-tentativas de boot NUNCA disparam sozinhas no teste: ficam na fila até `fireRetry()` — nenhum
+  // timer real sobrevive ao teste para reler um diretório já apagado.
+  const scheduled: Array<{ ms: number; fn: () => void; cancelled: boolean }> = [];
+  const schedule = (fn: () => void, ms: number) => {
+    const s = { ms, fn, cancelled: false };
+    scheduled.push(s);
+    return () => void (s.cancelled = true);
+  };
   let settings: GovernorSettings = { ...DEFAULT_GOVERNOR_SETTINGS, timezone: "UTC", ...opts.settings };
   const deps: CapacityServiceDeps = {
     now: () => now,
     settings: () => settings,
     statsUrl: () => (opts.statsUrl === undefined ? "http://medidor/stats" : opts.statsUrl),
-    readUsage: async () => current,
+    readUsage: opts.readUsage ?? (async () => current),
     stateDir: () => path.join(dir, "autonomy"),
     haltPath: () => haltFile,
     notify: (n) => notices.push(n),
     log: (m) => logs.push(m),
     readTtlMs: 60_000,
+    schedule,
+    // o ambiente do host NUNCA vaza para o teste: sem argv declarado aqui, não há keepalive
+    keepaliveArgv: () => opts.keepaliveArgv ?? null,
+    runKeepalive: opts.runKeepalive ?? (async () => ({ ok: true, detail: "" })),
   };
   const g = new CapacityGovernor(deps);
   live.push(g);
@@ -66,6 +86,15 @@ function harness(opts: { usage?: UsageWindow | null; statsUrl?: string | null; s
     deps,
     notices,
     logs,
+    scheduled,
+    /** dispara a re-tentativa pendente (a última agendada e não cancelada) e espera a leitura dela */
+    fireRetry: async () => {
+      const s = [...scheduled].reverse().find((x) => !x.cancelled);
+      if (!s) throw new Error("nenhuma re-tentativa pendente");
+      s.cancelled = true;
+      s.fn();
+      await g.flush();
+    },
     setNow: (t: number) => (now = t),
     setUsage: (u: UsageWindow | null) => (current = u),
     setSettings: (s: Partial<GovernorSettings>) => (settings = { ...settings, ...s }),
@@ -90,9 +119,10 @@ describe("medidor ausente, pendente, defasado", () => {
     expect(h.g.admission("automation")).toMatchObject({ admit: true, reason: "admit" });
   });
 
-  it("proxy que responde sem janela e NUNCA teve uma ⇒ inerte (quem adota sem medidor não trava)", async () => {
+  it("proxy que responde sem janela e NUNCA teve uma ⇒ inerte DEPOIS das re-tentativas (quem adota sem medidor não trava)", async () => {
     const h = harness({ usage: null });
     await h.g.refresh();
+    for (let i = 0; i < 5; i++) await h.fireRetry();
     expect(h.g.admission("automation")).toMatchObject({ admit: true, reason: "inert" });
   });
 
@@ -116,6 +146,75 @@ describe("medidor ausente, pendente, defasado", () => {
     live.push(h2);
     await h2.refresh();
     expect(h2.admission("automation")).toMatchObject({ admit: false, reason: "stale" });
+    // o medidor JÁ existiu: a falha é "defasado", não "primeira leitura" — nenhuma re-tentativa de boot
+    expect(h.scheduled).toEqual([]);
+  });
+});
+
+describe("a PRIMEIRA leitura que falha não declara «sem medidor» — re-tenta rápido antes", () => {
+  // Medido no host vivo (v0.8.0): o proxy estava de pé e respondia em 12 ms; só a leitura do BOOT falhou. O
+  // governador logou «sem medidor … governador inerte» e admitiu TUDO até o tick seguinte, 5 min depois.
+
+  it("falha no boot ⇒ a automação ESPERA a medição e re-tenta em 15 s, 30 s…; a leitura chega ⇒ governa, e «inerte» nunca é dito", async () => {
+    let calls = 0;
+    const h = harness({ readUsage: async () => (++calls <= 2 ? null : usage()) });
+    const { g, logs } = h;
+
+    await g.refresh(); // 1ª: falha
+    expect(g.admission("automation")).toMatchObject({ admit: false, reason: "measuring" });
+    expect(h.scheduled.map((s) => s.ms)).toEqual([15_000]);
+    await h.fireRetry(); // 2ª: falha
+    expect(g.admission("automation")).toMatchObject({ admit: false, reason: "measuring" });
+    expect(h.scheduled.map((s) => s.ms)).toEqual([15_000, 30_000]);
+    await h.fireRetry(); // 3ª: lê
+    expect(calls).toBe(3);
+    expect(g.admission("automation")).toMatchObject({ admit: true, reason: "admit" });
+    expect(h.scheduled.filter((s) => !s.cancelled)).toEqual([]); // nada mais pendente
+    expect(logs.some((l) => l.includes("inerte"))).toBe(false);
+    // o operador nunca esperou por isso
+    expect(g.admission("operator")).toMatchObject({ admit: true, reason: "operator" });
+  });
+
+  it("esgotadas as re-tentativas (15·30·60·120·240 s — dobrando até o tick) ⇒ inerte, dito UMA vez e só no fim", async () => {
+    const h = harness({ usage: null });
+    await h.g.refresh();
+    for (let i = 0; i < 5; i++) {
+      expect(h.g.admission("automation"), `re-tentativa ${i}`).toMatchObject({ admit: false, reason: "measuring" });
+      expect(h.logs.some((l) => l.includes("inerte")), `«inerte» dito antes de esgotar (${i})`).toBe(false);
+      await h.fireRetry();
+    }
+    expect(h.scheduled.map((s) => s.ms)).toEqual([15_000, 30_000, 60_000, 120_000, 240_000]);
+    expect(h.g.admission("automation")).toMatchObject({ admit: true, reason: "inert" });
+    const inert = h.logs.filter((l) => l.includes("inerte"));
+    expect(inert).toHaveLength(1);
+    expect(inert[0]).toContain("AGILEHARNESS_HEADROOM_URL=off");
+    // depois de esgotar, uma nova falha não reabre a fila de re-tentativas
+    await h.g.refresh();
+    expect(h.scheduled).toHaveLength(5);
+    expect(h.logs.filter((l) => l.includes("inerte"))).toHaveLength(1);
+  });
+
+  it("proxy desligado por env ⇒ inerte JÁ, sem re-tentativa (a ausência é declarada, não medida)", async () => {
+    const h = harness({ statsUrl: null });
+    await h.g.refresh();
+    expect(h.scheduled).toEqual([]);
+    expect(h.g.admission("automation")).toMatchObject({ admit: true, reason: "inert" });
+    expect(h.logs.filter((l) => l.includes("inerte"))).toHaveLength(1);
+  });
+
+  it("uma leitura pedida pela admissão durante a espera não agenda uma SEGUNDA re-tentativa", async () => {
+    const h = harness({ usage: null });
+    await h.g.refresh();
+    h.setNow(T0 + 61_000); // passou o TTL de leitura: a admissão cutuca uma leitura nova
+    h.g.admission("automation");
+    await h.g.flush();
+    expect(h.scheduled.filter((s) => !s.cancelled)).toHaveLength(1);
+  });
+
+  it("meterBootRetryDelays: dobra a partir da base enquanto for MENOR que o tick", () => {
+    expect(meterBootRetryDelays()).toEqual([15_000, 30_000, 60_000, 120_000, 240_000]);
+    expect(meterBootRetryDelays(15_000, 60_000)).toEqual([15_000, 30_000]);
+    expect(meterBootRetryDelays(0, 60_000)).toEqual([]);
   });
 });
 
@@ -155,9 +254,12 @@ describe("a trava automática", () => {
     h.setUsage(usage({ session: 87 })); // teto de 5h
     h.setNow(T0 + 2 * 60_000);
     await h.g.refresh();
-    h.setUsage(usage({ polledAt: T0 - 3 * HOUR_MS })); // defasada
+    // defasada (29 min > staleMinutes 20) mas ainda não PARADA (< meterStallMinutes 30): é o governador funcionando.
+    // Defasada além disso com o medidor já visto é o impasse — esse SIM avisa (ver «medidor PARADO» abaixo).
+    h.setUsage(usage({ polledAt: T0 - 25 * 60_000 }));
     h.setNow(T0 + 4 * 60_000);
     await h.g.refresh();
+    expect(h.g.admission("automation")).toMatchObject({ admit: false, reason: "stale" });
     expect(h.notices).toEqual([]);
   });
 });
@@ -333,5 +435,159 @@ describe("readingFromUsage", () => {
     expect(readingFromUsage({ ...u, polledAt: null }, T0)?.polledAt).toBe(0);
     expect(readingFromUsage({ ...u, week: null }, T0)).toBeNull();
     expect(readingFromUsage(null, T0)).toBeNull();
+  });
+});
+
+describe("medidor PARADO — o impasse vira UMA demanda crítica, e o keepalive é a saída opcional", () => {
+  // Medido na v0.8.0 no ar: o proxy só renova a leitura com o token OAuth que colhe do TRÁFEGO. Sem tráfego desde
+  // 22:17Z o token expirou, o poll falhava desde 01:48Z, a leitura ficou defasada, a automação foi retida — e,
+  // retida, nada passava pelo proxy: a frota parada para sempre, e o painel só dizia «leitura defasada».
+  const MIN = 60_000;
+  const stale = usage({ polledAt: T0 - MIN }); // o /stats segue servindo a janela VELHA — a ida "funciona"
+
+  it("defasada além de meterStallMinutes, com o medidor já visto ⇒ UM aviso `meter-stale`, o retrato e o log; uma medição fresca encerra sem novo push", async () => {
+    const h = harness({ usage: stale });
+    await h.g.refresh(); // leitura fresca em T0
+    h.setNow(T0 + 25 * MIN);
+    await h.g.refresh(); // defasada (>20), ainda não parada (<30)
+    expect(h.g.admission("automation")).toMatchObject({ admit: false, reason: "stale" });
+    expect(h.notices).toEqual([]);
+    expect(h.g.snapshot().meterStall).toBeNull();
+
+    h.setNow(T0 + 35 * MIN);
+    await h.g.refresh();
+    expect(h.notices.map((n) => n.kind)).toEqual(["meter-stale"]);
+    const snap = h.g.snapshot().meterStall!;
+    expect(snap.since).toBe(T0 - MIN);
+    expect(snap.detectedAt).toBe(T0 + 35 * MIN);
+    expect(snap.detail).toContain("medidor de cota parado desde 11:59");
+    expect(snap.detail).toContain("automação retida");
+    expect(h.logs.some((l) => l.includes("parado desde 11:59"))).toBe(true);
+
+    h.setNow(T0 + 50 * MIN);
+    await h.g.refresh(); // o MESMO episódio: nenhum segundo aviso
+    expect(h.notices).toHaveLength(1);
+
+    h.setUsage(usage({ polledAt: T0 + 50 * MIN - MIN })); // o proxy voltou a medir
+    await h.g.refresh();
+    expect(h.g.snapshot().meterStall).toBeNull();
+    expect(h.g.admission("automation")).toMatchObject({ admit: true });
+    expect(h.notices).toHaveLength(1); // a volta não empurra nada
+    expect(h.logs.some((l) => l.includes("o medidor voltou"))).toBe(true);
+  });
+
+  it("o episódio é PERSISTIDO: um restart no meio do impasse não re-avisa o celular — nem o esquece", async () => {
+    const h = harness({ usage: stale });
+    await h.g.refresh();
+    h.setNow(T0 + 40 * MIN);
+    await h.g.refresh();
+    expect(h.notices).toHaveLength(1);
+    await h.g.flush();
+    const h2 = new CapacityGovernor(h.deps);
+    live.push(h2);
+    await h2.refresh();
+    expect(h.notices).toHaveLength(1);
+    expect(h2.snapshot().meterStall?.since).toBe(T0 - MIN);
+  });
+
+  it("medidor NUNCA visto não é «parado» (é inerte), e proxy desligado por env também não", async () => {
+    const never = harness({ usage: null });
+    await never.g.refresh();
+    for (let i = 0; i < 5; i++) await never.fireRetry();
+    never.setNow(T0 + 3 * 60 * MIN);
+    await never.g.refresh();
+    expect(never.notices).toEqual([]);
+    expect(never.g.snapshot().meterStall).toBeNull();
+
+    const off = harness({ statsUrl: null });
+    off.setNow(T0 + 3 * 60 * MIN);
+    await off.g.refresh();
+    expect(off.notices).toEqual([]);
+  });
+
+  it("[NÃO-VACUIDADE] sem as DUAS chaves nada roda — e a metade que falta é dita UMA vez no log", async () => {
+    const calls: string[][] = [];
+    const run = async (argv: string[]) => (calls.push(argv), { ok: true, detail: "" });
+    // nenhuma chave
+    const none = harness({ usage: stale, runKeepalive: run });
+    await none.g.refresh();
+    none.setNow(T0 + 40 * MIN);
+    await none.g.refresh();
+    // só a cadência no settings
+    const cadence = harness({ usage: stale, runKeepalive: run, settings: { meterKeepalive: { everyMinutes: 30 } } });
+    await cadence.g.refresh();
+    cadence.setNow(T0 + 40 * MIN);
+    await cadence.g.refresh();
+    await cadence.g.refresh();
+    // só o comando no ambiente
+    const cmd = harness({ usage: stale, runKeepalive: run, keepaliveArgv: ["claude", "-p", "ok"] });
+    await cmd.g.refresh();
+    cmd.setNow(T0 + 40 * MIN);
+    await cmd.g.refresh();
+    await Promise.all([none, cadence, cmd].map((x) => x.g.flush()));
+
+    expect(calls).toEqual([]);
+    expect(none.logs.some((l) => l.includes("NÃO roda") || l.includes("rodando o keepalive"))).toBe(false);
+    expect(cadence.logs.filter((l) => l.includes("sem comando no ambiente"))).toHaveLength(1);
+    expect(cmd.logs.filter((l) => l.includes("governor.meterKeepalive ausente"))).toHaveLength(1);
+  });
+
+  it("armado: roda SÓ com a leitura defasada, respeita a cadência, relê o medidor ao terminar — e o impasse se desfaz", async () => {
+    const calls: string[][] = [];
+    let h!: ReturnType<typeof harness>;
+    const renew = async (argv: string[]) => {
+      calls.push(argv);
+      // o tráfego do keepalive renovou o token: o proxy volta a medir
+      h.setUsage(usage({ polledAt: T0 + 22 * MIN }));
+      return { ok: true, detail: "ok" };
+    };
+    h = harness({ usage: stale, runKeepalive: renew, keepaliveArgv: ["claude", "-p", "ok"], settings: { meterKeepalive: { everyMinutes: 30 } } });
+    await h.g.refresh(); // fresca: nada roda
+    expect(calls).toEqual([]);
+
+    h.setNow(T0 + 22 * MIN);
+    await h.g.refresh(); // defasada ⇒ o keepalive roda, e ao terminar relê
+    await h.g.flush();
+    expect(calls).toEqual([["claude", "-p", "ok"]]);
+    expect(h.g.admission("automation")).toMatchObject({ admit: true });
+    expect(h.logs.some((l) => l.includes("keepalive concluído"))).toBe(true);
+
+    // defasa de novo DENTRO da cadência: não roda outra vez
+    h.setUsage(usage({ polledAt: T0 + 22 * MIN }));
+    h.setNow(T0 + 45 * MIN);
+    await h.g.refresh();
+    await h.g.flush();
+    expect(calls).toHaveLength(1);
+    // passada a cadência, roda
+    h.setNow(T0 + 53 * MIN);
+    await h.g.refresh();
+    await h.g.flush();
+    expect(calls).toHaveLength(2);
+  });
+
+  it("um keepalive que FALHA é dito no log e não derruba o laço", async () => {
+    const h = harness({
+      usage: stale,
+      keepaliveArgv: ["claude", "-p", "ok"],
+      settings: { meterKeepalive: { everyMinutes: 30 } },
+      runKeepalive: async () => {
+        throw new Error("ENOENT claude");
+      },
+    });
+    await h.g.refresh();
+    h.setNow(T0 + 25 * MIN);
+    await h.g.refresh();
+    await h.g.flush();
+    expect(h.logs.some((l) => l.includes("keepalive FALHOU: ENOENT claude"))).toBe(true);
+    expect(h.g.admission("automation")).toMatchObject({ admit: false, reason: "stale" });
+  });
+});
+
+describe("meterKeepaliveArgv — o comando vem SÓ do ambiente do host", () => {
+  it("argv em JSON de strings não-vazias; qualquer outra forma é nula", () => {
+    expect(meterKeepaliveArgv({ AGILEHARNESS_METER_KEEPALIVE: '["claude","-p","ok"]' })).toEqual(["claude", "-p", "ok"]);
+    for (const bad of [undefined, "", "claude -p ok", "[]", '["claude",""]', '{"a":1}', "[1,2]"]) {
+      expect(meterKeepaliveArgv({ AGILEHARNESS_METER_KEEPALIVE: bad }), String(bad)).toBeNull();
+    }
   });
 });

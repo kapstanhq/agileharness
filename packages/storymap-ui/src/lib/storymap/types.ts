@@ -2491,6 +2491,20 @@ export interface RunnerSettings {
         fallback?: { cwd: string; command?: string } & Omit<Partial<MergeGateUnitDecl>, "command" | "cwd" | "triggers">;
       };
       /**
+       * Unidades de DADOS — o gate do que o split manda para `main`. Com `staging` ligado, todo caminho FORA
+       * de `staging.codePrefixes` é a metade "board-data" e aterrissa em `main` SEM gate — medido no alvo de
+       * referência: `scripts/deploy/**` (o próprio sistema de deploy, com suíte vitest), `scripts/ops/**` e
+       * `scripts/gc/**` (suítes `node --test`) e o `justfile` chegavam a main sem rodar um teste. Eles
+       * CONTINUAM aterrissando em main (o checkout de runtime os executa de lá); o que muda é que, quando a
+       * metade de dados de uma entrada toca um prefixo declarado aqui, as unidades dele rodam (seladas, os
+       * mesmos reporters/contagem/atribuição do gate de código, afetados quando `vitest-json`) numa árvore
+       * descartável = `main` atual + a metade de dados, e o patch só aterrissa se passarem. Mesma forma de
+       * `scope.packages` (a chave casa por prefixo; `triggers` também disparam). Sem fallback e sem teto:
+       * um prefixo não declarado segue exatamente como hoje. Só vale com `staging.enabled` — sem split,
+       * tudo aterrissa pelo gate de código, e o lugar das unidades é `scope.units`.
+       */
+      dataUnits?: Record<string, string | MergeGateUnitDecl>;
+      /**
        * O SELO (runner/gate-sandbox.ts): `systemd` (default) roda cada comando de código-do-delta numa unidade
        * transiente do systemd — root SEM capability, FS read-only exceto a árvore do gate, `/run` e `/tmp`
        * privados, credenciais conhecidas inacessíveis e (por unidade, `network: deny`, o default) sem rede. Só
@@ -2762,6 +2776,20 @@ export interface GovernorSettings {
   latchFiveHourPct: number;
   /** leitura mais velha que isto (min) é DEFASADA ⇒ o trabalho automático espera (default 20). */
   staleMinutes: number;
+  /**
+   * Defasada há mais que isto (min) COM o medidor já visto neste host ⇒ o medidor está PARADO: não é uma
+   * espera, é um impasse (sem número a automação não roda; sem automação nada passa pelo proxy; sem tráfego o
+   * token que o proxy usa para ler a janela nunca se renova). Vira UM aviso crítico (`meter-stale`) e o estado
+   * `meterStall` do retrato, uma vez por episódio (default 30; nunca abaixo de `staleMinutes`).
+   */
+  meterStallMinutes: number;
+  /**
+   * A saída OPCIONAL do impasse: enquanto a leitura está defasada (o medidor já visto), rodar o comando de
+   * keepalive a cada `everyMinutes` para gerar tráfego pelo proxy. SÓ a cadência mora aqui — o COMANDO vem do
+   * ambiente do host (`AGILEHARNESS_METER_KEEPALIVE`, argv em JSON): este arquivo chega a main pelo train, e um
+   * comando lido ao vivo dele seria execução arbitrária como o uid do serviço. Sem o comando no ambiente, nada roda.
+   */
+  meterKeepalive?: { everyMinutes: number };
   /** fuso IANA que define o "dia" do ritmo diário; ausente ⇒ o fuso do host. */
   timezone?: string;
 }

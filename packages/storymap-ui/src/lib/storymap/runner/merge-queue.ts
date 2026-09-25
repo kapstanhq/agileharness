@@ -83,18 +83,21 @@ import {
   cachedGateSandboxProbe,
   resolveGateIsolation,
   stopUnitCommand,
+  withSealedVitestFlags,
   type GateIsolationMode,
   type GateSeal,
   type SandboxProbe,
 } from "./gate-sandbox";
 import { captureConflictArtifact, describeConflictArtifact, type ConflictArtifact } from "./conflict-artifact";
 import {
+  resolveDataUnits,
   resolveGateUnits,
   unitAcceptsAffected,
   unitReporter,
   type GateNetwork,
   type GateScopeSpec,
   type GateUnit,
+  type GateUnitSpec,
 } from "./gate-scope";
 import { corridaVerdeLimpaMainRed, describeMainRed, quarantinedTestIds, recordMainRedMeasurement } from "./gate-health";
 import { prepareGateTree } from "./gate-tree";
@@ -319,7 +322,7 @@ export type IntegrationGateRunner = (opts: {
   branch: string;
   /** the run's sessionId — names the staging worktree/branch (`gate-<runId>` / `gate/<runId>`). */
   runId: string;
-  /** command executed in `<stagingPath>/packages/storymap-ui` (e.g. `"vitest run"`). */
+  /** the FALLBACK unit's command (`mergeGate.scope.fallback.command` absent ⇒ this; e.g. `"vitest run"`). */
   checkCommand: string;
   /** wall-clock ceiling for the check, ms. */
   timeoutMs: number;
@@ -381,6 +384,9 @@ export type IntegrationGateRunner = (opts: {
   /** as falhas que JÁ existiam na baseline (main vermelha) — o produtor que faltava (P-8) */
   preexisting?: GateFailure[];
 }>;
+
+/** O desfecho de UMA execução do gate — a mesma forma para o gate de código e o de dados. */
+export type IntegrationGateResult = Awaited<ReturnType<IntegrationGateRunner>>;
 
 /** O isolamento que o CHAMADOR resolveu para uma execução do gate (ver `IntegrationGateRunner.isolation`). */
 export interface IntegrationGateIsolation {
@@ -572,6 +578,14 @@ export interface MergeQueueConfig {
   gateAffected?: AffectedGateSpec;
   /** P-7 — escopo do gate (tests); unset ⇒ o `mergeGate.scope` vivo do `settings.yaml`. */
   gateScope?: GateScopeSpec;
+  /**
+   * O GATE DE DADOS ({@link DataGateRunner}): mede, antes de aterrissar, a metade do split que vai para `main`
+   * quando ela toca um prefixo de `mergeGate.dataUnits`. `getMergeQueue()` liga o real; ausente ⇒ nenhuma
+   * entrada é medida por ele (o comportamento de antes). Liga/desliga pelo MESMO `mergeGate.enabled`.
+   */
+  dataGate?: DataGateRunner | null;
+  /** as unidades de dados (tests); unset ⇒ o `mergeGate.dataUnits` vivo do `settings.yaml`. */
+  gateDataUnits?: Record<string, string | GateUnitSpec>;
   /** typecheck do gate (tests); unset ⇒ o `mergeGate.typecheck` vivo do `settings.yaml`. */
   gateTypecheck?: { enabled: boolean; command: string };
   /** o isolamento do gate JÁ RESOLVIDO (tests); unset ⇒ `mergeGate.isolation` vivo × a sonda abaixo. */
@@ -966,13 +980,15 @@ async function mergeBranchIntoStaging(
       await gitS(`checkout --theirs -- ${quote(sf)}`);
       await gitS(`add -- ${quote(sf)}`);
     }
-    const pkgDir = path.join(stagingPath, "packages", "storymap-ui");
+    // O pacote de cada snap vem do CAMINHO dele (packageDirOf), nunca de um `packages/storymap-ui` literal:
+    // no repositório de um adotante esse diretório não existe (ou é cópia morta), e o `vitest -u` rodava
+    // na suíte ERRADA — ou morria com cwd inexistente e o gate reprovava um delta sem ter medido nada.
     let regenErr: string | null = null;
     try {
       await provisionNodeModules(fs, repoRoot, stagingPath);
       // O `vitest -u` roda a suíte do delta — MESMO caminho (env neutralizado + selo) da checagem.
-      const r = await runInTree(`bunx vitest run -u`, pkgDir, { timeoutMs: DEFAULT_GATE_TIMEOUT_MS });
-      if (!r.ok) regenErr = detailOf(r.err);
+      const regen = await regenSnapshotsInTree(runInTree, stagingPath, snapConflicts, DEFAULT_GATE_TIMEOUT_MS);
+      if (regen.status === "failed") regenErr = regen.detail || "vitest -u falhou";
     } catch (err) {
       regenErr = detailOf(err);
     }
@@ -1084,7 +1100,7 @@ async function regenSnapshotsInTree(
     for (const p of pkgs) {
       // `vitest -u` RODA a suíte inteira do pacote — o mesmo código do delta que a checagem roda, logo o
       // mesmo env neutralizado E o mesmo selo (antes: env do serviço cru, com credencial MCP e de nuvem).
-      const r = await runInTree(`bunx vitest run -u`, path.join(treePath, p), { timeoutMs });
+      const r = await runInTree(`bunx vitest run -u`, path.join(treePath, p), { timeoutMs, vitest: true });
       if (!r.ok) return { status: "failed", detail: execErrorDetail(r.err, 160) };
     }
   } catch (err) {
@@ -1130,6 +1146,176 @@ export function makeDefaultGateRunner(fs: WorktreeFs = defaultWorktreeFs, report
   };
 }
 
+/**
+ * O GATE DE DADOS (`mergeGate.dataUnits`) — o que o split manda para `main` também é medido antes de aterrissar.
+ *
+ * O split roteia por prefixo: `staging.codePrefixes` vai para `stage` (e passa pelo gate de código), o resto
+ * aterrissa em `main` como "board-data", sem gate. Esse resto não é só card: medido no alvo de referência,
+ * `scripts/deploy/**` (o sistema de deploy, com suíte vitest própria), `scripts/ops/**`, `scripts/gc/**`
+ * (suítes `node --test`) e o `justfile` chegavam a main sem rodar um teste — e é de main que o checkout de
+ * runtime os executa. Eles CONTINUAM indo para main; o que muda é a régua antes da aterrissagem.
+ *
+ * UMA RÉGUA, a mesma do P-2: a árvore medida é a que a aterrissagem vai produzir — `main` (o sha que o
+ * chamador leu) + a metade de dados, pelo MESMO `diff base..pinado` do split, com os cards que main também
+ * moveu fundidos por CAMPO como a aterrissagem funde. As unidades rodam pelo MESMO miolo do gate de código
+ * ({@link measureGateUnits}): selo, reporters, contagem, atribuição contra a base (`main` sem o patch), retry
+ * de flaky, quarentena, crash = INCONCLUSIVO.
+ *
+ * O que a árvore NÃO reproduz, declarado: os artefatos de `staging.dataDerived` (vivem sob um prefixo de
+ * código) ficam com a cópia de main — a aterrissagem os REGENERA a partir dos dados, e regenerá-los aqui
+ * custaria a suíte inteira do pacote dono. Uma unidade de dados não os deve medir.
+ */
+export type DataGateRunner = (opts: {
+  exec: ExecFn;
+  repoRoot: string;
+  runId: string;
+  /** o sha de `main` de que a árvore é cortada — o que a aterrissagem vai encontrar */
+  mainSha: string;
+  /** a base do split (`entry.baseCommit`, ou o merge-base) — a MESMA do `base..pinado` da metade de dados */
+  deltaBase: string;
+  /** o sha pinado que a entrada integra */
+  deltaHead: string;
+  /** a metade de dados que aterrissa por PATCH (sem os cards de `carvedCards`) */
+  dataFiles: string[];
+  /** cards que `main` TAMBÉM moveu desde a base — a aterrissagem os funde por campo; a árvore também */
+  carvedCards: string[];
+  /** as unidades de dados que o delta tocou ({@link resolveDataUnits}) */
+  units: GateUnit[];
+  /** por que estas unidades — vai para o log */
+  reason: string;
+  timeoutMs: number;
+  retryOnNewFailure?: boolean;
+  affected?: AffectedGateSpec;
+  quarantined?: ReadonlySet<string>;
+  isolation?: IntegrationGateIsolation;
+}) => Promise<IntegrationGateResult>;
+
+/** Production {@link DataGateRunner}: env neutralizado, selo, árvore descartável limpa em todo caminho de saída. */
+export function makeDefaultDataGateRunner(fs: WorktreeFs = defaultWorktreeFs, reportIo: GateReportIo = defaultGateReportIo): DataGateRunner {
+  return async (opts) => {
+    let semCredencial: ReturnType<typeof criarDiretoriosSemCredencial>;
+    try {
+      semCredencial = criarDiretoriosSemCredencial();
+    } catch (err) {
+      return { passed: false, inconclusive: true, log: `gate de dados: setup falhou (diretórios sem credencial): ${execErrorDetail(err, GATE_LOG_CAP)}` };
+    }
+    try {
+      return await runDataGateInTree(fs, reportIo, opts, semCredencial);
+    } finally {
+      semCredencial.descartar();
+    }
+  };
+}
+
+async function runDataGateInTree(
+  fs: WorktreeFs,
+  reportIo: GateReportIo,
+  opts: Parameters<DataGateRunner>[0],
+  semCredencial: DiretoriosSemCredencial,
+): Promise<IntegrationGateResult> {
+  const { exec, repoRoot, runId, isolation } = opts;
+  // O MESMO caminho da árvore do gate de código: os dois nunca coexistem (o de código já a descartou), e é o
+  // caminho que o recover() limpa quando um restart pega uma entrada `gate-running` no meio.
+  const treePath = gateStagingPath(repoRoot, runId);
+  const isoEfetivo = { mode: isolation?.mode ?? ("none" as GateIsolationMode), reason: isolation?.reason ?? "isolamento não pedido ao runner" };
+  const seal = await buildGateSeal({ isolation, stagingPath: treePath, repoRoot, runId });
+  const runInTree = makeGateCommandRunner(exec, semCredencial, seal);
+  const carvedNotes: string[] = [];
+
+  await cleanupGateStaging(exec, fs, repoRoot, runId);
+  try {
+    const prepared = await prepareGateTree(
+      {
+        exec,
+        fs,
+        provisionNodeModules,
+        // derivados de `staging.dataDerived`: a aterrissagem os regenera em main; aqui ficam com a cópia de main
+        regenerateSnapshots: async () => ({ status: "noop" }),
+        join: (...parts) => path.join(...parts),
+        readFile: (abs) => fsp.readFile(abs, "utf8"),
+        beforeCommit:
+          opts.carvedCards.length > 0
+            ? async (tree) => {
+                for (const f of opts.carvedCards) {
+                  const [base, main, run] = await Promise.all([
+                    readCardAtRef(exec, repoRoot, opts.deltaBase, f),
+                    readCardAtRef(exec, repoRoot, opts.mainSha, f),
+                    readCardAtRef(exec, repoRoot, opts.deltaHead, f),
+                  ]);
+                  if (!base || !main || !run) {
+                    // delete/rename/ilegível num dos lados: a aterrissagem cai no patch de linha para ESTE card;
+                    // a árvore mantém a cópia de main e o log diz — uma unidade de ferramental não mede card.
+                    carvedNotes.push(f);
+                    continue;
+                  }
+                  await writeCardToPath(path.join(tree, f), mergeCardThreeWay(base, main, run));
+                  await exec(`git add -- ${quote(f)}`, { cwd: tree, timeout: GATE_GIT_TIMEOUT_MS });
+                }
+              }
+            : undefined,
+      },
+      {
+        repoRoot,
+        treePath,
+        treeBranch: gateStagingBranch(runId),
+        baseline: opts.mainSha,
+        deltaBase: opts.deltaBase,
+        deltaHead: opts.deltaHead,
+        patchFile: path.join(runnerStateDir(), `gate-${runId}-data.patch`),
+        timeoutMs: GATE_GIT_TIMEOUT_MS,
+        paths: opts.dataFiles,
+      },
+    );
+    if (!prepared.ok) {
+      // Conflito = a metade de dados não aplica em main: a aterrissagem também não aplicaria. Setup = infra.
+      if (prepared.kind === "conflict") return { passed: false, conflict: prepared.conflict, log: `gate de dados: ${prepared.log}` };
+      return { passed: false, inconclusive: true, log: `gate de dados: ${prepared.log}` };
+    }
+    let changedInTree: string[] = [];
+    try {
+      const diff = await exec(`git diff --name-only ${quote(prepared.baseSha)}..HEAD`, { cwd: treePath, timeout: GATE_GIT_TIMEOUT_MS });
+      changedInTree = diff.stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+    } catch {
+      /* sem delta legível → a seleção por afetados cai no conservador (completa) */
+    }
+    const motivo = await unitRefusal(fs, treePath, opts.units, "mergeGate.dataUnits");
+    if (motivo) return { passed: false, log: `gate de dados: ${motivo}` };
+    const note =
+      carvedNotes.length > 0
+        ? `\ngate de dados: ${carvedNotes.length} card(s) movido(s) pelos dois lados sem 3 versões legíveis ficaram com a cópia de main na árvore: ${carvedNotes.slice(0, 5).join(", ")}`
+        : "";
+    return await measureGateUnits({
+      exec,
+      treePath,
+      units: opts.units,
+      baseSha: prepared.baseSha,
+      changedInTree,
+      affected: opts.affected,
+      runInTree,
+      reportIo,
+      timeoutMs: opts.timeoutMs,
+      retryOnNewFailure: opts.retryOnNewFailure ?? true,
+      quarantined: opts.quarantined,
+      isolation: isoEfetivo,
+      scopeReason: `dados → main@${opts.mainSha.slice(0, 8)}: ${opts.reason}`,
+      notes: note,
+      half: "data",
+    });
+  } finally {
+    await cleanupGateStaging(exec, fs, repoRoot, runId);
+  }
+}
+
+/**
+ * O relatório da entrada quando os DOIS gates rodaram na mesma passada: as unidades do gate de código e as do
+ * de dados (marcadas `half: data`), com os totais recontados. Sem relatório de dados ⇒ o de código, intacto. PURA.
+ */
+export function combineGateReports(code: GateReport | undefined, data: GateReport | undefined): GateReport | undefined {
+  if (!data) return code;
+  const iso = code ?? data;
+  return summarizeGateReport([...(code?.units ?? []), ...data.units], { mode: iso.isolation, reason: iso.isolationReason });
+}
+
 /** O desfecho de UM comando do gate — sucesso OU falha, nunca exceção (quem decide é o chamador). */
 export interface GateCommandOutcome {
   ok: boolean;
@@ -1144,11 +1330,14 @@ export interface GateCommandOutcome {
   exitCode: number | null;
 }
 
-/** Roda UM comando de código-do-delta no `cwd` dado, com env neutralizado e (quando ligado) o selo. */
+/**
+ * Roda UM comando de código-do-delta no `cwd` dado, com env neutralizado e (quando ligado) o selo.
+ * `vitest: true` declara que o comando é um vitest — sob o selo ele ganha {@link withSealedVitestFlags}.
+ */
 export type GateCommandRunner = (
   command: string,
   cwd: string,
-  opts: { timeoutMs: number; network?: GateNetwork },
+  opts: { timeoutMs: number; network?: GateNetwork; vitest?: boolean },
 ) => Promise<GateCommandOutcome>;
 
 /**
@@ -1313,10 +1502,12 @@ function makeGateCommandRunner(
   seal: GateSeal | undefined,
 ): GateCommandRunner {
   let seq = 0;
-  return async (command, cwd, { timeoutMs, network }) => {
+  return async (command, cwd, { timeoutMs, network, vitest }) => {
     const base = gateExecOptions(cwd, timeoutMs, semCredencial);
     const inv = buildSealedInvocation({
-      command,
+      // Só SOB o selo: é lá que node_modules (links para o checkout principal) é read-only. Sem selo o
+      // comando segue byte a byte o de antes.
+      command: vitest && seal?.mode === "systemd" ? withSealedVitestFlags(command) : command,
       cwd,
       env: base.env,
       timeoutMs,
@@ -1498,22 +1689,8 @@ function gateRunnerSemCredencial(
       //
       // A MESMA régua vale para uma unidade `junit-xml` sem `junitPath` utilizável: sem o caminho do
       // relatório o gate não tem o que ler — e um junit sem relatório é uma unidade que "passa" sem medir.
-      const unidadesAusentes: string[] = [];
-      const declaracoesInvalidas: string[] = [];
-      for (const unit of scoped.units) {
-        if (!(await fs.isDir(path.join(stagingPath, unit.cwd)))) unidadesAusentes.push(unit.cwd);
-        if (unitReporter(unit) === "junit-xml" && !junitReportPath(path.join(stagingPath, unit.cwd), unit.junitPath)) {
-          declaracoesInvalidas.push(`${unit.label} (junit-xml sem junitPath relativo à unidade)`);
-        }
-      }
-      if (unidadesAusentes.length > 0 || declaracoesInvalidas.length > 0) {
-        const motivo =
-          unidadesAusentes.length > 0
-            ? `gate RECUSADO (não reprovado): ${unidadesAusentes.join(", ")} não existe em ${stagingPath}. ` +
-              `A suíte NÃO rodou. Declare as unidades em \`mergeGate.scope.packages\` do settings, ou aponte o ` +
-              `gate para a árvore que de fato tem o pacote.`
-            : `gate RECUSADO (não reprovado): declaração de unidade inválida — ${declaracoesInvalidas.join(", ")}. ` +
-              `A suíte NÃO rodou. Corrija \`mergeGate.scope\` no settings.`;
+      const motivo = await unitRefusal(fs, stagingPath, scoped.units, "mergeGate.scope");
+      if (motivo) {
         await cleanupGateStaging(exec, fs, repoRoot, runId);
         return { passed: false, log: motivo };
       }
@@ -1647,225 +1824,305 @@ function gateRunnerSemCredencial(
       }
       const tcNote = notasAteAqui();
 
-      // ── AS UNIDADES — cada uma medida pelo reporter QUE DECLAROU ──────────────────────────────────────
-      /**
-       * Roda UMA unidade. `useAffected` só vale na rodada do delta — a de ATRIBUIÇÃO é sempre completa, senão
-       * a base seria medida com uma régua mais frouxa que a do veredito. A seleção por afetados é da UNIDADE:
-       * o sufixo entra no comando DELA (flags preservadas), e só se ela é `vitest-json`.
-       */
-      const runUnit = async (unit: GateUnit, useAffected: boolean): Promise<UnitRun> => {
-        const reporter = unitReporter(unit);
-        const decision =
-          useAffected && affected?.enabled
-            ? resolveAffectedGate(unit.command, baseSha, changedInTree, affected, unitAcceptsAffected(unit))
-            : { command: unit.command, mode: "full" as const };
-        const command = reporter === "vitest-json" ? `${decision.command} --reporter=json` : decision.command;
-        const unitDir = path.join(stagingPath, unit.cwd);
-        const junitAbs = reporter === "junit-xml" ? junitReportPath(unitDir, unit.junitPath) : null;
-        // Um relatório de uma rodada ANTERIOR (a mesclada, antes do reset para a base — `git reset --hard`
-        // não apaga arquivo não-rastreado) seria lido como o desta. Apagar ANTES de rodar é o que garante
-        // que o relatório lido foi escrito por ESTE comando.
-        if (junitAbs) await reportIo.remove(junitAbs).catch(() => {});
-        const r = await runInTree(command, unitDir, { timeoutMs, network: unit.network });
-        let parsed: ParsedReport;
-        if (reporter === "vitest-json") parsed = parseVitestReport(r.stdout);
-        else if (reporter === "junit-xml") {
-          const xml = junitAbs ? await reportIo.read(junitAbs) : null;
-          parsed = xml === null ? { parsed: false, failures: [], tests: null } : parseJunitReport(xml);
-        } else parsed = { parsed: true, failures: [], tests: null };
-        return {
-          unit,
-          ok: r.ok,
-          parsed: parsed.parsed,
-          failures: parsed.failures,
-          raw: r.ok ? "" : execErrorDetail(r.err, GATE_LOG_CAP),
-          report: {
-            label: unit.label,
-            cwd: unit.cwd,
-            reporter,
-            mode: decision.mode,
-            network: unit.network ?? "deny",
-            isolation: r.isolation,
-            argv: r.argv,
-            exitCode: r.exitCode,
-            tests: parsed.parsed ? parsed.tests : null,
-            failures: parsed.failures.length,
-          },
-        };
-      };
-      const runUnits = async (units: GateUnit[], useAffected: boolean): Promise<UnitRun[]> => {
-        const out: UnitRun[] = [];
-        for (const u of units) out.push(await runUnit(u, useAffected));
-        return out;
-      };
-      /** A falha SINTÉTICA de uma unidade exit-code vermelha — a atribuição dela é por UNIDADE, não por teste. */
-      const exitFailure = (r: UnitRun): GateFailure => ({
-        file: r.unit.label,
-        name: "(exit-code ≠ 0)",
-        message: (r.raw || `exit ${r.report.exitCode ?? "sinal/timeout"}`).split("\n")[0],
+      return await measureGateUnits({
+        exec,
+        treePath: stagingPath,
+        units: scoped.units,
+        baseSha,
+        changedInTree,
+        affected,
+        runInTree,
+        reportIo,
+        timeoutMs,
+        retryOnNewFailure,
+        quarantined,
+        isolation: isoEfetivo,
+        scopeReason: scoped.reason,
+        notes: tcNote,
       });
-      /** As falhas atribuíveis de uma rodada: as identificadas + uma sintética por unidade exit-code vermelha. */
-      const failuresOf = (runs: UnitRun[]): GateFailure[] =>
-        runs.flatMap((r) => (r.ok ? [] : unitReporter(r.unit) === "exit-code" ? [exitFailure(r)] : r.failures));
-
-      const merged = await runUnits(scoped.units, true);
-      const report = summarizeGateReport(
-        merged.map((r) => r.report),
-        isoEfetivo,
-      );
-      const unitLines = `\n${formatUnitLines(report)}`;
-      const usouAfetados = merged.some((r) => r.report.mode === "affected");
-
-      // Um reporter DECLARADO que não produziu relatório legível não mediu nada — nem na saída verde. Exit 0
-      // sem relatório (junitPath errado, `--reporter` do comando engolindo o do gate) é exatamente o "verde
-      // sem prova" que este gate existe para matar: INCONCLUSIVO, nunca aprovação.
-      const semRelatorio = merged.filter((r) => unitReporter(r.unit) !== "exit-code" && !r.parsed);
-      if (semRelatorio.length > 0) {
-        const quais = semRelatorio.map((r) => `[${r.unit.label}] ${unitReporter(r.unit)} ${r.ok ? "exit 0" : "falhou"} sem relatório legível${r.raw ? `: ${r.raw}` : ""}`);
-        return {
-          passed: false,
-          inconclusive: true,
-          report,
-          log: `${quais.join("\n")}${tcNote}${unitLines}`,
-        };
-      }
-      // Não-zero SEM falha identificada num reporter que identifica = crash / OOM / setup / processo MORTO
-      // no meio (um `systemctl restart` durante o gate faz isto) — nada atribuível. Bloqueia (nunca arriscar
-      // aprovar uma suíte quebrada), mas diz O QUE aconteceu: INCONCLUSIVO, não "seus testes falharam". Vale
-      // POR UNIDADE: antes, uma unidade que crashava ao lado de outra com falha pré-existente sumia na soma,
-      // e a atribuição aprovava a entrada inteira.
-      const crashed = merged.filter((r) => !r.ok && unitReporter(r.unit) !== "exit-code" && r.failures.length === 0);
-      if (crashed.length > 0) {
-        return {
-          passed: false,
-          inconclusive: true,
-          report,
-          log: (crashed.map((r) => (merged.length > 1 ? `[${r.unit.label}] ${r.raw}` : r.raw)).join("\n") || "gate falhou (sem saída parseável)") + tcNote + unitLines,
-        };
-      }
-      const red = merged.filter((r) => !r.ok);
-      if (red.length === 0) {
-        // P-8b — o caminho VERDE também é uma medição da main, e por anos ele não reportava nada. Como a
-        // atribuição só roda quando a mesclada FALHA, um episódio vermelho entrava e nunca mais saía: o
-        // estado só some com uma medição verde, e ela nunca chegava. `preexisting: []` É essa medição.
-        // `undefined` sob seleção por afetados — ver `corridaVerdeLimpaMainRed`.
-        const limpa = corridaVerdeLimpaMainRed({ ok: true, affectedOnly: usouAfetados });
-        const contagem = report.testsExecuted === null ? "contagem desconhecida" : `${report.testsExecuted} teste(s) executado(s)`;
-        return {
-          passed: true,
-          preexisting: limpa ? [] : undefined,
-          report,
-          log: `✓ suíte verde (${scoped.reason}) — ${contagem}${tcNote}${unitLines}`,
-        };
-      }
-      // WS1.3 — remember the MERGED (main+branch) sha so the flaky retry can restore it after the base run
-      // resets the staging tree to baseSha for attribution.
-      const mergedSha = (await exec(`git rev-parse HEAD`, { cwd: stagingPath, timeout: GATE_GIT_TIMEOUT_MS })).stdout.trim();
-      // ATTRIBUTION: re-run the RED units on the BASE (pre-merge main HEAD) to learn which failures already
-      // existed — the card is blocked ONLY by the failures its diff INTRODUCED (new = merged \ base). Só as
-      // unidades vermelhas: uma unidade verde na mesclada não tem nada a atribuir.
-      let baseKeys: Set<string> | null = null;
-      let preexisting: GateFailure[] = [];
-      let exitVermelhasNaBase: UnitRun[] = [];
-      try {
-        await exec(`git reset --hard ${quote(baseSha)}`, { cwd: stagingPath, timeout: GATE_GIT_TIMEOUT_MS });
-        const base = await runUnits(
-          red.map((r) => r.unit),
-          false,
-        ); // atribuição SEMPRE completa — ver runUnit
-        const baseCrash = base.some((b) => !b.ok && unitReporter(b.unit) !== "exit-code" && (!b.parsed || b.failures.length === 0));
-        const baseSemRelatorio = base.some((b) => unitReporter(b.unit) !== "exit-code" && !b.parsed);
-        // A base só é MEDIDA quando toda unidade atribuível produziu relatório: um crash na base não perdoa.
-        if (!baseCrash && !baseSemRelatorio) {
-          const baseFailures = base.flatMap((b) => (b.ok || unitReporter(b.unit) === "exit-code" ? [] : b.failures));
-          preexisting = baseFailures;
-          baseKeys = new Set(baseFailures.map(gateFailureKey));
-          exitVermelhasNaBase = base.filter((b) => !b.ok && unitReporter(b.unit) === "exit-code");
-          // uma unidade exit-code vermelha na base também é um fato de main vermelha (P-8) — mas NÃO entra
-          // em baseKeys: exit-code não tem identidade de teste, e perdoá-la seria aprovar sem ter medido.
-          preexisting = [...preexisting, ...exitVermelhasNaBase.map(exitFailure)];
-        }
-      } catch {
-        /* couldn't run the base → fall through to blocking on all branch failures (conservative) */
-      }
-      if (!baseKeys) return { passed: false, report, log: formatGateFailures(failuresOf(merged), 0) + tcNote + unitLines };
-      // exit-code: vermelha na mesclada E na base ⇒ não há como dizer se o delta piorou algo. Essas unidades
-      // saem da atribuição por chave (nunca perdoadas por ela) e decidem sozinhas, abaixo: INCONCLUSIVO.
-      const exitInconclusivas = new Set(exitVermelhasNaBase.map((b) => b.unit.label));
-      const mergedAtribuiveis = failuresOf(merged).filter((f) => !(f.name === "(exit-code ≠ 0)" && exitInconclusivas.has(f.file)));
-      // P-8 — a QUARENTENA entra AQUI, no único lugar onde ela custa três linhas: o gate já subtrai um
-      // conjunto de chaves conhecidas antes de decidir, então quarentenar é somar chaves a esse conjunto.
-      // O teste em quarentena CONTINUA rodando e continua no relatório — só deixa de ser atribuído ao
-      // submitter. É a definição do SOTA ("remove do conjunto obrigatório, não da suíte"), sem flag de
-      // vitest, sem tocar na suíte e sem nunca esconder um resultado.
-      const attributionKeys = quarantined?.size ? new Set([...baseKeys, ...quarantined]) : baseKeys;
-      // WS1.3 — flaky quarantine: a NEW failure may be inter-worker pollution, not this card's fault. Decide
-      // pass/park via attributeWithRetry, which re-runs the WHOLE merged suite of the red units ONCE when a
-      // new failure appears.
-      const decision = await attributeWithRetry({
-        mergedFailures: mergedAtribuiveis,
-        baseKeys: attributionKeys,
-        retryEnabled: retryOnNewFailure,
-        rerun: async () => {
-          // Restore the merged state (the base run left the tree at baseSha). A FAILED reset must NOT let the
-          // retry run against the BASE tree (where the new failure doesn't exist) and false-pass as flaky — so
-          // signal the crashed sentinel {ok:false, failures:[]}, which attributeWithRetry PARKS on (fail-closed).
-          try {
-            await exec(`git reset --hard ${quote(mergedSha)}`, { cwd: stagingPath, timeout: GATE_GIT_TIMEOUT_MS });
-          } catch {
-            return { ok: false, failures: [] as GateFailure[] };
-          }
-          const rerun = await runUnits(
-            red.filter((r) => !exitInconclusivas.has(r.unit.label)).map((r) => r.unit),
-            true,
-          );
-          // Um reporter que crashou no retry não pode limpar nada (sentinela de crash → park).
-          if (rerun.some((r) => !r.ok && unitReporter(r.unit) !== "exit-code" && (!r.parsed || r.failures.length === 0))) {
-            return { ok: false, failures: [] as GateFailure[] };
-          }
-          return { ok: rerun.every((r) => r.ok), failures: failuresOf(rerun) };
-        },
-      });
-      const quarantineNote = quarantined?.size ? ` · ${quarantined.size} em quarentena (rodam, não atribuem)` : "";
-      if (decision.verdict === "park") {
-        return { passed: false, preexisting, report, log: formatGateFailures(decision.newFailures, baseKeys.size) + quarantineNote + tcNote + unitLines };
-      }
-      if (exitInconclusivas.size > 0) {
-        // A outra metade do contrato de exit-code: com a BASE vermelha, "vermelha com o delta" não diz nada
-        // sobre o delta. Nunca aprovação — e nunca "seus testes quebraram". INCONCLUSIVO, nomeado.
-        return {
-          passed: false,
-          inconclusive: true,
-          preexisting,
-          report,
-          log:
-            `INCONCLUSIVO: unidade(s) exit-code vermelha(s) TAMBÉM na base — ${[...exitInconclusivas].join(", ")}. ` +
-            `Um reporter exit-code não identifica testes, então não há como separar o que o delta quebrou do que ` +
-            `a main já quebrava. Conserte a main (ou declare um reporter que identifique testes).${quarantineNote}${tcNote}${unitLines}`,
-        };
-      }
-      if (decision.flaky?.length) {
-        return {
-          passed: true,
-          flaky: decision.flaky,
-          preexisting,
-          report,
-          log: `⚠ ${decision.flaky.length} falha(s) NOVA(s) não reproduziu(ram) no retry da suíte completa (flaky) — integrado; ver flaky.json${quarantineNote}${tcNote}${unitLines}`,
-        };
-      }
-      // Every failure pre-exists on main → this card's diff introduced NONE → it is NOT to blame. It merges;
-      // the red main is a SEPARATE, system-level problem the operator must fix on its own. P-8: `preexisting`
-      // é o PRODUTOR que faltava — antes esta frase era o fim da linha e ninguém ficava dono do problema.
-      return {
-        passed: true,
-        preexisting,
-        report,
-        log: `✓ nenhuma falha NOVA — ${baseKeys.size} falha(s) pré-existente(s) na main (NÃO atribuída(s) a este card; a main precisa de conserto à parte)${quarantineNote}${tcNote}${unitLines}`,
-      };
     } finally {
       // Cleanup ALWAYS, BEFORE any operation on main — the staging tree never leaks into the merge-back.
       await cleanupGateStaging(exec, fs, repoRoot, runId);
     }
+  };
+}
+
+/**
+ * A RECUSA de um conjunto de unidades sobre uma árvore — `null` quando todas podem ser medidas. Toda unidade
+ * tem de EXISTIR na árvore, e uma `junit-xml` precisa de um `junitPath` relativo a ela (sem o caminho não há
+ * relatório a ler, e um junit sem relatório "passa" sem medir). Recusa NÃO é reprovação: nada rodou, e por
+ * isso ela nunca vira GateFailure (a atribuição a creditaria à base e o gate aprovaria). `where` é a chave do
+ * settings que o operador corrige. Lê só o fs injetado.
+ */
+async function unitRefusal(fs: WorktreeFs, treePath: string, units: readonly GateUnit[], where: string): Promise<string | null> {
+  const unidadesAusentes: string[] = [];
+  const declaracoesInvalidas: string[] = [];
+  for (const unit of units) {
+    if (!(await fs.isDir(path.join(treePath, unit.cwd)))) unidadesAusentes.push(unit.cwd);
+    if (unitReporter(unit) === "junit-xml" && !junitReportPath(path.join(treePath, unit.cwd), unit.junitPath)) {
+      declaracoesInvalidas.push(`${unit.label} (junit-xml sem junitPath relativo à unidade)`);
+    }
+  }
+  if (unidadesAusentes.length === 0 && declaracoesInvalidas.length === 0) return null;
+  return unidadesAusentes.length > 0
+    ? `gate RECUSADO (não reprovado): ${unidadesAusentes.join(", ")} não existe em ${treePath}. ` +
+        `A suíte NÃO rodou. Declare as unidades em \`${where === "mergeGate.scope" ? "mergeGate.scope.packages" : where}\` do settings, ou aponte o ` +
+        `gate para a árvore que de fato tem o pacote.`
+    : `gate RECUSADO (não reprovado): declaração de unidade inválida — ${declaracoesInvalidas.join(", ")}. ` +
+        `A suíte NÃO rodou. Corrija \`${where}\` no settings.`;
+}
+
+/** O que {@link measureGateUnits} precisa: a árvore JÁ montada e as unidades JÁ resolvidas. */
+interface MeasureGateUnitsOpts {
+  exec: ExecFn;
+  /** a árvore montada — o delta commitado por cima de `baseSha` */
+  treePath: string;
+  units: GateUnit[];
+  /** a BASE da árvore: o alvo do reset da rodada de atribuição e o `{base}` da seleção por afetados */
+  baseSha: string;
+  changedInTree: string[];
+  affected?: AffectedGateSpec;
+  runInTree: GateCommandRunner;
+  reportIo: GateReportIo;
+  timeoutMs: number;
+  retryOnNewFailure: boolean;
+  quarantined?: ReadonlySet<string>;
+  isolation: { mode: GateIsolationMode; reason: string };
+  /** por que ESTAS unidades — vai para a linha verde do log */
+  scopeReason: string;
+  /** notas já acumuladas (typecheck) — anexadas a todo log que sai daqui */
+  notes: string;
+  /** `data` marca cada unidade do relatório como da metade de DADOS (o gate do que aterrissa em `main`) */
+  half?: "data";
+}
+
+/**
+ * MEDE as unidades numa árvore já montada e DECIDE — o miolo do gate, UMA implementação para as duas metades
+ * do split: o gate de CÓDIGO (árvore = `stage` + o delta) e o gate de DADOS (árvore = `main` + a metade que
+ * aterrissa em main). Cada unidade é medida pelo reporter que declarou; a atribuição re-mede na BASE só as
+ * unidades vermelhas; o retry de flaky, a quarentena, o crash-como-INCONCLUSIVO e o relatório por unidade são
+ * os mesmos. Duas cópias disto seriam duas réguas para a mesma pergunta — e a mais frouxa ganha.
+ */
+async function measureGateUnits(o: MeasureGateUnitsOpts): Promise<IntegrationGateResult> {
+  const { exec, units, baseSha, changedInTree, affected, runInTree, reportIo, timeoutMs, retryOnNewFailure, quarantined } = o;
+  const stagingPath = o.treePath;
+  const isoEfetivo = o.isolation;
+  const tcNote = o.notes;
+  // ── AS UNIDADES — cada uma medida pelo reporter QUE DECLAROU ──────────────────────────────────────
+  /**
+   * Roda UMA unidade. `useAffected` só vale na rodada do delta — a de ATRIBUIÇÃO é sempre completa, senão
+   * a base seria medida com uma régua mais frouxa que a do veredito. A seleção por afetados é da UNIDADE:
+   * o sufixo entra no comando DELA (flags preservadas), e só se ela é `vitest-json`.
+   */
+  const runUnit = async (unit: GateUnit, useAffected: boolean): Promise<UnitRun> => {
+    const reporter = unitReporter(unit);
+    const decision =
+      useAffected && affected?.enabled
+        ? resolveAffectedGate(unit.command, baseSha, changedInTree, affected, unitAcceptsAffected(unit))
+        : { command: unit.command, mode: "full" as const };
+    const command = reporter === "vitest-json" ? `${decision.command} --reporter=json` : decision.command;
+    const unitDir = path.join(stagingPath, unit.cwd);
+    const junitAbs = reporter === "junit-xml" ? junitReportPath(unitDir, unit.junitPath) : null;
+    // Um relatório de uma rodada ANTERIOR (a mesclada, antes do reset para a base — `git reset --hard`
+    // não apaga arquivo não-rastreado) seria lido como o desta. Apagar ANTES de rodar é o que garante
+    // que o relatório lido foi escrito por ESTE comando.
+    if (junitAbs) await reportIo.remove(junitAbs).catch(() => {});
+    const r = await runInTree(command, unitDir, { timeoutMs, network: unit.network, vitest: reporter === "vitest-json" });
+    let parsed: ParsedReport;
+    if (reporter === "vitest-json") parsed = parseVitestReport(r.stdout);
+    else if (reporter === "junit-xml") {
+      const xml = junitAbs ? await reportIo.read(junitAbs) : null;
+      parsed = xml === null ? { parsed: false, failures: [], tests: null } : parseJunitReport(xml);
+    } else parsed = { parsed: true, failures: [], tests: null };
+    return {
+      unit,
+      ok: r.ok,
+      parsed: parsed.parsed,
+      failures: parsed.failures,
+      raw: r.ok ? "" : execErrorDetail(r.err, GATE_LOG_CAP),
+      report: {
+        label: unit.label,
+        cwd: unit.cwd,
+        reporter,
+        mode: decision.mode,
+        network: unit.network ?? "deny",
+        isolation: r.isolation,
+        argv: r.argv,
+        exitCode: r.exitCode,
+        tests: parsed.parsed ? parsed.tests : null,
+        failures: parsed.failures.length,
+        ...(o.half ? { half: o.half } : {}),
+      },
+    };
+  };
+  const runUnits = async (units: GateUnit[], useAffected: boolean): Promise<UnitRun[]> => {
+    const out: UnitRun[] = [];
+    for (const u of units) out.push(await runUnit(u, useAffected));
+    return out;
+  };
+  /** A falha SINTÉTICA de uma unidade exit-code vermelha — a atribuição dela é por UNIDADE, não por teste. */
+  const exitFailure = (r: UnitRun): GateFailure => ({
+    file: r.unit.label,
+    name: "(exit-code ≠ 0)",
+    message: (r.raw || `exit ${r.report.exitCode ?? "sinal/timeout"}`).split("\n")[0],
+  });
+  /** As falhas atribuíveis de uma rodada: as identificadas + uma sintética por unidade exit-code vermelha. */
+  const failuresOf = (runs: UnitRun[]): GateFailure[] =>
+    runs.flatMap((r) => (r.ok ? [] : unitReporter(r.unit) === "exit-code" ? [exitFailure(r)] : r.failures));
+
+  const merged = await runUnits(units, true);
+  const report = summarizeGateReport(
+    merged.map((r) => r.report),
+    isoEfetivo,
+  );
+  const unitLines = `\n${formatUnitLines(report)}`;
+  const usouAfetados = merged.some((r) => r.report.mode === "affected");
+
+  // Um reporter DECLARADO que não produziu relatório legível não mediu nada — nem na saída verde. Exit 0
+  // sem relatório (junitPath errado, `--reporter` do comando engolindo o do gate) é exatamente o "verde
+  // sem prova" que este gate existe para matar: INCONCLUSIVO, nunca aprovação.
+  const semRelatorio = merged.filter((r) => unitReporter(r.unit) !== "exit-code" && !r.parsed);
+  if (semRelatorio.length > 0) {
+    const quais = semRelatorio.map((r) => `[${r.unit.label}] ${unitReporter(r.unit)} ${r.ok ? "exit 0" : "falhou"} sem relatório legível${r.raw ? `: ${r.raw}` : ""}`);
+    return {
+      passed: false,
+      inconclusive: true,
+      report,
+      log: `${quais.join("\n")}${tcNote}${unitLines}`,
+    };
+  }
+  // Não-zero SEM falha identificada num reporter que identifica = crash / OOM / setup / processo MORTO
+  // no meio (um `systemctl restart` durante o gate faz isto) — nada atribuível. Bloqueia (nunca arriscar
+  // aprovar uma suíte quebrada), mas diz O QUE aconteceu: INCONCLUSIVO, não "seus testes falharam". Vale
+  // POR UNIDADE: antes, uma unidade que crashava ao lado de outra com falha pré-existente sumia na soma,
+  // e a atribuição aprovava a entrada inteira.
+  const crashed = merged.filter((r) => !r.ok && unitReporter(r.unit) !== "exit-code" && r.failures.length === 0);
+  if (crashed.length > 0) {
+    return {
+      passed: false,
+      inconclusive: true,
+      report,
+      log: (crashed.map((r) => (merged.length > 1 ? `[${r.unit.label}] ${r.raw}` : r.raw)).join("\n") || "gate falhou (sem saída parseável)") + tcNote + unitLines,
+    };
+  }
+  const red = merged.filter((r) => !r.ok);
+  if (red.length === 0) {
+    // P-8b — o caminho VERDE também é uma medição da main, e por anos ele não reportava nada. Como a
+    // atribuição só roda quando a mesclada FALHA, um episódio vermelho entrava e nunca mais saía: o
+    // estado só some com uma medição verde, e ela nunca chegava. `preexisting: []` É essa medição.
+    // `undefined` sob seleção por afetados — ver `corridaVerdeLimpaMainRed`.
+    const limpa = corridaVerdeLimpaMainRed({ ok: true, affectedOnly: usouAfetados });
+    const contagem = report.testsExecuted === null ? "contagem desconhecida" : `${report.testsExecuted} teste(s) executado(s)`;
+    return {
+      passed: true,
+      preexisting: limpa ? [] : undefined,
+      report,
+      log: `✓ suíte verde (${o.scopeReason}) — ${contagem}${tcNote}${unitLines}`,
+    };
+  }
+  // WS1.3 — remember the MERGED (main+branch) sha so the flaky retry can restore it after the base run
+  // resets the staging tree to baseSha for attribution.
+  const mergedSha = (await exec(`git rev-parse HEAD`, { cwd: stagingPath, timeout: GATE_GIT_TIMEOUT_MS })).stdout.trim();
+  // ATTRIBUTION: re-run the RED units on the BASE (pre-merge main HEAD) to learn which failures already
+  // existed — the card is blocked ONLY by the failures its diff INTRODUCED (new = merged \ base). Só as
+  // unidades vermelhas: uma unidade verde na mesclada não tem nada a atribuir.
+  let baseKeys: Set<string> | null = null;
+  let preexisting: GateFailure[] = [];
+  let exitVermelhasNaBase: UnitRun[] = [];
+  try {
+    await exec(`git reset --hard ${quote(baseSha)}`, { cwd: stagingPath, timeout: GATE_GIT_TIMEOUT_MS });
+    const base = await runUnits(
+      red.map((r) => r.unit),
+      false,
+    ); // atribuição SEMPRE completa — ver runUnit
+    const baseCrash = base.some((b) => !b.ok && unitReporter(b.unit) !== "exit-code" && (!b.parsed || b.failures.length === 0));
+    const baseSemRelatorio = base.some((b) => unitReporter(b.unit) !== "exit-code" && !b.parsed);
+    // A base só é MEDIDA quando toda unidade atribuível produziu relatório: um crash na base não perdoa.
+    if (!baseCrash && !baseSemRelatorio) {
+      const baseFailures = base.flatMap((b) => (b.ok || unitReporter(b.unit) === "exit-code" ? [] : b.failures));
+      preexisting = baseFailures;
+      baseKeys = new Set(baseFailures.map(gateFailureKey));
+      exitVermelhasNaBase = base.filter((b) => !b.ok && unitReporter(b.unit) === "exit-code");
+      // uma unidade exit-code vermelha na base também é um fato de main vermelha (P-8) — mas NÃO entra
+      // em baseKeys: exit-code não tem identidade de teste, e perdoá-la seria aprovar sem ter medido.
+      preexisting = [...preexisting, ...exitVermelhasNaBase.map(exitFailure)];
+    }
+  } catch {
+    /* couldn't run the base → fall through to blocking on all branch failures (conservative) */
+  }
+  if (!baseKeys) return { passed: false, report, log: formatGateFailures(failuresOf(merged), 0) + tcNote + unitLines };
+  // exit-code: vermelha na mesclada E na base ⇒ não há como dizer se o delta piorou algo. Essas unidades
+  // saem da atribuição por chave (nunca perdoadas por ela) e decidem sozinhas, abaixo: INCONCLUSIVO.
+  const exitInconclusivas = new Set(exitVermelhasNaBase.map((b) => b.unit.label));
+  const mergedAtribuiveis = failuresOf(merged).filter((f) => !(f.name === "(exit-code ≠ 0)" && exitInconclusivas.has(f.file)));
+  // P-8 — a QUARENTENA entra AQUI, no único lugar onde ela custa três linhas: o gate já subtrai um
+  // conjunto de chaves conhecidas antes de decidir, então quarentenar é somar chaves a esse conjunto.
+  // O teste em quarentena CONTINUA rodando e continua no relatório — só deixa de ser atribuído ao
+  // submitter. É a definição do SOTA ("remove do conjunto obrigatório, não da suíte"), sem flag de
+  // vitest, sem tocar na suíte e sem nunca esconder um resultado.
+  const attributionKeys = quarantined?.size ? new Set([...baseKeys, ...quarantined]) : baseKeys;
+  // WS1.3 — flaky quarantine: a NEW failure may be inter-worker pollution, not this card's fault. Decide
+  // pass/park via attributeWithRetry, which re-runs the WHOLE merged suite of the red units ONCE when a
+  // new failure appears.
+  const decision = await attributeWithRetry({
+    mergedFailures: mergedAtribuiveis,
+    baseKeys: attributionKeys,
+    retryEnabled: retryOnNewFailure,
+    rerun: async () => {
+      // Restore the merged state (the base run left the tree at baseSha). A FAILED reset must NOT let the
+      // retry run against the BASE tree (where the new failure doesn't exist) and false-pass as flaky — so
+      // signal the crashed sentinel {ok:false, failures:[]}, which attributeWithRetry PARKS on (fail-closed).
+      try {
+        await exec(`git reset --hard ${quote(mergedSha)}`, { cwd: stagingPath, timeout: GATE_GIT_TIMEOUT_MS });
+      } catch {
+        return { ok: false, failures: [] as GateFailure[] };
+      }
+      const rerun = await runUnits(
+        red.filter((r) => !exitInconclusivas.has(r.unit.label)).map((r) => r.unit),
+        true,
+      );
+      // Um reporter que crashou no retry não pode limpar nada (sentinela de crash → park).
+      if (rerun.some((r) => !r.ok && unitReporter(r.unit) !== "exit-code" && (!r.parsed || r.failures.length === 0))) {
+        return { ok: false, failures: [] as GateFailure[] };
+      }
+      return { ok: rerun.every((r) => r.ok), failures: failuresOf(rerun) };
+    },
+  });
+  const quarantineNote = quarantined?.size ? ` · ${quarantined.size} em quarentena (rodam, não atribuem)` : "";
+  if (decision.verdict === "park") {
+    return { passed: false, preexisting, report, log: formatGateFailures(decision.newFailures, baseKeys.size) + quarantineNote + tcNote + unitLines };
+  }
+  if (exitInconclusivas.size > 0) {
+    // A outra metade do contrato de exit-code: com a BASE vermelha, "vermelha com o delta" não diz nada
+    // sobre o delta. Nunca aprovação — e nunca "seus testes quebraram". INCONCLUSIVO, nomeado.
+    return {
+      passed: false,
+      inconclusive: true,
+      preexisting,
+      report,
+      log:
+        `INCONCLUSIVO: unidade(s) exit-code vermelha(s) TAMBÉM na base — ${[...exitInconclusivas].join(", ")}. ` +
+        `Um reporter exit-code não identifica testes, então não há como separar o que o delta quebrou do que ` +
+        `a main já quebrava. Conserte a main (ou declare um reporter que identifique testes).${quarantineNote}${tcNote}${unitLines}`,
+    };
+  }
+  if (decision.flaky?.length) {
+    return {
+      passed: true,
+      flaky: decision.flaky,
+      preexisting,
+      report,
+      log: `⚠ ${decision.flaky.length} falha(s) NOVA(s) não reproduziu(ram) no retry da suíte completa (flaky) — integrado; ver flaky.json${quarantineNote}${tcNote}${unitLines}`,
+    };
+  }
+  // Every failure pre-exists on main → this card's diff introduced NONE → it is NOT to blame. It merges;
+  // the red main is a SEPARATE, system-level problem the operator must fix on its own. P-8: `preexisting`
+  // é o PRODUTOR que faltava — antes esta frase era o fim da linha e ninguém ficava dono do problema.
+  return {
+    passed: true,
+    preexisting,
+    report,
+    log: `✓ nenhuma falha NOVA — ${baseKeys.size} falha(s) pré-existente(s) na main (NÃO atribuída(s) a este card; a main precisa de conserto à parte)${quarantineNote}${tcNote}${unitLines}`,
   };
 }
 
@@ -2762,7 +3019,6 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
     cwd: string,
     snapFiles: string[],
   ): Promise<{ status: "regenerated" | "noop" | "failed"; detail?: string }> => {
-    const pkgDir = path.join(cwd, "packages", "storymap-ui");
     // O `vitest -u` roda a suíte INTEIRA — código escrito por agente — como o uid do serviço: o mesmo
     // env neutralizado do gate (sem credencial MCP nem de nuvem), com diretórios vazios só desta regen.
     let semCredencial: ReturnType<typeof criarDiretoriosSemCredencial> | null = null;
@@ -2776,8 +3032,10 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
         repoRoot: cfg.repoRoot,
         runId: `regen-${path.basename(cwd)}`,
       });
-      const r = await makeGateCommandRunner(cfg.exec, semCredencial, seal)(`bunx vitest run -u`, pkgDir, { timeoutMs: snapRegenTimeoutMs });
-      if (!r.ok) throw r.err ?? new Error(`vitest -u falhou (exit ${r.exitCode ?? "sinal"})`);
+      // No pacote de CADA snap (packageDirOf) — não num `packages/storymap-ui` literal, que no repositório de
+      // um adotante não existe: a regen rodaria a suíte errada, ou morreria com cwd inexistente.
+      const regen = await regenSnapshotsInTree(makeGateCommandRunner(cfg.exec, semCredencial, seal), cwd, snapFiles, snapRegenTimeoutMs);
+      if (regen.status === "failed") throw new Error(regen.detail || "vitest -u falhou");
     } catch (err) {
       // The vitest run itself failed (a genuine red test the regen can't paper over) → signal the
       // caller to undo + re-drive, CARRYING the error detail for triage. Links dropped first.
@@ -3192,6 +3450,81 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
   };
 
   /**
+   * AS DUAS METADES do split de uma entrada — a partição que {@link integrateSplit} aterrissa E a que o gate
+   * de dados mede. UMA função para as duas perguntas: se cada uma derivasse "o que vai para main" por conta
+   * própria, o gate mediria uma metade e a aterrissagem aplicaria outra (a régua duplicada do P-2). Só LÊ.
+   */
+  const splitHalves = async (
+    entry: MergeQueueEntry,
+    staging: NonNullable<MergeQueueConfig["staging"]>,
+  ): Promise<
+    | { ok: false; base: string; branch: string; detail: string }
+    | { ok: true; base: string; branch: string; code: string[]; data: string[]; promoted: string[] }
+  > => {
+    // WS-1.2/G5: read the work from the PINNED sha (a live session keeps committing past its submit).
+    const branch = integrationRev(entry);
+    // The INTEGRATION BASE the run was cut from (stale-base fix). Prefer the persisted `baseCommit` (the
+    // exact sha of `stage` at spawn) — a FIXED 2-dot range `base..branch` isolates ONLY this run's work,
+    // excluding the unreleased code already on `stage` (so the split never re-applies it). A stale base
+    // here is harmless: the code apply is idempotent (`apply --reverse --check` skips already-staged code)
+    // and the data apply matches (the card at the base == the card on main). The Defect A misclassification
+    // is fixed at the gate decision (forkPointBase in runLoop), which is where the stale base actually bit.
+    // Fallback to `merge-base HEAD branch` for legacy entries enqueued before this field existed.
+    const base = entry.baseCommit || (await git(`merge-base HEAD ${quote(branch)}`)).stdout.trim();
+
+    // `--no-renames` é OBRIGATÓRIO aqui (a mesma razão do `--binary` logo abaixo): com detecção de
+    // rename ligada — o default — o `--name-only` de um `git mv` lista APENAS o caminho NOVO. O caminho
+    // ANTIGO some da lista, some do pathspec, e portanto some do patch: o arquivo velho FICA em `stage`
+    // (e depois em main) ao lado do novo. Foi assim que, ao renomear Pilotagem→Inbox, a tela antiga
+    // sobreviveu importando símbolos que já não existiam — o build passa (a rota morta é inalcançável),
+    // então nada grita, e a árvore acumula código fantasma. Sem renames, o par vira delete+add e as duas
+    // metades entram no patch. (A deleção PURA, sem par, sempre funcionou — por isso o defeito é
+    // invisível até alguém renomear.)
+    const changed = await git(`diff --name-only --no-renames ${quote(base)}..${quote(branch)}`);
+    // A FAILED diff is NEVER an empty change set (94bfdb77 false-done) — it comes back as `ok:false`, and
+    // each caller owns what that means (the split fails loud; see integrateSplit).
+    if (!changed.ok) return { ok: false, base, branch, detail: (changed.stderr || changed.stdout || "sem detalhe").trim() };
+    const files = changed.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
+    // A DERIVED artifact travels with the SOURCE it derives from, not with its own path — otherwise the
+    // pair is torn in half and both halves are wrong at once (see `staging.dataDerived` in types.ts).
+    const dataDerived = staging.dataDerived ?? [];
+    const partitioned = partitionPaths(files, staging.codePrefixes, dataDerived.map((d) => d.artifact));
+    // …and the MIRROR of that rule: a data-half file that the code half IMPORTS travels WITH the code,
+    // or `stage` lands with an import pointing at a file that only exists on main. Reads at the PINNED
+    // rev (the tree the gate validated), synchronously pre-fetched because the promotion is pure.
+    // Pre-fetch the code half PLUS the promotion CANDIDATES (non-board data) — a promoted file may
+    // itself import another one, so the worklist needs their text too. Board cards, the bulk of the
+    // data half, are never promotable and are never read here.
+    const importerSources = new Map<string, string>();
+    for (const f of [...partitioned.code, ...partitioned.data.filter((p) => !p.startsWith("storymap/boards/"))]) {
+      const shown = await git(`show ${quote(`${branch}:${f}`)}`);
+      if (shown.ok) importerSources.set(f, shown.stdout);
+    }
+    const { data, code, promoted } = promoteImportedDataPaths(
+      partitioned.code,
+      partitioned.data,
+      (p) => importerSources.get(p) ?? null,
+    );
+    return { ok: true, base, branch, code, data, promoted };
+  };
+
+  /**
+   * story-r4o4wo — os cards da metade de dados que DIVERGIRAM dos dois lados: a entrada os mudou (estão em
+   * `data`) E `head` (main) também, desde `base`. São os únicos que o `git apply` por linha pode deixar com
+   * marcador de conflito no frontmatter — a aterrissagem os funde por CAMPO, e o gate de dados também (é a
+   * mesma pergunta; ver {@link DataGateRunner}). `diff --quiet` sai ≠0 (ok:false) ⇒ main mudou o card.
+   */
+  const divergedCards = async (data: readonly string[], base: string, head = "HEAD"): Promise<string[]> => {
+    const carved: string[] = [];
+    for (const f of data) {
+      if (!CARD_MD_RE.test(f)) continue;
+      const mainUnchanged = (await git(`diff --quiet ${quote(base)} ${head === "HEAD" ? "HEAD" : quote(head)} -- ${quote(f)}`)).ok;
+      if (!mainUnchanged) carved.push(f);
+    }
+    return carved;
+  };
+
+  /**
    * Fase 4a SPLIT integration for a run branch that touches CODE. `packages/**` → the `stage` branch
    * (held for the human release gate); EVERYTHING ELSE (cards/skills/docs) → main so the live board +
    * cascade advance. autonomy-reliability WS-1.1 — ATOMIC ORDER (código antes de dados): the CODE half
@@ -3215,66 +3548,31 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
     const dataPatch = path.join(runnerStateDir(), `split-${entry.runId}-data.patch`);
     const codePatch = path.join(runnerStateDir(), `split-${entry.runId}-code.patch`);
 
-    // The INTEGRATION BASE the run was cut from (stale-base fix). Prefer the persisted `baseCommit` (the
-    // exact sha of `stage` at spawn) — a FIXED 2-dot range `base..branch` isolates ONLY this run's work,
-    // excluding the unreleased code already on `stage` (so the split never re-applies it). A stale base
-    // here is harmless: the code apply is idempotent (`apply --reverse --check` skips already-staged code)
-    // and the data apply matches (the card at the base == the card on main). The Defect A misclassification
-    // is fixed at the gate decision (forkPointBase in runLoop), which is where the stale base actually bit.
-    // Fallback to `merge-base HEAD branch` for legacy entries enqueued before this field existed.
-    const base = entry.baseCommit || (await git(`merge-base HEAD ${quote(branch)}`)).stdout.trim();
+    const halves = await splitHalves(entry, staging);
+    const base = halves.base;
     const branchTip = (await git(`rev-parse ${quote(branch)}`)).stdout.trim();
-
-    // `--no-renames` é OBRIGATÓRIO aqui (a mesma razão do `--binary` logo abaixo): com detecção de
-    // rename ligada — o default — o `--name-only` de um `git mv` lista APENAS o caminho NOVO. O caminho
-    // ANTIGO some da lista, some do pathspec, e portanto some do patch: o arquivo velho FICA em `stage`
-    // (e depois em main) ao lado do novo. Foi assim que, ao renomear Pilotagem→Inbox, a tela antiga
-    // sobreviveu importando símbolos que já não existiam — o build passa (a rota morta é inalcançável),
-    // então nada grita, e a árvore acumula código fantasma. Sem renames, o par vira delete+add e as duas
-    // metades entram no patch. (A deleção PURA, sem par, sempre funcionou — por isso o defeito é
-    // invisível até alguém renomear.)
-    const changed = await git(`diff --name-only --no-renames ${quote(base)}..${quote(branch)}`);
     // HARD guard (94bfdb77 false-done): a FAILED diff is a failed integration, NEVER an empty change
     // set. Reading `!ok` as `[]` let a vanished/renamed ref sail through both halves as "empty",
     // finalize `done` and advance the card with ZERO content landed. The rev is resolved+pinned at
     // pick-time (resolveIntegrationSha), so reaching this means git itself broke — fail loud, keep the
     // branch preserved, and leave the operator/steward a truthful detail to requeue from.
-    if (!changed.ok) {
+    if (!halves.ok) {
       finalize(entry, "failed", {
         failureReason:
-          `split: diff ${base.slice(0, 8)}..${branch.slice(0, 12)} FALHOU (${(changed.stderr || changed.stdout || "sem detalhe").trim().slice(0, 160)}) — NADA foi integrado; branch preservada, re-enfileire após diagnosticar`,
+          `split: diff ${base.slice(0, 8)}..${branch.slice(0, 12)} FALHOU (${halves.detail.slice(0, 160)}) — NADA foi integrado; branch preservada, re-enfileire após diagnosticar`,
       });
       await persist();
       notify();
       return "paused";
     }
-    const files = changed.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
-    // A DERIVED artifact travels with the SOURCE it derives from, not with its own path — otherwise the
-    // pair is torn in half and both halves are wrong at once (see `staging.dataDerived` in types.ts).
-    const dataDerived = staging.dataDerived ?? [];
-    const partitioned = partitionPaths(files, staging.codePrefixes, dataDerived.map((d) => d.artifact));
-    // …and the MIRROR of that rule: a data-half file that the code half IMPORTS travels WITH the code,
-    // or `stage` lands with an import pointing at a file that only exists on main. Reads at the PINNED
-    // rev (the tree the gate validated), synchronously pre-fetched because the promotion is pure.
-    // Pre-fetch the code half PLUS the promotion CANDIDATES (non-board data) — a promoted file may
-    // itself import another one, so the worklist needs their text too. Board cards, the bulk of the
-    // data half, are never promotable and are never read here.
-    const importerSources = new Map<string, string>();
-    for (const f of [...partitioned.code, ...partitioned.data.filter((p) => !p.startsWith("storymap/boards/"))]) {
-      const shown = await git(`show ${quote(`${branch}:${f}`)}`);
-      if (shown.ok) importerSources.set(f, shown.stdout);
-    }
-    const { data, code, promoted } = promoteImportedDataPaths(
-      partitioned.code,
-      partitioned.data,
-      (p) => importerSources.get(p) ?? null,
-    );
+    const { data, code, promoted } = halves;
     if (promoted.length > 0) {
       console.warn(
         `[harness-merge-queue] split ${entry.runId}: ${promoted.length} arquivo(s) de dados viajam com o código ` +
           `(importados por ele): ${promoted.join(", ")}`,
       );
     }
+    const dataDerived = staging.dataDerived ?? [];
     // Everything the data half may legitimately touch on main — board data plus the artifacts it derives.
     // The scoped park/restore below must span exactly this, or a regenerated artifact reads as rogue
     // staged code and aborts the cleanup.
@@ -3606,13 +3904,7 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
           // structurally by field (mergeCardThreeWay: pipeline fields from the run, authorial from main);
           // line-apply the rest (non-card data, board.yaml union, skills, docs, and cards main never touched —
           // the ~all-runs fast path, byte-identical to the pre-fix behaviour).
-          const carved: string[] = [];
-          for (const f of data) {
-            if (!CARD_MD_RE.test(f)) continue;
-            // main diverged vs base for this card? `diff --quiet` exits non-zero (ok:false) ⇒ it changed.
-            const mainUnchanged = (await git(`diff --quiet ${quote(base)} HEAD -- ${quote(f)}`)).ok;
-            if (!mainUnchanged) carved.push(f);
-          }
+          const carved = await divergedCards(data, base);
           const lineData = data.filter((f) => !carved.includes(f));
 
           // 1) Line-apply everything that is NOT a both-diverged card. On conflict, applyPatch's own
@@ -3844,6 +4136,208 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
     return "done";
   };
 
+  /**
+   * O gate (de código OU de dados) NÃO passou e não é conflito — a disposição é a mesma para os dois, e é por
+   * isso que ela mora num lugar só. Três saídas, todas deixando main intocada:
+   *   · INCONCLUSIVO (infra) com retry sobrando ⇒ de volta a `waiting` (o contador é o MESMO para os dois gates:
+   *     é "o gate da entrada" que não produziu veredito, não um gate em particular);
+   *   · SESSÃO viva ⇒ `returned-to-session` com o log (ela escreveu o código e re-submete em segundos);
+   *   · RUN ⇒ `gate-failed` + o bloqueador `testing` no card.
+   * `name` é como o gate se apresenta a quem recebe o recado; `tag`, no log do serviço; `parkPrefix`, no
+   * `gateLog` do run parqueado (o operador precisa saber QUAL metade reprovou sem abrir o relatório).
+   */
+  const disposeRedGate = async (
+    entry: MergeQueueEntry,
+    gate: Pick<IntegrationGateResult, "log" | "inconclusive">,
+    { name, tag, parkPrefix = "" }: { name: string; tag: string; parkPrefix?: string },
+  ): Promise<void> => {
+    // Um gate INCONCLUSIVO é INFRA (crash/OOM/flake do processo do gate — NÃO o código do submitter:
+    // ex.: morto por um `systemctl restart storymap` concorrente, ou stdout poluído sem JSON parseável):
+    // RE-ENFILEIRA um número LIMITADO de vezes antes de devolver/parquear. Um retry absorve o flake
+    // transitório sem obrigar um re-submit MANUAL; o teto evita rodar a suíte para sempre num gate
+    // quebrado de verdade. Vale para run E session — infra é agnóstica a quem submeteu.
+    if (gate.inconclusive) {
+      const retries = (entry.gateInconclusiveRetries ?? 0) + 1;
+      if (retries <= MAX_GATE_INCONCLUSIVE_RETRIES) {
+        entry.gateInconclusiveRetries = retries;
+        entry.status = "waiting";
+        entry.mergeStartedAt = undefined;
+        entry.mergeEndedAt = undefined;
+        await persist();
+        notify();
+        console.warn(
+          `[harness-merge-queue] ${tag} INCONCLUSIVO (infra) em ${entry.runId} — re-enfileirando ` +
+            `(tentativa ${retries}/${MAX_GATE_INCONCLUSIVE_RETRIES})`,
+        );
+        return; // re-roda o gate num próximo passo do runLoop; main intocada
+      }
+      // esgotou os retries → segue no tratamento normal abaixo, já rotulado INCONCLUSIVO.
+    }
+    // WS-1.4/D3: a LIVE session's red gate goes straight BACK to the session (terminal), never to the
+    // operator's parking lot — the session wrote the code and can fix + re-submit immediately. The
+    // gate log rides along as the conflictDetail so the agent sees WHAT failed without a round-trip.
+    if (entry.kind === "session") {
+      // An INCONCLUSIVE gate is labelled as such: the submitter is told the gate could not run
+      // (infra), not that their tests failed. Re-submitting is the right move; hunting a
+      // non-existent regression in unrelated stderr is not.
+      const why = gate.inconclusive
+        ? `${name} INCONCLUSIVO (infra — não produziu veredito após ${MAX_GATE_INCONCLUSIVE_RETRIES + 1} tentativa(s); nada foi atribuído ao seu código; re-submeta)`
+        : `${name} reprovou`;
+      await returnToSession(entry, `${why}: ${gate.log.slice(0, GATE_LOG_CAP)}`);
+      return; // terminal → drain the rest of the queue; main untouched, branch intact
+    }
+    finalize(entry, "gate-failed", { gateLog: `${parkPrefix}${gate.log}`.slice(0, GATE_LOG_CAP) });
+    // AC2: stamp a testing:blocker finding on the card so the failed branch surfaces as a blocked
+    // card (held out of QA by `hasNoBlockers`) and the operator sees WHY. Best-effort: a write error
+    // logs + records on the entry but NEVER stalls the train (mirrors the pushToOrigin discipline).
+    const gateCardId = entry.cardId;
+    try {
+      if (gateCardId) await addGateBlocker(entry.board, gateCardId, entry.runId, entry.gateLog ?? gate.log);
+    } catch (err) {
+      const msg = String(err instanceof Error ? err.message : err).slice(0, 200);
+      console.error("[harness-merge-queue] addGateBlocker falhou (não-fatal):", msg);
+      entry.gateBlockerError = msg;
+    }
+    await persist();
+    notify(); // PARKED (gate-failed, retriable); the caller drains the rest — no head-of-line block
+  };
+
+  /** WS1.3 — o gate PASSOU apesar de falha NOVA que sumiu no retry (flaky): registra e avisa, nunca trava. */
+  const recordFlaky = async (entry: MergeQueueEntry, flaky: GateFailure[] | undefined): Promise<void> => {
+    // WS1.3 — the gate PASSED despite a NEW failure that vanished on the whole-suite retry (flaky):
+    // integrate, but AGGREGATE it (flaky.json, for future quarantine) + stamp an ADVISORY (low) finding
+    // so the operator sees the card shipped over a flake. Both best-effort — a write error NEVER stalls
+    // the train (mirrors addGateBlocker's discipline).
+    if (flaky?.length) {
+      const testIds = flaky.map((f) => `${f.file}::${f.name}`);
+      try {
+        const flakyPath = path.join(runnerStateDir(), "flaky.json");
+        const prev = await fsp.readFile(flakyPath, "utf8").then((s) => JSON.parse(s) as unknown).catch(() => []);
+        const arr = Array.isArray(prev) ? prev : [];
+        const at = new Date().toISOString();
+        for (const id of testIds) arr.push({ at, testId: id, runId: entry.runId, board: entry.board, cardId: entry.cardId });
+        await fsp.writeFile(flakyPath, JSON.stringify(arr.slice(-200), null, 2));
+      } catch (err) {
+        console.warn("[harness-merge-queue] flaky.json append falhou (não-fatal):", err instanceof Error ? err.message : err);
+      }
+      try {
+        // The flaky ADVISORY is a card finding; card-less work still aggregates into flaky.json above
+        // (the data that feeds future quarantine), it just has no card to advise on.
+        const flakyCardId = entry.cardId;
+        if (flakyCardId) {
+          await updateCardOnDisk(entry.board, flakyCardId, (card) => ({
+            ...card,
+            findings: withFlakyTestFinding(card.findings ?? [], entry.runId, testIds),
+          }));
+        }
+      } catch (err) {
+        console.warn("[harness-merge-queue] flaky finding falhou (não-fatal):", err instanceof Error ? err.message : err);
+      }
+    }
+  };
+
+  /** Aviso de config inerte dito uma vez por processo: `dataUnits` sem `staging` não tem metade de dados a medir. */
+  let dataUnitsWithoutStagingWarned = false;
+
+  /**
+   * O GATE DE DADOS de uma entrada ({@link DataGateRunner}). Devolve `stop` quando a entrada foi DISPOSTA
+   * (re-enfileirada, devolvida à sessão, parqueada, re-drivada) e `proceed` quando o split pode seguir.
+   *
+   * Nada muda para quem não declarou `mergeGate.dataUnits`, nem para a entrada cuja metade de dados não toca
+   * prefixo declarado: `proceed` sem tocar status, relatório ou log — o comportamento de antes. Liga pelo MESMO
+   * `mergeGate.enabled` do gate de código (um gate desligado não mede metade nenhuma).
+   *
+   * `controlTouched`: o delta toca arquivo de CONTROLE (justfile, hooks, CI) ⇒ seleção por afetados SUSPENSA,
+   * pela mesma razão do gate de código — um `justfile` não é importado por teste nenhum, então "afetados"
+   * selecionaria zero e diria verde sem olhar.
+   */
+  const runDataGate = async (
+    entry: MergeQueueEntry,
+    live: RunnerSettings["autorun"]["mergeGate"],
+    controlTouched: boolean,
+    codeReport: GateReport | undefined,
+  ): Promise<"proceed" | "stop"> => {
+    const declared = cfg.gateDataUnits ?? live?.dataUnits;
+    if (!declared || Object.keys(declared).length === 0) return "proceed";
+    const staging = cfg.staging;
+    if (!staging?.enabled) {
+      if (!dataUnitsWithoutStagingWarned) {
+        dataUnitsWithoutStagingWarned = true;
+        console.warn(
+          "[harness-merge-queue] mergeGate.dataUnits declarado com staging DESLIGADO — sem split não há metade de dados: " +
+            "tudo aterrissa pelo gate de código; declare essas unidades em mergeGate.scope.units",
+        );
+      }
+      return "proceed";
+    }
+    if (entry.split?.dataLanded) return "proceed"; // a metade de dados já aterrissou (retomada de um split)
+    const enabled = cfg.gateEnabled !== undefined ? cfg.gateEnabled : (live?.enabled ?? false);
+    if (!enabled || !cfg.dataGate) return "proceed";
+
+    const halves = await splitHalves(entry, staging);
+    if (!halves.ok) return "proceed"; // o split falha ALTO sobre o mesmo diff ilegível — é dele a mensagem
+    const decision = resolveDataUnits(halves.data, declared);
+    if (decision.units.length === 0) return "proceed";
+
+    const mainSha = (await git(`rev-parse HEAD`)).stdout.trim() || "HEAD";
+    const carvedCards = await divergedCards(halves.data, halves.base, mainSha);
+    entry.status = "gate-running";
+    await persist();
+    notify();
+    const quarantine = await quarantinedTestIds().catch(() => ({ testIds: [] as string[], reason: "" }));
+    let gate: IntegrationGateResult;
+    try {
+      gate = await cfg.dataGate({
+        exec: cfg.exec,
+        repoRoot: cfg.repoRoot,
+        runId: entry.runId,
+        mainSha,
+        deltaBase: halves.base,
+        deltaHead: halves.branch,
+        dataFiles: halves.data.filter((f) => !carvedCards.includes(f)),
+        carvedCards,
+        units: decision.units,
+        reason: decision.reason,
+        timeoutMs: cfg.gateTimeoutMs ?? live?.timeoutMs ?? DEFAULT_GATE_TIMEOUT_MS,
+        retryOnNewFailure: cfg.gateRetryOnNewFailure ?? live?.retryOnNewFailure ?? true,
+        affected: controlTouched ? undefined : (cfg.gateAffected ?? live?.affected),
+        quarantined: new Set(quarantine.testIds),
+        isolation: resolveLiveGateIsolation(live),
+      });
+    } catch (err) {
+      gate = { passed: false, inconclusive: true, log: `gate de dados erro inesperado: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    // As unidades de main SOMAM-SE às de código desta passada. NÃO alimenta o registro de "main vermelha"
+    // (recordMainRedMeasurement): aquele é a medição da suíte de CÓDIGO; uma rodada verde das unidades de dados
+    // apagaria um episódio que ela não mediu.
+    entry.gateReport = combineGateReports(codeReport, gate.report);
+    console.log(
+      `[harness-merge-queue] gate de dados ${entry.runId}: ${gate.passed ? "APROVADO" : gate.inconclusive ? "INCONCLUSIVO" : "REPROVADO"}` +
+        `${gate.report ? ` — ${gate.report.testsExecuted ?? "?"} teste(s) executado(s), isolamento ${gate.report.isolation}` : ""}\n${gate.log}`,
+    );
+    if (!gate.passed && gate.conflict) {
+      // A metade de dados não aplica em main: a aterrissagem também não aplicaria. Mesma rota do conflito do
+      // gate de código (sessão devolvida, run re-drivado/parqueado) — e nada aterrissou em lugar nenhum ainda.
+      entry.conflict = gate.conflict;
+      await persist();
+      await maybeRedrive(entry, withConflictDetail(entry, `gate de dados: o board-data não aplica em main (run ${entry.runId})`));
+      return "stop";
+    }
+    if (!gate.passed) {
+      await disposeRedGate(entry, gate, {
+        name: "gate de dados (o que aterrissa em main)",
+        tag: "gate de dados",
+        parkPrefix: `gate de dados (main@${mainSha.slice(0, 8)}): `,
+      });
+      return "stop";
+    }
+    await recordFlaky(entry, gate.flaky);
+    entry.status = "merging";
+    await persist();
+    notify();
+    return "proceed";
+  };
+
   /** The serial processor. Reentrancy-guarded: a second call while one runs is a no-op (returns the live promise). */
   const process = (): Promise<void> => {
     if (processing) return current;
@@ -4054,6 +4548,8 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
             `— suíte COMPLETA, sem seleção por afetados${gateActive ? "" : " (gate DESLIGADO nesta config — apenas registrado)"}`,
         );
       }
+      // O relatório do gate de código DESTA passada — o de dados soma-se a ele (nunca a um de tentativa anterior).
+      let codeGateReport: GateReport | undefined;
       if (cfg.integrationGate && gateActive) {
         entry.status = "gate-running";
         await persist();
@@ -4118,6 +4614,7 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
         // o operador PROVAR que N>0 testes rodaram — ou ver que não rodaram. Uma rodada sem relatório (conflito,
         // recusa, typecheck) LIMPA o de uma tentativa anterior: relatório velho sobre árvore nova é mentira.
         entry.gateReport = gate.report;
+        codeGateReport = gate.report;
         console.log(
           `[harness-merge-queue] gate ${entry.runId}: ${gate.passed ? "APROVADO" : gate.inconclusive ? "INCONCLUSIVO" : "REPROVADO"}` +
             `${gate.report ? ` — ${gate.report.testsExecuted ?? "?"} teste(s) executado(s), isolamento ${gate.report.isolation}` : ""}\n${gate.log}`,
@@ -4147,92 +4644,20 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
           continue; // sessão devolvida OU run parqueado/re-drivado — a fila DRENA nos dois casos
         }
         if (!gate.passed) {
-          // Um gate INCONCLUSIVO é INFRA (crash/OOM/flake do processo do gate — NÃO o código do submitter:
-          // ex.: morto por um `systemctl restart storymap` concorrente, ou stdout poluído sem JSON parseável):
-          // RE-ENFILEIRA um número LIMITADO de vezes antes de devolver/parquear. Um retry absorve o flake
-          // transitório sem obrigar um re-submit MANUAL; o teto evita rodar a suíte para sempre num gate
-          // quebrado de verdade. Vale para run E session — infra é agnóstica a quem submeteu.
-          if (gate.inconclusive) {
-            const retries = (entry.gateInconclusiveRetries ?? 0) + 1;
-            if (retries <= MAX_GATE_INCONCLUSIVE_RETRIES) {
-              entry.gateInconclusiveRetries = retries;
-              entry.status = "waiting";
-              entry.mergeStartedAt = undefined;
-              entry.mergeEndedAt = undefined;
-              await persist();
-              notify();
-              console.warn(
-                `[harness-merge-queue] gate INCONCLUSIVO (infra) em ${entry.runId} — re-enfileirando ` +
-                  `(tentativa ${retries}/${MAX_GATE_INCONCLUSIVE_RETRIES})`,
-              );
-              continue; // re-roda o gate num próximo passo do runLoop; main intocada
-            }
-            // esgotou os retries → segue no tratamento normal abaixo, já rotulado INCONCLUSIVO.
-          }
-          // WS-1.4/D3: a LIVE session's red gate goes straight BACK to the session (terminal), never to the
-          // operator's parking lot — the session wrote the code and can fix + re-submit immediately. The
-          // gate log rides along as the conflictDetail so the agent sees WHAT failed without a round-trip.
-          if (entry.kind === "session") {
-            // An INCONCLUSIVE gate is labelled as such: the submitter is told the gate could not run
-            // (infra), not that their tests failed. Re-submitting is the right move; hunting a
-            // non-existent regression in unrelated stderr is not.
-            const why = gate.inconclusive
-              ? `gate de integração INCONCLUSIVO (infra — não produziu veredito após ${MAX_GATE_INCONCLUSIVE_RETRIES + 1} tentativa(s); nada foi atribuído ao seu código; re-submeta)`
-              : `gate de integração reprovou`;
-            await returnToSession(entry, `${why}: ${gate.log.slice(0, GATE_LOG_CAP)}`);
-            continue; // terminal → drain the rest of the queue; main untouched, branch intact
-          }
-          finalize(entry, "gate-failed", { gateLog: gate.log.slice(0, GATE_LOG_CAP) });
-          // AC2: stamp a testing:blocker finding on the card so the failed branch surfaces as a blocked
-          // card (held out of QA by `hasNoBlockers`) and the operator sees WHY. Best-effort: a write error
-          // logs + records on the entry but NEVER stalls the train (mirrors the pushToOrigin discipline).
-          const gateCardId = entry.cardId;
-          try {
-            if (gateCardId) await addGateBlocker(entry.board, gateCardId, entry.runId, entry.gateLog ?? gate.log);
-          } catch (err) {
-            const msg = String(err instanceof Error ? err.message : err).slice(0, 200);
-            console.error("[harness-merge-queue] addGateBlocker falhou (não-fatal):", msg);
-            entry.gateBlockerError = msg;
-          }
-          await persist();
-          notify();
-          continue; // PARK this entry (gate-failed, retriable) and DRAIN the rest — no head-of-line block; main untouched
+          await disposeRedGate(entry, gate, { name: "gate de integração", tag: "gate" });
+          continue; // re-enfileirada, devolvida à sessão ou PARQUEADA (gate-failed) — a fila DRENA; main intocada
         }
-        // WS1.3 — the gate PASSED despite a NEW failure that vanished on the whole-suite retry (flaky):
-        // integrate, but AGGREGATE it (flaky.json, for future quarantine) + stamp an ADVISORY (low) finding
-        // so the operator sees the card shipped over a flake. Both best-effort — a write error NEVER stalls
-        // the train (mirrors addGateBlocker's discipline).
-        if (gate.flaky?.length) {
-          const testIds = gate.flaky.map((f) => `${f.file}::${f.name}`);
-          try {
-            const flakyPath = path.join(runnerStateDir(), "flaky.json");
-            const prev = await fsp.readFile(flakyPath, "utf8").then((s) => JSON.parse(s) as unknown).catch(() => []);
-            const arr = Array.isArray(prev) ? prev : [];
-            const at = new Date().toISOString();
-            for (const id of testIds) arr.push({ at, testId: id, runId: entry.runId, board: entry.board, cardId: entry.cardId });
-            await fsp.writeFile(flakyPath, JSON.stringify(arr.slice(-200), null, 2));
-          } catch (err) {
-            console.warn("[harness-merge-queue] flaky.json append falhou (não-fatal):", err instanceof Error ? err.message : err);
-          }
-          try {
-            // The flaky ADVISORY is a card finding; card-less work still aggregates into flaky.json above
-            // (the data that feeds future quarantine), it just has no card to advise on.
-            const flakyCardId = entry.cardId;
-            if (flakyCardId) {
-              await updateCardOnDisk(entry.board, flakyCardId, (card) => ({
-                ...card,
-                findings: withFlakyTestFinding(card.findings ?? [], entry.runId, testIds),
-              }));
-            }
-          } catch (err) {
-            console.warn("[harness-merge-queue] flaky finding falhou (não-fatal):", err instanceof Error ? err.message : err);
-          }
-        }
+        await recordFlaky(entry, gate.flaky);
         // Passed → resume the normal merge path (status back to `merging` for the real integration).
         entry.status = "merging";
         await persist();
         notify();
       }
+
+      // GATE DE DADOS — a metade do split que aterrissa em `main` (fora de `staging.codePrefixes`) é medida
+      // contra main ANTES do split, quando toca um prefixo de `mergeGate.dataUnits`. Antes do split, e não
+      // entre as metades: reprovar aqui não deixa código em `stage` sem dado em main (a meia-aterrissagem).
+      if ((await runDataGate(entry, liveMergeGate, demand.controlPaths.length > 0, codeGateReport)) === "stop") continue;
 
       // Staged release: when staging is on, EVERY run is integrated via the SPLIT (code → `stage`, data →
       // main) — not just code-touching ones. A run cut from `stage` carries the unreleased code in flight,
@@ -5010,6 +5435,10 @@ const MergeQueueEntrySchema = z.object({
   gateLog: z.string().optional(),
   trigger: z.string().optional(),
   driveCount: z.number().optional(),
+  // O teto de re-enfileiramentos de um gate INCONCLUSIVO. A mesma lição de `semanticAttempts` e
+  // `stewardAttempts` abaixo: Zod STRIPA a chave ausente daqui, então cada restart zerava o contador e um
+  // gate quebrado de verdade ganhava um retry novo a cada boot — o teto só valia entre dois restarts.
+  gateInconclusiveRetries: z.number().optional(),
   pushError: z.string().optional(),
   gateBlockerError: z.string().optional(),
   secretScanBlockerError: z.string().optional(),
@@ -5069,6 +5498,9 @@ const MergeQueueEntrySchema = z.object({
           exitCode: z.number().nullable(),
           tests: z.number().nullable(),
           failures: z.number(),
+          // gate de DADOS — a mesma lição: sem esta linha a unidade de main voltava do restart como se fosse
+          // do gate de código, e "o que rodou contra main" sumia do relatório.
+          half: z.enum(["data"]).optional(),
         }),
       ),
     })
@@ -5173,6 +5605,9 @@ export function getMergeQueue(): MergeQueuePort {
     exec: defaultExec,
     store: diskMergeQueueStore(runnerStateDir()),
     integrationGate: makeDefaultGateRunner(),
+    // O gate de DADOS: sempre ligado ao fio (closure pura, sem I/O até ser chamado); quem decide se ele roda é
+    // o `mergeGate.enabled` + `mergeGate.dataUnits` VIVOS, lidos por entrada — como o gate de código.
+    dataGate: makeDefaultDataGateRunner(),
     // O selo do gate: a sonda REAL, uma vez por processo (a disponibilidade do systemd não muda com o
     // serviço de pé). Só a fila de produção a recebe — ver `gateSandboxProbe` em MergeQueueConfig.
     gateSandboxProbe: cachedGateSandboxProbe,

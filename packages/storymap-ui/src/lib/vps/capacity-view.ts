@@ -112,6 +112,11 @@ export function capacityView(s: GovernorSnapshot | null | undefined, now: number
   if (latch) {
     tone = "danger";
     headline = latch.halt ? "Travado — HALT do host" : `Travado (${latch.level === "hard" ? "dura" : "mole"})`;
+  } else if (s.meterStall) {
+    // O IMPASSE: leitura defasada há muito com o medidor já visto — sem número a automação não roda, e sem ela
+    // nada renova o token do proxy. Não é "retida por defasagem" (uma espera que se resolve sozinha): é parado.
+    tone = "danger";
+    headline = "Medidor de cota PARADO — automação retida";
   } else if (s.inert) {
     headline = s.inert === "disabled" ? "Governador desligado" : "Inerte — sem medidor de uso";
   } else if (s.verdict.kind === "latch") {
@@ -127,7 +132,7 @@ export function capacityView(s: GovernorSnapshot | null | undefined, now: number
   return {
     tone,
     headline,
-    detail: latch ? latch.reason : s.verdict.detail,
+    detail: latch ? latch.reason : s.meterStall ? s.meterStall.detail : s.verdict.detail,
     retry: !latch && s.verdict.retryAt != null ? `volta a tentar ${when(s.verdict.retryAt, now)}` : null,
     rows,
     latch,

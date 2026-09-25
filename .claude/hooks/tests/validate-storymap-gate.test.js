@@ -1,6 +1,7 @@
 // Tests for the validate-storymap-gate hook (pre-write/pre-edit).
 //
-// Run with:  node --test .claude/hooks/tests/
+// Run with:  node --test '.claude/hooks/tests/*.test.js'   (quoted: node ≥ 21 expands the glob itself; a bare
+//             DIRECTORY argument is read as a module path on node 22 and fails with MODULE_NOT_FOUND)
 //
 // Lives OUTSIDE checks/ on purpose: runner.js auto-loads every *.js under
 // checks/<event>/ as a check, so a test file there would be (harmlessly) loaded

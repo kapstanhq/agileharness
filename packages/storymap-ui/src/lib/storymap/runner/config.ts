@@ -295,18 +295,21 @@ type GateReporterName = (typeof GATE_REPORTERS)[number];
  * reporter desconhecido DESCARTA (em vez de cair no vitest): rodar uma suíte com o leitor errado é medir
  * outra coisa. `network` inválido cai no default `deny`, o lado seguro. Exportada para teste.
  */
-export function coerceGateUnit(key: string, raw: unknown): string | MergeGateUnitDecl | null {
+export function coerceGateUnit(key: string, raw: unknown, where: GateUnitMapName = "mergeGate.scope"): string | MergeGateUnitDecl | null {
   if (typeof raw === "string") return raw.trim() ? raw.trim() : null;
   if (!raw || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   const command = asNonEmptyString(r.command);
+  // O que acontece com o delta de uma unidade descartada depende do MAPA: no escopo ele cai no fallback; nas
+  // unidades de dados ele aterrissa em main como hoje — sem gate nenhum. O aviso diz qual dos dois.
+  const consequence = where === "mergeGate.dataUnits" ? "o delta dela aterrissa em main SEM gate" : "o delta dela cai no fallback";
   if (!command) {
-    console.warn(`[storymap] mergeGate.scope: unidade "${key}" sem \`command\` — IGNORADA (o delta dela cai no fallback).`);
+    console.warn(`[storymap] ${where}: unidade "${key}" sem \`command\` — IGNORADA (${consequence}).`);
     return null;
   }
   if (r.reporter !== undefined && !GATE_REPORTERS.includes(r.reporter as GateReporterName)) {
     console.warn(
-      `[storymap] mergeGate.scope: unidade "${key}" com reporter desconhecido ${JSON.stringify(r.reporter)} — IGNORADA ` +
+      `[storymap] ${where}: unidade "${key}" com reporter desconhecido ${JSON.stringify(r.reporter)} — IGNORADA ` +
         `(válidos: ${GATE_REPORTERS.join(", ")}). Rodar a suíte com o leitor errado seria medir outra coisa.`,
     );
     return null;
@@ -325,12 +328,15 @@ export function coerceGateUnit(key: string, raw: unknown): string | MergeGateUni
   };
 }
 
-/** O mapa `packages`/`units` inteiro: só entram as unidades que {@link coerceGateUnit} aceitou. */
-function coerceGateUnitMap(raw: unknown): Record<string, string | MergeGateUnitDecl> {
+/** Os mapas de unidade do settings — o nome entra no aviso de uma unidade descartada. */
+type GateUnitMapName = "mergeGate.scope" | "mergeGate.dataUnits";
+
+/** O mapa `packages`/`units`/`dataUnits` inteiro: só entram as unidades que {@link coerceGateUnit} aceitou. */
+export function coerceGateUnitMap(raw: unknown, where: GateUnitMapName = "mergeGate.scope"): Record<string, string | MergeGateUnitDecl> {
   if (!raw || typeof raw !== "object") return {};
   const out: Record<string, string | MergeGateUnitDecl> = {};
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    const u = coerceGateUnit(k, v);
+    const u = coerceGateUnit(k, v, where);
     if (u !== null) out[k] = u;
   }
   return out;
@@ -414,6 +420,7 @@ export function coerceRunnerSettings(raw: unknown): RunnerSettings {
   // O teto de custo por run. Coerção ESTRITA e por entrada (run-budget.ts): lixo ⇒ ausente ⇒ a tabela por
   // skill, isto é, o teto continua LIGADO. Só um `0` explícito desliga.
   const maxBudgetUSD = coerceRunBudgetSetting(a.maxBudgetUSD);
+  const dataUnits = mg.dataUnits && typeof mg.dataUnits === "object" ? coerceGateUnitMap(mg.dataUnits, "mergeGate.dataUnits") : {};
   const surfaceMaxBudgetUSD = coerceSurfaceBudgets(a.surfaceMaxBudgetUSD);
 
   return {
@@ -465,6 +472,9 @@ export function coerceRunnerSettings(raw: unknown): RunnerSettings {
         // valor é um comando string não-vazio; o resto é ignorado em silêncio e cai no fallback, que é o
         // comportamento de hoje.
         scope: mg.scope && typeof mg.scope === "object" ? coerceGateScope(mg.scope as Record<string, unknown>) : dmg.scope,
+        // As unidades de DADOS — MESMA disciplina do escopo (coerção explícita, unidade inválida descartada com
+        // aviso). Um mapa vazio/ausente some da config: nenhuma entrada ganha gate de dados, o de hoje.
+        ...(Object.keys(dataUnits).length > 0 ? { dataUnits } : {}),
         // O selo: só os dois valores do contrato. Um valor desconhecido NÃO desliga o selo (cairia no lado
         // inseguro por um typo) — fica o default, com aviso.
         isolation: coerceGateIsolation(mg.isolation, dmg.isolation),

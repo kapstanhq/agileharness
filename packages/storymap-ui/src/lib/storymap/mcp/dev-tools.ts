@@ -1039,7 +1039,8 @@ export function registerDevTools(server: McpServer): void {
                 uncountedUnits: gr.uncountedUnits,
                 isolation: gr.isolation,
                 ...(gr.isolation === "none" ? { isolationReason: gr.isolationReason } : {}),
-                units: gr.units.map((u) => ({ label: u.label, reporter: u.reporter, mode: u.mode, tests: u.tests, exitCode: u.exitCode, argv: u.argv })),
+                // `half: "data"` = a unidade rodou contra MAIN (gate de dados, mergeGate.dataUnits), não contra stage
+                units: gr.units.map((u) => ({ label: u.label, reporter: u.reporter, mode: u.mode, tests: u.tests, exitCode: u.exitCode, argv: u.argv, ...(u.half ? { half: u.half } : {}) })),
               },
             }
           : {}),

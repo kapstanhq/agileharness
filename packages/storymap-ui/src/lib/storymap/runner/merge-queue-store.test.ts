@@ -189,3 +189,29 @@ describe("diskMergeQueueStore — o gateReport sobrevive ao restart (gate honest
     expect(out[0].gateReport).toBeUndefined();
   });
 });
+
+describe("diskMergeQueueStore — os contadores e a metade de dados sobrevivem ao restart", () => {
+  it("gateInconclusiveRetries NÃO zera no load — senão cada restart dava um retry novo a um gate quebrado de verdade", async () => {
+    const out = await storeWith({ version: 1, entries: [{ ...valid, status: "waiting", gateInconclusiveRetries: 1 }] }).load();
+    expect(out[0].gateInconclusiveRetries).toBe(1);
+  });
+
+  it("a unidade do gate de DADOS volta marcada `half: data` (senão o que rodou contra main viraria gate de código)", async () => {
+    const unit = {
+      label: "scripts/ops",
+      cwd: "scripts/ops",
+      reporter: "junit-xml",
+      mode: "full",
+      network: "deny",
+      isolation: "systemd",
+      argv: ["systemd-run", "--", "/bin/sh", "-c", "node --test"],
+      exitCode: 0,
+      tests: 3,
+      failures: 0,
+      half: "data",
+    };
+    const report = { isolation: "systemd", isolationReason: "ok", testsExecuted: 3, uncountedUnits: 0, units: [unit] };
+    const out = await storeWith({ version: 1, entries: [{ ...valid, status: "done", gateReport: report }] }).load();
+    expect(out[0].gateReport?.units[0].half).toBe("data");
+  });
+});

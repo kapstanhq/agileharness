@@ -5,14 +5,14 @@ import { readFileSync } from "node:fs";
 import yaml from "js-yaml";
 import { describe, expect, it } from "vitest";
 import { settingsPath } from "@/lib/storymap/paths";
-import { coerceGateScope } from "./config";
-import { resolveGateUnits, unitAcceptsAffected, unitReporter } from "./gate-scope";
+import { coerceGateScope, coerceGateUnitMap } from "./config";
+import { resolveDataUnits, resolveGateUnits, unitAcceptsAffected, unitReporter } from "./gate-scope";
 
-/** O bloco `# scope:` comentado do mergeGate, descomentado. */
-function exemploComentado(): unknown {
+/** O bloco `# <chave>:` comentado do mergeGate, descomentado. */
+function exemploComentado(chave = "scope"): unknown {
   const linhas = readFileSync(settingsPath(), "utf8").split("\n");
-  const ini = linhas.findIndex((l) => /^\s*# scope:\s*$/.test(l));
-  expect(ini, "o settings.yaml publicado perdeu o exemplo `# scope:` do gate por unidade").toBeGreaterThan(-1);
+  const ini = linhas.findIndex((l) => new RegExp(`^\\s*# ${chave}:\\s*$`).test(l));
+  expect(ini, `o settings.yaml publicado perdeu o exemplo \`# ${chave}:\` do gate`).toBeGreaterThan(-1);
   const indent = linhas[ini].indexOf("#");
   const bloco: string[] = [];
   for (let i = ini; i < linhas.length; i++) {
@@ -51,5 +51,30 @@ describe("o exemplo monorepo do settings.yaml publicado — parseia e chega ao m
     expect(unitAcceptsAffected(py)).toBe(false);
     expect(api.command).toBe("bunx vitest run --config vitest.unit.config.ts");
     expect(unitAcceptsAffected(api)).toBe(true);
+  });
+});
+
+describe("o exemplo de `dataUnits` do settings.yaml publicado — um monorepo com scripts/deploy (vitest) e scripts/ops (node --test)", () => {
+  const units = coerceGateUnitMap((exemploComentado("dataUnits") as { dataUnits: Record<string, unknown> }).dataUnits, "mergeGate.dataUnits");
+
+  it("as quatro unidades sobrevivem ao coerce, cada uma com o reporter que declara", () => {
+    expect(Object.keys(units)).toEqual(["scripts/deploy", "scripts/ops", "scripts/gc", "justfile"]);
+    expect(units["scripts/deploy"]).toMatchObject({ command: "bunx vitest run scripts/deploy/__tests__", cwd: "." });
+    expect(units["scripts/ops"]).toMatchObject({ reporter: "junit-xml", junitPath: "junit.xml" });
+    expect(units.justfile).toMatchObject({ reporter: "exit-code", cwd: "." });
+  });
+
+  it("a metade de dados de um delta chega às unidades certas; a suíte de deploy aceita afetados, a do node --test não", () => {
+    const d = resolveDataUnits(["scripts/deploy/lib/manifest.js", "scripts/ops/signals/bridge.mjs", "storymap/boards/x/cards/c.md"], units);
+    expect(d.units.map((u) => u.label)).toEqual(["scripts/deploy", "scripts/ops"]);
+    const [deploy, ops] = d.units;
+    expect(deploy.cwd).toBe(".");
+    expect(unitAcceptsAffected(deploy)).toBe(true);
+    expect(unitReporter(ops)).toBe("junit-xml");
+    expect(unitAcceptsAffected(ops)).toBe(false);
+    // um card sozinho não dispara unidade nenhuma — o board-data segue sem gate, como hoje
+    expect(resolveDataUnits(["storymap/boards/x/cards/c.md"], units).units).toEqual([]);
+    // e o justfile casa como ARQUIVO exato
+    expect(resolveDataUnits(["justfile"], units).units.map((u) => u.label)).toEqual(["justfile"]);
   });
 });

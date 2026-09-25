@@ -169,4 +169,46 @@ describe("prepareGateTree — a árvore do gate é a que a aterrissagem vai prod
     expect(res).toMatchObject({ ok: true, baseSha: "stageSha" });
     expect(calls.some((c) => c.includes("commit --no-verify --allow-empty"))).toBe(true);
   });
+
+  it("`paths` restringe o patch à metade pedida (o gate de dados monta main + SÓ o que aterrissa em main)", async () => {
+    const { deps, calls } = makeDeps([
+      { match: "rev-parse HEAD", stdout: "mainSha" },
+      { match: "diff --name-only", stdout: "packages/app/a.ts\nscripts/ops/x.mjs\nstorymap/boards/b/cards/c.md\n" },
+    ]);
+    const res = await prepareGateTree(deps, { ...OPTS, baseline: "mainSha", paths: ["scripts/ops/x.mjs", "storymap/boards/b/cards/c.md"] });
+    expect(res).toMatchObject({ ok: true, baseSha: "mainSha" });
+    const patch = calls.find((c) => c.includes("diff --binary"))!;
+    expect(patch).toContain('"scripts/ops/x.mjs"');
+    expect(patch).toContain('"storymap/boards/b/cards/c.md"');
+    expect(patch, "o código de stage vazou para a árvore de main").not.toContain("packages/app/a.ts");
+  });
+
+  it("`beforeCommit` escreve ANTES do commit — mesmo sem nada a aplicar por patch — e a falha dele é setup", async () => {
+    const order: string[] = [];
+    const { deps, calls } = makeDeps(
+      [
+        { match: "rev-parse HEAD", stdout: "mainSha" },
+        { match: "diff --name-only", stdout: "storymap/boards/b/cards/c.md\n" },
+      ],
+      { beforeCommit: async (tree) => void order.push(`before:${tree}`) },
+    );
+    const res = await prepareGateTree(deps, { ...OPTS, paths: [] });
+    expect(res.ok).toBe(true);
+    expect(order).toEqual([`before:${OPTS.treePath}`]);
+    expect(calls.some((c) => c.includes("diff --binary"))).toBe(false); // nada por patch
+    expect(calls.some((c) => c.includes("commit --no-verify --allow-empty"))).toBe(true);
+
+    const bad = makeDeps(
+      [
+        { match: "rev-parse HEAD", stdout: "mainSha" },
+        { match: "diff --name-only", stdout: "a.ts" },
+      ],
+      { beforeCommit: async () => { throw new Error("card ilegível"); } },
+    );
+    const r2 = await prepareGateTree(bad.deps, OPTS);
+    expect(r2).toMatchObject({ ok: false, kind: "setup" });
+    if (r2.ok) throw new Error("unreachable");
+    expect(r2.log).toContain("card ilegível");
+    expect(bad.calls.some((c) => c.includes("commit --no-verify"))).toBe(false);
+  });
 });

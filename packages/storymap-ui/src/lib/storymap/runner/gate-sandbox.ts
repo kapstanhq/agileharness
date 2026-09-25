@@ -393,6 +393,33 @@ export function resolveGateIsolation(
     : { mode: "none", reason: `⚠ SEM SELO — systemd indisponível: ${p.detail}. O código do delta roda como o uid do serviço, com a rede do host (só o env é neutralizado).` };
 }
 
+/**
+ * O que um `vitest` precisa para rodar SOB o selo sem escrever em `node_modules`.
+ *
+ * Na árvore do gate, `node_modules` são LINKS para o checkout principal — read-only dentro da unidade. O
+ * vitest (via vite) escreve lá em dois lugares, e o primeiro derruba a suíte antes do primeiro teste:
+ *   · `node_modules/.vite-temp/` — o loader default (`bundle`) empacota o `vitest.config.*` e grava o
+ *     resultado ali para importá-lo. Sob o selo: `EROFS … mkdir '<…>/node_modules/.vite-temp'` e o vitest
+ *     morre em "failed to load config" (medido: vite 8.2 / vitest 4.1, node_modules numa montagem ro). O vite
+ *     só cai para gravar ao lado do config em `EACCES`, nunca em `EROFS`. `--configLoader runner` (flag
+ *     documentada da CLI do vitest; exige vite ≥ 6.1) carrega o config pelo module runner, em memória —
+ *     nada é gravado. Medido no mesmo par: o mesmo config carrega e a suíte roda.
+ *   · `node_modules/.vite/vitest/<hash>/results.json` — o cache de resultados (ordem por duração/falha). O
+ *     vitest 4 engole o EROFS dessa escrita, versões anteriores não garantem; e o `cache.dir` que o
+ *     redirecionaria foi APOSENTADO na CLI (`--cache.dir is deprecated`). `--no-cache` (documentada) o
+ *     desliga: numa árvore descartável ele seria jogado fora de qualquer jeito.
+ * Sem nenhuma escrita sob `node_modules`, o `mergeGate.sealed.writablePaths` deixa de ser o contorno
+ * obrigatório — e continua valendo para o cache que a SUÍTE precisar (Playwright, por exemplo).
+ *
+ * Uma flag que o comando JÁ traz não é repetida (o operador que declarou `--configLoader native` manda). PURA.
+ */
+export function withSealedVitestFlags(command: string): string {
+  const extra: string[] = [];
+  if (!/(^|\s)--configLoader(\s|=|$)/.test(command)) extra.push("--configLoader runner");
+  if (!/(^|\s)--(no-)?cache(\s|=|$)/.test(command)) extra.push("--no-cache");
+  return extra.length > 0 ? `${command} ${extra.join(" ")}` : command;
+}
+
 /** Linha de parada da unidade que o timeout deixou viva — só para nomes de unidade do gate. PURA. */
 export function stopUnitCommand(unit: string): string | null {
   return isGateUnit(unit) ? `systemctl stop ${sq(unit)}` : null;

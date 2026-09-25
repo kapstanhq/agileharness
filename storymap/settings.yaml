@@ -125,6 +125,41 @@ autorun:
     # sealed:
     #   inaccessiblePaths: [/etc/agileharness]    # o diretório de env/segredos do SEU serviço
     #   writablePaths: [~/.cache/ms-playwright]   # um cache que a suíte precisa ESCREVER
+    # (vitest selado não precisa de writablePaths para node_modules: o gate já passa `--configLoader runner
+    # --no-cache` a todo vitest sob o selo — o config carrega em memória e nada é gravado em node_modules.)
+    #
+    # ── FERRAMENTAL FORA DE codePrefixes: as unidades de DADOS (o gate do que aterrissa em main) ─────────
+    # Com `staging` ligado, o split manda para `main` TUDO o que está fora de `staging.codePrefixes` — não só
+    # cards: o sistema de deploy, scripts de operação, o justfile. Sem declaração nada disso roda um teste antes
+    # de aterrissar. Uma unidade de dados roda quando a metade de dados de uma entrada toca o prefixo dela —
+    # selada, com os mesmos reporters/contagem/atribuição do gate de código (afetados quando vitest-json) —
+    # numa árvore descartável = `main` atual + a metade de dados; e o patch só aterrissa em main se ela passar
+    # (inconclusivo re-tenta; reprovado devolve à sessão / parqueia o run como gate-failed; nada do split
+    # aterrissa antes do veredito). Os arquivos CONTINUAM indo para main — o checkout de runtime os roda de lá.
+    # Mesma forma de `scope.packages` (a chave casa por prefixo; `triggers` também disparam); SEM fallback e
+    # SEM teto: prefixo não declarado segue como hoje. Só vale com staging ligado — sem split, use `scope.units`.
+    #
+    # dataUnits:
+    #   # o sistema de deploy: suíte vitest em scripts/deploy/__tests__, rodada da RAIZ (node_modules da raiz)
+    #   scripts/deploy:
+    #     command: bunx vitest run scripts/deploy/__tests__
+    #     cwd: .
+    #   # suítes `node --test` medidas por JUnit — o node NÃO cria diretório pai do destino, então o relatório
+    #   # fica na raiz da unidade; sempre completas (só vitest-json aceita seleção por afetados)
+    #   scripts/ops:
+    #     command: node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=junit.xml '**/*.test.mjs'
+    #     reporter: junit-xml
+    #     junitPath: junit.xml
+    #   scripts/gc:
+    #     command: node --test --test-reporter=junit --test-reporter-destination=junit.xml 'tests/*.test.mjs'
+    #     reporter: junit-xml
+    #     junitPath: junit.xml
+    #   # o justfile não tem suíte: uma checagem de que ele ainda PARSEIA, por exit-code (não conta testes)
+    #   justfile:
+    #     command: just --summary
+    #     reporter: exit-code
+    #     cwd: .
+    #
   mergeTrain:
     maxRedrives: 2
     semanticResolution: true
@@ -233,6 +268,19 @@ governor:
   latchWeekPct: 92
   latchFiveHourPct: 90
   staleMinutes: 20
+  # MEDIDOR PARADO — o impasse que a espera por defasagem não enxerga: o proxy de uso só renova a leitura com o
+  # token que colhe do TRÁFEGO; sem tráfego ele expira, a leitura fica defasada, a automação é retida (certo), e
+  # retida nada passa pelo proxy — o token nunca se renova. Defasada há mais que isto (min), com o medidor já
+  # visto neste host, vira UM aviso crítico (`meter-stale` → push `capacity-meter-stale`) e o painel de
+  # capacidade diz «medidor parado desde HH:MM», uma vez por episódio. Nunca abaixo de staleMinutes.
+  meterStallMinutes: 30
+  # A saída OPCIONAL e barata: enquanto a leitura estiver defasada (medidor já visto), rodar um keepalive a cada
+  # N min para gerar tráfego pelo proxy. SÓ a cadência mora aqui — o COMANDO vem do ambiente do host, argv em JSON
+  # e sem shell, porque este arquivo chega a main pelo train e um comando lido dele rodaria como o serviço:
+  #   AGILEHARNESS_METER_KEEPALIVE='["env","ANTHROPIC_BASE_URL=http://127.0.0.1:8787","claude","-p","ok","--max-turns","1"]'
+  # Sem as DUAS chaves (esta cadência + o comando no ambiente), nada roda — e a metade que faltar é dita no log.
+  # meterKeepalive:
+  #   everyMinutes: 30
 mcpTokens:
   - tokenEnv: AGILEHARNESS_MCP_TOKEN_ORCH
     level: orch

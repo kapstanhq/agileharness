@@ -53,7 +53,11 @@ export const DEFAULT_GOVERNOR_SETTINGS: Readonly<GovernorSettings> = {
   latchWeekPct: 92,
   latchFiveHourPct: 90,
   staleMinutes: 20,
+  meterStallMinutes: 30,
 };
+
+/** O keepalive nunca roda mais que uma vez a cada isto (min) — uma cadência menor seria gasto, não saída. */
+export const METER_KEEPALIVE_MIN_MINUTES = 10;
 
 // ── COERÇÃO (fail-closed por campo, sem spread do objeto cru) ──────────────────────────────────────────────
 
@@ -127,6 +131,37 @@ export function coerceGovernorSettings(raw: unknown, d: Readonly<GovernorSetting
     else staleMinutes = n;
   }
 
+  let meterStallMinutes = d.meterStallMinutes;
+  if (o.meterStallMinutes !== undefined && o.meterStallMinutes !== null) {
+    const n = asPositive(o.meterStallMinutes);
+    if (n === undefined) recusados.push("meterStallMinutes");
+    else meterStallMinutes = n;
+  }
+  if (meterStallMinutes < staleMinutes) {
+    // "parado" antes de "defasado" seria um alarme sobre uma leitura que o próprio governador ainda aceita. Só
+    // AVISA quando o valor foi declarado — o default sob um `staleMinutes` alto sobe calado.
+    if (o.meterStallMinutes !== undefined && o.meterStallMinutes !== null) {
+      console.warn(
+        `[storymap] settings governor.meterStallMinutes (${meterStallMinutes}) abaixo de staleMinutes (${staleMinutes}) — elevado a ${staleMinutes}.`,
+      );
+    }
+    meterStallMinutes = staleMinutes;
+  }
+
+  let meterKeepalive = d.meterKeepalive;
+  if (o.meterKeepalive !== undefined && o.meterKeepalive !== null) {
+    const k = o.meterKeepalive as Record<string, unknown>;
+    const every = k && typeof k === "object" && !Array.isArray(k) ? asPositive(k.everyMinutes) : undefined;
+    if (every === undefined) recusados.push("meterKeepalive");
+    else meterKeepalive = { everyMinutes: Math.max(METER_KEEPALIVE_MIN_MINUTES, every) };
+    if (k && typeof k === "object" && "command" in k) {
+      console.warn(
+        "[storymap] settings governor.meterKeepalive.command IGNORADO — o comando do keepalive vem SÓ do ambiente do host " +
+          "(AGILEHARNESS_METER_KEEPALIVE, argv em JSON): este arquivo chega a main pelo train, e um comando lido dele rodaria como o serviço.",
+      );
+    }
+  }
+
   let timezone = d.timezone;
   if (o.timezone !== undefined && o.timezone !== null) {
     const tz = typeof o.timezone === "string" ? o.timezone.trim() : "";
@@ -148,6 +183,8 @@ export function coerceGovernorSettings(raw: unknown, d: Readonly<GovernorSetting
     latchWeekPct: pct("latchWeekPct", d.latchWeekPct),
     latchFiveHourPct: pct("latchFiveHourPct", d.latchFiveHourPct),
     staleMinutes,
+    meterStallMinutes,
+    ...(meterKeepalive ? { meterKeepalive } : {}),
     ...(timezone ? { timezone } : {}),
   };
 }
@@ -590,6 +627,26 @@ export function projectWeekAtReset(r: Pick<CapacityReading, "usage7dPct" | "rese
   return Math.round(((r.usage7dPct * WEEK_MS) / elapsed) * 10) / 10;
 }
 
+/**
+ * O medidor está PARADO? — o impasse que o fail-closed sozinho não enxerga. Medido na v0.8.0 no ar: o proxy de
+ * uso só renova a leitura da janela com o token OAuth que colhe do TRÁFEGO que passa por ele; sem tráfego o token
+ * expira, o poll falha, a leitura fica DEFASADA, a automação é retida (correto) — e, retida, nada passa pelo proxy,
+ * então o token nunca se renova. A frota fica parada para sempre, e o painel só dizia "leitura defasada".
+ *
+ * Parado = o medidor JÁ foi visto neste host (senão é "sem medidor", que é inerte) E a última medição FRESCA
+ * (`polledAt` da leitura — o proxy segue servindo a janela velha, então a ida ao /stats "funciona") tem mais de
+ * `meterStallMinutes`; sem leitura nenhuma, conta desde `meterSeenAt`. Devolve DESDE QUANDO (a última medição
+ * boa), ou null. PURA.
+ */
+export function meterStallSince(
+  input: { reading: Pick<CapacityReading, "polledAt"> | null; meterSeenAt: number | null; now: number },
+  s: Pick<GovernorSettings, "enabled" | "meterStallMinutes">,
+): number | null {
+  if (!s.enabled || input.meterSeenAt == null) return null;
+  const since = input.reading ? input.reading.polledAt : input.meterSeenAt;
+  return input.now - since > s.meterStallMinutes * 60_000 ? since : null;
+}
+
 /** O estado do governador para a UI (HealthPill e a página de métricas). Serializável. */
 export interface GovernorSnapshot {
   at: number;
@@ -604,6 +661,11 @@ export interface GovernorSnapshot {
   /** o trabalho automático que está esperando o governador */
   held: { count: number; oldestSince: number | null };
   latch: EffectiveLatch | null;
+  /**
+   * O medidor PARADO ({@link meterStallSince}) — a demanda do impasse: desde quando não há medição fresca, quando
+   * o governador o declarou parado, e o texto para o operador. null = não parado.
+   */
+  meterStall: { since: number; detectedAt: number; detail: string } | null;
   /** os tetos em vigor (o painel desenha a régua contra eles) */
   caps: Pick<GovernorSettings, "weekCapPct" | "weekCapLast24hPct" | "fiveHourCapPct" | "latchWeekPct" | "latchFiveHourPct">;
 }
