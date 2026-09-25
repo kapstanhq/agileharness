@@ -310,6 +310,11 @@ arquivos (minimiza conflito), (d) entrega um incremento demonstrável.
   holder** — decida esperar ou re-priorizar); para você, humano, é ADVISORY (avisa, nunca
   bloqueia). Claim **não é lock de integridade** (isso é o train/gates/worktrees) e nunca
   vira campo do card. Órfão expira sozinho; o steward ceifa.
+- **Card CONDUZIDO (`routing.driver: conductor`) não é seu.** O condutor dele move, pergunta e
+  entrega; se ele morreu, quem decide é o operador. Não mova, não responda perguntas, não re-drive e
+  não passe gate num card com o driver — o tick já não acorda por ele e o steward o deixa em paz.
+  Pergunta de DINHEIRO (`category: money`) e pergunta que o PROXY de uma story ultra está respondendo
+  também não são suas (`answer_question` recusa a primeira).
 - **Distribua trabalho por INTENÇÃO, com `suggest_work`.** Para saber o próximo card
   acionável e livre, use **`suggest_work`** (determinística, read-only, ordem total, **zero
   reserva**) em vez de escolher no olho, e spawne/adote a sessão via `claude_new` /
