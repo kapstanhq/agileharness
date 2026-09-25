@@ -98,6 +98,8 @@ export function tickOutcomeText(
     failureStreak?: number;
     failureReason?: string;
     tickInFlight?: boolean;
+    /** skipped-capacity: o motivo que o governador de capacidade deu */
+    capacityDetail?: string;
   },
 ): { kind: CopilotActivityKind; text: string } | null {
   switch (outcome) {
@@ -180,6 +182,15 @@ export function tickOutcomeText(
           (ctx?.failureReason ? ` (${ctx.failureReason})` : "") +
           `. Não é budget — é um defeito no meu spawn. Vou sondar de novo depois de um tempo; ` +
           `se você corrigir a causa, o primeiro ciclo que sobreviver me destrava.`,
+      };
+    case "skipped-capacity":
+      // O governador de capacidade reteve o spawn: é a janela da CONTA (a mesma que o dono usa), não um defeito
+      // e não o budget do copiloto. A frase diz o motivo real e que eu volto sozinho.
+      return {
+        kind: "stood-down",
+        text:
+          `Segurei este ciclo pela capacidade da conta — ${ctx?.capacityDetail ?? "o governador reteve o trabalho automático"}. ` +
+          `Volto sozinho no próximo ciclo em que a janela permitir.`,
       };
     case "error":
       return { kind: "error", text: "Erro no meu ciclo — não consegui avaliar o board." };

@@ -257,6 +257,9 @@ export interface JudgeVerdict {
   /** set when the judge itself failed (crash/timeout/garbage) ⇒ `judge-failed`, never an escalation dressed
    *  up as a verdict: the operator must be able to tell "the judge says it's ambiguous" from "the judge died". */
   error?: string;
+  /** o juiz NEM NASCEU: o governador de capacidade o reteve (janela da conta). Não é um julgamento — e por isso
+   *  não pode gastar a única tentativa semântica da entry (ver climbLadder). */
+  held?: boolean;
 }
 
 /**
@@ -381,6 +384,19 @@ export async function climbLadder(deps: LadderDeps, input: LadderInput): Promise
   const verdict = await deps
     .judge({ sides: input.sides, base: input.base, origin: input.origin, board: input.board, cardId: input.cardId, conflictDetail: input.conflictDetail })
     .catch((err): JudgeVerdict => ({ hunks: [], runId: "", error: String(err instanceof Error ? err.message : err) }));
+
+  // The judge was HELD by the capacity governor — it never ran, so nothing was judged. `skipped` (not
+  // `judge-failed`) is the honest outcome, and the one that does NOT spend the entry's single semantic attempt
+  // (invariant 3 counts judgements, and none was bought): a later retry — the steward's, or the operator's —
+  // climbs again once the account window allows.
+  if (verdict.held) {
+    return {
+      outcome: "skipped",
+      detail: `degrau 2: o juiz não rodou — ${verdict.error ?? "retido pelo governador de capacidade"} — nenhuma tentativa gasta; re-tente quando a janela liberar`,
+      hunks: [],
+      ...base,
+    };
+  }
 
   // The judge DIED (crash/timeout/garbage) — distinct from "the judge says substantive". Both send it to the
   // human, but only one of them means the ladder is broken, and the operator/telemetry must be able to tell.

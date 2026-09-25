@@ -13,7 +13,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { defineTool } from "./register";
-import { currentMcpActor } from "./actor";
+import { currentMcpActor, isScopedActor } from "./actor";
 import { docIsCanonical, isPrdSection, prdSectionKeys, readGovernedValue } from "@/lib/storymap/doc/doc-governance";
 
 import { listBoards, readBoardConfig, readCard, readCards } from "@/lib/storymap/repo";
@@ -2533,6 +2533,9 @@ FORMATO DO CANVAS (Lean Canvas): um bloco NÃO é mais um paragrafão — é uma
         draftId,
         changes: draft.changes.map((c) => ({ artifact: c.artifact, field: c.field, label: c.label, before: c.before, after: c.after })),
         cardContext,
+        // Quem pediu o par: um agente escopado (o copiloto) é AUTOMAÇÃO e passa pelo governador de capacidade; o
+        // token full do operador não. Lido AQUI, na cadeia do request, onde o ator MCP existe.
+        initiator: isScopedActor() ? "automation" : "operator",
       };
       const verdict = await makePeerReviewPort({ claudeBin: resolvedClaudeBin({ name: loadRunnerConfig().autorun.claudeBin }) })(req);
       if (verdict.error) return fail(`Revisão por par não concluiu (${verdict.error}) — a proposta segue pendente para o humano.`);

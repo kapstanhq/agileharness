@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { spawnSync } from "node:child_process";
 import { promises as fsp, readFileSync } from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BUDGET_CUT_HOLD_MARKER, CLAIM_REFUSED_MARKER, RunnerEngine, brandbookPathFor, buildClaudeCommand, buildContextNote, buildResumeCommand, buildRunCommitMessage, buildStateSnapshot, buildStyleGuideNote, buildToolkitNote, captureInputHash, composeSystemPrompt, formatRunAge, precheckNoop, quoteArg, sanitizeSpawnPath, styleGuidePathFor, summarizeFinalText, timeoutFor, pumpRetryNeeded, PUMP_RETRY_MS, type CardUpdater, type PumpTimerFn, type PrecheckInput } from "./engine";
 import type { DeltaLandedFn, SplitLandedness } from "./convergence";
 import { BOARD_DATA_SKILL_INVARIANTS, CODE_SKILL_INVARIANTS, systemPromptFor } from "./skill-registry";
@@ -22,12 +22,67 @@ import type { VpsResources } from "./scheduler";
 import type { MergeQueueEntry } from "./types";
 import type { BoardConfig, Card, Finding, StatusDef, TriggerId } from "@/lib/storymap/types";
 import { BUDGET_CUT_FINDING_ID, withBudgetCutFinding } from "./findings";
+import type { CapacityGatePort } from "./capacity-service";
+import type { GateVerdict, Initiator } from "./capacity-governor";
+import { runWithMcpActor } from "@/lib/storymap/mcp/actor";
 
 // Resource probe (DI) that ALWAYS reports spare capacity, so the lane caps — not the VPS threshold —
 // govern admission in every test that isn't specifically about overload. Keeps the existing suite
 // deterministic regardless of the host's real free RAM / load (the operational settings.yaml carries
 // real thresholds). Overload-specific tests inject their own probe via makeEngine({ probeResources }).
 const NEVER_OVERLOADED: () => VpsResources = () => ({ freeRamMb: Infinity, loadAvg1: 0 });
+
+// O governador de capacidade que ADMITE tudo — o default de makeEngine, para a suíte pré-existente medir o que
+// media antes (lanes, recursos) sem depender da janela de uso do host.
+const ADMIT_ALL_GATE: CapacityGatePort = {
+  admission: (i) => ({ admit: true, reason: i === "operator" ? "operator" : "admit", detail: "", retryAt: null }),
+  reportHeld: () => {},
+};
+
+/**
+ * Um governador de capacidade CONTROLÁVEL: `hold()` retém a automação (o operador passa sempre), `open()` a
+ * libera e dispara o onChange (a borda que acorda o engine). Registra quem perguntou e o que foi reportado
+ * como retido.
+ */
+function makeGovernorDouble(startHeld = true) {
+  let held = startHeld;
+  const listeners = new Set<() => void>();
+  const asked: Initiator[] = [];
+  const reported: Record<string, string[]> = {};
+  const gate: CapacityGatePort = {
+    admission: (i): GateVerdict => {
+      asked.push(i);
+      if (i === "operator") return { admit: true, reason: "operator", detail: "", retryAt: null };
+      return held
+        ? { admit: false, reason: "daily-allowance", detail: "a cota de hoje acabou", retryAt: null }
+        : { admit: true, reason: "admit", detail: "", retryAt: null };
+    },
+    reportHeld: (surface, keys) => {
+      reported[surface] = [...keys];
+    },
+    onChange: (fn) => {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+  };
+  return {
+    gate,
+    asked,
+    reported,
+    hold: () => {
+      held = true;
+    },
+    /** libera SEM avisar (o caso do timer de re-arme) */
+    release: () => {
+      held = false;
+    },
+    /** libera E avisa (a borda: trava solta, dia novo, leitura nova) */
+    open: () => {
+      held = false;
+      for (const fn of listeners) fn();
+    },
+  };
+}
 
 // Flush microtasks/macrotasks. Two things now resolve asynchronously before assertions:
 //   - the worktree is created (await) BEFORE the spawn, so a run reaches `claude` only after a
@@ -241,6 +296,9 @@ function makeEngine(
     // data (the real writer has no path seam — see CardUpdater). `cardOnDisk` seeds it; `cardWrites`
     // records every mutation result.
     cardOnDisk?: Card | null;
+    // O GOVERNADOR DE CAPACIDADE (DI). Default = um portão que admite tudo, então a suíte pré-existente não
+    // depende do medidor do host; os testes do governador passam o dublê que retém a automação.
+    capacityGate?: CapacityGatePort;
   } = {},
 ) {
   // f1: an isolated run commits its worktree before detaching. Default committed:true (the run
@@ -397,6 +455,7 @@ function makeEngine(
       opts.setTimer ?? defaultSetTimer,
       // WS-1.3: undefined → the constructor default (real git). Only the redrive pre-check tests inject one.
       opts.branchWorkLandedBySplitFn,
+      opts.capacityGate ?? ADMIT_ALL_GATE,
     ),
     pumpTimers,
     killCalls,
@@ -4844,5 +4903,169 @@ describe("RunnerEngine.runSkill — corte por orçamento (budget-cut)", () => {
     expect(engine.runSkill("acme", "story-bc6", "harness-do", codeDef).ok).toBe(true);
     await flush();
     expect(cmds).toHaveLength(1);
+  });
+});
+
+// ── O GOVERNADOR DE CAPACIDADE no pump ─────────────────────────────────────────────────────────────────────
+// A admissão pela janela da CONTA (capacity-governor.ts), fiada no pump: a automação espera NA FILA (nunca é
+// recusada — nada encalha), o operador nunca espera e passa na frente de uma fila parada, o trabalho retido é
+// RE-ARMADO nas duas lanes (timer + a borda do governador), e o iniciador é fixado onde o ator ainda existe.
+describe("governador de capacidade — o pump admite pela janela da CONTA", () => {
+  const GOV_ENV = ["AGILEHARNESS_AUTORUN_MAX", "AGILEHARNESS_AUTORUN_LANE_LIGHT_MAX", "AGILEHARNESS_AUTORUN_LANE_HEAVY_MAX"] as const;
+  beforeEach(() => {
+    process.env.AGILEHARNESS_AUTORUN_MAX = "5";
+    process.env.AGILEHARNESS_AUTORUN_LANE_LIGHT_MAX = "5";
+    process.env.AGILEHARNESS_AUTORUN_LANE_HEAVY_MAX = "5";
+  });
+  afterEach(() => {
+    for (const k of GOV_ENV) delete process.env[k];
+  });
+  const enrich: StatusDef = { id: "enriquecer", name: "Especificar" };
+  const ran = (cmds: string[], key: string) => cmds.some((c) => c.includes(` ${key}"`) || c.includes(` ${key} `));
+
+  it("automação (a forma do cascade: sem origin = autorun) ESPERA na fila; o operador passa NA FRENTE dela", async () => {
+    const gov = makeGovernorDouble();
+    const { engine, cmds } = makeEngine(async () => null, { capacityGate: gov.gate });
+    engine.runSkill("acme", "auto-1", "harness-enrich", enrich);
+    engine.runSkill("acme", "op-1", "harness-enrich", enrich, { origin: "manual" });
+    await flush();
+    expect(ran(cmds, "acme/auto-1")).toBe(false);
+    expect(ran(cmds, "acme/op-1")).toBe(true);
+    expect(engine.isInFlight("acme", "auto-1")).toBe(true); // retido NA FILA, não recusado
+    expect(gov.reported.engine).toEqual(["acme/auto-1"]);
+    expect(gov.asked).toContain("automation");
+  });
+
+  it("merge-train (conflict-redrive) também é automação", async () => {
+    const gov = makeGovernorDouble();
+    const { engine, cmds } = makeEngine(async () => null, { capacityGate: gov.gate });
+    engine.runSkill("acme", "rd-1", "harness-do", codeDef, { origin: "conflict-redrive" });
+    await flush();
+    expect(cmds).toEqual([]);
+    expect(gov.reported.engine).toEqual(["acme/rd-1"]);
+  });
+
+  it("LIGHT retida e nada rodando ⇒ RE-ARMA (antes só a heavy re-armava); o timer admite quando a janela libera", async () => {
+    const gov = makeGovernorDouble();
+    const { engine, cmds, pumpTimers } = makeEngine(async () => null, { capacityGate: gov.gate });
+    engine.runSkill("acme", "light-h", "harness-enrich", enrich);
+    await flush();
+    expect(cmds).toEqual([]);
+    expect(pumpTimers).toHaveLength(1);
+    expect(pumpTimers[0].ms).toBe(PUMP_RETRY_MS);
+    pumpTimers[0].run(); // 30s depois, ainda retida ⇒ re-arma (retenta, não desiste)
+    await flush();
+    expect(cmds).toEqual([]);
+    expect(pumpTimers).toHaveLength(2);
+    gov.release(); // a janela libera SEM borda nenhuma (o dia virou)
+    pumpTimers[1].run();
+    await flush();
+    expect(ran(cmds, "acme/light-h")).toBe(true);
+    expect(gov.reported.engine).toEqual([]); // nada mais retido
+  });
+
+  it("HEAVY retida re-arma igual, e é admitida pela BORDA do governador sem esperar o timer", async () => {
+    const gov = makeGovernorDouble();
+    const { engine, cmds, pumpTimers } = makeEngine(async () => null, { capacityGate: gov.gate });
+    engine.runSkill("acme", "heavy-h", "harness-do", codeDef);
+    await flush();
+    expect(cmds).toEqual([]);
+    expect(pumpTimers).toHaveLength(1);
+    gov.open(); // a trava saiu / leitura nova: o governador avisa
+    await flush();
+    expect(ran(cmds, "acme/heavy-h")).toBe(true);
+  });
+
+  it("MANUAL vindo de um agente ESCOPADO (o token do copiloto) é automação; pelo token full do operador, não", async () => {
+    const gov = makeGovernorDouble();
+    const { engine, cmds } = makeEngine(async () => null, { capacityGate: gov.gate });
+    runWithMcpActor({ level: "orch", tokenEnv: "AGILEHARNESS_MCP_TOKEN_ORCH" }, () =>
+      engine.runSkill("acme", "via-orch", "harness-enrich", enrich, { origin: "manual" }),
+    );
+    runWithMcpActor({ level: "full" }, () => engine.runSkill("acme", "via-full", "harness-enrich", enrich, { origin: "manual" }));
+    await flush();
+    expect(ran(cmds, "acme/via-orch")).toBe(false);
+    expect(ran(cmds, "acme/via-full")).toBe(true);
+  });
+
+  it("o lote de um agente escopado: o dependente liberado DEPOIS (num settle, sem ator) segue automação e espera", async () => {
+    const gov = makeGovernorDouble(false); // aberto: A roda
+    const graph = new DependencyGraph();
+    const { engine, cmds, children } = makeEngine(async () => null, { committed: false, depGraph: graph, capacityGate: gov.gate });
+    runWithMcpActor({ level: "orch" }, () => {
+      engine.enqueueWithDeps("sm", "GA", "harness-do", codeDef, []);
+      engine.enqueueWithDeps("sm", "GB", "harness-do", codeDef, ["sm/GA"]);
+    });
+    await flush();
+    expect(cmds).toHaveLength(1);
+    gov.hold();
+    children[0].emit("close", 0); // GA ok → o grafo libera GB num callback de settle
+    await flush();
+    expect(graph.isBlocked("sm", "GB")).toBe(false);
+    expect(ran(cmds, "sm/GB")).toBe(false); // o iniciador foi fixado no ENFILEIRAMENTO
+    expect(gov.reported.engine).toEqual(["sm/GB"]);
+  });
+
+  it("o mesmo lote pedido pelo OPERADOR: o dependente liberado depois passa mesmo com a automação retida", async () => {
+    const gov = makeGovernorDouble(false);
+    const graph = new DependencyGraph();
+    const { engine, cmds, children } = makeEngine(async () => null, { committed: false, depGraph: graph, capacityGate: gov.gate });
+    engine.enqueueWithDeps("sm", "OA", "harness-do", codeDef, []);
+    engine.enqueueWithDeps("sm", "OB", "harness-do", codeDef, ["sm/OA"]);
+    await flush();
+    gov.hold();
+    children[0].emit("close", 0);
+    await flush();
+    expect(ran(cmds, "sm/OB")).toBe(true);
+    children[1].emit("close", 0);
+    await flush();
+  });
+
+  it("trava DURA: stopAutomationRuns para só o run AUTOMÁTICO em voo; o do operador segue", async () => {
+    const gov = makeGovernorDouble(false);
+    const { engine, cmds, children, finishes } = makeEngine(async () => null, { capacityGate: gov.gate });
+    engine.runSkill("acme", "auto-run", "harness-enrich", enrich);
+    engine.runSkill("acme", "op-run", "harness-enrich", enrich, { origin: "manual" });
+    await flush();
+    expect(cmds).toHaveLength(2);
+    const stopped = await engine.stopAutomationRuns("teste");
+    expect(stopped).toEqual([{ board: "acme", cardId: "auto-run", trigger: "harness-enrich" }]);
+    children[0].emit("close", null, "SIGTERM"); // a árvore do automático cai
+    await flush();
+    await flush();
+    expect(finishes).toContainEqual(expect.objectContaining({ cardId: "auto-run", outcome: "cancelled" }));
+    expect(finishes.some((f) => f.cardId === "op-run")).toBe(false);
+    expect(engine.isInFlight("acme", "op-run")).toBe(true);
+  });
+
+  it("um job automático CANCELADO na fila não fica preso atrás do governador — finaliza na hora", async () => {
+    const gov = makeGovernorDouble();
+    const { engine, finishes, cmds } = makeEngine(async () => null, { capacityGate: gov.gate });
+    engine.runSkill("acme", "cx", "harness-enrich", enrich);
+    await flush();
+    await engine.forceRelease("acme", "cx");
+    await flush();
+    expect(finishes).toContainEqual(expect.objectContaining({ cardId: "cx", outcome: "cancelled" }));
+    expect(cmds).toEqual([]); // cancelado sem nunca spawnar
+  });
+
+  it("o governador que LANÇA segura a automação (fail-closed) e re-arma; o operador passa", async () => {
+    const throwing: CapacityGatePort = {
+      admission: (i) => {
+        if (i === "operator") return { admit: true, reason: "operator", detail: "", retryAt: null };
+        throw new Error("boom");
+      },
+      reportHeld: () => {},
+    };
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { engine, cmds, pumpTimers } = makeEngine(async () => null, { capacityGate: throwing });
+    engine.runSkill("acme", "t-auto", "harness-enrich", enrich);
+    await flush();
+    expect(cmds).toEqual([]);
+    expect(pumpTimers).toHaveLength(1);
+    engine.runSkill("acme", "t-op", "harness-enrich", enrich, { origin: "manual" });
+    await flush();
+    expect(ran(cmds, "acme/t-op")).toBe(true);
+    err.mockRestore();
   });
 });

@@ -24,6 +24,7 @@ import {
   type OrchestratorState,
 } from "./orchestrator-state";
 import { spawnOrchestrator } from "./orchestrator-spawn";
+import { getCapacityGovernor } from "./capacity-service";
 import { flushAgentActions, readAgentActions } from "./agent-actions";
 import { deriveRunAttempt } from "./noop-attribution";
 import { getCardClaims } from "./claims";
@@ -118,6 +119,8 @@ export function buildTickDeps(overrideBoards?: ActiveBoard[], reason?: string): 
   // hasWork. WS-12 — consumed by recordOutcome for the honest stand-down; the per-item BUMP no longer reads it
   // (it re-collects at the run's END and attributes by the ledger). Per-tick (like sigByBoard).
   const idsByBoard = new Map<string, string[]>();
+  // O motivo do governador de capacidade, por board, para a frase do stand-down (per-tick, como sigByBoard).
+  const capacityDetailByBoard = new Map<string, string>();
   return {
     enabled: loadRunnerConfig().orchestrator?.enabled === true, // re-read → um toggle vale sem restart
     reason,
@@ -184,6 +187,14 @@ export function buildTickDeps(overrideBoards?: ActiveBoard[], reason?: string): 
     // O passe de recuperação do caminho sem-trabalho: $0, sem spawn, só sob prova (ver runDeployRecoveryPass).
     recoveryPass: async (board) => {
       await runBoardRecoveryPass(board);
+    },
+    // O tick é trabalho AUTOMÁTICO: o spawn do LLM passa pela janela da conta (capacity-governor). O re-arme é a
+    // própria cadência do tick + o wake — nada fica para trás, só espera.
+    capacityHeld: (board) => {
+      const gate = getCapacityGovernor().admission("automation");
+      if (gate.admit) return null;
+      capacityDetailByBoard.set(board, gate.detail);
+      return gate.detail;
     },
     spawn: async (board, mode, spawnReason) => {
       // pega o lease do tick ANTES de spawnar (o run em voo bloqueia o próximo) e o solta se o spawn não sair.
@@ -293,6 +304,7 @@ export function buildTickDeps(overrideBoards?: ActiveBoard[], reason?: string): 
         // stand-down por lease diz a verdade completa em vez de "só fiquei de fora".
         tickInFlight: leaseHeldByTick(s, Date.now()),
         actionableCount,
+        capacityDetail: capacityDetailByBoard.get(board),
       });
       if (said) await appendCopilotActivity(board, said);
     },

@@ -40,6 +40,9 @@ import { resolveRunBase } from "./run-base";
 const UI_SURFACE_EVIDENCE_PATH_CAP = 5;
 import { getMergeQueue, type MergeQueuePort } from "./merge-queue";
 import { serialCommit, type CommitSerializer } from "./commit-serializer";
+import { getCapacityGovernor, type CapacityGatePort, type StoppedRun } from "./capacity-service";
+import { initiatorFromOrigin, type GateVerdict, type Initiator } from "./capacity-governor";
+import { isScopedActor } from "@/lib/storymap/mcp/actor";
 import { classifyTrigger, isVpsOverloaded, probeVpsResources, type RunLane, type VpsResources } from "./scheduler";
 import { ADVANCE_ON_SUCCESS_SKILLS, capTier, CODE_SKILLS, FULL_AUTONOMY_SKILLS, REQUIRES_CODE_ARTIFACTS_SKILLS, systemPromptFor, tierOf } from "./skill-registry";
 import { appendTransition } from "./transitions";
@@ -823,8 +826,11 @@ export type PumpTimerFn = (fn: () => void, ms: number) => PumpTimer;
  * redundant (and a busy-loop while the box is legitimately saturated). The light lane can't strand — it
  * has no level gate — so heavy queued + zero running is the whole condition. PURE.
  */
-export function pumpRetryNeeded(running: number, heavyQueued: number): boolean {
-  return running === 0 && heavyQueued > 0;
+export function pumpRetryNeeded(running: number, heavyQueued: number, governorHeld = 0): boolean {
+  // O governador de capacidade é o SEGUNDO portão de nível, e vale para as DUAS lanes: um trabalho automático
+  // retido pela janela da conta (ritmo do dia, teto de 5h, trava) também não tem borda que o acorde — o dia
+  // vira, a janela reseta, o operador solta a trava, e nenhum run assenta por isso.
+  return running === 0 && (heavyQueued > 0 || governorHeld > 0);
 }
 
 /**
@@ -1197,6 +1203,14 @@ export class RunnerEngine {
   // so getQueueInfo can report a card's lane + 0-indexed position without changing the closures.
   private lightQueueKeys: string[] = [];
   private heavyQueueKeys: string[] = [];
+  // O GOVERNADOR DE CAPACIDADE: quem iniciou cada job da fila, em lockstep com as filas/keys acima. O pump
+  // admite o operador sempre e a automação só quando o governador deixa — então precisa saber qual é qual.
+  private lightQueueInitiators: Initiator[] = [];
+  private heavyQueueInitiators: Initiator[] = [];
+  // `${board}/${id}` → quem iniciou o run em voo/na fila (e o trigger + sessão), para a trava DURA parar só a
+  // automação e para os re-dispatches internos (resume, fallback) herdarem o iniciador. A sessão é a chave de
+  // posse: um teardown só apaga a entrada que é DELE.
+  private runMeta = new Map<string, { initiator: Initiator; trigger: TriggerId; sessionId: string }>();
   private running = 0; // total in-flight across BOTH lanes (drives the global maxConcurrent ceiling)
   private runningHeavy = 0; // subset of `running` in the heavy lane (light = running - runningHeavy)
   private completionListeners = new Set<(ev: RunCompletion) => void>();
@@ -1393,7 +1407,13 @@ export class RunnerEngine {
   // sobrescrevia a declaração do repositório — o train já lia o declarado, as réguas de ciclo de vida não
         stageBranch: loadRunnerConfig().autorun.staging?.branch ?? "stage",
       }),
+    // O GOVERNADOR DE CAPACIDADE (capacity-service.ts): a admissão do trabalho AUTOMÁTICO pela janela real da
+    // assinatura. DI (um dublê nos testes); prod recebe o singleton do processo. LAST param, pela regra acima.
+    private capacityGate: CapacityGatePort = getCapacityGovernor(),
   ) {
+    // Quando a automação volta a poder entrar (trava solta, dia novo, leitura nova), re-pumpa NA HORA — o timer
+    // de trabalho encalhado é só a rede de segurança.
+    this.capacityGate.onChange?.(() => this.pump());
     // story-92ldyt: wire the merge train's conflict re-drive back into this engine. When a run branch
     // conflicts and the train re-drives (instead of pausing), it calls this to RE-RUN the generating
     // skill against the now-updated main. Registered once (the engine + queue are both singletons).
@@ -1403,7 +1423,9 @@ export class RunnerEngine {
     // engine-free (it only computes WHO is ready) — the engine does the spawning, here.
     this.onComplete((ev) => {
       for (const e of this.depGraph.onSettled(ev.board, ev.cardId, ev.outcome)) {
-        this.runSkill(e.board, e.cardId, e.trigger, e.def, { origin: "manual" });
+        // O iniciador foi fixado no ENFILEIRAMENTO (dentro do request MCP): aqui, num callback de settle, o ator
+        // já não existe, e derivar agora faria o lote de um agente escopado virar trabalho "do operador".
+        this.runSkill(e.board, e.cardId, e.trigger, e.def, { origin: "manual", initiator: e.initiator });
       }
     });
   }
@@ -1797,6 +1819,9 @@ export class RunnerEngine {
       }
       released = true;
       note = "na fila — lock liberado; re-enfileirar quando quiser";
+      // Finaliza o cancelado AGORA se ele puder sair da fila: um job retido pelo governador de capacidade só
+      // sairia no próximo pump (o timer), e até lá o cancelamento ficaria pendurado com a key reaproveitável.
+      this.pump();
     }
     if (!released) return { released: false, note: "nenhuma run ativa para este card" };
     // WS-8.1: arm the phase-brake. Read the card's resting status AFTER the kill (the cancelled run wrote
@@ -1979,31 +2004,59 @@ export class RunnerEngine {
     // Probe at most ONCE per pump pass: resources don't change within one synchronous drain, and a
     // heavy run is only gated when one is actually waiting (skip the /proc read otherwise).
     let resources: VpsResources | null = null;
+    // O GOVERNADOR DE CAPACIDADE, consultado no máximo UMA vez por passada e só quando um job AUTOMÁTICO é o
+    // próximo da fila — o operador nunca pergunta. Um governador que LANÇA segura a automação (fail-closed) e
+    // o timer de trabalho encalhado re-tenta; ele nunca lança por desenho (capacity-service.ts).
+    let automation: GateVerdict | null = null;
+    const automationAdmitted = (): boolean => {
+      if (automation === null) {
+        try {
+          automation = this.capacityGate.admission("automation");
+        } catch (err) {
+          console.error("[harness-autorun pump] governador de capacidade falhou — automação retida:", err instanceof Error ? err.message : err);
+          automation = { admit: false, reason: "stale", detail: "governador de capacidade indisponível", retryAt: null };
+        }
+      }
+      return automation.admit;
+    };
+    // O índice do próximo job ADMISSÍVEL de uma lane: FIFO entre os admissíveis. Com a automação liberada é
+    // sempre a cabeça; retida, é o primeiro job do operador (que passa na frente de uma fila parada — esperar
+    // atrás de trabalho que não pode andar seria reter o operador, que o governador nunca faz) OU um job já
+    // CANCELADO na fila: ele não spawna nada (start() o finaliza na hora), e deixá-lo preso atrás do
+    // governador manteria um cancelamento pendurado por horas, com a key reaproveitável por um run novo.
+    const nextIndex = (initiators: Initiator[], keys: string[]): number => {
+      if (initiators.length === 0) return -1;
+      if (initiators[0] === "operator" || this.cancelled.has(keys[0]) || automationAdmitted()) return 0;
+      return initiators.findIndex((i, n) => i === "operator" || this.cancelled.has(keys[n]));
+    };
 
     while (this.running < max) {
       const runningLight = this.running - this.runningHeavy;
-      const canLight = this.lightQueue.length > 0 && runningLight < lanes.light.maxConcurrent;
-      let canHeavy = this.heavyQueue.length > 0 && this.runningHeavy < lanes.heavy.maxConcurrent;
-      if (canHeavy) {
+      const li = runningLight < lanes.light.maxConcurrent ? nextIndex(this.lightQueueInitiators, this.lightQueueKeys) : -1;
+      let hi = this.runningHeavy < lanes.heavy.maxConcurrent ? nextIndex(this.heavyQueueInitiators, this.heavyQueueKeys) : -1;
+      if (hi >= 0) {
         try {
           if (resources === null) resources = this.probeResources();
         } catch (err) {
           // probeResources() reads /proc/meminfo — a failure (e.g. restricted env) must not
           // crash the pump; block heavy lane for this pass and retry next pump cycle.
           console.error("[harness-autorun pump] probeResources falhou — heavy lane bloqueada:", err instanceof Error ? err.message : err);
-          canHeavy = false;
+          hi = -1;
         }
         // Hold the heavy run in its queue while the VPS is over the RAM/CPU threshold — without
         // blocking the light lane (its eligibility above is independent of this probe).
-        if (resources && isVpsOverloaded(resources, thresholds)) canHeavy = false;
+        if (resources && isVpsOverloaded(resources, thresholds)) hi = -1;
       }
-      if (!canLight && !canHeavy) break;
+      if (li < 0 && hi < 0) break;
 
       // Prefer the light lane when both are eligible: light runs are cheap + short, so draining them
       // first keeps the board responsive and frees their slots fast for the heavy backlog.
-      const lane: RunLane = canLight ? "light" : "heavy";
-      const job = (lane === "light" ? this.lightQueue : this.heavyQueue).shift()!;
-      (lane === "light" ? this.lightQueueKeys : this.heavyQueueKeys).shift(); // keep keys in lockstep
+      const lane: RunLane = li >= 0 ? "light" : "heavy";
+      const idx = lane === "light" ? li : hi;
+      const job = (lane === "light" ? this.lightQueue : this.heavyQueue).splice(idx, 1)[0];
+      // keys + initiators in lockstep with the queue
+      (lane === "light" ? this.lightQueueKeys : this.heavyQueueKeys).splice(idx, 1);
+      (lane === "light" ? this.lightQueueInitiators : this.heavyQueueInitiators).splice(idx, 1);
       this.running += 1;
       if (lane === "heavy") this.runningHeavy += 1;
       // job() (start) is invoked synchronously so its pre-spawn work keeps its timing, but the
@@ -2020,11 +2073,53 @@ export class RunnerEngine {
         this.pump();
       });
     }
+    // O que o governador está RETENDO agora (o painel conta; o laço dele avisa o que passar de 24h). Só se
+    // reporta o que foi DECIDIDO nesta passada: uma passada que nem consultou o governador (lanes cheias) não
+    // sabe se a automação seria retida, e não pode zerar o relógio de quem já esperava.
+    const automationQueued = this.lightQueueInitiators.includes("automation") || this.heavyQueueInitiators.includes("automation");
+    const gate = automation as GateVerdict | null;
+    const heldKeys = gate && !gate.admit ? this.automationQueuedKeys() : [];
+    if (!automationQueued || gate) {
+      try {
+        this.capacityGate.reportHeld("engine", heldKeys);
+      } catch {
+        /* o registro do retido é escrituração — nunca pode travar o pump */
+      }
+    }
     // The loop above exits either satisfied (nothing queued) or GATED. When it exits gated with nothing
     // running, no future edge exists to re-enter it — see {@link pumpRetryNeeded}. Re-arm on a timer so a
-    // level condition that clears silently (the VPS cooling down) still gets its run admitted.
-    if (pumpRetryNeeded(this.running, this.heavyQueue.length)) this.armPumpRetry();
+    // level condition that clears silently (the VPS cooling down, the capacity window freeing up) still gets
+    // its run admitted.
+    if (pumpRetryNeeded(this.running, this.heavyQueue.length, heldKeys.length)) this.armPumpRetry();
   };
+
+  /** As keys dos jobs AUTOMÁTICOS na fila (as duas lanes) — o que o governador está retendo quando diz não. */
+  private automationQueuedKeys(): string[] {
+    const out: string[] = [];
+    this.lightQueueInitiators.forEach((i, n) => i === "automation" && !this.cancelled.has(this.lightQueueKeys[n]) && out.push(this.lightQueueKeys[n]));
+    this.heavyQueueInitiators.forEach((i, n) => i === "automation" && !this.cancelled.has(this.heavyQueueKeys[n]) && out.push(this.heavyQueueKeys[n]));
+    return out;
+  }
+
+  /**
+   * A TRAVA DURA do governador de capacidade: para os runs AUTOMÁTICOS que estão EXECUTANDO (o do operador
+   * segue) e diz quais foram, para o governador re-armá-los quando a trava sair. Usa o mesmo cancelamento do
+   * operador (forceRelease): árvore do processo derrubada, desfecho `cancelled`, card onde estava. Os que
+   * estão na FILA não precisam disto — o pump já não os admite.
+   */
+  async stopAutomationRuns(reason: string): Promise<StoppedRun[]> {
+    const stopped: StoppedRun[] = [];
+    for (const [key, meta] of [...this.runMeta]) {
+      if (meta.initiator !== "automation" || !this.children.has(key)) continue;
+      const slash = key.indexOf("/");
+      const board = key.slice(0, slash);
+      const cardId = key.slice(slash + 1);
+      this.registry.appendLog(board, cardId, "system", `■ parado pela trava de capacidade: ${reason}`);
+      const r = await this.forceRelease(board, cardId);
+      if (r.released) stopped.push({ board, cardId, trigger: meta.trigger });
+    }
+    return stopped;
+  }
 
   /**
    * The stranded-work timer: ONE at a time, self-clearing, `unref`'d so it never holds the process open.
@@ -2112,6 +2207,12 @@ export class RunnerEngine {
        */
       column?: string;
       noProgressRuns?: number;
+      /**
+       * Quem iniciou este run — o que o GOVERNADOR DE CAPACIDADE lê (o operador nunca espera; a automação passa
+       * pelo portão). Ausente ⇒ derivado de `origin` + do ator MCP da chamada ({@link initiatorFromOrigin}).
+       * Os re-dispatches internos (resume, fallback) passam o do run original.
+       */
+      initiator?: Initiator;
     } = {},
   ): RunAttempt {
     const key = `${board}/${cardId}`;
@@ -2157,6 +2258,10 @@ export class RunnerEngine {
     // the same transcript and the journal keys it identically), instead of minting a fresh one.
     const sessionId = opts.resumeSessionId ?? newRunSessionId();
     const origin = opts.origin ?? "autorun";
+    // Quem iniciou: o que o chamador disse, senão a origem + o ator MCP DESTA chamada (lido agora, na cadeia
+    // síncrona do request — depois o AsyncLocalStorage não existe mais).
+    const initiator: Initiator = opts.initiator ?? initiatorFromOrigin(origin, isScopedActor());
+    this.runMeta.set(key, { initiator, trigger, sessionId });
     // WS-8.1: an EXPLICIT re-run (a human "Rodar agora"/enqueue = "manual", or a merge-train re-drive =
     // "conflict-redrive") is an unmistakable resume intent → drop any cancel phase-brake on this card so the
     // caller's run (and the cascade it feeds) proceeds. An "autorun" spawn does NOT clear it — that is the
@@ -2217,6 +2322,7 @@ export class RunnerEngine {
     const releaseInFlight = () => {
       this.inFlight.delete(key);
       this.children.delete(key);
+      if (this.runMeta.get(key)?.sessionId === sessionId) this.runMeta.delete(key);
     };
 
     const start = async () => {
@@ -2249,6 +2355,7 @@ export class RunnerEngine {
       const release = () => {
         this.children.delete(key);
         this.inFlight.delete(key); // idempotent (Set.delete on missing key is a no-op)
+        if (this.runMeta.get(key)?.sessionId === sessionId) this.runMeta.delete(key);
         releaseSlot();
         // WS-4.2 — the reservation dies with the run on EVERY path (settle / watchdog timeout / cancel /
         // launch error / max-turns), because release() is the universal teardown. Fire-and-forget: freeing a
@@ -3438,6 +3545,7 @@ export class RunnerEngine {
             // max-turns resume (this is not a fallback) so it stays monotonic/durable for the whole card.
             resumeFallbackCount: opts.resumeFallbackCount,
             origin,
+            initiator,
             headroomUrl: opts.headroomUrl,
             driveCount: opts.driveCount,
             // ADR-063 (4b): a max-turns resume is the SAME logical cascade attempt — carry the loop-guard
@@ -3486,6 +3594,7 @@ export class RunnerEngine {
         // boot recovery re-injects it and the cap still bites (it no longer resets to 0 on every boot).
         const re = this.runSkill(board, cardId, trigger, def, {
           origin,
+          initiator,
           headroomUrl: opts.headroomUrl,
           driveCount: opts.driveCount,
           resumeFallbackCount: attempt,
@@ -3807,6 +3916,7 @@ export class RunnerEngine {
 
     (lane === "heavy" ? this.heavyQueue : this.lightQueue).push(start);
     (lane === "heavy" ? this.heavyQueueKeys : this.lightQueueKeys).push(key); // parallel to the queue
+    (lane === "heavy" ? this.heavyQueueInitiators : this.lightQueueInitiators).push(initiator); // idem
     this.pump();
     return { ok: true };
   }
@@ -3829,8 +3939,11 @@ export class RunnerEngine {
     trigger: TriggerId,
     def: StatusDef,
     deps: string[] = [],
-    opts: { origin?: "autorun" | "manual"; headroomUrl?: string | null } = {},
+    opts: { origin?: "autorun" | "manual"; headroomUrl?: string | null; initiator?: Initiator } = {},
   ): EnqueueResult {
+    const origin = opts.origin ?? "manual";
+    // Fixado AGORA, na cadeia do request (o ator MCP ainda existe) — um dependente liberado depois herda isto.
+    const initiator: Initiator = opts.initiator ?? initiatorFromOrigin(origin, isScopedActor());
     const aliveDeps = deps.filter((d) => {
       const slash = d.indexOf("/");
       if (slash <= 0 || slash === d.length - 1) return false; // not a "board/cardId" key
@@ -3841,8 +3954,9 @@ export class RunnerEngine {
 
     if (aliveDeps.length === 0) {
       const attempt = this.runSkill(board, cardId, trigger, def, {
-        origin: opts.origin ?? "manual",
+        origin,
         headroomUrl: opts.headroomUrl,
+        initiator,
       });
       if (!attempt.ok) {
         return { id: cardId, board, lane: null, position: null, estimatedStart: null, blocked: false, reason: attempt.reason };
@@ -3866,6 +3980,7 @@ export class RunnerEngine {
       depsRemaining: new Set(aliveDeps),
       failedDeps: new Set(),
       blockedSince: Date.now(),
+      initiator,
     });
     return {
       id: cardId,

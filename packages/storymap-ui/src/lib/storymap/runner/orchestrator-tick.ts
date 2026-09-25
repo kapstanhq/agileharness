@@ -21,6 +21,8 @@ export type OrchestratorTickStatus =
   | "skipped-backoff"
   | "skipped-spawn-failed"
   | "skipped-spawn-broken"
+  /** o GOVERNADOR DE CAPACIDADE reteve o spawn (janela da conta, ritmo do dia, trava) — o próximo tick re-tenta */
+  | "skipped-capacity"
   | "error";
 
 /** One active board the tick considers: its id + its declared mode (off boards are pre-filtered out). */
@@ -68,6 +70,11 @@ export interface OrchestratorTickDeps {
    *  seguida; o que ele escala já chega ao humano com a análise. Opcional (ausente ⇒ sem steward,
    *  comportamento legado) e best-effort: a impl nunca lança, então nunca troca um spawn por um `error`. */
   stewardPass?: (board: string) => Promise<void>;
+  /** O GOVERNADOR DE CAPACIDADE: o tick é trabalho AUTOMÁTICO, então o spawn do LLM passa pelo mesmo portão
+   *  da janela da conta que o engine. Devolve o MOTIVO quando retido, null quando pode spawnar. Consultado por
+   *  ÚLTIMO, logo antes do spawn: tudo o que vem antes é $0 (inclusive o steward), e só o LLM gasta a janela.
+   *  O re-arme é o próprio tick (a cadência + o wake). Opcional (ausente ⇒ sem governador, legado). */
+  capacityHeld?: (board: string) => Promise<string | null> | string | null;
   /** O passe de RECUPERAÇÃO ($0, sem spawn) para o caminho `skipped-no-work`. Só o playbook 8.4: quando TODOS
    *  os itens caem no backoff anti-noop, `hasWork` fica false para sempre e o steward completo — que roda
    *  depois dele — nunca alcança os itens travados. A recuperação ficaria atrás da própria condição que ela
@@ -148,6 +155,11 @@ export async function runOrchestratorTick(deps: OrchestratorTickDeps): Promise<O
       // com trabalho acionável e dentro do budget), mas ANTES de gastar um token. Ele destrava o que é FATO
       // mecânico; o LLM que nasce logo abaixo pega o board já limpo disso.
       await deps.stewardPass?.(board);
+      if (deps.capacityHeld && (await deps.capacityHeld(board)) !== null) {
+        out.push("skipped-capacity");
+        await deps.recordOutcome?.(board, "skipped-capacity");
+        continue;
+      }
       const started = await deps.spawn(board, mode, deps.reason);
       if (started === false) {
         // o run não nasceu ⇒ não é um tick "gasto": não debita budget, e o operador vê o motivo real.

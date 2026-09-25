@@ -96,6 +96,7 @@ import {
   SPAWN_RETRY_WINDOW_MS,
   type SessionSpawnDeps,
 } from "@/lib/storymap/runner/session-spawn";
+import { getCapacityGovernor } from "@/lib/storymap/runner/capacity-service";
 import { resolveCardRoute } from "@/lib/storymap/runner/config";
 // WS-6.5 — the deterministic "what next?" ranking (pure) + its IO half.
 import { collectWorkCandidates, excludedReason, rankWorkCandidates } from "@/lib/storymap/runner/suggest-work";
@@ -170,6 +171,8 @@ export const sessionSpawnDeps = (): SessionSpawnDeps => {
     // drive the pipeline and publish, but never open a shell through MCP nor delete.
     mcpToken: process.env.AGILEHARNESS_MCP_TOKEN_ORCH,
     port: SERVICE_PORT,
+    // O governador de capacidade: a sessão aberta pela AUTOMAÇÃO (o copiloto) passa pela janela da conta.
+    admission: (initiator) => getCapacityGovernor().admission(initiator),
   };
 };
 
@@ -2480,15 +2483,18 @@ export function registerDevTools(server: McpServer): void {
         // or re-prioritise?) or the holder (take another card). `isError` would hide the structure from it.
         return json({
           ok: false,
-          error: res.holder ? "card_claimed" : res.queue ? "no_capacity" : "spawn_failed",
+          error: res.code === "capacity_held" ? "capacity_held" : res.holder ? "card_claimed" : res.queue ? "no_capacity" : "spawn_failed",
           motivo: res.reason,
           ...(res.queue ? { fila: res.queue } : {}),
           ...(res.holder ? { holder: { actor: res.holder.actor, kind: res.holder.kind, expiresAt: res.holder.expiresAt } } : {}),
-          proximo: res.queue
-            ? "espere uma vaga (claude_sessions mostra quem está rodando) ou rode um papel sem árvore (triage/steward)"
-            : res.holder
-              ? "suggest_work({board}) devolve o próximo card livre"
-              : undefined,
+          proximo:
+            res.code === "capacity_held"
+              ? "a janela de uso da conta está retendo trabalho automático — encerre o ciclo e tente no próximo; o operador vê o motivo no painel de capacidade"
+              : res.queue
+                ? "espere uma vaga (claude_sessions mostra quem está rodando) ou rode um papel sem árvore (triage/steward)"
+                : res.holder
+                  ? "suggest_work({board}) devolve o próximo card livre"
+                  : undefined,
         });
       }
       return json({

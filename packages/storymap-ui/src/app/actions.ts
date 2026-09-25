@@ -2126,6 +2126,9 @@ export async function approveDataDeletionAction(input: {
     }
     const res = getRunnerEngine().runSkill(input.boardId, approved.id, def.trigger, def, {
       headroomUrl: resolveHeadroomUrl(config, process.env),
+      // Uma APROVAÇÃO é decisão do operador: o run que ela dispara não espera o governador de capacidade (sem
+      // origin explícita o engine o leria como autorun). Um agente escopado que chegasse aqui seguiria automação.
+      initiator: isScopedActor() ? "automation" : "operator",
     });
     if (!res.ok) {
       return { ok: false, error: res.reason === "in-flight" ? "Esse card já está rodando." : res.detail };
