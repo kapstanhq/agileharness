@@ -84,6 +84,7 @@ import { DependencyGraph, getDependencyGraph } from "./dep-graph";
 import type { EnqueueResult, RunnerFailure } from "./types";
 import type { AutonomyTier, BoardConfig, Card, RunnerSettings, StatusDef, TriggerId } from "@/lib/storymap/types";
 import { AUTONOMY_TIERS } from "@/lib/storymap/types";
+import { isConducted } from "@/lib/storymap/driver";
 import { resolvedClaudeBin } from "./claude-bin";
 
 /** The headless `/<skill>` command for a trigger. A trigger id IS the skill name (uma convenção
@@ -2342,6 +2343,34 @@ export class RunnerEngine {
       // Force-released while waiting for a concurrency slot → cancel cleanly (never spawned, no
       // worktree allocated yet).
       if (this.cancelled.delete(key)) return finishCancelled();
+
+      // A CONDUCTED card (routing.driver: conductor) never gets a column skill — on ANY dispatch path the
+      // cascade shell does not already cover: a human "Rodar agora"/run_skill/enqueue, a recovery resume, a
+      // conflict re-drive of a run that started before the card was handed to its conductor. Read FRESH here
+      // (not the enqueue-time snapshot): the driver may have landed while this run waited for a slot. Settled
+      // like a queued cancel — a clean "cancelled" finish with NO telemetry row and NO RunnerFailure — because
+      // the alternative (letting it reach the claim and settle as a `claim-refused` no-op) is exactly the
+      // "travado" noise on Inbox a conducted card must never produce. The card console still says why, for the
+      // human who pressed the button.
+      const fresh = await this.readCard(board, cardId).catch(() => null);
+      if (isConducted(fresh)) {
+        console.debug(`${tag} card conduzido (routing.driver: conductor) — run de coluna não disparado`);
+        try {
+          this.registry.appendLog(
+            board,
+            cardId,
+            "system",
+            "— não rodou: o card é conduzido por uma sessão condutora (routing.driver: conductor). Para devolvê-lo ao pipeline de colunas: set_card_driver com driver null.",
+          );
+          this.registry.finish(board, cardId);
+          void this.journal.recordFinish(board, cardId, "cancelled", Date.now());
+        } finally {
+          release();
+          this.pump();
+        }
+        this.emitComplete({ board, cardId, trigger, outcome: "cancelled" });
+        return;
+      }
 
       // WS-5.3 — zero-token PRE-CHECK: BEFORE allocating a worktree or spawning `claude -p`, run cheap
       // in-process checks; if one CONCLUSIVELY finds nothing to do, settle as a $0 no-op with NO process.

@@ -508,3 +508,122 @@ describe("recycleSession — troca o PROCESSO, preserva o AGENTE (AC5)", () => {
     expect(res.ok).toBe(false);
   });
 });
+
+// ── conductor-core — a sessão CONDUTORA ────────────────────────────────────────────────────────────────
+// O prompt precisa COMEÇAR pelo comando da skill (senão o CLI lê "/harness-conductor …" como prosa enterrada
+// depois do contrato, e a skill "talvez" carregue); a linha do registro carrega o driver (é o que a dispatch
+// conta contra o cap); e uma reciclagem acorda DENTRO da skill de novo.
+describe("sessão condutora — comando na frente, driver no registro, reciclagem re-invoca", () => {
+  it("buildSessionPrompt: o comando é a PRIMEIRA linha; o contrato segue abaixo", () => {
+    const p = buildSessionPrompt({
+      command: "/harness-conductor acme/story-1",
+      sessionId: "s-1",
+      agentId: "a-1",
+      role: "implement",
+      task: "conduzir",
+      board: "acme",
+      cardId: "story-1",
+      worktreePath: "/w",
+      branch: "agent/s-1",
+    });
+    expect(p.split("\n")[0]).toBe("/harness-conductor acme/story-1");
+    expect(p).toContain("worktree_submit");
+    // sem comando, nada muda (as outras sessões)
+    expect(buildSessionPrompt({ sessionId: "s", agentId: "a", role: "implement", task: "t" }).startsWith("Você é um agente")).toBe(true);
+  });
+
+  it("spawnWorkSession grava `driver` na linha da sessão e o comando chega no argv do tmux", async () => {
+    const commands: string[] = [];
+    const deps = spawnDeps({
+      tmux: {
+        exists: async () => false,
+        create: async (_n: string, command: string) => {
+          commands.push(command);
+          return { ok: true };
+        },
+        survives: async () => true,
+        kill: async () => {},
+      } as never,
+    });
+    // triage = o caminho SEM árvore (o registerSession); o de árvore passa pela mesma porta de campos.
+    const res = await spawnWorkSession(deps, {
+      role: "triage",
+      task: "conduzir",
+      board: "acme",
+      cardId: "story-1",
+      driver: "conductor",
+      command: "/harness-conductor acme/story-1",
+    });
+    expect(res.ok).toBe(true);
+    const [stored] = await deps.worktree.store.load();
+    expect(stored.driver).toBe("conductor");
+    expect(commands[0]).toContain("'/harness-conductor acme/story-1\n\n");
+  });
+
+  it("recycleSession de um condutor: o prompt novo começa pelo comando da skill (+ o handoff)", async () => {
+    const store = memSessionStore([
+      {
+        sessionId: "s-live",
+        agentId: "a-live",
+        role: "implement",
+        task: "conduzir",
+        branch: "agent/s-live",
+        worktreePath: "/w",
+        baseCommit: "b",
+        board: "acme",
+        cardId: "story-1",
+        driver: "conductor",
+        tmuxSession: "agent-velha",
+        openedAt: new Date(0).toISOString(),
+        heartbeatAt: new Date(0).toISOString(),
+      },
+    ]);
+    const commands: string[] = [];
+    const deps = spawnDeps({
+      worktree: { ...spawnDeps().worktree, store } as never,
+      tmux: {
+        exists: async () => false,
+        create: async (_n: string, command: string) => {
+          commands.push(command);
+          return { ok: true };
+        },
+        survives: async () => true,
+        kill: async () => {},
+      } as never,
+    });
+    const res = await recycleSession(deps, { sessionId: "s-live" });
+    expect(res.ok).toBe(true);
+    expect(commands[0]).toContain("'/harness-conductor acme/story-1\n\n");
+    expect(commands[0]).toContain("RECICLAGEM");
+  });
+});
+
+// ── o CENSO dos chamadores do spawn de sessão (a família tmux que o lint de env declara fora do alcance) ──────
+// `spawn-chokepoint.test.ts` recenseia quem spawna o binário do Claude DIRETO; a família mediada por tmux
+// (`spawnWorkSession`) ficava sem censo. Agora há um SEGUNDO chamador — a dispatch do condutor, que abre sessões
+// SEM uma chamada humana — e ele não pode nascer calado: um chamador novo reprova aqui até ser registrado.
+describe("censo — quem chama spawnWorkSession", () => {
+  const SPAWN_WORK_SESSION_CALLERS: Record<string, string> = {
+    "src/lib/storymap/mcp/dev-tools.ts": "claude_new — o operador (ou o copiloto) abre uma sessão da frota",
+    "src/lib/storymap/runner/fleet-deps.ts": "a dispatch do CONDUTOR — um card entra em `conductor.fromStatus` e ganha uma sessão",
+  };
+
+  it("os chamadores são exatamente os registrados", async () => {
+    const { readdirSync, readFileSync, statSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const walk = (dir: string, acc: string[] = []): string[] => {
+      for (const e of readdirSync(dir)) {
+        const p = join(dir, e);
+        if (statSync(p).isDirectory()) walk(p, acc);
+        else if (/\.(ts|tsx)$/.test(p) && !/\.test\.(ts|tsx)$/.test(p)) acc.push(p);
+      }
+      return acc;
+    };
+    const callers = walk("src")
+      .filter((f) => !f.endsWith("runner/session-spawn.ts"))
+      .filter((f) => /\bspawnWorkSession\s*\(/.test(readFileSync(f, "utf8")))
+      .map((f) => f.replace(/\\/g, "/"))
+      .sort();
+    expect(callers).toEqual(Object.keys(SPAWN_WORK_SESSION_CALLERS).sort());
+  });
+});

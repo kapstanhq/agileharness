@@ -45,13 +45,21 @@ export function roleOf(record: Pick<TelemetryRecord, "role">): TelemetryRole {
   return record.role ?? "run";
 }
 
+/**
+ * What a record's `trigger` may name: a column/on-demand skill (a RUN), or the skill an agent SESSION ran
+ * (`harness-conductor` — the conductor's own spend, recorded when its session ends, role `session`). Widened
+ * instead of lying with a cast: a consumer that needs a real {@link TriggerId} (the handoff, the step history)
+ * must narrow, and the compiler now says so.
+ */
+export type TelemetryTrigger = TriggerId | "harness-conductor";
+
 /** One settled run, the persisted unit of telemetry. Keyed by `id` (the run's sessionId). */
 export interface TelemetryRecord {
-  /** sessionId of the run — unique per run (a re-run mints a fresh one). */
+  /** sessionId of the run — unique per run (a re-run mints a fresh one). A SESSION record is `session:<id>`. */
   id: string;
   board: string;
   cardId: string;
-  trigger: TriggerId;
+  trigger: TelemetryTrigger;
   /** epoch ms the child spawned (the run's start). */
   startedAt: number;
   /** wall-clock duration in ms, or null if unknown (e.g. never spawned). */

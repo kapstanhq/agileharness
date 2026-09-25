@@ -93,3 +93,73 @@ export function resolveStaleQuestions(existing: CardQuestion[], today: string): 
       : q,
   );
 }
+
+/** One STRUCTURED question an agent asks through `ask_question` — the shape `harness-grill`/`harness-review`
+ *  write in the card file, now reachable over MCP (so a conductor mid-build asks it on main, at once). */
+export interface StructuredQuestionInput {
+  text: string;
+  context?: string;
+  options?: Array<{ label: string; pros?: string[]; cons?: string[]; recommended?: boolean }>;
+  mode?: "single" | "multi";
+  /** the agent's recommended answer in prose — for a question with NO discrete options. */
+  recommendation?: string;
+}
+
+/**
+ * Why a structured question is malformed — or null. PURE. The rules are the ones the `/perguntas` queue renders
+ * against: a non-empty text; options (when given) 2–8 with non-empty labels; at most ONE `recommended` (two
+ * recommendations are no recommendation); `recommendation` prose only for a question WITHOUT options (with
+ * options the recommendation is the flagged option — two channels for one opinion would disagree eventually).
+ */
+export function structuredQuestionError(q: StructuredQuestionInput): string | null {
+  if (!q.text?.trim()) return "pergunta sem texto";
+  const opts = q.options ?? [];
+  if (opts.length === 1) return `"${q.text.slice(0, 60)}": uma opção só não é escolha — dê 2 ou mais, ou nenhuma (texto livre)`;
+  if (opts.length > 8) return `"${q.text.slice(0, 60)}": ${opts.length} opções — no máximo 8`;
+  if (opts.some((o) => !o.label?.trim())) return `"${q.text.slice(0, 60)}": opção sem rótulo`;
+  if (opts.filter((o) => o.recommended).length > 1) return `"${q.text.slice(0, 60)}": mais de uma opção recomendada — marque no máximo UMA`;
+  if (opts.length && q.recommendation?.trim()) {
+    return `"${q.text.slice(0, 60)}": \`recommendation\` é para pergunta SEM opções — com opções, marque a recomendada com recommended:true`;
+  }
+  return null;
+}
+
+/**
+ * APPEND structured OPEN questions (the same dedup rule as {@link addQuestions}: a text already open verbatim is
+ * not duplicated). Option ids are `o1…oN` within each question. Pure; call {@link structuredQuestionError} first.
+ */
+export function addStructuredQuestions(
+  existing: CardQuestion[],
+  questions: StructuredQuestionInput[],
+  askedBy: string,
+  today: string,
+): CardQuestion[] {
+  const openTexts = new Set(existing.filter((q) => q.status === "open").map((q) => q.text.trim()));
+  let next = existing.slice();
+  for (const raw of questions) {
+    const text = raw.text.trim();
+    if (!text || openTexts.has(text)) continue;
+    openTexts.add(text);
+    const options = (raw.options ?? []).map((o, i) => ({
+      id: `o${i + 1}`,
+      label: o.label.trim(),
+      ...(o.pros?.length ? { pros: o.pros.map((p) => p.trim()).filter(Boolean) } : {}),
+      ...(o.cons?.length ? { cons: o.cons.map((c) => c.trim()).filter(Boolean) } : {}),
+      ...(o.recommended ? { recommended: true } : {}),
+    }));
+    next = [
+      ...next,
+      {
+        id: nextQuestionId(next),
+        text,
+        askedBy,
+        askedAt: today,
+        status: "open" as const,
+        ...(options.length ? { options, mode: raw.mode ?? "single" } : {}),
+        ...(raw.context?.trim() ? { context: raw.context.trim() } : {}),
+        ...(!options.length && raw.recommendation?.trim() ? { recommendation: raw.recommendation.trim() } : {}),
+      },
+    ];
+  }
+  return next;
+}

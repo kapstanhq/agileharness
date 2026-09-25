@@ -57,8 +57,14 @@ export function cardToFrontmatter(card: Card): Record<string, unknown> {
     // by (a non-empty skip set OR a WS4 profile/model-effort cap). Absent ⇒ the rules decide live. The
     // WS4 sub-fields (profile/modelCap/effortCap/rationale) are each emitted sparsely — a caps-only routing
     // (empty skips, express profile) round-trips instead of being dropped as "no override".
+    // `driver` alone is enough to emit the block: a conducted card with no skip set must round-trip, or the
+    // very next app write would hand it back to the column cascade (the stale column run the driver prevents).
     ...(card.routing &&
-    (card.routing.skips?.length || card.routing.profile || card.routing.modelCap || card.routing.effortCap)
+    (card.routing.skips?.length ||
+      card.routing.profile ||
+      card.routing.modelCap ||
+      card.routing.effortCap ||
+      card.routing.driver)
       ? {
           routing: {
             skips: card.routing.skips ?? [],
@@ -68,6 +74,7 @@ export function cardToFrontmatter(card: Card): Record<string, unknown> {
             ...(card.routing.modelCap ? { modelCap: card.routing.modelCap } : {}),
             ...(card.routing.effortCap ? { effortCap: card.routing.effortCap } : {}),
             ...(card.routing.rationale ? { rationale: card.routing.rationale } : {}),
+            ...(card.routing.driver ? { driver: card.routing.driver } : {}),
           },
         }
       : {}),

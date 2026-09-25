@@ -18,13 +18,25 @@ import { consumeGrant, createApprovalRequest, decideApprovalRequest, findMatchin
 import { appendAgentAction } from "@/lib/storymap/runner/agent-actions";
 // WS-6.4 — a frota: reciclar um agente e liberar o claim dele a partir de /processes.
 import { getCardClaims, sessionClaimActor } from "@/lib/storymap/runner/claims";
+import { sessionOwnsCard } from "@/lib/storymap/runner/session-claims";
 import { recycleSession } from "@/lib/storymap/runner/session-spawn";
-import { discardSessionWorktree } from "@/lib/storymap/runner/session-worktree";
+import { allSessions, discardSessionWorktree } from "@/lib/storymap/runner/session-worktree";
 import { supersedeStaleTerminalBlockers } from "@/lib/storymap/runner/findings";
 import { sessionSpawnDeps } from "@/lib/storymap/mcp/dev-tools";
 import { logHumanActionAction } from "./audit-actions";
 import { resolveRouteProfile, routeSkipsValidationError, triggerForCard } from "@/lib/storymap/skip-routing";
-import { addQuestions, answerQuestion, openQuestions, resolveStaleQuestions } from "@/lib/storymap/questions";
+import {
+  addQuestions,
+  addStructuredQuestions,
+  answerQuestion,
+  openQuestions,
+  resolveStaleQuestions,
+  structuredQuestionError,
+  type StructuredQuestionInput,
+} from "@/lib/storymap/questions";
+import { qaApprovalStatuses, reviewApprovalStatuses } from "@/lib/storymap/pipeline-routing";
+import { addOrRefreshFinding, normalizeTasks, tasksError, type AddFindingInput } from "@/lib/storymap/card-evidence";
+import { preserveDriver, withDriver, withoutDriver } from "@/lib/storymap/driver";
 import { boardCardDemands, SEVERITY_RANK, DEPLOY_FAILURE_FINDING_ID, supersedeDeliveryFindingsOnReentry, type Demand, type CockpitItem } from "@/lib/storymap/demands";
 import { collectBoardCockpitItems } from "@/lib/storymap/cockpit-collect";
 import {
@@ -131,6 +143,7 @@ import type {
   BoardConfig,
   BugReport,
   Card,
+  CardDriver,
   CardCommitWarning,
   CardLink,
   CardMode,
@@ -148,6 +161,7 @@ import type {
   RiskDisposition,
   RunnerSettings,
   SystemDef,
+  Task,
   TrashManifest,
   WireframeDoc,
 } from "@/lib/storymap/types";
@@ -258,14 +272,27 @@ export async function answerQuestionAction(input: {
 export async function askQuestionsAction(input: {
   boardId: string;
   cardId: string;
-  texts: string[];
+  texts?: string[];
+  /** STRUCTURED questions (options with pros/cons, one recommended, context) — the shape the /perguntas queue
+   *  renders; appended after the plain `texts`. Backward compatible: omit it and nothing changes. */
+  questions?: StructuredQuestionInput[];
   askedBy?: string;
 }): Promise<Result<{ card: Card }>> {
   await requireSession("askQuestionsAction");
   try {
+    const texts = input.texts ?? [];
+    const structured = input.questions ?? [];
+    if (!texts.some((t) => t.trim()) && !structured.length) {
+      return { ok: false, error: "Nenhuma pergunta: passe `texts` e/ou `questions`." };
+    }
+    for (const q of structured) {
+      const err = structuredQuestionError(q);
+      if (err) return { ok: false, error: `Pergunta estruturada inválida — ${err}.` };
+    }
+    const askedBy = input.askedBy || "operator";
     const card = await updateCardOnDisk(input.boardId, input.cardId, (prev) => ({
       ...prev,
-      questions: addQuestions(prev.questions ?? [], input.texts, input.askedBy || "operator", today()),
+      questions: addStructuredQuestions(addQuestions(prev.questions ?? [], texts, askedBy, today()), structured, askedBy, today()),
     }));
     if (!card) return { ok: false, error: `card não encontrado: ${input.cardId}` };
     revalidateBoard(input.boardId);
@@ -1442,7 +1469,11 @@ async function gateScopedMove(
   args: Record<string, unknown>,
 ): Promise<{ ok: false; error: string } | null> {
   if (!isScopedActor()) return null; // human / UI / internal move → never gated
-  const cls = moveRiskClass(config, toStatus, undefined);
+  // The card changes what the move SPAWNS (entry-effect.ts): a conducted card spawns no column skill, and a
+  // story entering the board's conductor `fromStatus` spawns a conductor session. Unreadable ⇒ the legacy
+  // column-only classification (never less strict than before for a non-conducted card).
+  const moving = await readCard(boardId, cardId).catch(() => null);
+  const cls = moveRiskClass(config, toStatus, undefined, moving);
   if (cls === "write-board") return null; // benign move — the 5.2 guard already handled write-board
   const disp = dispositionFor(config.orchestrator ?? null, cls);
   if (disp === "auto") return null; // (deploy/destructive never resolve auto; run/merge only if the matrix says so)
@@ -3002,14 +3033,11 @@ export async function getDeployFailureLogAction(input: {
   }
 }
 
-/**
- * Statuses where a human REVIEWS the QA outcome — the only columns where approving QA
- * makes sense. `qa-automatizado` (QA / Testes, where harness-qa runs) and `revisao` (Aprovar
- * entrega, gated by hasQaPassed). Stamping qaPassed:true on an earlier column (e.g. a card
- * still in `capturando`) would leave the spec inconsistent with the real pipeline, so
- * approveQaAction rejects it.
- */
-const QA_APPROVAL_STATUSES = ["qa-automatizado", "revisao"] as const;
+// Statuses where approving QA / a review makes sense are RESOLVED FROM THE BOARD'S PIPELINE
+// (qaApprovalStatuses / reviewApprovalStatuses in pipeline-routing.ts): the step that runs harness-qa and the
+// step gated by hasQaPassed; plus the step that runs harness-review for a review. The canonical pipeline
+// resolves them to the historical ids (`qa-automatizado`, `revisao`, `revisar-codigo`), so a board on `_base`
+// behaves exactly as before — and a board that renamed its columns is no longer refused on its own QA step.
 
 /**
  * First-class QA approval (Eixo 3.1): set qaPassed/qaRanAt/qaCommit on a card via the SAME
@@ -3041,10 +3069,11 @@ export async function approveQaAction(input: {
   await requireSession("approveQaAction");
   try {
     const passed = input.qaPassed ?? true;
+    const qaStatuses = qaApprovalStatuses(await readBoardConfig(input.boardId).catch(() => null));
     const updated = await updateCardOnDisk(input.boardId, input.cardId, (card) => {
-      if (!(QA_APPROVAL_STATUSES as readonly string[]).includes(card.status ?? "")) {
+      if (!qaStatuses.includes(card.status ?? "")) {
         throw new Error(
-          `Só dá para aprovar QA num card em revisão humana (${QA_APPROVAL_STATUSES.join(" ou ")}); ` +
+          `Só dá para aprovar QA num card em revisão humana (${qaStatuses.join(" ou ")}); ` +
             `este está em "${card.status ?? "(sem status)"}". Avance o card até QA / Testes (ou rode a skill) antes de aprovar.`,
         );
       }
@@ -3077,14 +3106,6 @@ export async function approveQaAction(input: {
   }
 }
 
-/**
- * Statuses where approving a REVIEW makes sense — the review column (harness-review runs here) plus the
- * downstream human-review columns (`qa-automatizado` / `revisao`), so a human can stamp the review
- * provenance at review time OR retroactively while reconciling a card that already advanced. Stamping
- * reviewedAt on an upstream/autorun column would drift the spec from the real pipeline, so
- * approveReviewAction rejects it. Mirrors QA_APPROVAL_STATUSES.
- */
-const REVIEW_APPROVAL_STATUSES = ["revisar-codigo", "qa-automatizado", "revisao"] as const;
 
 /**
  * First-class REVIEW approval (story-740c8g) — SYMMETRIC to approveQaAction. Sets reviewedAt/reviewCommit
@@ -3110,10 +3131,11 @@ export async function approveReviewAction(input: {
   await requireSession("approveReviewAction");
   try {
     const reviewed = input.reviewed ?? true;
+    const reviewStatuses = reviewApprovalStatuses(await readBoardConfig(input.boardId).catch(() => null));
     const updated = await updateCardOnDisk(input.boardId, input.cardId, (card) => {
-      if (!(REVIEW_APPROVAL_STATUSES as readonly string[]).includes(card.status ?? "")) {
+      if (!reviewStatuses.includes(card.status ?? "")) {
         throw new Error(
-          `Só dá para aprovar a revisão de código num card em Revisão de código (${REVIEW_APPROVAL_STATUSES.join(" ou ")}); ` +
+          `Só dá para aprovar a revisão de código num card em Revisão de código (${reviewStatuses.join(" ou ")}); ` +
             `este está em "${card.status ?? "(sem status)"}". Avance o card até Revisão de código (ou rode a skill) antes de aprovar.`,
         );
       }
@@ -3130,6 +3152,116 @@ export async function approveReviewAction(input: {
     if (!updated) return { ok: false, error: `card não encontrado: ${input.cardId}` };
     revalidateBoard(input.boardId);
     return { ok: true, data: { card: updated } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * `add_finding` — a finding written on MAIN through the single writer, for evidence discovered MID-BUILD (a
+ * budget stop, a verification finding) that cannot wait for the session's final submit. A stable `id` makes it
+ * idempotent (re-adding refreshes the CONTENT, never the status — triage owns the status). Only a NEW finding is
+ * minted `open`. A finding can only HOLD a card back (a blocker closes the hasNoBlockers gate), never push one
+ * forward — which is why this is a plain board write and needs no claim.
+ */
+export async function addFindingAction(input: {
+  boardId: string;
+  cardId: string;
+  finding: AddFindingInput;
+}): Promise<Result<{ id: string; created: boolean; changed: boolean }>> {
+  await requireSession("addFindingAction");
+  try {
+    let outcome: { id: string; created: boolean; changed: boolean } | null = null;
+    const updated = await updateCardOnDisk(input.boardId, input.cardId, (card) => {
+      const res = addOrRefreshFinding(card.findings ?? [], input.finding);
+      if (!res.ok) throw new Error(res.error);
+      outcome = { id: res.id, created: res.created, changed: res.changed };
+      return res.changed ? { ...card, findings: res.findings } : null; // unchanged ⇒ no write (loop-safe)
+    });
+    if (!outcome) return { ok: false, error: `card não encontrado: ${input.cardId}` };
+    if (updated) revalidateBoard(input.boardId);
+    return { ok: true, data: outcome };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * `set_tasks` — the card's task list on MAIN (the evidence `hasTasks`/`hasBuildEvidence` read), written by the
+ * SESSION THAT OWNS THE CARD. Containment: the caller names itself (`sessionId`) and must hold a LIVE claim on
+ * this card as `session:<agentId>` — the list (and every `done: true` in it) is build evidence, and a flip by
+ * someone who does not own the work is the trust-me stamp `mark_tasks_done` was retired for. REPLACES the list.
+ */
+export async function setTasksAction(input: {
+  boardId: string;
+  cardId: string;
+  sessionId: string;
+  tasks: Array<Pick<Task, "id" | "title" | "done">>;
+}): Promise<Result<{ tasks: Task[] }>> {
+  await requireSession("setTasksAction");
+  try {
+    const err = tasksError(input.tasks);
+    if (err) return { ok: false, error: `tasks inválidas — ${err}.` };
+    const owns = sessionOwnsCard(
+      await allSessions(),
+      await getCardClaims().list(input.boardId),
+      { sessionId: input.sessionId, board: input.boardId, cardId: input.cardId },
+      Date.now(),
+    );
+    if (!owns.ok && owns.reason === "unknown-session") {
+      return { ok: false, error: `sessão ${input.sessionId} desconhecida — set_tasks é da sessão que tem o claim do card.` };
+    }
+    if (!owns.ok) {
+      const holder = owns.holder;
+      return {
+        ok: false,
+        error:
+          `a sessão ${input.sessionId.slice(0, 8)} não tem o claim de ${input.boardId}/${input.cardId}` +
+          (holder ? ` (quem tem: ${holder.actor})` : " (ninguém tem — reserve com claim_card)") +
+          `: as tasks são evidência do build e só quem é dono do trabalho as grava.`,
+      };
+    }
+    const tasks = normalizeTasks(input.tasks);
+    const updated = await updateCardOnDisk(input.boardId, input.cardId, (card) => ({ ...card, tasks }));
+    if (!updated) return { ok: false, error: `card não encontrado: ${input.cardId}` };
+    revalidateBoard(input.boardId);
+    return { ok: true, data: { tasks: updated.tasks } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * `set_card_driver` — who drives the card: `conductor` (a conductor session; the cascade and the engine stay
+ * silent for it) or `null` (back to the column cascade). The conductor clears it at the end of its job; the
+ * operator clears it to hand a card whose conductor died back to the pipeline. Clearing does NOT re-evaluate
+ * the cascade: the card's next column entry (or run_skill) is what runs a column skill — handing a card back
+ * must never, by itself, spawn anything.
+ */
+export async function setCardDriverAction(input: {
+  boardId: string;
+  cardId: string;
+  driver: CardDriver | null;
+}): Promise<Result<{ card: Card; changed: boolean }>> {
+  await requireSession("setCardDriverAction");
+  try {
+    let changed = false;
+    const written = await updateCardOnDisk(input.boardId, input.cardId, (card) => {
+      if (input.driver) {
+        const routing = withDriver(card, input.driver, today());
+        if (!routing) return null;
+        changed = true;
+        return { ...card, routing };
+      }
+      const routing = withoutDriver(card);
+      if (routing === undefined) return null;
+      changed = true;
+      return { ...card, routing };
+    });
+    const card = written ?? (await readCard(input.boardId, input.cardId));
+    if (!card) return { ok: false, error: `card não encontrado: ${input.cardId}` };
+    if (changed) revalidateBoard(input.boardId);
+    return { ok: true, data: { card, changed } };
   } catch (e) {
     return fail(e);
   }
@@ -3737,7 +3869,14 @@ export async function setCardRouteAction(input: {
           ...(input.rationale && input.rationale.trim() ? { rationale: input.rationale.trim() } : {}),
         }
       : null;
-    const updated = await updateCardOnDisk(input.boardId, input.cardId, (fresh) => ({ ...fresh, routing }));
+    // The DRIVER is not part of the route this action edits (skips/caps/profile) — it says WHO conducts the
+    // card, and only the conductor or `set_card_driver` changes it. Replacing `routing` wholesale here would
+    // silently hand a conducted card back to the column cascade (its next entry would spawn a stale column
+    // run). So a fresh driver survives both an edit and a CLEAR of the route.
+    const updated = await updateCardOnDisk(input.boardId, input.cardId, (fresh) => ({
+      ...fresh,
+      routing: preserveDriver(routing, fresh.routing, today()),
+    }));
     if (!updated) return { ok: false, error: "Card não encontrado." };
     revalidateBoard(input.boardId);
     return { ok: true, data: { card: updated, ...(note ? { note } : {}) } };

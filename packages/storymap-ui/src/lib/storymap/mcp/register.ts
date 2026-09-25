@@ -112,6 +112,12 @@ const TOOL_ANNOTATIONS: Record<string, ToolHints> = {
   save_system: WRITE_IDEM,
   triage_finding: WRITE_IDEM,
   answer_question: WRITE_IDEM, // HITL: marca uma pergunta open→answered (idempotente por id)
+  // Evidência na MAIN no meio do build (card-evidence.ts). add_finding é WRITE (sem id estável, cada chamada
+  // cria um finding novo); set_tasks substitui a lista inteira (idempotente por args) e exige o claim da sessão;
+  // set_card_driver alterna quem conduz o card (idempotente). Nenhum spawna nada: classe write-board.
+  add_finding: WRITE,
+  set_tasks: WRITE_IDEM,
+  set_card_driver: WRITE_IDEM,
   ask_question: WRITE, // HITL: empurra pergunta/diretriz de volta ao loop do agente
   set_card_route: WRITE_IDEM, // 4.2 — rota por-card (skips dispensáveis + tetos): substitui o conjunto (idempotente por args)
   set_card_links: WRITE_IDEM, // grafo tipado do card: substitui o conjunto de links (idempotente por args)
@@ -166,6 +172,10 @@ const TOOL_ANNOTATIONS: Record<string, ToolHints> = {
   worktree_submit: EXEC_EXT,
   worktree_refresh: EXEC_EXT,
   worktree_discard: EXEC_EXT,
+  // O claim da PRÓPRIA sessão (session-claims.ts): reservar (sessões sem claim — worktree_open/adopt_session) e
+  // soltar (ao terminar). Escrevem só no registro de claims, nunca em git nem em card. Classe `session` abaixo.
+  claim_card: WRITE_IDEM,
+  release_claim: WRITE_IDEM,
   // WS-6.5 — READ-ONLY por construção: só ranqueia cards livres. A exclusão real acontece na AQUISIÇÃO do
   // claim, não aqui — se esta tool reservasse algo, seria um lock fantasma (ver suggest-work.ts).
   suggest_work: RO,
@@ -374,6 +384,11 @@ const RISK_CLASS_EXCEPTIONS: Record<string, RiskClass> = {
   worktree_submit: "session",
   worktree_refresh: "session",
   worktree_discard: "session",
+  // O claim da PRÓPRIA sessão — o mesmo raio de `worktree_*`: o chamador se nomeia pelo sessionId e o ator é
+  // derivado do registro, então ele só reserva/solta o que é DELE. Sem a exceção, o preset derivaria
+  // `write-board` e um token `write` (que não é da frota) poderia reservar cards em nome de sessões.
+  claim_card: "session",
+  release_claim: "session",
   //
   //   LIVRE (classe `run-free`) — recebe um PROMPT ou um COMANDO e spawna `claude --dangerously-skip-permissions`
   //   (Bash pleno), ou alcança para fora do board. UMA chamada = execução arbitrária ⇒ contornaria todos os

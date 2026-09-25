@@ -31,12 +31,15 @@ import { describeMainRed, readMainRed } from "@/lib/storymap/runner/gate-health"
 import { getRunnerJournal } from "@/lib/storymap/runner/journal";
 import { getCardClaims, type CardClaim } from "@/lib/storymap/runner/claims";
 import { waitForRunCore } from "@/lib/storymap/runner/run-wait";
+import { allSessions } from "@/lib/storymap/runner/session-worktree";
+import { readWorktreeSessionCost } from "@/lib/vps/session-cost";
 import { loadRunnerConfig } from "@/lib/storymap/runner/config";
 import { resolveHeadroomUrl } from "@/lib/storymap/runner/headroom";
 import { detectCycle, topologicalOrder } from "@/lib/storymap/runner/dep-graph";
 import type { EnqueueResult } from "@/lib/storymap/runner/types";
 import { waitForApprovalDecision } from "@/lib/storymap/approvals";
 import {
+  addFindingAction,
   answerQuestionAction,
   approveActionRequestAction,
   approveDataDeletionAction,
@@ -68,8 +71,10 @@ import {
   runCardSkillAction,
   savePersonaAction,
   saveSystemAction,
+  setCardDriverAction,
   setCardLinksAction,
   setCardRouteAction,
+  setTasksAction,
   syncCardAction,
   updateCardAction,
   updateFindingStatusAction,
@@ -1196,19 +1201,138 @@ export function registerStorymapTools(server: McpServer): void {
       title: "Perguntar de volta ao loop do agente (HITL)",
       description:
         "Adiciona uma ou mais perguntas/diretrizes ABERTAS a um card (HITL) — o operador empurra um follow-up para o " +
-        "loop do agente; a próxima skill as lê como contexto. Dedup por texto (não empilha duplicatas).",
+        "loop do agente; a próxima skill as lê como contexto. Dedup por texto (não empilha duplicatas). " +
+        "`texts` = perguntas de texto livre (o formato de sempre). `questions` = perguntas ESTRUTURADAS, o formato " +
+        "que a fila /perguntas renderiza: `context` (o que está em jogo), 2–8 `options` com `pros`/`cons` curtos e " +
+        "NO MÁXIMO UMA `recommended: true`, `mode` single|multi; sem opções, `recommendation` em prosa. Os dois " +
+        "campos podem vir juntos; ao menos um é obrigatório.",
       inputSchema: {
         board: z.string(),
         cardId: z.string(),
-        texts: z.array(z.string()).describe("uma ou mais perguntas/diretrizes"),
+        texts: z.array(z.string()).optional().describe("perguntas/diretrizes de texto livre"),
+        questions: z
+          .array(
+            z.object({
+              text: z.string().describe("a pergunta — uma, clara"),
+              context: z.string().optional().describe("por que você pergunta / o que está em jogo (1–2 linhas)"),
+              options: z
+                .array(
+                  z.object({
+                    label: z.string(),
+                    pros: z.array(z.string()).optional(),
+                    cons: z.array(z.string()).optional(),
+                    recommended: z.boolean().optional().describe("a SUA recomendação — no máximo uma por pergunta"),
+                  }),
+                )
+                .optional(),
+              mode: z.enum(["single", "multi"]).optional().describe("single (padrão) = escolhe uma; multi = várias"),
+              recommendation: z.string().optional().describe("só para pergunta SEM opções: a resposta que você recomenda"),
+            }),
+          )
+          .optional()
+          .describe("perguntas estruturadas (opções, recomendação, contexto)"),
         askedBy: z.string().optional().describe("quem perguntou (padrão: operator)"),
       },
     },
-    async ({ board, cardId, texts, askedBy }) => {
-      const r = await askQuestionsAction({ boardId: board, cardId, texts, askedBy });
+    async ({ board, cardId, texts, questions, askedBy }) => {
+      const r = await askQuestionsAction({ boardId: board, cardId, texts, questions, askedBy });
       if (!r.ok) return fail(r.error);
       const open = r.data ? openQuestions(r.data.card) : [];
       return json({ ok: true, openRemaining: open.length, openIds: open.map((q) => q.id) });
+    },
+  );
+
+  // ---- EVIDÊNCIA NA MAIN (card-evidence.ts) — o que uma sessão (o condutor) escreve no MEIO do build ----------
+  // Os gates leem o card da MAIN; sem estas duas, um finding ou a lista de tasks só chegava lá por um checkpoint
+  // de dados pelo train, legal apenas enquanto o branch não carregasse código.
+
+  defineTool(server,
+    "add_finding",
+    {
+      title: "Registrar um finding no card",
+      description:
+        "Grava um finding no card NA MAIN, pelo escritor único do serviço — para o que aparece no MEIO do trabalho " +
+        "(teto de orçamento, achado de verificação) e não pode esperar o submit final. `severity` blocker fecha o " +
+        "gate hasNoBlockers; high/medium/low só anotam. Um `id` ESTÁVEL (ex.: conductor-budget) torna a chamada " +
+        "idempotente: repetir atualiza o conteúdo e NUNCA o status (quem muda status é triage_finding). Sem `id`, " +
+        "um novo `<lens>-<n>` é criado `open`.",
+      inputSchema: {
+        board: z.string(),
+        cardId: z.string(),
+        severity: z.enum(["blocker", "high", "medium", "low"]),
+        title: z.string(),
+        detail: z.string().optional(),
+        lens: z.enum(["firestore", "nextjs", "perf", "security", "testing", "general"]).optional().describe("padrão general"),
+        id: z.string().optional().describe("id estável para idempotência (letras, dígitos, . _ : -)"),
+        file: z.string().optional(),
+        line: z.number().int().optional(),
+        suggestion: z.string().optional(),
+      },
+    },
+    async ({ board, cardId, severity, title, detail, lens, id, file, line, suggestion }) => {
+      const r = await addFindingAction({
+        boardId: board,
+        cardId,
+        finding: { severity, title, detail, lens, id, file, line, suggestion },
+      });
+      return r.ok ? json({ ok: true, ...r.data }) : fail(r.error);
+    },
+  );
+
+  defineTool(server,
+    "set_tasks",
+    {
+      title: "Gravar as tasks do card (evidência do build)",
+      description:
+        "SUBSTITUI a lista de tasks do card NA MAIN — a evidência que os gates hasTasks/hasBuildEvidence leem — sem " +
+        "precisar de um submit só-de-dados pelo train. Só a SESSÃO DONA do card grava: passe o seu `sessionId`; ela " +
+        "precisa ter o claim vivo do card (claude_new já o dá; worktree_open/adopt_session: claim_card). Marque " +
+        "`done: true` só no que de fato aterrissou (suíte verde + mudança no diff): é evidência, não intenção.",
+      inputSchema: {
+        board: z.string(),
+        cardId: z.string(),
+        sessionId: z.string().describe("o SEU sessionId — precisa ter o claim vivo deste card"),
+        tasks: z
+          .array(z.object({ id: z.string(), title: z.string(), done: z.boolean() }))
+          .describe("a lista COMPLETA (ids únicos t1…tN)"),
+      },
+    },
+    async ({ board, cardId, sessionId, tasks }) => {
+      const r = await setTasksAction({ boardId: board, cardId, sessionId, tasks });
+      if (!r.ok) return fail(r.error);
+      const list = r.data?.tasks ?? [];
+      return json({ ok: true, tasks: { done: list.filter((t) => t.done).length, total: list.length } });
+    },
+  );
+
+  defineTool(server,
+    "set_card_driver",
+    {
+      title: "Definir quem conduz o card",
+      description:
+        "`driver: \"conductor\"` marca o card como CONDUZIDO por uma sessão condutora (harness-conductor): a cascata " +
+        "de colunas e o engine param de disparar skills nele, em silêncio (sem no-op nem finding de travado). " +
+        "`driver: null` devolve o card ao pipeline de colunas. O condutor limpa ao terminar; o operador limpa para " +
+        "devolver um card cujo condutor morreu. Limpar NÃO dispara nada sozinho: a próxima entrada de coluna (ou " +
+        "run_skill) é que roda a skill da coluna. Idempotente.",
+      inputSchema: {
+        board: z.string(),
+        cardId: z.string(),
+        driver: z.enum(["conductor"]).nullable().describe("\"conductor\" ou null (volta à cascata)"),
+      },
+    },
+    async ({ board, cardId, driver }) => {
+      const r = await setCardDriverAction({ boardId: board, cardId, driver });
+      if (!r.ok) return fail(r.error);
+      return json({
+        ok: true,
+        cardId,
+        driver: r.data?.card.routing?.driver ?? null,
+        changed: r.data?.changed ?? false,
+        ...(driver === null && r.data?.changed
+          ? { proximo: "o card voltou à cascata — a próxima entrada de coluna (ou run_skill) roda a skill da coluna" }
+          : {}),
+      });
     },
   );
 
@@ -1423,7 +1547,35 @@ export function registerStorymapTools(server: McpServer): void {
       // With both, append the card's telemetry history (AC4) — the durable last-N runs with metrics.
       if (board && cardId) {
         const history = await getTelemetryStore().listByCard(board, cardId, limit ?? 20);
-        return json({ ...base, history });
+        // The LIVE conductor(s) on this card, with their spend so far ESTIMATED from their worktree's transcripts
+        // (lib/vps/session-cost.ts). The ledger only books a session when it ends — without this a conductor
+        // checking its own budget mid-story had to guess its spend. Omitted when the card has no conductor.
+        const conductors = (await allSessions().catch(() => []))
+          .filter((s) => s.board === board && s.cardId === cardId && s.driver === "conductor");
+        const sessions = await Promise.all(
+          conductors.map(async (s) => {
+            const est = await readWorktreeSessionCost(s.worktreePath ?? null).catch(() => null);
+            return {
+              sessionId: s.sessionId,
+              tmuxSession: s.tmuxSession ?? null,
+              openedAt: s.openedAt,
+              estimatedCostUSD: est?.costUSD ?? null,
+              requests: est?.requests ?? 0,
+              approximate: est?.approximate ?? true,
+            };
+          }),
+        );
+        if (!sessions.length) return json({ ...base, history });
+        // The WHOLE ledger of the card (not just the `limit` shown) — the same sum cardBudgetUSD reads — plus the
+        // live conductors' estimate: the number a conductor compares against its budget at a block boundary.
+        const ledgerUSD = (await getTelemetryStore().listByCard(board, cardId)).reduce((acc, r) => acc + (r.costUSD ?? 0), 0);
+        const liveUSD = sessions.reduce((acc, x) => acc + (x.estimatedCostUSD ?? 0), 0);
+        return json({
+          ...base,
+          history,
+          conductorSessions: sessions,
+          spentIncludingLiveSessionsUSD: Math.round((ledgerUSD + liveUSD) * 10_000) / 10_000,
+        });
       }
       return json(base);
     },
@@ -1778,8 +1930,8 @@ export function registerStorymapTools(server: McpServer): void {
       const card = (await readCards(board).catch(() => [])).find((c) => c.id === cardId);
       if (!card) return fail(`card não encontrado: ${cardId} (board ${board})`);
       try {
-        const { path: rel, bytes } = await writeSidecarByKind(board, cardId, kind, content);
-        return json({ ok: true, board, cardId, kind, path: rel, bytes });
+        const { path: rel, bytes, warnings } = await writeSidecarByKind(board, cardId, kind, content);
+        return json({ ok: true, board, cardId, kind, path: rel, bytes, ...(warnings?.length ? { avisos: warnings } : {}) });
       } catch (err) {
         return fail(err instanceof Error ? err.message : String(err));
       }

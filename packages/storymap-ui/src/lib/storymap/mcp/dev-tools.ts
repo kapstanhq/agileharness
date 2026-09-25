@@ -60,7 +60,7 @@ import { deliverToSession, listClaudeProcesses, listSessions,
 import { currentTerminalAttention } from "@/lib/terminal/attention-watch";
 import { waitedFor } from "@/lib/terminal/attention";
 import { assessKillLive } from "@/lib/vps/kill-guard";
-import { findNewTranscript, readTranscriptTurns, suggestRecycle } from "@/lib/vps/claude-transcript";
+import { readTranscriptTurns, suggestRecycle } from "@/lib/vps/claude-transcript";
 import { readSessionContext } from "@/lib/vps/transcript-usage";
 import { loadRunnerConfig } from "@/lib/storymap/runner/config";
 import { ensureDetachedSession } from "@/lib/vps/tmux";
@@ -73,6 +73,7 @@ import { screenStillness } from "@/lib/terminal/attention-watch";
 import { currentMcpActor } from "./actor";
 // WS-1 — the agent-session worktree lifecycle (open/submit/refresh/discard). The logic lives in the runner
 // (DI-testable against a temp repo); these tools are only the MCP surface over it.
+import { claimCardForSession, releaseSessionClaim } from "@/lib/storymap/runner/session-claims";
 import {
   adoptSession,
   allSessions,
@@ -81,12 +82,13 @@ import {
   openSessionWorktree,
   refreshSessionWorktree,
   submitSessionWork,
+  updateSession,
   type FleetReconcileResult,
   type SessionWorktreeDeps,
 } from "@/lib/storymap/runner/session-worktree";
 // F2 — a reconciliação da frota (heartbeat/claims/óbito) é do SERVIÇO, não desta tool: o boot a roda num
 // tick e `claude_sessions` só pega carona. A fábrica de deps vive lá pelo mesmo motivo.
-import { defaultSessionDeps, reconcileFleetNow } from "@/lib/storymap/runner/fleet-deps";
+import { defaultSessionDeps, reconcileFleetNow, sessionSpawnDeps } from "@/lib/storymap/runner/fleet-deps";
 // WS-6.2 — the work-oriented spawn (admission → tree → claim → tmux → registry). Same split: the decisions
 // live in the runner, this file is the MCP surface over them.
 import {
@@ -94,9 +96,7 @@ import {
   recycleSession,
   spawnWorkSession,
   SPAWN_RETRY_WINDOW_MS,
-  type SessionSpawnDeps,
 } from "@/lib/storymap/runner/session-spawn";
-import { resolveCardRoute } from "@/lib/storymap/runner/config";
 // WS-6.5 — the deterministic "what next?" ranking (pure) + its IO half.
 import { collectWorkCandidates, excludedReason, rankWorkCandidates } from "@/lib/storymap/runner/suggest-work";
 import { getCardClaims, isClaimLive } from "@/lib/storymap/runner/claims";
@@ -119,59 +119,11 @@ const pexec = promisify(execFile);
  */
 const sessionDeps = (): SessionWorktreeDeps => defaultSessionDeps();
 
-/** The port the AgileHarness MCP is served on — the SAME default the copiloto's spawn uses (orchestrator-spawn).
- *  The session mounts `http://localhost:<port>/api/mcp/<token>/mcp`, i.e. this very service. */
-const SERVICE_PORT = Number(process.env.PORT) || 3008;
-
-/**
- * WS-6.2 — production deps for the work-oriented spawn. Resolved PER CALL (never cached), like `sessionDeps`:
- * the cap, the thresholds and the claude binary come from the LIVE settings, so the operator retunes capacity
- * without a restart.
- */
-export const sessionSpawnDeps = (): SessionSpawnDeps => {
-  const autorun = loadRunnerConfig().autorun;
-  const claims = getCardClaims();
-  const tmuxAlive = async (name: string): Promise<boolean> =>
-    (await run("tmux", ["has-session", "-t", name], { timeoutMs: 8_000 })).code === 0;
-  return {
-    worktree: sessionDeps(),
-    claims: {
-      conflictFor: (req) => claims.conflictFor(req),
-      acquire: (req) => claims.acquire(req),
-      release: (board, cardId, actor) => claims.release(board, cardId, actor),
-    },
-    // The card's OWN route — literally the runs' path (config.resolveCardRoute → deriveCardModelEffort).
-    // A card in a status the board no longer declares still yields its title (the prompt wants it) but no
-    // route: we would rather spawn on the CLI's default than invent a tier from a column that doesn't exist.
-    cardRoute: async (board, cardId) => {
-      const [card, config] = await Promise.all([readCard(board, cardId), readBoardConfig(board)]);
-      if (!card) return null;
-      const def = config.statuses.find((s) => s.id === card.status);
-      if (!def) return { title: card.title };
-      return { ...resolveCardRoute(card, def, loadRunnerConfig()), title: card.title };
-    },
-    tmux: {
-      exists: tmuxAlive,
-      create: async (name, command, cwd) => {
-        const r = await ensureDetachedSession(name, command, cwd);
-        return { ok: r.ok, error: r.error };
-      },
-      survives: (name) => pollSessionAlive(() => tmuxAlive(name)),
-      kill: async (name) => {
-        await run("tmux", ["kill-session", "-t", name], { timeoutMs: 5_000 });
-      },
-    },
-    findTranscript: (since) => findNewTranscript(since),
-    fs,
-    claudeBin: resolvedClaudeBin({ name: autorun.claudeBin }),
-    repoRoot: findRepoRoot(),
-    stateDir: runnerStateDir(),
-    // G12 — the SCOPED `orch` token, never AGILEHARNESS_MCP_TOKEN (the operator's `full`): a spawned agent may
-    // drive the pipeline and publish, but never open a shell through MCP nor delete.
-    mcpToken: process.env.AGILEHARNESS_MCP_TOKEN_ORCH,
-    port: SERVICE_PORT,
-  };
-};
+// WS-6.2 — the production deps of the work-oriented spawn moved to `runner/fleet-deps.ts` (the fleet's
+// production wiring): the CONDUCTOR dispatch (runner/conductor.ts) spawns through the SAME factory, and a
+// runner module must not import this tools module to reach it. Re-exported so `app/actions.ts` and the
+// existing call sites below keep their import.
+export { sessionSpawnDeps };
 
 // --- result helpers -------------------------------------------------------
 const text = (s: string): CallToolResult => ({ content: [{ type: "text", text: s || "(vazio)" }] });
@@ -277,31 +229,9 @@ export function copSessionName(name: string): string | null {
 // make the contract honest (poll for persistence) and give claude_sessions a real notion
 // of how full each session's context is so the orchestrator can recycle BEFORE overflow.
 
-const SESSION_POLL_INTERVAL_MS = 500;
-const SESSION_POLL_TIMEOUT_MS = 5_000;
-
-const defaultSleep = (ms: number): Promise<void> => new Promise((res) => setTimeout(res, ms));
-
-/**
- * Poll `check()` (true = session still alive) across the persistence window. Resolves
- * `false` the moment a check reports the session is gone; `true` only if it survives the
- * whole window. Iteration-driven (not wall-clock) so it's deterministic under an injected
- * `sleep` in unit tests — the real call passes a `tmux has-session` probe as `check`.
- */
-export async function pollSessionAlive(
-  check: () => Promise<boolean>,
-  opts: { intervalMs?: number; timeoutMs?: number; sleep?: (ms: number) => Promise<void> } = {},
-): Promise<boolean> {
-  const intervalMs = opts.intervalMs ?? SESSION_POLL_INTERVAL_MS;
-  const timeoutMs = opts.timeoutMs ?? SESSION_POLL_TIMEOUT_MS;
-  const sleep = opts.sleep ?? defaultSleep;
-  const iterations = Math.max(1, Math.ceil(timeoutMs / intervalMs));
-  for (let i = 0; i < iterations; i++) {
-    await sleep(intervalMs);
-    if (!(await check())) return false;
-  }
-  return true;
-}
+// `pollSessionAlive` (the honest-spawn probe) moved to runner/session-spawn.ts with its second caller (the
+// conductor dispatch). Re-exported here so the existing dev-tools tests keep importing it from this file.
+export { pollSessionAlive } from "@/lib/storymap/runner/session-spawn";
 
 // Build the argv for `run_task` (headless `claude -p`). Pure so the contract (prompt is a
 // single argv entry — never shell-interpolated — and the autonomous flag is opt-out) is
@@ -1263,6 +1193,80 @@ export function registerDevTools(server: McpServer): void {
       const res = await discardSessionWorktree(sessionDeps(), { sessionId });
       if (!res.ok) return fail(res.reason);
       return json({ branchPreserved: res.branchPreserved, detail: res.detail });
+    },
+  );
+
+  // ── the session's OWN reservation (runner/session-claims.ts) ─────────────────────────────────────────────
+  // claude_new was the only door that took a claim, and nothing gave one back but a dying tmux or a lapsed TTL.
+  // These two close both ends for any fleet session — first of all the conductor, whose claim is what holds
+  // every column skill off its card, and who must be able to let go of it when the human approved its delivery.
+  const sessionClaimDeps = () => ({
+    sessions: () => allSessions(),
+    claims: getCardClaims(),
+    bindCard: async (sessionId: string, board: string, cardId: string) => {
+      await updateSession(sessionDeps(), sessionId, { board, cardId });
+    },
+  });
+
+  defineTool(server,
+    "claim_card",
+    {
+      title: "Reservar um card para esta sessão",
+      description:
+        "Reserva (claim) um card para a SUA sessão — a mesma regra do claude_new (papel da sessão → kind/scope, TTL " +
+        "de 60 min, ator session:<agentId>). Para sessões abertas por worktree_open ou adopt_session, que nascem SEM " +
+        "claim: sem ele as skills de coluna NÃO são seguradas fora do card. Chamar de novo no MESMO card renova. " +
+        "Uma sessão = um card. Recusa com o holder quando outro ator já tem o card.",
+      inputSchema: {
+        board: z.string(),
+        cardId: z.string(),
+        sessionId: z.string().describe("o SEU sessionId (do prompt inicial / worktree_open) — o claim é da sessão que pede"),
+      },
+    },
+    async ({ board, cardId, sessionId }) => {
+      const res = await claimCardForSession(sessionClaimDeps(), { sessionId, board, cardId });
+      if (!res.ok) {
+        return json({
+          ok: false,
+          motivo: res.reason,
+          ...(res.holder ? { holder: { actor: res.holder.actor, kind: res.holder.kind, scope: res.holder.scope, expiresAt: res.holder.expiresAt } } : {}),
+        });
+      }
+      return json({
+        ok: true,
+        claim: { actor: res.claim.actor, kind: res.claim.kind, scope: res.claim.scope, expiresAt: res.claim.expiresAt },
+        renovacao: res.renewedByFleet
+          ? "a frota renova este claim enquanto o seu tmux viver"
+          : "sessão sem tmux registrado: a frota NÃO renova — chame claim_card de novo antes de expirar",
+      });
+    },
+  );
+
+  defineTool(server,
+    "release_claim",
+    {
+      title: "Soltar o claim da própria sessão",
+      description:
+        "Solta o claim que a SUA sessão tem num card (ator session:<agentId> da sessão). NUNCA solta o claim de outro " +
+        "ator — run, copiloto, humano ou outra sessão: a recusa nomeia o dono. Use ao terminar o trabalho no card " +
+        "(ex.: o condutor depois que o humano aprovou a entrega), ANTES de worktree_discard — o descarte tira a " +
+        "sessão da frota e o claim ficaria sem renovação nem varredura até o TTL.",
+      inputSchema: {
+        board: z.string(),
+        cardId: z.string(),
+        sessionId: z.string().describe("o SEU sessionId — só o claim desta sessão é solto"),
+      },
+    },
+    async ({ board, cardId, sessionId }) => {
+      const res = await releaseSessionClaim(sessionClaimDeps(), { sessionId, board, cardId });
+      if (!res.ok) {
+        return json({
+          ok: false,
+          motivo: res.reason,
+          ...(res.holder ? { holder: { actor: res.holder.actor, kind: res.holder.kind, expiresAt: res.holder.expiresAt } } : {}),
+        });
+      }
+      return json({ ok: true, released: res.released, detail: res.detail });
     },
   );
 

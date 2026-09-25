@@ -32,7 +32,10 @@ import { entryEffect } from "@/lib/storymap/entry-effect";
 import { appendTransition, type TransitionActor } from "@/lib/storymap/runner/transitions";
 import { runEntryEffect } from "@/lib/storymap/runner/entry-effects";
 import { getPendingEffects } from "@/lib/storymap/runner/pending-effects";
-import { decideCascade } from "./cascade-decision";
+import { CONDUCTOR_STOP_REASON, decideCascade } from "./cascade-decision";
+import { conductorEntryVerdict } from "@/lib/storymap/runner/conductor";
+import { dispatchConductorOnEntry } from "@/lib/storymap/runner/fleet-deps";
+import { isConducted } from "@/lib/storymap/driver";
 import { isAmbiguousRouting } from "@/lib/storymap/skip-routing";
 import type { BoardConfig, Card, StatusDef, TriggerId } from "@/lib/storymap/types";
 
@@ -248,6 +251,23 @@ export async function evaluateAutorunOnEntry(
   const card = cards?.find((c) => c.id === cardId);
   if (!card) return;
 
+  // The CONDUCTOR dispatch (board.yaml `conductor`, runner/conductor.ts): a story that lands in the board's
+  // `fromStatus` is handed to ONE interactive conductor session instead of the column cascade. Decided HERE,
+  // before the cascade, because this is the one chokepoint every entry path already funnels through — and
+  // AWAITED (the driver stamp + the durable queue), so every evaluation after this one reads a conducted card
+  // and the cascade below stays silent for it. Only a card NOT YET conducted is dispatched: the re-evaluations
+  // a conducted card keeps receiving (its conductor's own submits landing, a run completion, the watcher echo)
+  // must never re-open a conductor, least of all for a card whose conductor died (the operator decides that).
+  const conductorVerdict = conductorEntryVerdict(card, config);
+  if (conductorVerdict.dispatch && !isConducted(card)) {
+    try {
+      await dispatchConductorOnEntry(boardId, card.id);
+    } catch (err) {
+      console.error(`[harness-autorun ${boardId}/${cardId}] dispatch do condutor falhou:`, err instanceof Error ? err.message : err);
+    }
+    return;
+  }
+
   // WS-8.1 — the cancel PHASE-BRAKE. If the operator just cancelled THIS card, do NOT re-engage the cascade
   // (this ONE chokepoint covers BOTH the run-completion threading path AND the fs-watch path). Without it the
   // cancelled run's own settle→cascade and the fs-watch of its status-advance write re-spawn the next threaded
@@ -383,6 +403,11 @@ export async function evaluateAutorunOnEntry(
     void evaluateAutorunOnEntry(boardId, cardId, {}).catch((err) =>
       console.error(`[harness-autorun forward-retrigger ${boardId}/${cardId}]`, err instanceof Error ? err.message : err),
     );
+  } else if (decision.reason === CONDUCTOR_STOP_REASON) {
+    // A CONDUCTED card (routing.driver: conductor): its conductor session owns the work and the placement.
+    // SILENCE on purpose — no card console line, no finding, no refused run: the card resting in an armed
+    // column is the conductor's projection, not a stall. A debug line keeps it traceable.
+    console.debug(`[harness-autorun ${boardId}/${cardId}] card conduzido (routing.driver: conductor) em '${card.status}' — cascata não age`);
   } else if (decision.reason === "manual") {
     console.log(`[harness-autorun ${boardId}/${cardId}] autorun:false em '${card.status}' — skip`);
   } else if (decision.reason.startsWith("gate:")) {

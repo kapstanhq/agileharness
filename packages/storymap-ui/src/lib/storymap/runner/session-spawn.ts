@@ -49,7 +49,8 @@ import {
   type FleetQueueRow,
   type SessionWorktreeDeps,
 } from "./session-worktree";
-import type { EffortLevel, ModelTier } from "@/lib/storymap/types";
+import type { CardDriver, EffortLevel, ModelTier } from "@/lib/storymap/types";
+import { conductorCommand } from "@/lib/storymap/driver";
 
 /** How the fleet names a session's tmux: `agent-<slug|short id>`. The `agent-` prefix is what tells the
  *  reaper, the /processes lanes and a human at a keyboard that the tool owns this session. */
@@ -170,6 +171,13 @@ export function findRetrySpawn<T extends { role: AgentRole; task: string; board?
 // ── the CONTRACT prompt ──────────────────────────────────────────────────────────────────────────────────
 
 export interface SessionPromptInput {
+  /**
+   * A SLASH COMMAND that LEADS the prompt (`/harness-conductor demo/story-x`), so the CLI parses the first
+   * user turn as that command and loads the skill — a command buried after the contract preamble would be
+   * read as prose, and the session would only "maybe" invoke the skill. Everything after it (the contract)
+   * reaches the skill as its arguments. Absent ⇒ the prompt is the contract alone (every other session).
+   */
+  command?: string;
   sessionId: string;
   agentId: string;
   role: AgentRole;
@@ -193,6 +201,7 @@ export interface SessionPromptInput {
  */
 export function buildSessionPrompt(i: SessionPromptInput): string {
   const lines: string[] = [];
+  if (i.command) lines.push(i.command, "");
   lines.push(
     `Você é um agente da FROTA do AgileHarness (papel: ${i.role}; agentId: ${i.agentId.slice(0, 8)}; sessionId: ${i.sessionId}).`,
     "",
@@ -305,6 +314,39 @@ export async function writeSessionMcpConfig(
   return file;
 }
 
+// ── the honest-spawn probe ───────────────────────────────────────────────────────────────────────────────
+// claude_new used to return {ok:true} the instant `tmux new-session` exited 0, but the `claude` process can
+// die right after (no current client / not-in-a-mode) — so the session vanishes and every later
+// claude_send/claude_sessions call breaks. This makes the contract honest (poll for persistence). It lives
+// with the spawn (not in the MCP tool module) because TWO callers need it: `claude_new` and the conductor
+// dispatch (runner/conductor.ts), and the second must not import the tools module to reach it.
+
+const SESSION_POLL_INTERVAL_MS = 500;
+const SESSION_POLL_TIMEOUT_MS = 5_000;
+
+const defaultSleep = (ms: number): Promise<void> => new Promise((res) => setTimeout(res, ms));
+
+/**
+ * Poll `check()` (true = session still alive) across the persistence window. Resolves
+ * `false` the moment a check reports the session is gone; `true` only if it survives the
+ * whole window. Iteration-driven (not wall-clock) so it's deterministic under an injected
+ * `sleep` in unit tests — the real call passes a `tmux has-session` probe as `check`.
+ */
+export async function pollSessionAlive(
+  check: () => Promise<boolean>,
+  opts: { intervalMs?: number; timeoutMs?: number; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<boolean> {
+  const intervalMs = opts.intervalMs ?? SESSION_POLL_INTERVAL_MS;
+  const timeoutMs = opts.timeoutMs ?? SESSION_POLL_TIMEOUT_MS;
+  const sleep = opts.sleep ?? defaultSleep;
+  const iterations = Math.max(1, Math.ceil(timeoutMs / intervalMs));
+  for (let i = 0; i < iterations; i++) {
+    await sleep(intervalMs);
+    if (!(await check())) return false;
+  }
+  return true;
+}
+
 // ── the spawn ────────────────────────────────────────────────────────────────────────────────────────────
 
 export interface SessionSpawnDeps {
@@ -339,6 +381,14 @@ export interface SessionSpawnDeps {
 }
 
 export interface SpawnSessionInput {
+  /**
+   * The session is this card's DRIVER (`conductor`): stamped on the registry row so the conductor dispatch
+   * can count live conductors per board, and so a recycle re-invokes the conductor skill. Absent ⇒ an
+   * ordinary fleet session.
+   */
+  driver?: CardDriver;
+  /** A slash command that leads the first prompt (see {@link SessionPromptInput.command}). */
+  command?: string;
   role: AgentRole;
   task: string;
   board?: string;
@@ -427,6 +477,7 @@ export async function spawnWorkSession(deps: SessionSpawnDeps, input: SpawnSessi
       role: input.role,
       spawnedBy: input.spawnedBy,
       agentId: input.agentId,
+      ...(input.driver ? { driver: input.driver } : {}),
     });
     // WS-1's door refuses for exactly one reason a caller can act on (admission) — it carries the queue when
     // so; anything else is plumbing (git/fs) that no queue explains.
@@ -444,6 +495,7 @@ export async function spawnWorkSession(deps: SessionSpawnDeps, input: SpawnSessi
       spawnedBy: input.spawnedBy,
       agentId: input.agentId,
       cwd: deps.repoRoot,
+      ...(input.driver ? { driver: input.driver } : {}),
     });
     session = reg.session;
   }
@@ -494,6 +546,7 @@ export async function spawnWorkSession(deps: SessionSpawnDeps, input: SpawnSessi
     () => null,
   );
   const prompt = buildSessionPrompt({
+    ...(input.command ? { command: input.command } : {}),
     sessionId: session.sessionId,
     agentId: session.agentId,
     role: input.role,
@@ -582,7 +635,12 @@ export async function recycleSession(deps: SessionSpawnDeps, input: { sessionId:
   const mcpPath = await writeSessionMcpConfig(deps.fs, deps.stateDir, cur.sessionId, deps.mcpToken, deps.port).catch(
     () => null,
   );
+  // A recycled CONDUCTOR must wake up inside the conductor skill again (with the handoff note telling it to
+  // read its journal first) — without the leading command the new process would be a generic fleet agent
+  // holding a conductor's claim and tree.
+  const command = cur.driver === "conductor" && cur.board && cur.cardId ? conductorCommand(cur.board, cur.cardId) : undefined;
   const prompt = buildSessionPrompt({
+    ...(command ? { command } : {}),
     sessionId: cur.sessionId,
     agentId: cur.agentId,
     role: cur.role,

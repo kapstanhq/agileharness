@@ -4,7 +4,8 @@
 // enquanto os efeitos em si (promoteStageToMain/deployBoard) já são testados no nível git. actions.ts faz o
 // dispatch (ENTRY_EFFECTS) executando o efeito que esta função decide.
 
-import type { BoardConfig, EntryEffect, RiskClass } from "./types";
+import { conductorEntryVerdict, isConducted } from "./driver";
+import type { BoardConfig, Card, EntryEffect, RiskClass } from "./types";
 
 /**
  * Qual EntryEffect uma transição de status dispara — ou null. Dispara SÓ numa MUDANÇA REAL de status
@@ -32,9 +33,21 @@ export function moveRiskClass(
   config: BoardConfig,
   toStatus: string | null | undefined,
   fromStatus: string | null | undefined,
+  /**
+   * The card being moved, when the caller has it. It changes the answer in exactly two ways, both about WHAT
+   * THE MOVE SPAWNS (the rule of this function), never about the verb:
+   *   - a CONDUCTED card (routing.driver: conductor) spawns no column skill on entry — the cascade is silent
+   *     for it — so an armed column is a benign `write-board` landing (the conductor's projection);
+   *   - a NOT-yet-conducted story entering the board's conductor `fromStatus` opens an interactive conductor
+   *     session → `run` (the same class as arming a column: an agent is spawned without another call).
+   * Absent ⇒ the legacy column-only classification (byte-identical).
+   */
+  card?: Pick<Card, "type" | "capture" | "container" | "routing"> | null,
 ): RiskClass {
   if (!toStatus || fromStatus === toStatus) return "write-board";
   if (entryEffect(config, toStatus, fromStatus)) return "deploy";
+  if (card && !isConducted(card) && conductorEntryVerdict({ ...card, status: toStatus }, config).dispatch) return "run";
+  if (card && isConducted(card)) return "write-board";
   const status = config.statuses.find((s) => s.id === toStatus);
   if (status?.autorun === true && status.trigger) return "run";
   return "write-board";

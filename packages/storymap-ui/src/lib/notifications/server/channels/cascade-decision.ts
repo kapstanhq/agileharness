@@ -10,7 +10,15 @@
 import { checkGate } from "@/lib/storymap/gates";
 import { nextBuildStatus } from "@/lib/storymap/pipeline-routing";
 import { routeSkip, triggerForCard } from "@/lib/storymap/skip-routing";
+import { isConducted } from "@/lib/storymap/driver";
 import type { BoardConfig, Card, StatusDef, TriggerId } from "@/lib/storymap/types";
+
+/**
+ * The STOP reason for a card a CONDUCTOR drives (`routing.driver: conductor`). A named constant because the
+ * shell (autorun-eval) treats it differently from every other stop: SILENCE — a debug line, no finding, no
+ * console log on the card. The card resting in an armed column is the conductor's projection, not a stall.
+ */
+export const CONDUCTOR_STOP_REASON = "conductor";
 
 export type CascadeDecision =
   | { action: "run"; trigger: TriggerId }
@@ -36,6 +44,11 @@ export interface CascadeOpts {
  *   - the status has a `trigger` (≠ suppressTrigger)                    → RUN that skill
  *   - the status's trigger === suppressTrigger (didn't advance)         → STOP (no retry loop)
  *   - the status is a gated landing (no trigger)                         → FORWARD (see decideForward)
+ *   - the card is CONDUCTED (routing.driver: conductor)                  → STOP ("conductor") instead of
+ *     RUNning a column skill or skip-FORWARDing it: the conductor session owns the card's work AND its
+ *     placement (the Kanban is its projection). Two forwards survive, because they are delivery mechanics,
+ *     not work routing: `autoEnterTerminal` (the deploy settle) and a trigger-less autorun passage (the
+ *     train's merge → stage → release after the human approves the delivery).
  *
  * The skip is evaluated BEFORE the manual guard ON PURPOSE: a non-skip card has no
  * business resting in a step it bypasses, so the cascade forwards it past the block
@@ -60,7 +73,12 @@ export function decideCascade(card: Card, config: BoardConfig, opts: CascadeOpts
   // reopen overrides (a refine/fix skips the discovery interview; a TEXT/BEHAVIOUR-only refine
   // skips the design block) and any per-instance persisted decision (card.routing.skips). This
   // runs BEFORE the manual guard so a skip-status forwards even under autorun:false.
+  const conducted = isConducted(card);
   if (routeSkip(status, card)) {
+    // A conducted card is never skip-forwarded: the skip set routes WORK between column skills, and a
+    // conductor does the work itself — forwarding it would move the card under its conductor's feet (the
+    // "cascade forwarding strands a conductor card in an armed column" gap).
+    if (conducted) return { action: "stop", reason: CONDUCTOR_STOP_REASON };
     return decideForward(card, status, config);
   }
   // ADR-059: a step that declares `autoEnterTerminal` (the `deploy`/Publicar step) auto-advances into the
@@ -81,6 +99,10 @@ export function decideCascade(card: Card, config: BoardConfig, opts: CascadeOpts
   // that JUST ran and did NOT advance (suppressTrigger === effectiveTrigger) STOPs instead of re-firing.
   const effectiveTrigger = status.trigger ? triggerForCard(card, status.trigger) : undefined;
   const reopenOverride = !!effectiveTrigger && effectiveTrigger !== status.trigger;
+  // A conducted card never gets a column skill — not the column's own trigger, not a reopen override. The
+  // check sits BEFORE the manual guard so the stop reason is always the honest one ("conductor"), which is
+  // what lets the shell stay silent instead of logging a misleading "autorun:false".
+  if (conducted && effectiveTrigger) return { action: "stop", reason: CONDUCTOR_STOP_REASON };
   if (!reopenOverride && status.autorun !== true) return { action: "stop", reason: "manual" };
   if (effectiveTrigger) {
     if (opts.suppressTrigger && effectiveTrigger === opts.suppressTrigger) {

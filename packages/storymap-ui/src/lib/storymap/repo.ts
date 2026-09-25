@@ -18,6 +18,7 @@ import { coerceStyleGuidePointer } from "./style-guide";
 import { coerceWsjf } from "./wsjf";
 import { DEPLOY_STEP_ID, releaseModeOf, withDerivedDeployAutorun } from "./release-policy";
 import { mergeById } from "./gate-core";
+import { conductorConfigProblem } from "./driver";
 import {
   isBugSeverity,
   isBugFrequency,
@@ -45,6 +46,7 @@ import type {
   CardRouting,
   CardType,
   ColumnDef,
+  ConductorPolicy,
   CommitRange,
   CriterionSpec,
   DiffSnapshot,
@@ -85,6 +87,7 @@ import {
   FINDING_SEVERITIES,
   FINDING_STATUSES,
   GATE_IDS,
+  isCardDriver,
   isCardProvenance,
   isReopenMode,
   isRoutingDecidedBy,
@@ -330,7 +333,11 @@ function coerceRouting(raw: unknown): CardRouting | null {
   const profile = r.profile != null && String(r.profile).trim() ? String(r.profile).trim() : undefined;
   const modelCap = coerceModel(r.modelCap);
   const effortCap = coerceEffort(r.effortCap);
-  if (!skips.length && !profile && !modelCap && !effortCap) return null;
+  // The DRIVER (conductor) is meaningful on its own: a card conducted with no skip set still carries
+  // `routing: {skips: [], driver: conductor}`. Dropping it here would silently hand the card back to the
+  // column cascade on the next read — the stale-column-run the driver exists to prevent.
+  const driver = isCardDriver(r.driver) ? r.driver : undefined;
+  if (!skips.length && !profile && !modelCap && !effortCap && !driver) return null;
   const routing: CardRouting = {
     skips,
     decidedBy: isRoutingDecidedBy(r.decidedBy) ? r.decidedBy : "rules",
@@ -340,6 +347,7 @@ function coerceRouting(raw: unknown): CardRouting | null {
   if (modelCap) routing.modelCap = modelCap;
   if (effortCap) routing.effortCap = effortCap;
   if (r.rationale != null && String(r.rationale).trim()) routing.rationale = String(r.rationale).trim();
+  if (driver) routing.driver = driver;
   return routing;
 }
 
@@ -744,6 +752,28 @@ export function coerceOrchestrator(raw: unknown): OrchestratorPolicy | undefined
     }
     if (Object.keys(matrix).length) out.riskMatrix = matrix;
   }
+  return out;
+}
+
+/**
+ * The board's CONDUCTOR dispatch policy (board.yaml `conductor:`). Tolerant on shape, strict on values —
+ * the coerceOrchestrator discipline: a block without a non-empty `fromStatus` is dropped whole (a dispatch
+ * with no trigger status can never fire, and an `enabled: true` that silently never fires is the worst
+ * outcome), `enabled` is true ONLY for a literal `true`, `maxSessions` keeps a positive integer (else the
+ * default applies at read time), and an unknown `model` is dropped (the default tier applies). Returns
+ * undefined when absent (byte-identical legacy load). Whether `fromStatus` names a REAL status is the
+ * board-integrity lint's job, not the reader's.
+ */
+export function coerceConductor(raw: unknown): ConductorPolicy | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const r = raw as Record<string, unknown>;
+  const fromStatus = typeof r.fromStatus === "string" ? r.fromStatus.trim() : "";
+  if (!fromStatus) return undefined;
+  const out: ConductorPolicy = { enabled: r.enabled === true, fromStatus };
+  const max = Number(r.maxSessions);
+  if (r.maxSessions != null && Number.isFinite(max) && max >= 1) out.maxSessions = Math.floor(max);
+  const model = coerceModel(r.model);
+  if (model) out.model = model;
   return out;
 }
 
@@ -1572,6 +1602,7 @@ async function resolveBoardConfigFromOwnRaw(
   // Resolvido ANTES do literal porque duas coisas dependem dele: o campo `release` e o `autorun` do
   // passo `Publicar`, que é DERIVADO daqui em vez de autorado (ver `withDerivedDeployAutorun`).
   const releaseMode = releaseModeOf(parsed as Pick<BoardConfig, "release">);
+  const conductor = coerceConductor((parsed as { conductor?: unknown }).conductor);
   const config: BoardConfig = {
     id: parsed.id ?? boardId,
     name: parsed.name ?? boardId,
@@ -1602,6 +1633,10 @@ async function resolveBoardConfigFromOwnRaw(
     systems: coerceSystems(parsed.systems),
     linkTypes: parsed.linkTypes ?? [],
     headroom: coerceHeadroom(parsed.headroom),
+    // A dispatch do CONDUTOR. Sem esta linha o bloco seria SILENCIOSAMENTE INERTE — o mesmo modo de falha
+    // que os vizinhos (`deploy`, `faceUrl`, `sharedPackages`) documentam: yaml declara, Zod aceita, o
+    // coerce (whitelist) descarta. Spread condicional para board sem o bloco não carregar chave fantasma.
+    ...(conductor ? { conductor } : {}),
     // Strategy bench artifacts (owner:human) — declared in BoardConfigSchema but historically dropped
     // here, which broke the governance round-trip (approve→write→read showed the stale value). Coerced +
     // persisted (deriveBoardConfigForPersist) so the strategy ladder (Posicionamento/Métrica/Resultado-alvo)
@@ -1631,6 +1666,10 @@ async function resolveBoardConfigFromOwnRaw(
       JSON.stringify(check.issues).slice(0, 600),
     );
   }
+  // O mesmo alarme para o condutor: um `enabled: true` que nunca dispara (fromStatus inexistente/terminal) é
+  // declarado, aceito pelo contrato e INERTE — o pior modo de falha. Grita; nunca apaga o board por isso.
+  const conductorProblem = conductorConfigProblem(config);
+  if (conductorProblem) console.error(`[storymap] board "${boardId}": ${conductorProblem}`);
   return config;
 }
 
@@ -1768,6 +1807,9 @@ export async function deriveBoardConfigForPersist(
     out.specialists = config.specialists;
 
   if (config.headroom) out.headroom = config.headroom;
+  // A dispatch do condutor é board-local (o `_base` não declara nenhuma): um save de qualquer outra coisa
+  // (vocab/canvas/estratégia) não pode apagar a linha do disco — o defeito D15 do kill-switch abaixo.
+  if (config.conductor) out.conductor = config.conductor;
   // story-fr5bnt kill-switch — board-local operational flag (never inherited from _base): persist when
   // set, else ANY board.yaml save (vocab/canvas/strategy) silently DELETED the line from disk (D15).
   if (config.autorunDisabled) out.autorunDisabled = true;

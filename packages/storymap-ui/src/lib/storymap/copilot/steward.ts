@@ -517,7 +517,7 @@ export function planGateSatisfied(input: {
   if (verdict) {
     return { action: "stand-down", reason: `o gate \`${verdict.gate}\` NÃO passa: ${verdict.message}` };
   }
-  const riskClass = moveRiskClass(input.config, input.to, input.from);
+  const riskClass = moveRiskClass(input.config, input.to, input.from, input.card);
   if (!mayActAutonomously(input.policy, riskClass)) {
     return {
       action: "stand-down",

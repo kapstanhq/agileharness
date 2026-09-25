@@ -22,6 +22,7 @@ import type { VpsResources } from "./scheduler";
 import type { MergeQueueEntry } from "./types";
 import type { BoardConfig, Card, Finding, StatusDef, TriggerId } from "@/lib/storymap/types";
 import { BUDGET_CUT_FINDING_ID, withBudgetCutFinding } from "./findings";
+import { coerceCard } from "@/lib/storymap/repo";
 
 // Resource probe (DI) that ALWAYS reports spare capacity, so the lane caps — not the VPS threshold —
 // govern admission in every test that isn't specifically about overload. Keeps the existing suite
@@ -4844,5 +4845,64 @@ describe("RunnerEngine.runSkill — corte por orçamento (budget-cut)", () => {
     expect(engine.runSkill("acme", "story-bc6", "harness-do", codeDef).ok).toBe(true);
     await flush();
     expect(cmds).toHaveLength(1);
+  });
+});
+
+// ── conductor-core — a CONDUCTED card never gets a column skill, on ANY dispatch path ─────────────────────
+// The cascade shell already stays silent for it (autorun-eval); these pin the ENGINE's own guard, which covers
+// what the shell never sees: a human "Rodar agora"/run_skill, a recovery resume, a conflict re-drive of a run
+// that started before the card was handed to its conductor. The settle must be SILENT for the Inbox: a clean
+// "cancelled" finish, no telemetry row (a $0 `no-op` is exactly the "travado" noise), and no claim taken.
+describe("RunnerEngine — card conduzido (routing.driver: conductor)", () => {
+  const conducted: Card = coerceCard(
+    "story-1",
+    { type: "story", status: "desenvolver", routing: { skips: [], decidedBy: "rules", decidedAt: "2026-09-25", driver: "conductor" } },
+    "",
+  );
+
+  it("um run MANUAL num card conduzido não spawna, não reserva, não grava telemetria — e assenta limpo", async () => {
+    const claims = new CardClaims(memoryClaimStore());
+    const telemetry = makeTelemetry();
+    const { engine, cmds, finishes } = makeEngine(async () => "desenvolver", {
+      claims,
+      telemetry: telemetry.telemetry,
+      readCard: async () => conducted,
+    });
+    const outcomes: string[] = [];
+    engine.onComplete((ev) => outcomes.push(ev.outcome));
+    engine.runSkill("acme", "story-1", "harness-do", codeDef, { origin: "manual" });
+    await flush();
+    await flush();
+    expect(cmds).toHaveLength(0); // nenhum processo
+    expect(await claims.list("acme")).toHaveLength(0); // nunca chegou a reservar (nada de claim-refused)
+    expect(telemetry.records).toHaveLength(0); // nada de no-op $0 no ledger → nada de "travado" no Inbox
+    expect(finishes).toEqual([{ board: "acme", cardId: "story-1", outcome: "cancelled", endedAt: expect.any(Number) }]);
+    expect(outcomes).toEqual(["cancelled"]);
+    expect(engine.isInFlight("acme", "story-1")).toBe(false); // o lock foi solto
+  });
+
+  it("CONTROLE: o mesmo run num card SEM driver spawna normalmente", async () => {
+    const { engine, cmds } = makeEngine(async () => "desenvolver", {
+      readCard: async () => ({ ...conducted, routing: null }) as Card,
+    });
+    engine.runSkill("acme", "story-1", "harness-do", codeDef, { origin: "manual" });
+    await flush();
+    await flush();
+    expect(cmds).toHaveLength(1);
+  });
+
+  it("o driver que aterrissa ENQUANTO o run espera vaga também segura (leitura fresca no start)", async () => {
+    let current: Card = { ...conducted, routing: null } as Card;
+    process.env.AGILEHARNESS_AUTORUN_MAX = "1";
+    const { engine, cmds, children } = makeEngine(async () => "desenvolver", { readCard: async () => current });
+    engine.runSkill("acme", "story-2", "harness-do", codeDef, { origin: "manual" }); // ocupa a única vaga
+    engine.runSkill("acme", "story-1", "harness-do", codeDef, { origin: "manual" }); // fica na fila
+    await flush();
+    await flush();
+    expect(cmds).toHaveLength(1);
+    current = conducted; // o condutor assumiu o card enquanto o run esperava
+    children[0].emit("close", 0);
+    for (let i = 0; i < 6; i++) await flush();
+    expect(cmds).toHaveLength(1); // o run enfileirado NÃO spawnou
   });
 });

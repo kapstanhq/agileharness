@@ -89,6 +89,21 @@ export function isRoutingDecidedBy(v: unknown): v is RoutingDecidedBy {
 }
 
 /**
+ * WHO DRIVES a card through the pipeline, when it is not the column cascade. Today one value:
+ * `conductor` — ONE interactive agent session (the `harness-conductor` skill) carries the whole story
+ * (shape → build → verify → publish) in one context, and the Kanban becomes a PROJECTION of its
+ * progress. While set, the autorun cascade and the engine never spawn a column skill for the card
+ * (and stay silent about it — no claim-refused no-op, no loop-guard finding). It is STICKY on purpose:
+ * it survives the conductor's session dying, so a card whose conductor dropped never gets a stale
+ * column run; only the conductor (at the end of its job) or the operator clears it (`set_card_driver`).
+ */
+export type CardDriver = "conductor";
+export const CARD_DRIVERS = ["conductor"] as const;
+export function isCardDriver(v: unknown): v is CardDriver {
+  return typeof v === "string" && (CARD_DRIVERS as readonly string[]).includes(v);
+}
+
+/**
  * PER-INSTANCE pipeline routing override (sparse; PIPELINE-OWNED — set by the deterministic skip
  * router or `harness-refine`, NEVER the drawer). `skips` lists the status ids THIS card instance
  * bypasses in the build cascade, persisted so the PURE cascade kernel reads a precomputed boolean
@@ -123,6 +138,14 @@ export interface CardRouting {
   effortCap?: EffortLevel;
   /** WS4 — free-text WHY this route was chosen (harness-enrich/human), surfaced in the WS5 history. Optional. */
   rationale?: string;
+  /**
+   * Who drives this card instead of the column cascade ({@link CardDriver}). Absent ⇒ the cascade (the
+   * default). ORTHOGONAL to `skips`/caps: a routing block that carries ONLY a driver still has `skips: []`
+   * and leaves the deterministic skip rules deciding live. Set by the conductor dispatch (board.yaml
+   * `conductor`) or `set_card_driver`; cleared only by the conductor or the operator (never by a session
+   * dying). `set_card_route` preserves it.
+   */
+  driver?: CardDriver;
 }
 
 /**
@@ -1873,6 +1896,16 @@ export interface BoardConfig {
     proxyUrl: string;
   };
   /**
+   * The CONDUCTOR dispatch ({@link ConductorPolicy}): when a story card ENTERS `fromStatus` (typically the
+   * column the human's acceptance lands it in) and `enabled`, the service stamps `routing.driver:
+   * conductor` on it and opens ONE interactive conductor session for it (the same spawn `claude_new`
+   * uses: worktree, claim, scoped MCP token, tmux, role `implement`) whose first prompt is
+   * `/harness-conductor <board>/<cardId>`. At most `maxSessions` live conductors per board; the excess
+   * waits in a durable queue and is dispatched when a slot frees. Absent ⇒ no dispatch (byte-identical).
+   * Board-local, never inherited meaningfully from `_base` (the base declares none).
+   */
+  conductor?: ConductorPolicy;
+  /**
    * 🟨 NEGÓCIO — Posicionamento estratégico (Kotler/Keller, STP): "Para [segmento], a [Marca] é a
    * [categoria] que [benefício] porque [razão]". Direciona marketing E produto (owner:human; propose_change).
    */
@@ -2032,6 +2065,24 @@ export interface OrchestratorPolicy {
   maxActionsPerHour?: number;
   /** risk class → disposition (auto/ask/never). Absent classes fall to a conservative default (`ask`). */
   riskMatrix?: Partial<Record<RiskClass, RiskDisposition>>;
+}
+
+/** Default cap of live conductor sessions per board (the owner's decision: up to 2 in parallel). */
+export const CONDUCTOR_DEFAULT_MAX_SESSIONS = 2;
+
+/**
+ * The board's CONDUCTOR dispatch policy (BoardConfig.conductor) — see `runner/conductor.ts`. Declarative
+ * and agnostic: the board names the status whose ENTRY is the "go" (`fromStatus`), how many conductors
+ * may run at once (`maxSessions`, default {@link CONDUCTOR_DEFAULT_MAX_SESSIONS}) and, optionally, the model
+ * tier the session runs on (absent ⇒ `opus`: one context carries the whole story, so the per-column tier a
+ * headless run would get is the wrong ruler). The dispatch obeys the same switches as autorun (the live
+ * master switch and the board's `autorunDisabled`) and the fleet's admission (cap + resource probe).
+ */
+export interface ConductorPolicy {
+  enabled: boolean;
+  fromStatus: string;
+  maxSessions?: number;
+  model?: ModelTier;
 }
 
 /** WS8 / F8 — server-side MCP authority LEVELS keyed by the URL token (settings.mcpTokens). A level MOUNTS a
