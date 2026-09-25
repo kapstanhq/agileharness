@@ -4,10 +4,15 @@ import type { CardMetrics } from "./runner/telemetry";
 // WS-12.2 (D16) — o Inbox carimba nos items os que o Jido autônomo DESISTIU (backoff por-item), lendo
 // o estado durável do orquestrador. Mockamos as fontes de IO da dobra (o board + os 5 sidecars/ledgers) para
 // isolar o carimbo; `mockNoopByItem` é o estado real de 2026-07-16 do acme.
-const { mockGetBoard, mockNoopByItem, mockReadBoardConfig } = vi.hoisted(() => ({
+const { mockGetBoard, mockNoopByItem, mockReadBoardConfig, mockMeterStall } = vi.hoisted(() => ({
   mockGetBoard: vi.fn(),
   mockNoopByItem: vi.fn(() => ({}) as Record<string, { streak: number; doctrine: string }>),
   mockReadBoardConfig: vi.fn(),
+  // v0.9 — o `meterStall` do snapshot do governador (o campo é do governador; aqui só a forma que o coletor lê).
+  mockMeterStall: vi.fn(() => null as null | { since: number; detectedAt: number; detail: string }),
+}));
+vi.mock("@/lib/storymap/runner/capacity-service", () => ({
+  getCapacityGovernor: () => ({ snapshot: () => ({ meterStall: mockMeterStall() }) }),
 }));
 vi.mock("@/lib/storymap/repo", async (orig) => ({
   ...(await orig<typeof import("./repo")>()),
@@ -129,6 +134,34 @@ describe("WS-12.2 (D16) — o Inbox carimba os itens de que o Jido desistiu", ()
     const items = await collectBoardCockpitItems("acme");
     expect(items).toHaveLength(1);
     expect(items[0].copilotBackoff).toBeUndefined();
+  });
+
+  // v0.9 — o MEDIDOR de cota parado entra no Inbox de TODO board enquanto durar: um item do host, travado, primeiro
+  // da pilha. E some sozinho quando o governador volta a ter leitura (meterStall null).
+  it("medidor parado ⇒ UM item do host neste board, na lane travado; medidor vivo ⇒ nada", async () => {
+    mockMeterStall.mockReturnValue({ since: 1_700_000_000_000, detectedAt: 1_700_001_800_000, detail: "leitura com 30min" });
+    try {
+      const items = await collectBoardCockpitItems("acme");
+      const meter = items.filter((i) => i.kind === "meter-stalled");
+      expect(meter).toHaveLength(1);
+      expect(meter[0]).toMatchObject({ boardId: "acme", cardId: "", lane: "travado", detail: "leitura com 30min" });
+      expect(items[0].kind).toBe("meter-stalled"); // travado vem antes do aprovar
+      // …e o tick NÃO acorda por ele (não há o que o copiloto faça) — nem no Autônomo
+      mockReadBoardConfig.mockResolvedValue({ ...config, orchestrator: { mode: "autonomous", riskMatrix: { deploy: "auto" } } });
+      expect((await collectActionableCockpit("acme")).ids).not.toContain(meter[0].id);
+    } finally {
+      mockMeterStall.mockReturnValue(null);
+    }
+    expect((await collectBoardCockpitItems("acme")).some((i) => i.kind === "meter-stalled")).toBe(false);
+  });
+
+  it("um snapshot sem o campo, ou com forma torta, é medidor vivo — nunca um item inventado", async () => {
+    mockMeterStall.mockReturnValue({ since: "ontem" } as never);
+    try {
+      expect((await collectBoardCockpitItems("acme")).some((i) => i.kind === "meter-stalled")).toBe(false);
+    } finally {
+      mockMeterStall.mockReturnValue(null);
+    }
   });
 });
 

@@ -66,12 +66,18 @@ const KIND_OVERRIDES: Record<CockpitItemKind, Record<string, unknown>> = {
   "merge-failed": { runId: "r1", branch: "run/r1", failureReason: "boom" },
   "proxy-audit": { id: "c1:pa:q1", lane: "aprovar", questionId: "q1", prompt: "?", answer: "a", assumptions: "p", confidence: 0.9 },
   "delivery-audit": { id: "c1:da", lane: "aprovar", sampledAt: "2026-09-25" },
+  "meter-stalled": { id: "host:meter-stalled:1", cardId: "", stalledSince: 1, detectedAt: 2, detail: "d" },
 };
 
 const ALL_KINDS: CockpitItemKind[] = [
   "question", "blocker", "finding", "deploy-failed", "gate", "approval", "review", "stuck", "conflict", "proposal", "design", "governance",
-  "deploy-unsettled", "release-aging", "merge-failed", "proxy-audit", "delivery-audit",
+  "deploy-unsettled", "release-aging", "merge-failed", "proxy-audit", "delivery-audit", "meter-stalled",
 ];
+
+// v0.9 (revisão exigida por este teste): o ÚNICO kind sem escalar. O medidor de cota parado é um fato do HOST — sem
+// card, e sem alavanca nenhuma do copiloto (o conserto é tráfego pelo proxy / renovar o token): abrir o Jido com ele
+// carregado seria acordá-lo para constatar impotência. Todo kind novo continua exigindo o escalar abaixo.
+const NO_ESCALATE_KINDS: ReadonlySet<string> = new Set(["meter-stalled"]);
 
 const deployCfg = mkConfig([st("release", "Publicar", { onEnter: "promote-and-deploy" }), st("live", "No ar", { terminal: true })]);
 const simpleCfg = mkConfig([st("todo", "A fazer", { autorun: false }), st("next", "Próximo"), st("done", "Concluída", { terminal: true })]);
@@ -95,7 +101,12 @@ describe("QUICK_ACTIONS_OF", () => {
       assertAction(set.primary);
       expect(Array.isArray(set.secondary)).toBe(true);
       set.secondary.forEach(assertAction);
-      // every kind can be handed to the copiloto (D4) — escalate is always present in WS-0.
+      // every kind can be handed to the copiloto (D4) — escalate is always present in WS-0 (except the host fact
+      // above, which has nothing the copiloto could do).
+      if (NO_ESCALATE_KINDS.has(kind)) {
+        expect(set).toEqual({ primary: null, secondary: [], escalate: null });
+        continue;
+      }
       expect(set.escalate).not.toBeNull();
       assertAction(set.escalate);
       expect(set.escalate?.invoke.kind).toBe("escalate");

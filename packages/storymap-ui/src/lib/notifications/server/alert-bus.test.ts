@@ -73,6 +73,13 @@ describe("o governador: cada borda com o seu nome na política", () => {
     expect(sendSlackAlert).toHaveBeenCalledTimes(2); // o Slack segue a mesma régua (as duas primeiras)
   });
 
+  it("o MEDIDOR parado empurra (frota retida sem ninguém ver) — uma borda do governador como as outras", () => {
+    publishAgentAlert(capacityAlert({ kind: "meter-stale", title: "Medidor de cota parado", body: "desde 03:10" }, 4));
+    expect(sendPush).toHaveBeenCalledTimes(1);
+    expect(sendSlackAlert).toHaveBeenCalledTimes(1);
+    expect(capacityAlert({ kind: "meter-stale", title: "t", body: "b" }, 4)).toMatchObject({ event: "capacity-meter-stale", tag: "capacity-meter-stale" });
+  });
+
   it("o aviso do governador leva o fato, não uma decisão de push", () => {
     const a = capacityAlert({ kind: "held-24h", title: "t", body: "b" }, 5);
     expect(a).toMatchObject({ kind: "capacity-critical", event: "capacity-held-24h", urgency: "blocking" });

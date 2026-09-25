@@ -560,6 +560,11 @@ export const QUICK_ACTIONS_OF: EntryMap = {
   "proxy-audit": (item) =>
     emptySet(buildEscalateAction({ templateId: "hitl-card-instructions", kind: "card", boardId: item.boardId, cardId: item.cardId })),
 
+  // v0.9 — o medidor de cota parado é um fato do HOST: não há card para abrir nem alavanca que o copiloto tenha
+  // (o conserto é tráfego pelo proxy / renovar o token). Nenhuma ação — nem o escalar, que abriria o Jido para
+  // constatar impotência. O renderer diz o que fazer.
+  "meter-stalled": () => ({ primary: null, secondary: [], escalate: null }),
+
   // v0.9 — confirmar/reabrir uma ENTREGA autônoma é do dono, e mora no renderer (Confirmar / Reabrir com o motivo).
   "delivery-audit": (item) =>
     emptySet(buildEscalateAction({ templateId: "hitl-card-instructions", kind: "card", boardId: item.boardId, cardId: item.cardId })),

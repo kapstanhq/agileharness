@@ -30,6 +30,7 @@ const EXPECTED: Record<PushEventKind, { push: boolean; slack: boolean }> = {
   "capacity-latch": { push: true, slack: true }, // a trava de cota parou a frota
   "capacity-extra-usage": { push: true, slack: true }, // trava por uso PAGO / a conta passou a gastar dinheiro
   "capacity-held-24h": { push: false, slack: false }, // o governador funcionando — painel de capacidade
+  "capacity-meter-stale": { push: true, slack: true }, // o medidor parou: frota retida sem ninguém ver
   "deploy-rollback": { push: true, slack: true }, // a produção não recebeu o que foi aprovado
   "deploy-blocked": { push: false, slack: false }, // nada rodou, nada caiu — Inbox (travado)
   "critical-signal": { push: true, slack: true }, // o board declarou: fonte parada, fornecedor sem crédito…
@@ -56,8 +57,14 @@ describe("a política padrão, fato a fato (exaustiva)", () => {
     },
   );
 
-  it("o padrão empurra SÓ o crítico: trava de cota (e a de uso pago), deploy revertido e sinais do board", () => {
-    expect([...DEFAULT_CRITICAL_PUSH].sort()).toEqual(["capacity-extra-usage", "capacity-latch", "critical-signal", "deploy-rollback"]);
+  it("o padrão empurra SÓ o crítico: trava de cota (e a de uso pago), medidor parado, deploy revertido e sinais do board", () => {
+    expect([...DEFAULT_CRITICAL_PUSH].sort()).toEqual([
+      "capacity-extra-usage",
+      "capacity-latch",
+      "capacity-meter-stale",
+      "critical-signal",
+      "deploy-rollback",
+    ]);
   });
 
   it("o único opt-in é o sininho do terminal (e ele nunca vai ao Slack do time)", () => {
@@ -144,7 +151,7 @@ describe("coerência: o que empurra também toca na tela aberta, em todo modo", 
   // quais fatos cada kind de aviso carrega (os produtores: capacity-notify, deploy-revert, critical-signal-channel,
   // attention-watch, instrumentation)
   const EVENTS_OF: Record<AgentAlertKind, PushEventKind[]> = {
-    "capacity-critical": ["capacity-latch", "capacity-extra-usage", "capacity-held-24h"],
+    "capacity-critical": ["capacity-latch", "capacity-extra-usage", "capacity-held-24h", "capacity-meter-stale"],
     "deploy-failed": ["deploy-rollback", "deploy-blocked"],
     "critical-signal": ["critical-signal"],
     "publish-blocked": ["publish-blocked"],

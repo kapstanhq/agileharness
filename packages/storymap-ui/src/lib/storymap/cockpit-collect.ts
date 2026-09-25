@@ -9,9 +9,11 @@ import {
   designItemsFromWireframes,
   governanceItemsFromDrafts,
   isCopilotActionable,
+  meterStallItem,
   proposalItemsFromContainers,
   stuckItemsFromFailures,
   type CockpitItem,
+  type MeterStall,
 } from "@/lib/storymap/demands";
 import { governanceConflicts } from "@/lib/storymap/governance";
 import {
@@ -179,6 +181,16 @@ async function collectBoardCockpit(boardId: string): Promise<{ items: CockpitIte
       ...(a.note ? { note: a.note } : {}),
     }));
 
+  // (7b) v0.9 — o MEDIDOR de cota parado: um fato do HOST (o governador de capacidade retém TODA automação), o
+  //      mesmo item em todo board enquanto durar. Leitura defensiva: o campo `meterStall` do snapshot é do
+  //      governador (capacity-governor/-service), e qualquer falha de leitura só significa "sem item".
+  const meterItems: CockpitItem[] = await readMeterStall()
+    .then((stall) => {
+      const item = meterStallItem(stall, boardId);
+      return item ? [item] : [];
+    })
+    .catch(() => []);
+
   // (8) WS-12.2 (D16) — stamp the items the autonomous copiloto GAVE UP on (per-item anti-noop backoff), so the
   //     cockpit can show the chip that makes the hand-off explicit ("this one is yours now"). Read-only over the
   //     durable orchestrator state; fail-open (an unreadable state just means no chips).
@@ -196,6 +208,7 @@ async function collectBoardCockpit(boardId: string): Promise<{ items: CockpitIte
     ...designItems,
     ...governanceItems,
     ...approvalItems,
+    ...meterItems,
   ]
     .map((item) => {
       // WS-4.5: the chip tells the truth — an item given up on under a REVOKED doctrine is not "yours now",
@@ -212,6 +225,23 @@ async function collectBoardCockpit(boardId: string): Promise<{ items: CockpitIte
         (a.since || "9999").localeCompare(z.since || "9999"),
     );
   return { items, cards };
+}
+
+/**
+ * O `meterStall` do snapshot do governador — ou null. Import dinâmico (o governador arrasta o laço de capacidade, e
+ * este coletor roda em toda leitura do Inbox) e leitura ESTRUTURAL: o campo pertence ao governador, e um snapshot
+ * sem ele (ou com outra forma) é simplesmente "medidor vivo".
+ */
+async function readMeterStall(): Promise<MeterStall | null> {
+  const { getCapacityGovernor } = await import("@/lib/storymap/runner/capacity-service");
+  const snap = getCapacityGovernor().snapshot() as unknown as { meterStall?: unknown };
+  const s = snap.meterStall as Partial<MeterStall> | null | undefined;
+  if (!s || typeof s.since !== "number" || !Number.isFinite(s.since)) return null;
+  return {
+    since: s.since,
+    detectedAt: typeof s.detectedAt === "number" ? s.detectedAt : s.since,
+    detail: typeof s.detail === "string" ? s.detail : "",
+  };
 }
 
 /**

@@ -243,14 +243,14 @@ mcpTokens:
 # SLACK (AGILEHARNESS_SLACK_WEBHOOK_URL). O resto espera no Inbox: o dono abre quando quiser. AUSENTE = o padrão
 # abaixo (descomentar só fixa a lista de hoje). A lista SUBSTITUI o padrão; vazia = nada empurra. Nome desconhecido
 # é descartado com aviso. Os fatos que existem:
-#   capacity-latch · capacity-extra-usage · capacity-held-24h   (o governador de capacidade)
+#   capacity-latch · capacity-extra-usage · capacity-held-24h · capacity-meter-stale   (o governador de capacidade)
 #   deploy-rollback (o deploy rodou e falhou; o card voltou) · deploy-blocked (recusado antes de rodar)
 #   critical-signal (card nascido com um prefixo de board.yaml notifications.criticalTitlePrefixes)
 #   card-demand · card-needs-you · card-moved · run-failed · publish-blocked · terminal-waiting
 #   terminal-quiet (o sininho que VOCÊ arma numa página de terminal: empurra sempre, é o seu pedido; nunca vai ao Slack)
 # notifications:
 #   push:
-#     critical: [capacity-latch, capacity-extra-usage, deploy-rollback, critical-signal]
+#     critical: [capacity-latch, capacity-extra-usage, capacity-meter-stale, deploy-rollback, critical-signal]
 #
 
 # Publicação — o canário de FIDELIDADE que roda depois de um deploy de rosto bem-sucedido:

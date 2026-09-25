@@ -45,6 +45,7 @@ import {
   type MergeFailedCockpitItem,
   type ProxyAuditCockpitItem,
   type DeliveryAuditCockpitItem,
+  type MeterStalledCockpitItem,
 } from "@/lib/storymap/demands";
 import type {
   BoardConfig,
@@ -77,7 +78,7 @@ import { escalationRefFor, type EscalationRef } from "@/lib/storymap/copilot/esc
 import { dejargonText, lensLabel } from "@/lib/storymap/copilot/dejargon";
 import { cardHref, processesMergeHref } from "@/lib/storymap/deep-links";
 import { QuickActionButton } from "@/components/QuickActionButton";
-import { COCKPIT_DEMAND_LABEL, cockpitItemShowsStatus } from "@/components/inicio/cockpit-labels";
+import { COCKPIT_DEMAND_LABEL, cockpitItemShowsStatus, meterStallLine } from "@/components/inicio/cockpit-labels";
 import { EscalateButton } from "@/components/copilot/EscalateButton";
 import {
   acceptProposalAction,
@@ -158,6 +159,8 @@ const KIND_RENDERER: Record<CockpitItemKind, (item: CockpitItem, ctx: RendererCt
   "proxy-audit": (item, ctx) => <ProxyAuditRenderer item={item as ProxyAuditCockpitItem} ctx={ctx} />,
   // v0.9 — the owner's AUDIT of an autonomous delivery (ultra mode: nobody approved it before it shipped).
   "delivery-audit": (item, ctx) => <DeliveryAuditRenderer item={item as DeliveryAuditCockpitItem} ctx={ctx} />,
+  // v0.9 — o medidor de cota parado (fato do HOST, sem card): a automação toda está retida.
+  "meter-stalled": (item) => <MeterStalledRenderer item={item as MeterStalledCockpitItem} />,
 };
 
 // ── Shell: ToastProvider wrapper ──────────────────────────────────────────────
@@ -2133,6 +2136,24 @@ function DeliveryAuditRenderer({ item, ctx }: { item: DeliveryAuditCockpitItem; 
           </button>
         }
       />
+    </div>
+  );
+}
+
+/**
+ * v0.9 — o MEDIDOR de cota parado. Sem botão de propósito: não há card, e nada que um clique aqui conserte — o
+ * impasse é o token do medidor, que só renova com tráfego. O item diz o que aconteceu, desde quando, e o que fazer
+ * no host; some sozinho quando uma leitura nova chegar.
+ */
+function MeterStalledRenderer({ item }: { item: MeterStalledCockpitItem }) {
+  return (
+    <div className="space-y-2">
+      <p className="text-[13px] leading-snug text-fg">{meterStallLine(item.stalledSince)}</p>
+      {item.detail && <p className="text-[12px] leading-snug text-fg-muted">{item.detail}</p>}
+      <p className="text-[12px] leading-snug text-fg-subtle">
+        Nenhum trabalho automático começa enquanto o medidor estiver parado. Faça passar tráfego pelo proxy de uso (uma
+        chamada mínima basta para o token renovar) ou renove o token; o item some quando uma leitura nova chegar.
+      </p>
     </div>
   );
 }

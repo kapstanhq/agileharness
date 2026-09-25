@@ -29,6 +29,9 @@ export type PushEventKind =
   | "capacity-extra-usage"
   /** um trabalho automático está retido pelo governador há mais de 24h. runner/capacity-notify. */
   | "capacity-held-24h"
+  /** o MEDIDOR de cota parou: a leitura de uso envelheceu depois de já ter sido vista, e o governador retém a frota
+   *  inteira sem que ninguém veja. runner/capacity-notify (borda do governador, uma vez por episódio). */
+  | "capacity-meter-stale"
   /** um deploy de produção FALHOU e o card foi revertido: o trabalho aprovado NÃO está no ar. runner/deploy-revert. */
   | "deploy-rollback"
   /** a publicação foi recusada ANTES de rodar (promoção stage→main falhou, preflight de frescor): nada tocou a
@@ -55,9 +58,10 @@ export type PushEventKind =
 
 /**
  * O padrão, fato a fato — exaustivo por construção (`Record<PushEventKind, …>`). `true` = empurra.
- * Só o que o dono chamou de crítico: a frota parada pela cota, a produção que não recebeu o que devia (deploy
- * revertido) e os sinais que o próprio board declara críticos (fonte de eventos parada, fornecedor sem crédito,
- * produção fora do ar vista por um monitor do produto). Todo o resto espera o dono no Inbox.
+ * Só o que o dono chamou de crítico: a frota parada pela cota (ou pelo medidor dela, parado), a produção que não
+ * recebeu o que devia (deploy revertido) e os sinais que o próprio board declara críticos (fonte de eventos
+ * parada, fornecedor sem crédito, produção fora do ar vista por um monitor do produto). Todo o resto espera o dono
+ * no Inbox.
  */
 export const PUSH_EVENT_DEFAULTS: Record<PushEventKind, boolean> = {
   "capacity-latch": true,
@@ -67,6 +71,9 @@ export const PUSH_EVENT_DEFAULTS: Record<PushEventKind, boolean> = {
   "capacity-extra-usage": true,
   // é o governador funcionando (retém o que não cabe na janela); aparece no painel de capacidade.
   "capacity-held-24h": false,
+  // é a frota PARADA por um defeito que não se resolve sozinho (sem tráfego, o token do medidor não renova) — o
+  // mesmo efeito da trava, sem a trava para avisar. Crítico.
+  "capacity-meter-stale": true,
   "deploy-rollback": true,
   // nada foi ao ar e nada saiu do ar: o card espera em "Liberar" com o motivo, no Inbox (lane travado).
   "deploy-blocked": false,

@@ -645,6 +645,7 @@ empurra — nenhum produtor decide sozinho:
 |---|---|---|
 | `capacity-latch` · `capacity-extra-usage` | o governador: a trava engatou (cota, ou uso extra PAGO) | **empurra** |
 | `capacity-held-24h` | o governador: trabalho automático retido > 24h | painel de capacidade |
+| `capacity-meter-stale` | o governador: o MEDIDOR de cota parou (leitura envelhecida) — frota retida sem ninguém ver | **empurra** (e item no Inbox de todo board enquanto durar) |
 | `deploy-rollback` | o deploy rodou, falhou e o card voltou para Liberar (o aprovado não está no ar) | **empurra** |
 | `deploy-blocked` | publicação recusada antes de rodar (promoção, preflight de frescor) | Inbox (travado) |
 | `critical-signal` | card que NASCE com um prefixo de `notifications.criticalTitlePrefixes` do board | **empurra** (uma vez por card) |

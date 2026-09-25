@@ -5,7 +5,7 @@
 //   • a board WITHOUT the autonomy block sees byte-identical items (no new keys on a legacy question).
 
 import { describe, expect, it } from "vitest";
-import { cardCockpitItems, cardDemands, isCopilotActionable, type CockpitItem } from "./demands";
+import { cardCockpitItems, cardDemands, isCopilotActionable, meterStallItem, type CockpitItem } from "./demands";
 import type { BoardConfig, Card, CardQuestion } from "./types";
 
 const cfg = (autonomy?: BoardConfig["autonomy"]): BoardConfig => ({
@@ -127,5 +127,29 @@ describe("a auditoria de uma entrega autônoma é item do dono — mesmo com o c
     const closed = delivered({ deliveryAudit: { sampledAt: "2026-09-25", auditedAt: "2026-09-26", outcome: "confirmed" } });
     expect(cardCockpitItems(closed, cfg({ mode: "ultra" }), "b")).toEqual([]);
     expect(cardCockpitItems(delivered(), cfg(), "b")).toEqual([]);
+  });
+});
+
+// v0.9 — o MEDIDOR de cota parado vira UM item do Inbox (fato do host, sem card) enquanto durar — e nunca é do
+// copiloto: o conserto é tráfego pelo proxy / renovar o token, mãos do operador.
+describe("o medidor de cota parado é item do Inbox, do host e do dono", () => {
+  it("meterStallItem: travado, severidade alta, sem card, id estável por episódio", () => {
+    const item = meterStallItem({ since: 1_700_000_000_000, detectedAt: 1_700_001_800_000, detail: "leitura com 30min" }, "b")!;
+    expect(item).toMatchObject({
+      kind: "meter-stalled",
+      boardId: "b",
+      cardId: "",
+      lane: "travado",
+      severity: "high",
+      stalledSince: 1_700_000_000_000,
+      detail: "leitura com 30min",
+      id: "host:meter-stalled:1700000000000",
+    });
+    for (const tier of ["chat", "copiloto", "autonomo"] as const) expect(isCopilotActionable(item, tier)).toBe(false);
+  });
+
+  it("medidor vivo (null) ou leitura torta ⇒ nenhum item", () => {
+    expect(meterStallItem(null, "b")).toBeNull();
+    expect(meterStallItem({ since: Number.NaN, detectedAt: 0, detail: "" }, "b")).toBeNull();
   });
 });
