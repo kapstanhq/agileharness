@@ -78,7 +78,15 @@ import { escalationRefFor, type EscalationRef } from "@/lib/storymap/copilot/esc
 import { dejargonText, lensLabel } from "@/lib/storymap/copilot/dejargon";
 import { cardHref, processesMergeHref } from "@/lib/storymap/deep-links";
 import { QuickActionButton } from "@/components/QuickActionButton";
-import { COCKPIT_DEMAND_LABEL, cockpitItemShowsStatus, meterStallLine } from "@/components/inicio/cockpit-labels";
+import {
+  COCKPIT_DEMAND_LABEL,
+  cockpitItemShowsStatus,
+  cockpitItemTitle,
+  governanceDecision,
+  meterRenewMessage,
+  meterStallHeadline,
+  previewList,
+} from "@/components/inicio/cockpit-labels";
 import { EscalateButton } from "@/components/copilot/EscalateButton";
 import {
   acceptProposalAction,
@@ -93,6 +101,7 @@ import {
   rejectActionRequestAction,
   refineProposalAction,
   rejectGovernanceDraftAction,
+  renewCapacityMeterAction,
   requestDesignChangeAction,
   resolveProxyAuditAction,
   resolveDeliveryAuditAction,
@@ -129,6 +138,12 @@ interface RendererCtx {
   onOpenCard: (cardId: string) => void;
   /** optimistic local removal after a delete (the server `items` refetch removes the row). */
   onDeleted: (cardId: string) => void;
+  /**
+   * `list` = a pilha do Inbox (muitos itens, um embaixo do outro); `item` = um item sozinho (a página dele, a
+   * folha da home). Na pilha, um corpo LONGO nasce recolhido — senão um item empurra a decisão de todos os
+   * seguintes para fora da tela; sozinho, ele pode abrir.
+   */
+  surface: "list" | "item";
 }
 
 // ── KIND REGISTRY — add a kind = add one renderer function here ──────────────
@@ -244,9 +259,15 @@ function CockpitViewInner({
     return () => { clearTimeout(t); es.close(); };
   }, [router]);
 
+  // Os avisos do HOST (o medidor de cota parado) saem das raias: não são uma decisão deste board — o mesmo
+  // aviso se repete em todo board — e, como item da raia TRAVADO, abriam o Inbox com um cartão que ocupava a
+  // primeira tela do celular inteira. Viram uma faixa compacta acima das raias, com a ação dela.
+  const hostNotices = items.filter((i): i is MeterStalledCockpitItem => i.kind === "meter-stalled");
+
   // Group items by lane preserving COCKPIT_GROUP_ORDER (travado → pergunta → aprovar)
   const byLane = new Map<string, CockpitItem[]>();
   for (const item of items) {
+    if (item.kind === "meter-stalled") continue;
     const bucket = byLane.get(item.lane) ?? [];
     bucket.push(item);
     byLane.set(item.lane, bucket);
@@ -284,6 +305,17 @@ function CockpitViewInner({
             Independente do inbox de cards: aparece quando o código de um sistema mudou desde o último
             sync, some quando tudo está sincronizado. */}
         <SystemDriftPanel boardId={boardId} />
+
+        {hostNotices.map((item) => (
+          <section
+            key={item.id}
+            data-host-notice={item.kind}
+            aria-label="Aviso do host"
+            className="mb-6 rounded-md border border-rose-500/30 bg-rose-500/5 px-3 py-2.5"
+          >
+            <MeterStalledRenderer item={item} />
+          </section>
+        ))}
 
         {total === 0 ? (
           <p className="rounded-md border border-line bg-surface p-6 text-center text-sm text-fg-muted">
@@ -329,6 +361,7 @@ function CockpitViewInner({
                           cardsById,
                           onOpenCard: openCardPage,
                           onDeleted: handleDeleted,
+                          surface: "list",
                         }}
                       />
                     ))}
@@ -395,10 +428,10 @@ function CockpitItemRow({
             className="text-[13px] font-medium text-fg transition hover:text-accent"
             title="Abrir card"
           >
-            {item.cardTitle}
+            {cockpitItemTitle(item)}
           </button>
         ) : (
-          <span className="text-[13px] font-medium text-fg">{item.cardTitle}</span>
+          <span className="text-[13px] font-medium text-fg">{cockpitItemTitle(item)}</span>
         )}
         {showStatus && statusName && (
           <>
@@ -495,6 +528,7 @@ function CockpitItemDetailInner({
     // On this dedicated page "abrir card" navigates to the card page; a delete returns to the cockpit.
     onOpenCard: (cardId) => router.push(`/board/${boardId}/card/${cardId}`),
     onDeleted: () => router.push(`/board/${boardId}/inbox`),
+    surface: "item",
   };
 
   return (
@@ -1546,6 +1580,11 @@ function ProposalRenderer({ item, ctx }: { item: ProposalCockpitItem; ctx: Rende
   const [refineOpen, setRefineOpen] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(() => selectAll(item.items));
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  // Na PILHA a lista de itens nasce recolhida: cada item traz descrição, caminho e avisos, e uma proposta de 7
+  // itens media ~2.000 px no celular — empurrando para fora da tela a decisão de todo item abaixo dela (o PRD do
+  // board ficava a ~11.000 px). O resumo + "Criar N cards" bastam para decidir o lote inteiro; para escolher item a
+  // item, abre-se a lista. Na página do item ela nasce aberta.
+  const [treeOpen, setTreeOpen] = useState(ctx.surface === "item");
   const [pending, startTransition] = useTransition();
 
   // Still generating: the proposal sidecar has no items yet (harness-capture hasn't written them). The container
@@ -1648,45 +1687,41 @@ function ProposalRenderer({ item, ctx }: { item: ProposalCockpitItem; ctx: Rende
   const acceptLabel =
     creations === n ? `Criar ${n} ${n === 1 ? "card" : "cards"}` : `Aplicar ${n} ${n === 1 ? "item" : "itens"}`;
 
+  const acceptButton = (
+    <button
+      type="button"
+      disabled={pending || chosen.length === 0}
+      onClick={accept}
+      title={
+        chosen.length === 0
+          ? "Marque ao menos um item para criar."
+          : "Cria de verdade os itens marcados no board e descarta esta proposta."
+      }
+      className={PRIMARY_BTN}
+    >
+      {pending ? "Criando…" : acceptLabel}
+    </button>
+  );
+
   return (
     <div className="space-y-3">
-      {/* Como o agente leu o texto — o enquadramento, em prosa, antes da lista. */}
-      <p className="text-[12px] leading-snug text-fg-muted">{item.summary || "Proposta de captura"}</p>
+      {/* Como o agente leu o texto — o enquadramento, em prosa, antes de tudo. Na pilha, com a lista fechada, até
+          4 linhas (há resumo de 16 linhas no celular): quem abre a lista lê o resumo inteiro junto dela. */}
+      <p
+        className={cn("text-[12px] leading-snug text-fg-muted", !treeOpen && "line-clamp-4")}
+        title={!treeOpen ? item.summary : undefined}
+      >
+        {item.summary || "Proposta de captura"}
+      </p>
 
-      {/* Onde cada item entra (caminho em texto) × o que entra (os cards novos), com cascata dura. */}
-      <ProposalTree
-        items={items}
-        selected={selected}
-        onSelect={onSelect}
-        collapsed={collapsed}
-        onToggleCollapse={onToggleCollapse}
-        cards={ctx.cardsById}
-        config={ctx.config}
-        onSelectAll={() => setSelected(selectAll(items))}
-        onSelectNone={() => setSelected(new Set())}
-        onReanchor={onReanchor}
-      />
-
+      {/* A decisão ANTES da lista (a mesma regra da governança): o botão diz quantos entram, e a lista — longa —
+          vem depois, para quem quer escolher item a item. */}
       <ItemActions
         ctx={ctx}
         cardId={item.cardId}
         escRef={escRef}
         openCard={false}
-        lead={
-          <button
-            type="button"
-            disabled={pending || chosen.length === 0}
-            onClick={accept}
-            title={
-              chosen.length === 0
-                ? "Marque ao menos um item para criar."
-                : "Cria de verdade os itens marcados no board e descarta esta proposta."
-            }
-            className={PRIMARY_BTN}
-          >
-            {pending ? "Criando…" : acceptLabel}
-          </button>
-        }
+        lead={acceptButton}
         trail={
           <>
             <button
@@ -1740,6 +1775,37 @@ function ProposalRenderer({ item, ctx }: { item: ProposalCockpitItem; ctx: Rende
             <span className="text-[11px] text-fg-subtle">⌘/Ctrl+Enter</span>
           </div>
         </div>
+      )}
+
+      <button
+        type="button"
+        aria-expanded={treeOpen}
+        onClick={() => setTreeOpen((v) => !v)}
+        className="text-[12px] font-medium text-accent transition hover:underline"
+      >
+        {treeOpen
+          ? "▾ Recolher a lista"
+          : `▸ Ver ${items.length === 1 ? "o item proposto" : `os ${items.length} itens propostos`}${n < items.length ? ` · ${n} marcado${n === 1 ? "" : "s"}` : ""}`}
+      </button>
+
+      {treeOpen && (
+        <>
+          {/* Onde cada item entra (caminho em texto) × o que entra (os cards novos), com cascata dura. */}
+          <ProposalTree
+            items={items}
+            selected={selected}
+            onSelect={onSelect}
+            collapsed={collapsed}
+            onToggleCollapse={onToggleCollapse}
+            cards={ctx.cardsById}
+            config={ctx.config}
+            onSelectAll={() => setSelected(selectAll(items))}
+            onSelectNone={() => setSelected(new Set())}
+            onReanchor={onReanchor}
+          />
+          {/* Quem escolheu item a item no fim de uma lista longa decide ali, sem rolar de volta. */}
+          {items.length > 3 && <div className="flex">{acceptButton}</div>}
+        </>
       )}
     </div>
   );
@@ -1836,15 +1902,8 @@ function DesignRenderer({ item, ctx }: { item: DesignCockpitItem; ctx: RendererC
         Sem pendências, aprove o design; com pedidos de mudança, envie para redesenho.
       </p>
 
-      <DesignCanvas
-        doc={docView}
-        journey={item.journey}
-        busy={pending}
-        compact
-        onSetPrimary={setPrimary}
-        onFeedback={sendFeedback}
-      />
-
+      {/* A decisão ANTES do canvas (a mesma regra da governança e da proposta): o canvas é longo, e o botão se
+          adapta sozinho enquanto você comenta — ele não precisa estar embaixo do que avalia. */}
       <ItemActions
         ctx={ctx}
         cardId={item.cardId}
@@ -1877,14 +1936,26 @@ function DesignRenderer({ item, ctx }: { item: DesignCockpitItem; ctx: RendererC
       </>
     }
   />
+
+      <DesignCanvas
+        doc={docView}
+        journey={item.journey}
+        busy={pending}
+        compact
+        onSetPrimary={setPrimary}
+        onFeedback={sendFeedback}
+      />
     </div>
   );
 }
 
 // ── RENDERER: governance ──────────────────────────────────────────────────────
 // Inbox cockpit surface for GovernanceDraft proposals (story-w9n03r).
-// Shows: reason + origin chip + per-change before/after diff in opt-3 style.
-// Conflict warning (before ≠ canonical) shown in amber above the action row.
+// DECISÃO PRIMEIRO, DOCUMENTO DEPOIS (v0.9.2): o título do item diz o que está em decisão
+// ("Aprovar o PRD do board — 16 seções"); o corpo mostra o porquê (≤3 linhas), as seções tocadas, o aviso
+// de conflito colado aos botões, e Aprovar/Rejeitar — tudo sem rolar, a 390px. O rascunho (per-change
+// before/after diff, opt-3 style) nasce RECOLHIDO atrás de "Ler o rascunho completo (N seções)", e repete
+// Aprovar/Rejeitar no fim de quem o abriu.
 // Actions: Aprovar (promotes all changes to canonical) · Rejeitar (discard).
 // Lane is always "aprovar".
 
@@ -2141,19 +2212,65 @@ function DeliveryAuditRenderer({ item, ctx }: { item: DeliveryAuditCockpitItem; 
 }
 
 /**
- * v0.9 — o MEDIDOR de cota parado. Sem botão de propósito: não há card, e nada que um clique aqui conserte — o
- * impasse é o token do medidor, que só renova com tráfego. O item diz o que aconteceu, desde quando, e o que fazer
- * no host; some sozinho quando uma leitura nova chegar.
+ * v0.9 — o MEDIDOR de cota parado, como AVISO COMPACTO do host: uma linha com o fato e o efeito, o "Renovar agora" e
+ * o por quê recolhido. Não há card: é um fato do HOST que se repete em todo board. Até a v0.9.1 ele era um muro de
+ * três parágrafos SEM botão no topo do Inbox — ocupava a primeira tela do celular inteira e mandava o dono "fazer
+ * passar tráfego pelo proxy", o que ninguém faz de um celular. O botão pede ao governador o keepalive do host AGORA
+ * e relê o medidor (renewCapacityMeterAction — só o operador com sessão); o item some sozinho quando a leitura nova
+ * chega.
  */
 function MeterStalledRenderer({ item }: { item: MeterStalledCockpitItem }) {
+  const router = useRouter();
+  const toast = useToast();
+  const [pending, startTransition] = useTransition();
+
+  const renew = () => {
+    if (pending) return;
+    startTransition(async () => {
+      const res = await renewCapacityMeterAction();
+      if (!res.ok || !res.data) {
+        toast(res.ok ? "O governador não respondeu ao pedido de renovação." : res.error);
+        return;
+      }
+      const msg = meterRenewMessage(res.data);
+      toast(msg.text, msg.tone);
+      router.refresh();
+    });
+  };
+
   return (
-    <div className="space-y-2">
-      <p className="text-[13px] leading-snug text-fg">{meterStallLine(item.stalledSince)}</p>
-      {item.detail && <p className="text-[12px] leading-snug text-fg-muted">{item.detail}</p>}
-      <p className="text-[12px] leading-snug text-fg-subtle">
-        Nenhum trabalho automático começa enquanto o medidor estiver parado. Faça passar tráfego pelo proxy de uso (uma
-        chamada mínima basta para o token renovar) ou renove o token; o item some quando uma leitura nova chegar.
-      </p>
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <p className="min-w-0 flex-1 text-[13px] font-medium leading-snug text-fg">{meterStallHeadline(item.stalledSince)}</p>
+        <button
+          type="button"
+          disabled={pending}
+          onClick={renew}
+          title="Roda agora o keepalive do host (AGILEHARNESS_METER_KEEPALIVE) para gerar tráfego pelo proxy de uso e relê o medidor."
+          className={PRIMARY_BTN}
+        >
+          {pending ? "Renovando…" : "Renovar agora"}
+        </button>
+      </div>
+      <details className="group/why">
+        <summary className="cursor-pointer list-none text-[11.5px] font-medium text-fg-subtle transition hover:text-fg-muted">
+          <span className="group-open/why:hidden">▸ Por quê e o que fazer</span>
+          <span className="hidden group-open/why:inline">▾ Por quê e o que fazer</span>
+        </summary>
+        <div className="mt-1.5 space-y-1.5 text-[12px] leading-snug text-fg-muted">
+          <p>
+            O proxy de uso só renova a leitura da cota com tráfego da conta. Sem tráfego o token dele expira, a leitura
+            para — e, com o medidor parado, o governador retém toda automação: nenhum run automático começa até uma
+            leitura nova chegar.
+          </p>
+          <p>
+            &ldquo;Renovar agora&rdquo; roda o keepalive do host e relê o medidor. Sem keepalive configurado, peça ao
+            operador do host para definir AGILEHARNESS_METER_KEEPALIVE; uma sessão interativa do Claude neste host
+            também renova o token.
+          </p>
+          {item.detail && <p className="text-fg-subtle">Medido pelo governador: {item.detail}</p>}
+        </div>
+      </details>
     </div>
   );
 }
@@ -2163,6 +2280,11 @@ function GovernanceRenderer({ item, ctx }: { item: GovernanceCockpitItem; ctx: R
   const toast = useToast();
   const escRef = escalationRefFor(item, ctx.boardId); // WS-3 §3.6
   const [pending, startTransition] = useTransition();
+  // O rascunho nasce RECOLHIDO, na pilha e na página do item: é o documento, não a decisão. Aberto por padrão
+  // ele punha o Aprovar de um PRD de 16 seções a ~8.800 px do topo no celular — o dono não achava onde aprovar.
+  const [draftOpen, setDraftOpen] = useState(false);
+  const decision = governanceDecision(item);
+  const blocked = item.conflicts.length > 0;
 
   const approve = () => {
     if (pending) return;
@@ -2190,26 +2312,61 @@ function GovernanceRenderer({ item, ctx }: { item: GovernanceCockpitItem; ctx: R
     });
   };
 
+  // A MESMA decisão em dois lugares: no topo (sempre visível) e no fim do rascunho aberto — quem leu as 16 seções
+  // decide ali, sem rolar de volta. O segundo par é só Aprovar/Rejeitar: ler e delegar já estão no primeiro.
+  const decide = (full: boolean) => (
+    <ItemActions
+      ctx={ctx}
+      cardId={item.cardId}
+      escRef={full ? escRef : null}
+      openCard={full && Boolean(item.cardId)}
+      lead={
+        <button
+          type="button"
+          disabled={pending || blocked}
+          title={
+            blocked
+              ? "Conflito: re-proponha sobre o valor atual antes de aprovar."
+              : "Aplica estas mudanças ao board de verdade (viram o valor oficial)."
+          }
+          onClick={approve}
+          className={PRIMARY_BTN}
+        >
+          {pending ? "Aplicando…" : "Aprovar"}
+        </button>
+      }
+      trail={
+        <button
+          type="button"
+          disabled={pending}
+          onClick={reject}
+          title="Descarta a proposta — o board fica como está."
+          className={SECONDARY_BTN}
+        >
+          Rejeitar
+        </button>
+      }
+    />
+  );
+
   return (
     <div className="space-y-3">
-      {/* Origin + reason */}
-      <div className="flex flex-wrap items-start gap-2">
-        <span className="rounded bg-surface px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-fg-subtle">
-          ⚙ GOV
-        </span>
-        {item.origin?.skill && (
-          <span className="rounded bg-surface px-1.5 py-0.5 font-mono text-[10px] text-fg-subtle">
-            {item.origin.skill}
-          </span>
-        )}
-      </div>
+      {/* O QUE está em decisão já é o título do item (cockpitItemTitle → "Aprovar o PRD do board — 16 seções").
+          Aqui: o porquê, em até 3 linhas, e o que a proposta toca — o bastante para decidir sem abrir o rascunho. */}
       {item.reason && (
-        <p className="text-[12px] text-fg-muted">{item.reason}</p>
+        <p className="line-clamp-3 text-[12.5px] leading-snug text-fg-muted" title={item.reason}>
+          {item.reason}
+        </p>
+      )}
+      {decision && decision.sections.length > 1 && (
+        <p className="line-clamp-2 text-[11.5px] leading-snug text-fg-subtle" title={decision.sections.join(", ")}>
+          Seções: {previewList(decision.sections)}
+        </p>
       )}
 
       {/* Conflict warning — canonical changed since the proposal: approve is BLOCKED (q1=o1).
-          No blind overwrite; the proposal must be re-made over the current value. */}
-      {item.conflicts.length > 0 && (
+          No blind overwrite; the proposal must be re-made over the current value. Colado aos botões que ele bloqueia. */}
+      {blocked && (
         <div className="rounded-md border border-amber-400/40 bg-amber-400/8 px-2.5 py-1.5">
           <p className="text-[11px] text-amber-700 dark:text-amber-400">
             ⚠ Conflito: o valor canônico mudou desde a proposta ({item.conflicts.join(", ")}).
@@ -2218,60 +2375,52 @@ function GovernanceRenderer({ item, ctx }: { item: GovernanceCockpitItem; ctx: R
         </div>
       )}
 
-      {/* Before / After diff — opt-3 style */}
-      <div className="space-y-2">
-        {item.changes.map((change, i) => {
-          const label = change.label ?? (change.field ? `${change.artifact}.${change.field}` : change.artifact);
-          const beforeStr = governanceValueToText(change, change.before);
-          const afterStr = governanceValueToText(change, change.after);
-          return (
-            <div key={i} className="rounded-md border border-line bg-inset px-2.5 py-2 space-y-1">
-              <p className="text-[10px] uppercase tracking-wide text-fg-subtle">{label}</p>
-              <div className="rounded bg-surface px-2 py-1">
-                <p className="text-[10px] text-fg-subtle mb-0.5">− antes</p>
-                <p className="whitespace-pre-wrap text-[12px] text-fg-muted leading-snug">{beforeStr}</p>
-              </div>
-              <div className="rounded bg-emerald-500/8 border border-emerald-500/20 px-2 py-1">
-                <p className="text-[10px] text-emerald-700 dark:text-emerald-400 mb-0.5">+ depois</p>
-                <p className="whitespace-pre-wrap text-[12px] text-emerald-900 dark:text-emerald-300 leading-snug">{afterStr}</p>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      {decide(true)}
 
-      <ItemActions
-        ctx={ctx}
-        cardId={item.cardId}
-        escRef={escRef}
-        openCard={Boolean(item.cardId)}
-        lead={
-          <button
-            type="button"
-            disabled={pending || item.conflicts.length > 0}
-            title={
-              item.conflicts.length > 0
-                ? "Conflito: re-proponha sobre o valor atual antes de aprovar."
-                : "Aplica estas mudanças ao board de verdade (viram o valor oficial)."
-            }
-            onClick={approve}
-            className={PRIMARY_BTN}
-          >
-            {pending ? "Aplicando…" : "Aprovar"}
-          </button>
-        }
-        trail={
-          <button
-            type="button"
-            disabled={pending}
-            onClick={reject}
-            title="Descarta a proposta — o board fica como está."
-            className={SECONDARY_BTN}
-          >
-            Rejeitar
-          </button>
-        }
-      />
+      <button
+        type="button"
+        aria-expanded={draftOpen}
+        onClick={() => setDraftOpen((v) => !v)}
+        className="text-[12px] font-medium text-accent transition hover:underline"
+      >
+        {draftOpen ? "▾ Recolher o rascunho" : `▸ ${decision?.readLabel ?? "Ver a proposta completa"}`}
+      </button>
+
+      {draftOpen && (
+        <div className="space-y-3 border-t border-line pt-3">
+          {/* Origin */}
+          <div className="flex flex-wrap items-start gap-2">
+            <span className="rounded bg-surface px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-fg-subtle">⚙ GOV</span>
+            {item.origin?.skill && (
+              <span className="rounded bg-surface px-1.5 py-0.5 font-mono text-[10px] text-fg-subtle">{item.origin.skill}</span>
+            )}
+          </div>
+
+          {/* Before / After diff — opt-3 style */}
+          <div className="space-y-2">
+            {item.changes.map((change, i) => {
+              const label = change.label ?? (change.field ? `${change.artifact}.${change.field}` : change.artifact);
+              const beforeStr = governanceValueToText(change, change.before);
+              const afterStr = governanceValueToText(change, change.after);
+              return (
+                <div key={i} className="rounded-md border border-line bg-inset px-2.5 py-2 space-y-1">
+                  <p className="text-[10px] uppercase tracking-wide text-fg-subtle">{label}</p>
+                  <div className="rounded bg-surface px-2 py-1">
+                    <p className="text-[10px] text-fg-subtle mb-0.5">− antes</p>
+                    <p className="whitespace-pre-wrap text-[12px] text-fg-muted leading-snug">{beforeStr}</p>
+                  </div>
+                  <div className="rounded bg-emerald-500/8 border border-emerald-500/20 px-2 py-1">
+                    <p className="text-[10px] text-emerald-700 dark:text-emerald-400 mb-0.5">+ depois</p>
+                    <p className="whitespace-pre-wrap text-[12px] text-emerald-900 dark:text-emerald-300 leading-snug">{afterStr}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {decide(false)}
+        </div>
+      )}
     </div>
   );
 }

@@ -8,7 +8,15 @@ import {
   cockpitItemSnippet,
   cockpitItemTitle,
   cockpitItemWaitingMs,
+  governanceDecision,
+  governanceSections,
+  meterRenewMessage,
+  meterStallHeadline,
+  previewList,
 } from "./cockpit-labels";
+import { PRD_SCHEMA } from "@/lib/storymap/doc/schemas/prd";
+import type { KeepaliveNowOutcome } from "@/lib/storymap/runner/capacity-service";
+import type { GovernanceChange } from "@/lib/storymap/types";
 import {
   COCKPIT_GROUP_ORDER,
   type CockpitItem,
@@ -192,5 +200,133 @@ describe("cockpitItemWaitingMs", () => {
   it("clamps a future timestamp to 0 rather than going negative", () => {
     const item = fixture("question", { since: "2026-07-23T12:05:00.000Z" });
     expect(cockpitItemWaitingMs(item, NOW)).toBe(0);
+  });
+});
+
+// ── A proposta de governança como DECISÃO (v0.9.2) ────────────────────────────────────────────────
+// Medido no ar (board nook): o rascunho do PRD — 20 mudanças, 16 seções — vinha INTEIRO antes do Aprovar, que
+// ficava a 8.768 px do topo a 390px; e o título do item era a lista de chaves ("prd.resumo + prd.problema + …").
+
+/** Um rascunho do PRD INTEIRO: uma mudança por seção do schema (topo e subseções), como o do board nook. */
+const fullPrd: GovernanceChange[] = PRD_SCHEMA.sections.map((sec) => ({
+  artifact: "prd",
+  field: sec.key,
+  before: "",
+  after: `texto de ${sec.label}`,
+  label: `PRD · ${sec.label}`,
+}));
+const topLevel = PRD_SCHEMA.sections.filter((sec) => sec.level === 2);
+
+describe("governanceSections", () => {
+  it("no PRD conta a seção de TOPO: a subseção entra como a seção que a contém, sem repetir", () => {
+    const sections = governanceSections(fullPrd);
+    expect(fullPrd.length).toBe(20);
+    expect(sections).toHaveLength(16);
+    expect(sections).toEqual(topLevel.map((sec) => sec.label));
+  });
+
+  it("nos outros artefatos cada campo tocado é uma unidade, com o rótulo do proponente", () => {
+    expect(
+      governanceSections([
+        { artifact: "canvas", field: "problem", before: "", after: "x", label: "Canvas · Problema" },
+        { artifact: "canvas", field: "problem", before: "", after: "y", label: "Canvas · Problema" },
+        { artifact: "desiredOutcome", field: null, before: "", after: "z" },
+      ]),
+    ).toEqual(["Canvas · Problema", "resultado-alvo"]);
+  });
+});
+
+describe("governanceDecision", () => {
+  it("o PRD inteiro vira UMA manchete — o que se decide e o tamanho: «Aprovar o PRD do board — 16 seções»", () => {
+    const d = governanceDecision({ changes: fullPrd, conflicts: [] })!;
+    expect(d.headline).toBe("Aprovar o PRD do board — 16 seções");
+    expect(d.readLabel).toBe("Ler o rascunho completo (16 seções)");
+    expect(d.sections).toHaveLength(16);
+  });
+
+  it("conflitos entram na manchete — o dono vê que o Aprovar está bloqueado antes de tentar", () => {
+    expect(governanceDecision({ changes: fullPrd, conflicts: ["PRD · Posicionamento"] })!.headline).toBe(
+      "Aprovar o PRD do board — 16 seções, 1 conflito",
+    );
+    const one: GovernanceChange[] = [{ artifact: "positioning", field: null, before: "a", after: "b" }];
+    expect(governanceDecision({ changes: one, conflicts: ["positioning", "x"] })!.headline).toBe(
+      "Aprovar o posicionamento — 2 conflitos",
+    );
+  });
+
+  it("um artefato só, uma mudança: sem contagem; várias: contadas; canvas por bloco; vários artefatos: nomeados", () => {
+    const one: GovernanceChange[] = [{ artifact: "desiredOutcome", field: null, before: "a", after: "b" }];
+    expect(governanceDecision({ changes: one, conflicts: [] })).toMatchObject({
+      headline: "Aprovar o resultado-alvo",
+      readLabel: "Ver o antes e depois (1 mudança)",
+    });
+    const canvas: GovernanceChange[] = [
+      { artifact: "canvas", field: "problem", before: "", after: "x" },
+      { artifact: "canvas", field: "solution", before: "", after: "y" },
+    ];
+    expect(governanceDecision({ changes: canvas, conflicts: [] })!.headline).toBe("Aprovar o Lean Canvas — 2 blocos");
+    const mixed: GovernanceChange[] = [...one, ...canvas];
+    expect(governanceDecision({ changes: mixed, conflicts: [] })!.headline).toBe(
+      "Aprovar mudanças no board — resultado-alvo + Lean Canvas",
+    );
+  });
+
+  it("sem mudança nenhuma ⇒ null (a tela cai no rótulo do kind)", () => {
+    expect(governanceDecision({ changes: [], conflicts: [] })).toBeNull();
+  });
+
+  it("é o TÍTULO do item de governança em toda superfície — nunca mais a lista de chaves", () => {
+    const item = {
+      kind: "governance",
+      cardTitle: fullPrd.map((c) => `prd.${c.field}`).join(" + "),
+      changes: fullPrd,
+      conflicts: [],
+    } as unknown as CockpitItem;
+    expect(cockpitItemTitle(item)).toBe("Aprovar o PRD do board — 16 seções");
+  });
+});
+
+describe("previewList", () => {
+  it("até `max` nomes, o resto contado", () => {
+    expect(previewList(["a", "b"])).toBe("a, b");
+    expect(previewList(["a", "b", "c", "d", "e", "f"])).toBe("a, b, c, d e mais 2");
+    expect(previewList(["a", "b", "c"], 2)).toBe("a, b e mais 1");
+  });
+});
+
+// ── O medidor de cota parado: aviso compacto + «Renovar agora» (v0.9.2) ──────────────────────────────
+
+describe("meterStallHeadline", () => {
+  it("UMA linha: o fato e o efeito, na hora de quem lê — a causa fica no «por quê» recolhido", () => {
+    const since = Date.UTC(2026, 8, 25, 3, 10);
+    const hhmm = new Date(since).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+    expect(meterStallHeadline(since)).toBe(`Medidor de cota parado desde ${hhmm} — automação retida`);
+  });
+});
+
+describe("meterRenewMessage", () => {
+  const ALL: KeepaliveNowOutcome[] = ["renewed", "still-stalled", "failed", "not-configured", "no-meter"];
+
+  it.each(ALL)("dá a %s uma frase", (outcome) => {
+    expect(meterRenewMessage({ outcome, detail: "" }).text.trim().length).toBeGreaterThan(0);
+  });
+
+  it("só «renovado» é sucesso; «não configurado» diz a QUEM pedir e O QUÊ", () => {
+    expect(meterRenewMessage({ outcome: "renewed", detail: "ok" })).toEqual({
+      tone: "success",
+      text: "Medidor renovado — a automação volta a entrar.",
+    });
+    const nc = meterRenewMessage({ outcome: "not-configured", detail: "" });
+    expect(nc.tone).not.toBe("success");
+    expect(nc.text).toContain("operador do host");
+    expect(nc.text).toContain("AGILEHARNESS_METER_KEEPALIVE");
+    for (const o of ALL.filter((x) => x !== "renewed")) expect(meterRenewMessage({ outcome: o, detail: "" }).tone, o).not.toBe("success");
+  });
+
+  it("a falha carrega o erro do keepalive", () => {
+    expect(meterRenewMessage({ outcome: "failed", detail: "exit 1 — not logged in" })).toEqual({
+      tone: "error",
+      text: "O keepalive falhou: exit 1 — not logged in",
+    });
   });
 });

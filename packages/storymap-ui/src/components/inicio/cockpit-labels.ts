@@ -3,7 +3,10 @@
 // client file) so the inbox, the feed and the per-item page share ONE vocabulary and can be
 // unit-tested without React.
 
-import type { CockpitGroup, CockpitItem, CockpitItemKind } from "@/lib/storymap/demands";
+import type { CockpitGroup, CockpitItem, CockpitItemKind, GovernanceCockpitItem } from "@/lib/storymap/demands";
+import { PRD_SCHEMA } from "@/lib/storymap/doc/schemas/prd";
+import type { GovernanceArtifact, GovernanceChange } from "@/lib/storymap/types";
+import type { KeepaliveNowResult } from "@/lib/storymap/runner/capacity-service";
 
 /**
  * A short human LABEL per cockpit kind — the eyebrow of an attention row/detail. EXHAUSTIVE over
@@ -102,10 +105,128 @@ export const LANE_TEXT_CLS: Record<CockpitGroup, string> = {
 /**
  * A one-line TITLE for an attention item: the underlying card's title, or the kind label for a
  * board-level item that carries no card (governance drafts, the copiloto's own approval requests).
+ *
+ * A proposta de governança é a exceção: o `cardTitle` dela é a lista de chaves que ela toca
+ * (`draftTitle` — "prd.resumo + prd.problema + …", 20 chaves num PRD inteiro), um identificador para
+ * máquina que no Inbox virava um título de cinco linhas. O título dela é a DECISÃO
+ * ({@link governanceDecision}).
  */
 export function cockpitItemTitle(item: CockpitItem): string {
+  if (item.kind === "governance") {
+    const decision = governanceDecision(item);
+    if (decision) return decision.headline;
+  }
   const title = item.cardTitle?.trim();
   return title && title.length > 0 ? title : COCKPIT_KIND_LABEL[item.kind];
+}
+
+// ── A proposta de governança como DECISÃO ────────────────────────────────────────────────────────
+//
+// O item de governança mostrava o rascunho INTEIRO antes dos botões: num PRD de 16 seções o Aprovar
+// ficava a ~8.800 px do topo no celular, e o dono não o achava. A tela passa a dizer primeiro O QUE
+// está em decisão — "Aprovar o PRD do board — 16 seções" — e o documento vem depois, recolhido.
+// Estas funções são a parte PURA disso: o que a manchete diz e como as seções se contam.
+
+/** O objeto da decisão, por artefato — o complemento de "Aprovar …". Exaustivo (o Record obriga). */
+const GOVERNANCE_SUBJECT: Record<GovernanceArtifact, string> = {
+  prd: "o PRD do board",
+  positioning: "o posicionamento",
+  businessMetric: "a métrica de negócio",
+  desiredOutcome: "o resultado-alvo",
+  canvas: "o Lean Canvas",
+  canvasTags: "as etiquetas do Lean Canvas",
+  releases: "as releases",
+  personas: "as personas",
+};
+
+/** O mesmo, curto — para a proposta que mexe em mais de um artefato ("PRD + Lean Canvas"). */
+const GOVERNANCE_SHORT: Record<GovernanceArtifact, string> = {
+  prd: "PRD",
+  positioning: "posicionamento",
+  businessMetric: "métrica de negócio",
+  desiredOutcome: "resultado-alvo",
+  canvas: "Lean Canvas",
+  canvasTags: "etiquetas do canvas",
+  releases: "releases",
+  personas: "personas",
+};
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * As SEÇÕES que a proposta toca, na ordem em que aparecem, sem repetição. No PRD a unidade é a seção
+ * de TOPO do documento: uma subseção ("Objetivos · Métrica de negócio") conta como a seção que a contém
+ * — é assim que o dono lê o PRD, e é por isso que um rascunho de 20 mudanças é "16 seções". Nos outros
+ * artefatos, cada campo tocado é uma unidade, com o rótulo que o proponente deu.
+ */
+export function governanceSections(changes: readonly GovernanceChange[]): string[] {
+  const seen = new Map<string, string>();
+  for (const c of changes) {
+    if (c.artifact === "prd" && c.field) {
+      const rule = PRD_SCHEMA.sections.find((s) => s.key === c.field);
+      const top = rule?.parent ? PRD_SCHEMA.sections.find((s) => s.key === rule.parent) : rule;
+      const key = `prd:${top?.key ?? c.field}`;
+      if (!seen.has(key)) seen.set(key, top?.label ?? c.label?.trim() ?? c.field);
+      continue;
+    }
+    const key = `${c.artifact}:${c.field ?? ""}`;
+    if (!seen.has(key)) seen.set(key, c.label?.trim() || (c.field ? `${c.artifact}.${c.field}` : GOVERNANCE_SHORT[c.artifact]));
+  }
+  return [...seen.values()];
+}
+
+export interface GovernanceDecision {
+  /** o que está em decisão, numa linha: "Aprovar o PRD do board — 16 seções, 1 conflito". */
+  headline: string;
+  /** as seções tocadas ({@link governanceSections}). */
+  sections: string[];
+  /** o rótulo do botão que abre o rascunho recolhido. */
+  readLabel: string;
+}
+
+/**
+ * A proposta de governança dita como DECISÃO — a manchete, as seções e o rótulo do "ler o rascunho".
+ * PURA. `null` quando a proposta não traz mudança nenhuma (a tela cai no rótulo do kind).
+ */
+export function governanceDecision(item: Pick<GovernanceCockpitItem, "changes" | "conflicts">): GovernanceDecision | null {
+  const changes = item.changes ?? [];
+  if (changes.length === 0) return null;
+  const sections = governanceSections(changes);
+  const artifacts = [...new Set(changes.map((c) => c.artifact))];
+
+  let headline: string;
+  let unit: string;
+  if (artifacts.length > 1) {
+    headline = `Aprovar mudanças no board — ${artifacts.map((a) => GOVERNANCE_SHORT[a]).join(" + ")}`;
+    unit = plural(changes.length, "mudança", "mudanças");
+  } else if (artifacts[0] === "prd") {
+    unit = plural(sections.length, "seção", "seções");
+    headline = `Aprovar ${GOVERNANCE_SUBJECT.prd} — ${unit}`;
+  } else if (artifacts[0] === "canvas" && changes.every((c) => c.field)) {
+    unit = plural(sections.length, "bloco", "blocos");
+    headline = `Aprovar ${GOVERNANCE_SUBJECT.canvas} — ${unit}`;
+  } else {
+    unit = plural(changes.length, "mudança", "mudanças");
+    headline = `Aprovar ${GOVERNANCE_SUBJECT[artifacts[0]]}${changes.length > 1 ? ` — ${unit}` : ""}`;
+  }
+
+  const conflicts = item.conflicts?.length ?? 0;
+  if (conflicts > 0) {
+    const c = plural(conflicts, "conflito", "conflitos");
+    headline += headline.includes(" — ") ? `, ${c}` : ` — ${c}`;
+  }
+
+  const readLabel = artifacts.length === 1 && artifacts[0] === "prd" ? `Ler o rascunho completo (${unit})` : `Ver o antes e depois (${unit})`;
+  return { headline, sections, readLabel };
+}
+
+/**
+ * Até `max` nomes e o resto contado — "Resumo executivo, Problema, Público e mais 13". PURA. Para caber
+ * numa linha do Inbox sem virar outra parede de texto.
+ */
+export function previewList(names: readonly string[], max = 4): string {
+  if (names.length <= max) return names.join(", ");
+  return `${names.slice(0, max).join(", ")} e mais ${names.length - max}`;
 }
 
 /** First non-empty trimmed string, or "" — keeps the per-kind branches below to one expression each. */
@@ -132,8 +253,49 @@ function firstText(...candidates: Array<string | null | undefined>): string {
  * (e não na projeção pura) porque a hora é do fuso de quem lê.
  */
 export function meterStallLine(stalledSince: number): string {
-  const hhmm = new Date(stalledSince).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-  return `medidor de cota parado desde ${hhmm} — automação retida; causa provável: sem tráfego pelo proxy / token expirado`;
+  return `medidor de cota parado desde ${stallClock(stalledSince)} — automação retida; causa provável: sem tráfego pelo proxy / token expirado`;
+}
+
+/** `HH:MM` da última leitura boa, no fuso de quem LÊ. */
+function stallClock(stalledSince: number): string {
+  return new Date(stalledSince).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * A linha ÚNICA do aviso compacto do medidor no Inbox — o fato e o efeito, sem a causa (que fica no "por quê",
+ * recolhido). O aviso é do HOST e se repete em todo board: ele não pode empurrar as decisões para fora da
+ * primeira tela.
+ */
+export function meterStallHeadline(stalledSince: number): string {
+  return `Medidor de cota parado desde ${stallClock(stalledSince)} — automação retida`;
+}
+
+/**
+ * O que o toast diz depois do "Renovar agora" — o desfecho do governador em uma frase, e se é sucesso. PURA.
+ * O `not-configured` diz a quem pedir e o quê: o dono no celular não tem como definir o keepalive, o operador
+ * do host tem.
+ */
+export function meterRenewMessage(r: KeepaliveNowResult): { tone: "success" | "warning" | "error"; text: string } {
+  const why = r.detail ? `: ${r.detail}` : "";
+  switch (r.outcome) {
+    case "renewed":
+      return { tone: "success", text: "Medidor renovado — a automação volta a entrar." };
+    case "still-stalled":
+      return { tone: "warning", text: "O keepalive rodou, mas o medidor segue parado — o token do proxy não renovou." };
+    case "failed":
+      return { tone: "error", text: `O keepalive falhou${why}` };
+    case "not-configured":
+      return {
+        tone: "warning",
+        text: "Keepalive não configurado — peça ao operador do host para definir AGILEHARNESS_METER_KEEPALIVE.",
+      };
+    case "no-meter":
+      return { tone: "warning", text: `Sem medidor neste host${why}` };
+    default: {
+      const exhaustive: never = r.outcome;
+      return exhaustive;
+    }
+  }
 }
 
 export function cockpitItemSnippet(item: CockpitItem): string {
