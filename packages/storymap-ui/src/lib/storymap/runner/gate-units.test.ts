@@ -359,7 +359,8 @@ describe("o SELO na argv — forma verificada aqui; contenção medida em gate-s
       const u = res.report!.units[0];
       expect(u.isolation).toBe("systemd");
       expect(u.argv[0]).toBe("systemd-run");
-      expect(u.argv.slice(-3)).toEqual(["/bin/sh", "-c", "bunx vitest run --reporter=json"]);
+      // (sob o selo o vitest carrega o config em memória e não grava cache — ver o describe logo abaixo)
+      expect(u.argv.slice(-3)).toEqual(["/bin/sh", "-c", "bunx vitest run --reporter=json --configLoader runner --no-cache"]);
       expect(res.report!.isolation).toBe("systemd");
     } finally {
       if (prev === undefined) delete process.env.GATE_SEAL_VALUE_PROBE;
@@ -393,6 +394,57 @@ describe("o SELO na argv — forma verificada aqui; contenção medida em gate-s
     await run(h, { scope: { packages: { "packages/web": "bunx vitest run" } } });
     expect(h.calls.some((c) => c.cmd.includes("systemd-run"))).toBe(false);
     expect(unitCalls(h.calls, "packages/web")[0].cmd).toBe("bunx vitest run --reporter=json");
+  });
+});
+
+describe("vitest SOB o selo não escreve em node_modules (links read-only para o checkout principal)", () => {
+  // Medido (vite 8.2 / vitest 4.1, node_modules numa montagem ro): o loader default empacota o config em
+  // `node_modules/.vite-temp` e morre em EROFS — «failed to load config» antes do primeiro teste. O alvo de
+  // referência contornava com `mergeGate.sealed.writablePaths`, abrindo o node_modules do checkout principal.
+  const SEALED = { mode: "systemd" as const, reason: "sonda ok" };
+  const tail = (cmd: string) => cmd.slice(cmd.lastIndexOf("'/bin/sh' '-c' ") + "'/bin/sh' '-c' ".length);
+
+  it("a unidade vitest selada carrega o config em memória e sem cache — também com a seleção por afetados", async () => {
+    const h = harness({ changed: ["packages/web/src/a.ts"], units: { "packages/web": { merged: { exit: 0, stdout: vitestJson(3) } } } });
+    const res = await run(h, { scope: { packages: { "packages/web": "bunx vitest run --config vitest.unit.config.ts" } }, affected: AFFECTED, isolation: SEALED });
+    expect(res.passed).toBe(true);
+    expect(tail(unitCalls(h.calls, "packages/web")[0].cmd)).toBe(
+      "'bunx vitest run --config vitest.unit.config.ts --changed basesha0000 --passWithNoTests --reporter=json --configLoader runner --no-cache'",
+    );
+    expect(res.report!.units[0].argv.at(-1)).toContain("--configLoader runner --no-cache");
+  });
+
+  it("só vitest: a unidade junit/exit-code selada NÃO ganha flag de vitest; e sem selo nada muda", async () => {
+    const h = harness({
+      changed: ["services/api/app.py", "tools/lint/x.sh"],
+      junitFile: ".gate/junit.xml",
+      units: { "services/api": { merged: { exit: 0, junit: junit([{ name: "a" }]) } }, "tools/lint": { merged: { exit: 0 } } },
+    });
+    await run(h, { scope: MONOREPO, isolation: SEALED });
+    for (const k of ["services/api", "tools/lint"]) expect(unitCalls(h.calls, k)[0].cmd).not.toContain("--configLoader");
+
+    const h2 = harness({ changed: ["packages/web/src/a.ts"], units: { "packages/web": { merged: { exit: 0, stdout: vitestJson(1) } } } });
+    await run(h2, { scope: { packages: { "packages/web": "bunx vitest run" } } });
+    expect(unitCalls(h2.calls, "packages/web")[0].cmd).toBe("bunx vitest run --reporter=json");
+  });
+
+  it("a regeneração de snapshot (`vitest -u`) selada leva as MESMAS flags, no pacote do snap", async () => {
+    const h = harness({
+      changed: ["packages/web/src/__snapshots__/a.test.ts.snap", "packages/web/src/a.ts"],
+      units: { "packages/web": { merged: { exit: 0, stdout: vitestJson(2) } } },
+    });
+    await run(h, { scope: { packages: { "packages/web": "bunx vitest run" } }, baselineRef: "stage", deltaBase: "b0", isolation: SEALED });
+    const regen = h.calls.find((c) => c.cmd.includes("vitest run -u"));
+    expect(regen, "a regen não rodou — o teste mediria o vazio").toBeDefined();
+    expect(regen!.cwd).toBe("/repo/.worktrees/gate-x/packages/web");
+    expect(tail(regen!.cmd)).toBe("'bunx vitest run -u --configLoader runner --no-cache'");
+  });
+
+  it("o operador que já declarou o loader MANDA — a flag não é repetida", async () => {
+    const h = harness({ changed: ["packages/web/src/a.ts"], units: { "packages/web": { merged: { exit: 0, stdout: vitestJson(1) } } } });
+    await run(h, { scope: { packages: { "packages/web": "bunx vitest run --configLoader native" } }, isolation: SEALED });
+    const cmd = tail(unitCalls(h.calls, "packages/web")[0].cmd);
+    expect(cmd).toBe("'bunx vitest run --configLoader native --reporter=json --no-cache'");
   });
 });
 

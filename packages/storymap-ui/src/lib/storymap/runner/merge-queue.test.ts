@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { devNull } from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -2187,6 +2188,16 @@ describe("makeDefaultGateRunner — SNAP-AWARE staging merge (story-zdeajs CRITI
     }
   });
 
+  it("mergeBranchIntoStaging regenera no pacote DO SNAP — nunca num `packages/storymap-ui` literal", async () => {
+    const { exec, calls } = makeSnapGateExec({ unmergedPaths: ["packages/acme/src/__snapshots__/cart.test.ts.snap"] });
+    const res = await makeDefaultGateRunner(noopFs)({ exec, repoRoot: "/repo", branch: "run/x", runId: "x", checkCommand: "vitest run", timeoutMs: 1000 });
+
+    expect(res.passed).toBe(true);
+    const regens = calls.filter((c) => c.cmd.includes("bunx vitest run -u"));
+    expect(regens).toHaveLength(1);
+    expect(regens[0].cwd).toBe(path.join("/repo", ".worktrees", "gate-x", "packages", "acme"));
+  });
+
   it("SNAP-ONLY conflict → REGENERATES from the merged source, runs the suite, and PASSES (no false-park)", async () => {
     const { exec, calls } = makeSnapGateExec({ unmergedPaths: ["packages/storymap-ui/src/__snapshots__/board.snap"] });
     const runner = makeDefaultGateRunner(noopFs);
@@ -3444,13 +3455,15 @@ describe("makeMergeQueue — staging-OFF snapshot auto-regen on the pure git-mer
   // two-phase merge (`--no-commit`) hits a snap-only conflict; the regen resolves it; the completing
   // commit makes the branch an ancestor of HEAD (so the f3 guard passes). The snap regen reports a
   // staged diff (`diff --cached --quiet` exits 1) so the helper returns "regenerated".
-  function makeSnapMergeExec(opts: { regenThrows?: boolean } = {}) {
+  function makeSnapMergeExec(opts: { regenThrows?: boolean; snap?: string } = {}) {
     const calls: string[] = [];
-    const snap = "packages/storymap-ui/src/lib/storymap/__snapshots__/board-base-pipeline.test.ts.snap";
+    const cwds: Array<{ cmd: string; cwd?: string }> = [];
+    const snap = opts.snap ?? "packages/storymap-ui/src/lib/storymap/__snapshots__/board-base-pipeline.test.ts.snap";
     let integrated = false;
     let vitestRan = false;
-    const exec: ExecFn = async (cmd) => {
+    const exec: ExecFn = async (cmd, o) => {
       calls.push(cmd);
+      cwds.push({ cmd, cwd: o?.cwd });
       // main tree is clean (no board mutations) → empty-diff guard + clean-gate both see clean.
       if (cmd.includes("status --porcelain")) return { stdout: "", stderr: "" };
       if (cmd.includes("rev-parse --verify")) return { stdout: "deadbeef\n", stderr: "" };
@@ -3488,8 +3501,23 @@ describe("makeMergeQueue — staging-OFF snapshot auto-regen on the pure git-mer
       // scan-secrets, rev-parse HEAD/HEAD^1, branch -D, push, etc. all succeed.
       return { stdout: "", stderr: "" };
     };
-    return { exec, calls, snap };
+    return { exec, calls, cwds, snap };
   }
+
+  it("a regen roda no pacote DO SNAP — nunca num `packages/storymap-ui` literal (agnosticismo, D13)", async () => {
+    // No repositório de um adotante `packages/storymap-ui` não existe: a regen rodava a suíte errada, ou
+    // morria com cwd inexistente e o merge era desfeito por um "teste vermelho" que ninguém mediu.
+    const { exec, cwds } = makeSnapMergeExec({ snap: "packages/acme/src/__snapshots__/cart.test.ts.snap" });
+    const { mq } = makeQueue({ exec, snapFs: recordingFs().fs });
+
+    await mq.enqueueMerge(input({ board: "acme", cardId: "story-z", runId: "s1", branch: "run/s1" }));
+    await mq.whenIdle();
+
+    expect(mq.getSnapshot().entries[0].status).toBe("done");
+    const regens = cwds.filter((c) => c.cmd.includes("bunx vitest run -u"));
+    expect(regens).toHaveLength(1);
+    expect(regens[0].cwd).toBe(path.join("/repo", "packages", "acme"));
+  });
 
   it("regenerates a divergent *.snap from the merged source, folds it into the merge commit, lands `done` — NEVER false-parks (AC1)", async () => {
     const { exec, calls, snap } = makeSnapMergeExec();

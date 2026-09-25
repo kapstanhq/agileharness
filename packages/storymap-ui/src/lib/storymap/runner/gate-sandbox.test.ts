@@ -11,7 +11,7 @@
 // A metade real é pulada onde o host não roda UNIDADE TRANSIENTE nenhuma (CI sem root, macOS, container
 // sem systemd, ou esta suíte rodando DENTRO do selo do gate). Nunca pela sonda do selo — ver TRANSIENT_OK.
 import { exec as execCb, spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -27,6 +27,7 @@ import {
   resolveGateIsolation,
   sealProperties,
   stopUnitCommand,
+  withSealedVitestFlags,
   type GateSeal,
 } from "./gate-sandbox";
 import { parseJunitReport } from "./gate-reporters";
@@ -131,6 +132,20 @@ describe("buildSealedInvocation — a argv que o exec roda", () => {
       expect(stopUnitCommand(bad as string)).toBeNull();
     }
     expect(stopUnitCommand("ah-gate-r1-abc.service")).toBe("systemctl stop 'ah-gate-r1-abc.service'");
+  });
+});
+
+describe("withSealedVitestFlags — vitest selado sem escrita em node_modules", () => {
+  it("anexa o loader em memória e desliga o cache de resultados", () => {
+    expect(withSealedVitestFlags("bunx vitest run --reporter=json")).toBe("bunx vitest run --reporter=json --configLoader runner --no-cache");
+  });
+  it("nunca repete o que o comando já declarou (`--configLoader x`, `--configLoader=x`, `--cache`/`--no-cache`)", () => {
+    expect(withSealedVitestFlags("vitest run --configLoader native")).toBe("vitest run --configLoader native --no-cache");
+    expect(withSealedVitestFlags("vitest run --configLoader=bundle --no-cache")).toBe("vitest run --configLoader=bundle --no-cache");
+    expect(withSealedVitestFlags("vitest run --cache")).toBe("vitest run --cache --configLoader runner");
+  });
+  it("um caminho que só CONTÉM a palavra não conta como a flag", () => {
+    expect(withSealedVitestFlags("vitest run --config x--configLoader.ts")).toBe("vitest run --config x--configLoader.ts --configLoader runner --no-cache");
   });
 });
 
@@ -341,6 +356,59 @@ test("subprocesso + git init/commit numa pasta temporária", () => {
     expect(rep.failures).toEqual([]);
     expect(rep.tests).toBe(3);
   });
+});
+
+// ── vitest SELADO de verdade: o node_modules da árvore é LINK para o checkout (read-only no selo) ─────────
+describe.skipIf(!TRANSIENT_OK)("vitest REAL sob o selo — o config carrega sem gravar em node_modules", () => {
+  let root: string;
+  let tree: string;
+  beforeAll(() => {
+    root = mkdtempSync(path.join(os.tmpdir(), "ah-gate-vitest-"));
+    tree = path.join(root, "tree");
+    mkdirSync(tree);
+    // a MESMA forma da árvore do gate: node_modules é um link para o checkout (aqui, o deste pacote — sob
+    // /root, que o selo monta read-only), e o config usa import.meta.url como o de um alvo real.
+    symlinkSync(path.resolve(process.cwd(), "node_modules"), path.join(tree, "node_modules"));
+    writeFileSync(path.join(tree, "package.json"), JSON.stringify({ name: "gate-vitest-fixture", private: true, type: "module" }));
+    writeFileSync(
+      path.join(tree, "vitest.config.ts"),
+      `import { fileURLToPath } from "node:url";\nimport { defineConfig } from "vitest/config";\n` +
+        `export default defineConfig({ resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } }, test: { include: ["*.test.ts"] } });\n`,
+    );
+    writeFileSync(path.join(tree, "a.test.ts"), `import { expect, it } from "vitest";\nit("soma", () => { expect(1 + 1).toBe(2); });\n`);
+  });
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  const runSealed = async (command: string): Promise<{ ok: boolean; out: string }> => {
+    const inv = buildSealedInvocation({
+      command,
+      cwd: tree,
+      env: { ...process.env },
+      timeoutMs: 90_000,
+      seal: seal({ treePath: tree, repoRoot: root, inaccessiblePaths: [], runId: "vitest" }),
+      nonce: Math.random().toString(36).slice(2, 8),
+    });
+    try {
+      const r = await execP(inv.command, { env: inv.env, cwd: tree, timeout: 120_000 });
+      return { ok: true, out: `${r.stdout}${r.stderr}` };
+    } catch (err) {
+      const e = err as { stdout?: string; stderr?: string };
+      return { ok: false, out: `${e.stdout ?? ""}${e.stderr ?? ""}` };
+    }
+  };
+  const vitest = () => `${path.resolve(process.cwd(), "node_modules", ".bin", "vitest")} run --reporter=json`;
+
+  it("[CONTROLE] o loader default morre em EROFS no node_modules read-only — o teste discrimina", async () => {
+    const r = await runSealed(vitest());
+    expect(r.ok).toBe(false);
+    expect(r.out).toMatch(/EROFS|read-only file system/i);
+  }, 150_000);
+
+  it("[SELADO] com as flags do selo o MESMO config carrega e a suíte roda, medida pelo relatório", async () => {
+    const r = await runSealed(withSealedVitestFlags(vitest()));
+    expect(r.ok, r.out.slice(-600)).toBe(true);
+    expect(r.out).toContain('"numPassedTests":1');
+  }, 150_000);
 });
 
 // ── E O GATE INTEIRO, selado, contra um repositório git real ────────────────────────────────────────────

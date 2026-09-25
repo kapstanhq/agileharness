@@ -1,6 +1,7 @@
 // Tests for the block-runtime-board-writes hook (pre-write/pre-edit) — WS-3.1 / D4.
 //
-// Run with:  node --test .claude/hooks/tests/
+// Run with:  node --test '.claude/hooks/tests/*.test.js'   (quoted: node ≥ 21 expands the glob itself; a bare
+//             DIRECTORY argument is read as a module path on node 22 and fails with MODULE_NOT_FOUND)
 //
 // Lives OUTSIDE checks/ on purpose (mesmo racional dos irmãos: runner.js auto-carrega todo *.js
 // sob checks/<event>/ como CHECK — um arquivo de teste lá viraria um check no-op e os casos nunca

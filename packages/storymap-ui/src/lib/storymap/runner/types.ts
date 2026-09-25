@@ -260,6 +260,11 @@ export interface GateUnitReport {
   tests: number | null;
   /** falhas que o relatório identificou (0 para exit-code, que não identifica) */
   failures: number;
+  /**
+   * `data` = unidade do gate de DADOS (`mergeGate.dataUnits`): rodou numa árvore de `main` + a metade do split
+   * que aterrissa em main. Ausente = gate de código (a árvore de `stage`) — o relatório de antes, byte a byte.
+   */
+  half?: "data";
 }
 
 /** O que a entrada do train guarda do gate: isolamento efetivo + as unidades da rodada que DECIDIU. */
