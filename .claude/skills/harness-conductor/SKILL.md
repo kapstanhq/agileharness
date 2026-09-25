@@ -203,7 +203,7 @@ The AgileHarness server is mounted as `storymap` in a fleet session (`mcp__story
 | `list_claims` | `{board?, released?}` |
 | `update_card` | `{board, cardId, title?, storyType?, narrative?{role,want,soThat}, acceptance?[], personas?[], systems?[], body?}` — `body` REPLACES the whole body |
 | `move_card` | `{board, cardId, status?, parent?, serves?, release?, order?}` |
-| `ask_question` | `{board, cardId, texts?[], questions?[], askedBy?}` — `questions[]`: `{text, context?, options?[{label, pros?[], cons?[], recommended?}], mode?: "single" \| "multi", recommendation?, category?: "interview" \| "ui-choice" \| "delivery" \| "money"}` (2–8 options, at most ONE recommended; `recommendation` only without options). ALWAYS set `category`: it is what the autonomy key reads (see "ULTRA mode") |
+| `ask_question` | `{board, cardId, texts?[], questions?[], askedBy?}` — `questions[]`: `{text, context?, options?[{label, pros?[], cons?[], recommended?}], mode?: "single" \| "multi", recommendation?, category: "interview" \| "ui-choice" \| "delivery" \| "money"}` (2–8 options, at most ONE recommended; `recommendation` only without options). `category` is REQUIRED on every structured question (the tool refuses one without it): it is what the autonomy key reads (see "ULTRA mode"). Plain `texts` carry no category and stay with the owner |
 | `write_sidecar` | `{board, cardId, kind: "plans" \| "wireframes" \| "proposals", content}` — full file, ≤512KB; `wireframes` is VALIDATED (bad JSON, `format: "html"` without html, html over 32KB or sanitized to nothing ⇒ error naming the artifact) and returns `avisos` for what the sanitizer strips / fixed widths over 390px |
 | `add_finding` | `{board, cardId, severity, title, detail?, lens?, id?, file?, line?, suggestion?}` — on MAIN; a stable `id` is idempotent (refreshes content, never the status) |
 | `set_tasks` | `{board, cardId, sessionId, tasks: [{id, title, done}]}` — REPLACES the list on MAIN; only the session holding the card's live claim |
@@ -506,7 +506,13 @@ In **ultra**:
   any agent.
 - **P5 (delivery):** after the `## Prova da entrega`, move `revisao` -> `merge` (Integrar) yourself instead of
   pausing — unless the delivery touches an always-human category (money, auth/rules/payments, PRD), then P5.
-  Publishing stays with the board's release policy.
+  Publishing stays with the board's release policy. **Notice after, sampled audit:** when a story you delivered this
+  way reaches the board's `delivered` status ("No ar"), a deterministic sample (by card id, at `auditSampleRate`)
+  lands on the owner's Inbox as "Entrega autônoma" — with your `## Prova da entrega` as the evidence, so write it
+  for a reader who did not watch you work. The owner confirms it, or REOPENS it: the story comes back in
+  `mode: refine` with the owner's reason as the brief and an open `delivery-audit` finding (a reopen clears the
+  driver — the refine triage owns it from there; a later conductor treats that finding as part of the contract).
+  A delivery the owner moved out of the approval step themselves (a P5 you paused on) is never sampled.
 - A sample of the proxy's answers (`auditSampleRate`, default 0.2, plus every answer below 0.5 confidence) goes
   to the owner's audit list; a REOPENED answer returns to the owner and is never proxied again — treat its new
   answer as authoritative on resume.
@@ -530,8 +536,8 @@ In **ultra**:
 
 ## Known limits (core follow-ups — do not pretend otherwise)
 
-Screenshots have no durable per-card home; the ultra DELIVERY audit (sampling notices of autonomous
-deliveries) is not in core yet — only the proxy's answers are sampled. A conductor that
+Screenshots have no durable per-card home (the delivery audit shows the `## Prova da entrega` text, not the
+PNGs). A conductor that
 dies is never reopened automatically (the driver stays; the operator reopens with `claude_new` or
 clears it). The session's cost is an ESTIMATE (embedded price table; a model it does not know is
 priced by family or left unpriced), booked when the session ends — a tail spent after

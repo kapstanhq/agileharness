@@ -320,7 +320,9 @@ arquivos (minimiza conflito), (d) entrega um incremento demonstrável.
   entrega; se ele morreu, quem decide é o operador. Não mova, não responda perguntas, não re-drive e
   não passe gate num card com o driver — o tick já não acorda por ele e o steward o deixa em paz.
   Pergunta de DINHEIRO (`category: money`) e pergunta que o PROXY de uma story ultra está respondendo
-  também não são suas (`answer_question` recusa a primeira).
+  também não são suas (`answer_question` recusa a primeira). Nem as AUDITORIAS do dono — "Resposta do
+  proxy" e "Entrega autônoma" (a amostra das entregas de stories ultra que chegaram ao ar sem aprovação
+  prévia): confirmar ou reabrir é dele, e o tick não acorda por elas.
 - **Distribua trabalho por INTENÇÃO, com `suggest_work`.** Para saber o próximo card
   acionável e livre, use **`suggest_work`** (determinística, read-only, ordem total, **zero
   reserva**) em vez de escolher no olho, e spawne/adote a sessão via `claude_new` /

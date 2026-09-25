@@ -14,6 +14,7 @@
 
 import { openQuestions } from "./questions";
 import { isOwnerOnlyQuestion, isPendingProxyAudit, isProxiableQuestion } from "./autonomy";
+import { deliveryProofOf, isPendingDeliveryAudit } from "./delivery-audit";
 import { draftTitle, isGovernanceDraftStale } from "./governance";
 import { hasCanvasContent } from "./design-canvas";
 // type-only: apagado em runtime, então não cria ciclo (copilot/tier.ts não importa demands.ts) e mantém este
@@ -460,7 +461,9 @@ export type CockpitItemKind =
   /** WS-5 (D9) — entry TERMINAL `failed` do merge train (a mais recente do card): trabalho fora da main. */
   | "merge-failed"
   /** lanes-ultra — uma resposta que o PROXY (modo ultra) deu no lugar do dono e caiu na AMOSTRA de auditoria. */
-  | "proxy-audit";
+  | "proxy-audit"
+  /** v0.9 — uma ENTREGA AUTÔNOMA (modo ultra: ninguém aprovou antes) chegou ao ar e caiu na AMOSTRA de auditoria. */
+  | "delivery-audit";
 
 interface CockpitItemBase {
   /** stable id, unique within the board (e.g. `<cardId>:q:<questionId>`) */
@@ -520,6 +523,20 @@ export interface ProxyAuditCockpitItem extends CockpitItemBase {
   assumptions: string;
   confidence: number;
   category?: QuestionCategory;
+}
+
+/**
+ * 🟢 v0.9 — an AUTONOMOUS DELIVERY on the owner's audit list (ultra mode — delivery-audit.ts): the story reached a
+ * `delivered` status with no one approving it first, and the deterministic sample picked it. The owner CONFIRMS it
+ * (it stands) or REOPENS it (the story goes back through refine, with the owner's reason as a finding). It is the
+ * owner's review of work shipped on their behalf: never the copiloto's.
+ */
+export interface DeliveryAuditCockpitItem extends CockpitItemBase {
+  kind: "delivery-audit";
+  /** when the delivery was sampled (YYYY-MM-DD). */
+  sampledAt: string;
+  /** the `## Prova da entrega` the conductor wrote (trimmed), when the card has one. */
+  proof?: string;
 }
 
 /** 🔴 An open blocker finding (code review) keeping the card stuck. */
@@ -702,7 +719,8 @@ export type CockpitItem =
   | DeployUnsettledCockpitItem
   | ReleaseAgingCockpitItem
   | MergeFailedCockpitItem
-  | ProxyAuditCockpitItem;
+  | ProxyAuditCockpitItem
+  | DeliveryAuditCockpitItem;
 
 /**
  * 6.4 — quem pode ACIONAR cada kind do cockpit, POR TIER do copiloto. O princípio (herdado da F8) é um só:
@@ -767,6 +785,9 @@ const KIND_AUTONOMY: Record<CockpitItemKind, KindAutonomy> = {
   // um copiloto que a fechasse apagaria justamente o controle que a amostra existe para dar. (A tool que a fecha é
   // full-only também — as duas travas dizem a mesma coisa.)
   "proxy-audit": "never",
+  // v0.9 — a auditoria de uma ENTREGA autônoma é a mesma coisa um degrau acima: o dono revisando o que foi entregue
+  // em nome dele. Um copiloto que a confirmasse apagaria o único olhar humano sobre essa entrega.
+  "delivery-audit": "never",
   approval: "never", // é o pedido que o PRÓPRIO copiloto abriu — ele aguarda VOCÊ. Se fosse acionável, o tick
   // acordaria por causa de si mesmo, veria "trabalho", e re-acordaria: laço. O gate DO CARD (que ele PODE
   // empurrar) é o kind `gate` — outro item, outra semântica.
@@ -892,6 +913,22 @@ export function cardCockpitItems(card: Card, config: BoardConfig, boardId: strin
         ...(q.category ? { category: q.category } : {}),
       });
     }
+  }
+
+  // v0.9 — the DELIVERY AUDIT list: an autonomous delivery sampled for the owner's review. Also BEFORE the terminal
+  // guard — the delivered status IS terminal ("No ar"), and that is exactly where this item has to show.
+  if (def && isPendingDeliveryAudit(card) && card.deliveryAudit) {
+    const proof = deliveryProofOf(card.body);
+    out.push({
+      ...base,
+      id: `${card.id}:da`,
+      kind: "delivery-audit",
+      lane: "aprovar",
+      severity: "low",
+      since: card.deliveryAudit.sampledAt,
+      sampledAt: card.deliveryAudit.sampledAt,
+      ...(proof ? { proof } : {}),
+    });
   }
 
   if (!def || def.terminal) return out;

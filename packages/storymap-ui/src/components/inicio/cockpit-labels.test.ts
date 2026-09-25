@@ -104,6 +104,7 @@ const SNIPPET_FIXTURE: Record<CockpitItemKind, Record<string, unknown>> = {
   "release-aging": { stagedAt: "2026-07-18T10:00:00.000Z", ageDays: 4 },
   "merge-failed": { runId: "r1", branch: "failed/run/r1", failureReason: "o gate reprovou" },
   "proxy-audit": { prompt: "Quem é o público?", answer: "Leitoras", assumptions: "PRD", confidence: 0.8 },
+  "delivery-audit": { sampledAt: "2026-09-25", proof: "- **O que mudou:** filtro por gênero na lista" },
 };
 
 const ALL_KINDS = Object.keys(SNIPPET_FIXTURE) as CockpitItemKind[];

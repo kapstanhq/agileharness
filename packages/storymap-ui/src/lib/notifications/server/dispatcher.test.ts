@@ -1,10 +1,13 @@
 // O dispatcher registra o canal dos SINAIS CRÍTICOS do board — sem esta linha a declaração em board.yaml
 // (`notifications.criticalTitlePrefixes`) seria aceita, coerida e INERTE: o monitor do produto gritaria e o dono
-// não ouviria.
+// não ouviria. E o da AUDITORIA de entregas autônomas, pelo mesmo motivo: sem ele o modo ultra nunca amostraria.
 
 import { describe, expect, it, vi } from "vitest";
 
-const { criticalNotify } = vi.hoisted(() => ({ criticalNotify: vi.fn(async () => {}) }));
+const { criticalNotify, auditNotify } = vi.hoisted(() => ({ criticalNotify: vi.fn(async () => {}), auditNotify: vi.fn(async () => {}) }));
+vi.mock("./channels/delivery-audit-channel", () => ({
+  createDeliveryAuditChannel: () => ({ id: "delivery-audit", notify: auditNotify }),
+}));
 vi.mock("./channels/critical-signal-channel", () => ({
   createCriticalSignalChannel: () => ({ id: "critical-signal", notify: criticalNotify }),
 }));
@@ -22,5 +25,7 @@ describe("getDispatcher", () => {
     const event = { id: "1", type: "card.created" as const, boardId: "b", cardId: "c", title: "[sinal:x] y", at: 0 };
     await getDispatcher().dispatch(event);
     expect(criticalNotify).toHaveBeenCalledWith(event);
+    // e ao canal da auditoria de entregas autônomas (modo ultra) — sem ele a amostra nunca aconteceria
+    expect(auditNotify).toHaveBeenCalledWith(event);
   });
 });

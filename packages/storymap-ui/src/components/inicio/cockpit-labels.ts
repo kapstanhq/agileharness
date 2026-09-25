@@ -27,6 +27,7 @@ export const COCKPIT_KIND_LABEL: Record<CockpitItemKind, string> = {
   "release-aging": "Release parada em stage",
   "merge-failed": "Merge falhou",
   "proxy-audit": "Resposta do proxy",
+  "delivery-audit": "Entrega autônoma",
 };
 
 /**
@@ -61,6 +62,7 @@ export const COCKPIT_DEMAND_LABEL: Record<CockpitItemKind, string> = {
   "release-aging": "Publicar release parada",
   "merge-failed": "Resolver merge que falhou",
   "proxy-audit": "Auditar resposta do proxy",
+  "delivery-audit": "Auditar entrega autônoma",
 };
 
 /**
@@ -165,6 +167,8 @@ export function cockpitItemSnippet(item: CockpitItem): string {
       return firstText(item.failureReason, `Branch ${item.branch} ficou fora da main.`);
     case "proxy-audit":
       return firstText(item.prompt && `${item.prompt} → ${item.answer}`, item.answer);
+    case "delivery-audit":
+      return firstText(item.proof, "Entregue sem aprovação prévia (modo ultra) — caiu na amostra de auditoria.");
     default: {
       const exhaustive: never = item;
       return exhaustive;

@@ -423,7 +423,7 @@ view:                        # opcional: o Kanban em RAIAS (ver "Vista em raias"
 autonomy:                    # opcional: a CHAVE DE AUTONOMIA (ver "Modo ultra", abaixo) — ausente = human
   mode: ultra                # human | ultra
   proxyModel: sonnet         # opcional (padrão sonnet)
-  auditSampleRate: 0.2       # opcional (padrão 0.2): fração das respostas do proxy que vai para a auditoria
+  auditSampleRate: 0.2       # opcional (padrão 0.2): fração das respostas do proxy E das entregas autônomas que vai para a auditoria
 notifications:               # opcional: os SINAIS CRÍTICOS do board (ver "Push só para o crítico", abaixo)
   criticalTitlePrefixes: ["[sinal:scraper:", "[sinal:credits:"]  # card que NASCE com um destes prefixos vai ao dono (uma vez)
 linkTypes:  [{ id, name, from?: NodeKind[], to?: NodeKind[] }]
@@ -623,6 +623,15 @@ deploy). "O detalhe de cada etapa aparece como etiqueta dentro do card, não com
 - **Auditoria:** `auditSampleRate` (padrão 0.2) das respostas — e toda resposta com confiança < 0,5 — cai
   no Inbox como "Resposta do proxy": o dono confirma, ou reabre (a pergunta volta para ele, com as
   premissas do proxy no contexto, e nunca mais vai ao proxy).
+- **Prova da entrega — aviso depois, auditoria por amostra:** quando uma story em ultra EFETIVO chega a um status
+  `delivered: true` ("No ar") por um caminho AUTÔNOMO — a última travessia do passo de aprovação de entrega (o
+  gate `hasQaPassed`, "Aprovar entrega") não foi de um humano; sem registro dela no ledger de transições, conta
+  como autônoma —, a mesma `auditSampleRate`, sorteada de forma DETERMINÍSTICA pelo id do card, a põe no Inbox
+  como "Entrega autônoma", com a `## Prova da entrega` do card à vista. **Confirmar** fecha; **Reabrir** pede o
+  motivo e devolve a story pelo refino (`mode: refine`, o motivo como brief, destino padrão `desenvolver`) com um
+  finding `delivery-audit` aberto. Nunca é do copiloto. O carimbo mora no card (`deliveryAudit`) e é posto pelo
+  observador de escritas (qualquer escritor que leve o card ao ar). Board sem status `delivered` declarado, ou
+  story em human: nada muda.
 - **O condutor** é avisado na sessão dele quando o proxy responde (o "continuar" que o dono diria).
 
 ### Push só para o crítico (`notifications`)

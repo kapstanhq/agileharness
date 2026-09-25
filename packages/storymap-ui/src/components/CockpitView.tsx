@@ -44,6 +44,7 @@ import {
   type ReleaseAgingCockpitItem,
   type MergeFailedCockpitItem,
   type ProxyAuditCockpitItem,
+  type DeliveryAuditCockpitItem,
 } from "@/lib/storymap/demands";
 import type {
   BoardConfig,
@@ -93,6 +94,7 @@ import {
   rejectGovernanceDraftAction,
   requestDesignChangeAction,
   resolveProxyAuditAction,
+  resolveDeliveryAuditAction,
 } from "@/app/actions";
 import { rearmCopilotItemAction } from "@/app/copilot-actions";
 import { cn } from "@/lib/cn";
@@ -154,6 +156,8 @@ const KIND_RENDERER: Record<CockpitItemKind, (item: CockpitItem, ctx: RendererCt
   "merge-failed": (item, ctx) => <MergeFailedRenderer item={item as MergeFailedCockpitItem} ctx={ctx} />,
   // lanes-ultra — the owner's AUDIT of an answer the proxy gave on their behalf (ultra mode).
   "proxy-audit": (item, ctx) => <ProxyAuditRenderer item={item as ProxyAuditCockpitItem} ctx={ctx} />,
+  // v0.9 — the owner's AUDIT of an autonomous delivery (ultra mode: nobody approved it before it shipped).
+  "delivery-audit": (item, ctx) => <DeliveryAuditRenderer item={item as DeliveryAuditCockpitItem} ctx={ctx} />,
 };
 
 // ── Shell: ToastProvider wrapper ──────────────────────────────────────────────
@@ -2024,6 +2028,108 @@ function ProxyAuditRenderer({ item, ctx }: { item: ProxyAuditCockpitItem; ctx: R
             className={SECONDARY_BTN}
           >
             Reabrir para mim
+          </button>
+        }
+      />
+    </div>
+  );
+}
+
+/**
+ * v0.9 — an AUTONOMOUS DELIVERY sampled for the owner's audit (ultra mode — delivery-audit.ts). Shows the conductor's
+ * `## Prova da entrega` so the owner audits in place; CONFIRMS it (the delivery stands) or REOPENS it — which asks
+ * for the reason (the refine starts from it) and sends the story back through refine, with that reason as a finding
+ * on the card. Owner-only by design: the copiloto never acts on this kind (KIND_AUTONOMY `never`).
+ */
+function DeliveryAuditRenderer({ item, ctx }: { item: DeliveryAuditCockpitItem; ctx: RendererCtx }) {
+  const router = useRouter();
+  const toast = useToast();
+  const escRef = escalationRefFor(item, ctx.boardId);
+  const [pending, startTransition] = useTransition();
+  const [reopening, setReopening] = useState(false);
+  const [note, setNote] = useState("");
+
+  const resolve = (outcome: "confirmed" | "reopened") => {
+    if (pending) return;
+    if (outcome === "reopened" && !note.trim()) {
+      toast("Diga o que está errado nesta entrega — o refino parte daí.");
+      return;
+    }
+    startTransition(async () => {
+      const res = await resolveDeliveryAuditAction({
+        boardId: ctx.boardId,
+        cardId: item.cardId,
+        outcome,
+        ...(outcome === "reopened" ? { note } : {}),
+      });
+      if (!res.ok) {
+        toast(res.error);
+        return;
+      }
+      toast(outcome === "confirmed" ? "Entrega confirmada." : "Story reaberta para refino — o motivo ficou no card.", "success");
+      router.refresh();
+    });
+  };
+
+  return (
+    <div className="space-y-3">
+      <p className="text-[12.5px] leading-snug text-fg">
+        Entregue sem aprovação prévia (modo ultra) e sorteada para a sua auditoria em {item.sampledAt}.
+      </p>
+      {item.proof ? (
+        <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-md border border-line bg-inset px-2.5 py-1.5 font-sans text-[12px] leading-snug text-fg-muted">
+          {item.proof}
+        </pre>
+      ) : (
+        <p className="text-[12px] leading-snug text-fg-subtle">O card não traz uma “Prova da entrega” — abra o card para ver o que mudou.</p>
+      )}
+      {reopening && (
+        <textarea
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          rows={2}
+          autoFocus
+          placeholder="O que está errado nesta entrega? (vira o brief do refino e um achado no card)"
+          className="w-full resize-y rounded-md border border-line bg-inset px-2.5 py-1.5 text-[13px] text-fg placeholder:text-fg-subtle focus:border-accent focus:outline-none"
+        />
+      )}
+      <ItemActions
+        ctx={ctx}
+        cardId={item.cardId}
+        escRef={escRef}
+        openCard={Boolean(item.cardId)}
+        lead={
+          reopening ? (
+            <button
+              type="button"
+              disabled={pending || !note.trim()}
+              onClick={() => resolve("reopened")}
+              title="A story volta para refino com o seu motivo; o harness-refine diagnostica e roteia."
+              className={PRIMARY_BTN}
+            >
+              {pending ? "Reabrindo…" : "Reabrir com este motivo"}
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => resolve("confirmed")}
+              title="Você concorda: a entrega fica como está."
+              className={PRIMARY_BTN}
+            >
+              {pending ? "Salvando…" : "Confirmar"}
+            </button>
+          )
+        }
+        trail={
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => setReopening((v) => !v)}
+            title="A story volta para o fluxo (refino), com o motivo como achado no card."
+            className={SECONDARY_BTN}
+          >
+            {reopening ? "Cancelar" : "Reabrir"}
           </button>
         }
       />

@@ -56,6 +56,7 @@ import type {
   LaneDemand,
   ProxyAnswerRecord,
   CriterionSpec,
+  DeliveryAuditRecord,
   DiffSnapshot,
   FailureClass,
   Finding,
@@ -272,6 +273,27 @@ function coerceProxyAnswer(raw: unknown): ProxyAnswerRecord | undefined {
   const auditedAt = r.auditedAt != null ? toDateString(r.auditedAt) : null;
   if (auditedAt) out.auditedAt = auditedAt;
   if (r.auditOutcome === "confirmed" || r.auditOutcome === "reopened") out.auditOutcome = r.auditOutcome;
+  return out;
+}
+
+/**
+ * The owner's sampled audit of an autonomous delivery (delivery-audit.ts). Strict on the one field that makes it
+ * an audit — a valid `sampledAt` date — else the record is dropped whole; tolerant on the rest (an unknown
+ * `outcome` is dropped, leaving the audit pending — the owner is asked again rather than a verdict invented).
+ */
+function coerceDeliveryAudit(raw: unknown): DeliveryAuditRecord | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const r = raw as Record<string, unknown>;
+  const sampledAt = r.sampledAt != null ? toDateString(r.sampledAt) : null;
+  if (!sampledAt) return undefined;
+  const out: DeliveryAuditRecord = { sampledAt };
+  if (typeof r.deliveredIn === "string" && r.deliveredIn.trim()) out.deliveredIn = r.deliveredIn.trim();
+  const auditedAt = r.auditedAt != null ? toDateString(r.auditedAt) : null;
+  if (auditedAt && (r.outcome === "confirmed" || r.outcome === "reopened")) {
+    out.auditedAt = auditedAt;
+    out.outcome = r.outcome;
+  }
+  if (typeof r.note === "string" && r.note.trim()) out.note = r.note.trim();
   return out;
 }
 
@@ -1102,6 +1124,8 @@ export function coerceCard(
     routing: coerceRouting(data.routing),
     // The per-story autonomy exception (sparse): only a known mode survives the read.
     autonomyMode: isAutonomyMode(data.autonomyMode) ? data.autonomyMode : undefined,
+    // The owner's sampled audit of an autonomous delivery (sparse): a husk without `sampledAt` is dropped.
+    deliveryAudit: coerceDeliveryAudit(data.deliveryAudit),
     release: data.release != null ? String(data.release) : null,
     // SM-02: sparse flag — only retained when explicitly true on disk.
     unplaced: data.unplaced === true ? true : undefined,

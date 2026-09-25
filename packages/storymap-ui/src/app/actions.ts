@@ -142,6 +142,7 @@ import {
 } from "@/lib/storymap/triage/parse";
 import type { TriageOutcome, TriageReport } from "@/lib/storymap/triage/types";
 import { defaultQuestionCategory, effectiveAutonomy, resolveProxyAudit } from "@/lib/storymap/autonomy";
+import { applyDeliveryAuditOutcome } from "@/lib/storymap/delivery-audit";
 import { isAutonomyMode } from "@/lib/storymap/types";
 import type {
   AutonomyMode,
@@ -3351,6 +3352,55 @@ export async function resolveProxyAuditAction(input: {
       return { ok: false, error: `nenhuma auditoria de proxy pendente em ${input.cardId}/${input.questionId}` };
     }
     revalidateBoard(input.boardId);
+    return { ok: true, data: { card } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * v0.9 — the owner closes an item of the DELIVERY AUDIT list (Inbox): an autonomous delivery (ultra mode) sampled
+ * for review. `confirmed` keeps it; `reopened` sends the story back through REFINE (the same reopen as the Refinar
+ * button — `mode: refine`, the owner's reason as the brief, `reopenPending` so harness-refine runs at the
+ * destination and routes) with the reason as an open finding on the card. The transform is pure
+ * (delivery-audit.ts `applyDeliveryAuditOutcome`); only a PENDING audit changes, and a reopen needs the reason.
+ */
+export async function resolveDeliveryAuditAction(input: {
+  boardId: string;
+  cardId: string;
+  outcome: "confirmed" | "reopened";
+  note?: string | null;
+  destination?: ReopenDestination;
+}): Promise<Result<{ card: Card }>> {
+  await requireSession("resolveDeliveryAuditAction");
+  try {
+    if (input.outcome !== "confirmed" && input.outcome !== "reopened") return { ok: false, error: "outcome: confirmed | reopened" };
+    const config = await readBoardConfig(input.boardId);
+    let refused: string | null = null;
+    let from: string | null = null;
+    const card = await updateCardOnDisk(input.boardId, input.cardId, (prev) => {
+      from = prev.status ?? null;
+      const r = applyDeliveryAuditOutcome(prev, config, { outcome: input.outcome, today: today(), note: input.note, destination: input.destination });
+      if ("error" in r) {
+        refused = r.error;
+        return null;
+      }
+      return r.card;
+    });
+    if (refused) return { ok: false, error: refused };
+    if (!card) return { ok: false, error: `card não encontrado: ${input.cardId}` };
+    revalidateBoard(input.boardId);
+    if (input.outcome === "reopened" && card.status) {
+      // A reopen is a REAL status change — the same post-effects as refineCardAction: the ledger hop, the cascade
+      // in-process (harness-refine runs at the destination via reopenPending), and any parked integration superseded.
+      void appendTransition({ board: input.boardId, cardId: input.cardId, from, to: card.status, actor: "human", note: "reopen:delivery-audit" });
+      void evaluateAutorunOnEntry(input.boardId, input.cardId).catch((err) =>
+        console.error(`[resolveDeliveryAuditAction autorun ${input.boardId}/${input.cardId}]`, err),
+      );
+      void import("@/lib/storymap/runner/merge-queue")
+        .then(({ getMergeQueue }) => getMergeQueue().reconcileCardMergeEntries(input.boardId, input.cardId))
+        .catch((err) => console.error(`[resolveDeliveryAuditAction reconcile ${input.boardId}/${input.cardId}]`, err));
+    }
     return { ok: true, data: { card } };
   } catch (e) {
     return fail(e);

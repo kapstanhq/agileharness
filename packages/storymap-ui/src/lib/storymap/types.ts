@@ -595,6 +595,14 @@ export interface Card {
    * Set through the MCP tool `set_card_autonomy` (or the card file); shown on the card.
    */
   autonomyMode?: AutonomyMode;
+  /**
+   * The owner's SAMPLED AUDIT of an AUTONOMOUS DELIVERY (ultra mode — delivery-audit.ts; the "prova da entrega:
+   * aviso depois, auditoria por amostra" row of the autonomy table). Stamped when a story in effective `ultra`
+   * reaches a `delivered` status without the owner having approved its delivery, and the deterministic sample (by
+   * card id, at `autonomy.auditSampleRate`) picks it. PENDING while `auditedAt` is absent; the owner confirms it or
+   * reopens the story from the Inbox. Sparse — absent on every card that was never sampled.
+   */
+  deliveryAudit?: DeliveryAuditRecord;
   /** release slice id (stories only); null = unscheduled */
   release: string | null;
   /**
@@ -2185,6 +2193,20 @@ export type AutonomyMode = "human" | "ultra";
 export const AUTONOMY_MODES: AutonomyMode[] = ["human", "ultra"];
 export function isAutonomyMode(v: unknown): v is AutonomyMode {
   return typeof v === "string" && (AUTONOMY_MODES as string[]).includes(v);
+}
+
+/** One sampled audit of an autonomous delivery ({@link Card.deliveryAudit}). */
+export interface DeliveryAuditRecord {
+  /** when the delivery was sampled (YYYY-MM-DD) */
+  sampledAt: string;
+  /** the delivered status the card had just entered (forensics) */
+  deliveredIn?: string;
+  /** when the owner closed it (YYYY-MM-DD) — absent ⇒ pending */
+  auditedAt?: string;
+  /** `confirmed` — the delivery stands; `reopened` — the owner sent the story back (refine + a finding) */
+  outcome?: "confirmed" | "reopened";
+  /** the owner's reason on a reopen */
+  note?: string;
 }
 
 /** The board's notification declarations (BoardConfig.notifications). */

@@ -560,6 +560,10 @@ export const QUICK_ACTIONS_OF: EntryMap = {
   "proxy-audit": (item) =>
     emptySet(buildEscalateAction({ templateId: "hitl-card-instructions", kind: "card", boardId: item.boardId, cardId: item.cardId })),
 
+  // v0.9 — confirmar/reabrir uma ENTREGA autônoma é do dono, e mora no renderer (Confirmar / Reabrir com o motivo).
+  "delivery-audit": (item) =>
+    emptySet(buildEscalateAction({ templateId: "hitl-card-instructions", kind: "card", boardId: item.boardId, cardId: item.cardId })),
+
   // WS-5 (D9) — read-only + escalate only (D6 rejected a checkDeploySettleAction); "Ver status" is a renderer-local affordance.
   "deploy-unsettled": (item) =>
     emptySet(buildEscalateAction({ templateId: "deploy-unsettled", kind: "deploy", boardId: item.boardId, cardId: item.cardId })),

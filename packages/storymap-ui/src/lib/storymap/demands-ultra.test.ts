@@ -105,3 +105,27 @@ describe("a AUDITORIA do proxy é item do dono", () => {
     expect(cardCockpitItems(card([unsampled]), cfg({ mode: "ultra" }), "b").some((i) => i.kind === "proxy-audit")).toBe(false);
   });
 });
+
+// v0.9 — a ENTREGA autônoma amostrada vira item do Inbox do dono, JÁ NO AR (o status de entrega é terminal): Confirmar /
+// Reabrir, com a Prova da entrega à vista. Nunca é do copiloto, em tier nenhum.
+describe("a auditoria de uma entrega autônoma é item do dono — mesmo com o card em 'No ar'", () => {
+  const delivered = (over: Partial<Card> = {}) => card([], { status: "concluida", ...over });
+
+  it("auditoria pendente ⇒ item `delivery-audit` na lane aprovar, com a Prova da entrega", () => {
+    const c = delivered({ deliveryAudit: { sampledAt: "2026-09-25", deliveredIn: "concluida" }, body: "## Prova da entrega\n- filtro novo\n" });
+    const items = cardCockpitItems(c, cfg({ mode: "ultra" }), "b");
+    expect(items.map((i) => i.kind)).toEqual(["delivery-audit"]);
+    expect(items[0]).toMatchObject({ id: "c:da", lane: "aprovar", sampledAt: "2026-09-25", proof: "- filtro novo" });
+  });
+
+  it("nunca acionável pelo copiloto — nem no Autônomo", () => {
+    const [item] = cardCockpitItems(delivered({ deliveryAudit: { sampledAt: "2026-09-25" } }), cfg({ mode: "ultra" }), "b");
+    for (const tier of ["chat", "copiloto", "autonomo"] as const) expect(isCopilotActionable(item, tier)).toBe(false);
+  });
+
+  it("fechada (confirmada/reaberta) ou ausente ⇒ nenhum item; o card legado segue byte-idêntico", () => {
+    const closed = delivered({ deliveryAudit: { sampledAt: "2026-09-25", auditedAt: "2026-09-26", outcome: "confirmed" } });
+    expect(cardCockpitItems(closed, cfg({ mode: "ultra" }), "b")).toEqual([]);
+    expect(cardCockpitItems(delivered(), cfg(), "b")).toEqual([]);
+  });
+});

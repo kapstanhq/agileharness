@@ -141,6 +141,31 @@ describe("card `autonomyMode` — type · coerce · contract · serializer", () 
   });
 });
 
+// v0.9 — a auditoria de uma ENTREGA autônoma mora no card: dropada pelo serializer, a próxima escrita do app apagaria o
+// item pendente do Inbox (ou o veredito do dono); dropada pelo coerce, o card lido não teria auditoria nenhuma.
+describe("card `deliveryAudit` — type · coerce · contract · serializer", () => {
+  const audit = { sampledAt: "2026-09-25", deliveredIn: "concluida", auditedAt: "2026-09-26", outcome: "reopened", note: "o filtro some" };
+
+  it("round-trip idêntico (pendente e fechada); ausente segue ausente", () => {
+    expect(roundTrip({ type: "story", status: "concluida", deliveryAudit: audit }).back.deliveryAudit).toEqual(audit);
+    expect(roundTrip({ type: "story", status: "concluida", deliveryAudit: { sampledAt: "2026-09-25" } }).back.deliveryAudit).toEqual({ sampledAt: "2026-09-25" });
+    expect(roundTrip({ type: "story", status: "concluida" }).back.deliveryAudit).toBeUndefined();
+  });
+
+  it("sem sampledAt a casca é descartada; um desfecho desconhecido deixa a auditoria PENDENTE (o dono é perguntado de novo)", () => {
+    expect(coerceCard("story-x", { type: "story", deliveryAudit: { note: "x" } }, "").deliveryAudit).toBeUndefined();
+    expect(coerceCard("story-x", { type: "story", deliveryAudit: { sampledAt: "2026-09-25", auditedAt: "2026-09-26", outcome: "talvez" } }, "").deliveryAudit).toEqual({
+      sampledAt: "2026-09-25",
+    });
+  });
+
+  it("o contrato Card aceita o bloco (e recusa um desfecho fora do vocabulário)", () => {
+    const card = coerceCard("story-x", { type: "story", status: "concluida", deliveryAudit: audit }, "");
+    expect(parseCard(card).ok).toBe(true);
+    expect(parseCard({ ...card, deliveryAudit: { sampledAt: "2026-09-25", outcome: "talvez" as never } }).ok).toBe(false);
+  });
+});
+
 describe("question `category` + `proxy` — type · coerce · contract · serializer", () => {
   const q = {
     id: "q1",

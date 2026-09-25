@@ -13,7 +13,10 @@ import { createTriggerRunnerChannel } from "./channels/trigger-runner-channel";
 import { createWebPushChannel, initRunnerFailurePush } from "./channels/web-push-channel";
 import { createCriticalSignalChannel } from "./channels/critical-signal-channel";
 import { publishAgentAlert } from "./alert-bus";
-import { readBoardConfig } from "@/lib/storymap/repo";
+import { createDeliveryAuditChannel } from "./channels/delivery-audit-channel";
+import { readBoardConfig, readCard } from "@/lib/storymap/repo";
+import { readTransitions } from "@/lib/storymap/runner/transitions";
+import { updateCardOnDisk } from "@/lib/storymap/write";
 
 class Dispatcher {
   private channels: NotificationChannel[] = [];
@@ -57,6 +60,11 @@ export function getDispatcher(): Dispatcher {
   // those prefixes becomes a `critical-signal` alert on the bus — once per card. Always registered; a board with no
   // prefixes never emits.
   dispatcher.register(createCriticalSignalChannel({ readBoardConfig, publish: (a) => publishAgentAlert(a) }));
+  // The ultra DELIVERY AUDIT (delivery-audit.ts): a story that reaches a `delivered` status through an autonomous
+  // path is sampled onto the owner's Inbox. Always registered; a board without ultra never stamps. It sits HERE —
+  // the observer of every write — because a card reaches "No ar" through many writers (deploy settle, MCP move,
+  // cascade, a skill editing the file).
+  dispatcher.register(createDeliveryAuditChannel({ readBoardConfig, readCard, readTransitions, updateCardOnDisk }));
   // Always registered; gated LIVE per event by autorun.enabled (settings.yaml)
   // or AGILEHARNESS_AUTORUN=0 (env) — so the Config panel can toggle it without a restart.
   dispatcher.register(createTriggerRunnerChannel());
