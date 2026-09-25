@@ -61,6 +61,19 @@ export const CAPACITY_READ_TTL_MS = 60_000;
 export const CAPACITY_TICK_MS = 5 * 60_000;
 /** Retido há mais que isto ⇒ aviso crítico (uma vez por item). */
 export const HELD_ALERT_MS = DAY_MS;
+/** A 1ª re-tentativa de uma leitura que falhou ANTES de qualquer leitura existir neste host. */
+export const METER_BOOT_RETRY_BASE_MS = 15_000;
+
+/**
+ * As esperas entre as re-tentativas da PRIMEIRA leitura: `base`, dobrando, enquanto for MENOR que o tick
+ * normal (15 s, 30 s, 60 s, 120 s, 240 s com os defaults). Chegar ao tick é esgotar: dali em diante o laço
+ * normal já lê nessa cadência, e uma re-tentativa "rápida" do tamanho do tick não seria rápida. PURA.
+ */
+export function meterBootRetryDelays(baseMs: number = METER_BOOT_RETRY_BASE_MS, tickMs: number = CAPACITY_TICK_MS): number[] {
+  const out: number[] = [];
+  for (let d = baseMs; d > 0 && d < tickMs; d *= 2) out.push(d);
+  return out;
+}
 
 /** O caminho do HALT do host. */
 export function haltFilePath(env: Record<string, string | undefined> = process.env): string {
@@ -193,7 +206,19 @@ export interface CapacityServiceDeps {
   notify?: (n: CapacityCriticalNotice) => void;
   log?: (msg: string) => void;
   readTtlMs?: number;
+  /** a 1ª espera das re-tentativas de boot ({@link meterBootRetryDelays}); default 15 s */
+  bootRetryBaseMs?: number;
+  /** o tick normal do laço — o teto das re-tentativas de boot; default {@link CAPACITY_TICK_MS} */
+  tickMs?: number;
+  /** agenda `fn` em `ms` e devolve o cancelador (DI: o teste dispara à mão); default `setTimeout` com `unref` */
+  schedule?: (fn: () => void, ms: number) => () => void;
 }
+
+const defaultSchedule = (fn: () => void, ms: number): (() => void) => {
+  const h = setTimeout(fn, ms);
+  h.unref?.();
+  return () => clearTimeout(h);
+};
 
 export class CapacityGovernor implements CapacityGatePort {
   private readonly now: () => number;
@@ -205,12 +230,18 @@ export class CapacityGovernor implements CapacityGatePort {
   private readonly notify: (n: CapacityCriticalNotice) => void;
   private readonly log: (msg: string) => void;
   private readonly readTtlMs: number;
+  private readonly bootRetryDelays: number[];
+  private readonly schedule: (fn: () => void, ms: number) => () => void;
 
   private loadedDir: string | null = null;
   private state: GovernorState = emptyState();
   private reading: CapacityReading | null = null;
   private latchFile: LatchState | null = null;
   private firstReadDone = false;
+  /** quantas re-tentativas de boot já foram AGENDADAS (índice em `bootRetryDelays`) */
+  private bootRetryAttempt = 0;
+  /** o cancelador da re-tentativa de boot pendente; null = nenhuma agendada */
+  private bootRetryCancel: (() => void) | null = null;
   private lastReadAt = Number.NEGATIVE_INFINITY;
   private inflight: Promise<void> | null = null;
   private writeChain: Promise<void> = Promise.resolve();
@@ -231,6 +262,8 @@ export class CapacityGovernor implements CapacityGatePort {
     this.notify = deps.notify ?? ((n) => notifyCapacityCritical(n));
     this.log = deps.log ?? ((m) => console.log(m));
     this.readTtlMs = deps.readTtlMs ?? CAPACITY_READ_TTL_MS;
+    this.bootRetryDelays = meterBootRetryDelays(deps.bootRetryBaseMs ?? METER_BOOT_RETRY_BASE_MS, deps.tickMs ?? CAPACITY_TICK_MS);
+    this.schedule = deps.schedule ?? defaultSchedule;
   }
 
   /** A trava dura para os runs em voo por AQUI (a composição — instrumentation — liga o engine). */
@@ -273,6 +306,8 @@ export class CapacityGovernor implements CapacityGatePort {
     this.reading = this.state.lastReading;
     this.latchFile = this.readLatchSync(this.now());
     this.firstReadDone = false;
+    this.cancelMeterRetry();
+    this.bootRetryAttempt = 0;
     this.lastReadAt = Number.NEGATIVE_INFINITY;
     this.lastAutomationAdmit = null;
     this.wasHard = false;
@@ -410,11 +445,23 @@ export class CapacityGovernor implements CapacityGatePort {
             this.state.meterSeenAt = now;
             // A base do dia só nasce de uma leitura FRESCA — uma defasada daria uma "primeira leitura" mentirosa.
             if (this.isFresh(r, now)) this.state.baseline = rollBaseline(this.state.baseline, r, now, this.settings().timezone);
+            this.cancelMeterRetry();
+            this.firstReadDone = true;
+          } else if (this.state.meterSeenAt == null && !this.reading) {
+            // NUNCA houve leitura neste host e esta falhou. UMA falha não prova "sem medidor": medido no host
+            // vivo, o proxy estava de pé e respondia em 12 ms — só a leitura do BOOT falhou, e o governador
+            // declarou-se inerte e admitiu TUDO até o tick seguinte, 5 min depois. Enquanto houver
+            // re-tentativa, a primeira leitura segue PENDENTE (a automação espera a medição, como no boot);
+            // só esgotadas elas é que a ausência vira fato — e aí, sim, inerte.
+            if (!this.scheduleMeterRetry()) this.firstReadDone = true;
+          } else {
+            this.firstReadDone = true;
           }
         } else {
+          // Proxy desligado por env: a ausência do medidor é DECLARADA, não medida — inerte já, sem re-tentar.
           this.lastReadAt = this.now();
+          this.firstReadDone = true;
         }
-        this.firstReadDone = true;
         this.latchFile = this.readLatchSync(this.now());
         await this.evaluate(this.now());
         this.persist();
@@ -425,6 +472,33 @@ export class CapacityGovernor implements CapacityGatePort {
       }
     })();
     return this.inflight;
+  }
+
+  /**
+   * Agenda a próxima re-tentativa da PRIMEIRA leitura ({@link meterBootRetryDelays}). Devolve `true` enquanto
+   * a medição segue pendente (agendou agora, ou já havia uma agendada) e `false` quando as re-tentativas
+   * ESGOTARAM — só então a falta de medidor é um fato.
+   */
+  private scheduleMeterRetry(): boolean {
+    if (this.bootRetryCancel) return true;
+    const delay = this.bootRetryDelays[this.bootRetryAttempt];
+    if (delay === undefined) return false;
+    this.bootRetryAttempt += 1;
+    this.log(
+      `[capacity] a leitura do medidor falhou e ele nunca foi lido neste host — nova tentativa em ${Math.round(delay / 1000)}s ` +
+        `(${this.bootRetryAttempt}/${this.bootRetryDelays.length}); o trabalho automático espera a medição`,
+    );
+    this.bootRetryCancel = this.schedule(() => {
+      this.bootRetryCancel = null;
+      void this.refresh();
+    }, delay);
+    return true;
+  }
+
+  /** Cancela a re-tentativa de boot pendente (uma leitura chegou, o estado mudou de diretório, ou o laço parou). */
+  cancelMeterRetry(): void {
+    this.bootRetryCancel?.();
+    this.bootRetryCancel = null;
   }
 
   /** O laço periódico chama isto. */
@@ -505,7 +579,12 @@ export class CapacityGovernor implements CapacityGatePort {
     if (verdict.kind === "admit" && verdict.inert === "no-meter") {
       if (!this.inertLogged) {
         this.inertLogged = true;
-        this.log(`[capacity] ${verdict.detail} — o trabalho automático não é limitado pela janela da conta.`);
+        // Com o proxy configurado, "inerte" só chega aqui DEPOIS das re-tentativas — e o operador que não roda
+        // proxy nenhum precisa saber como dizer isso de uma vez (declarado ⇒ inerte já no boot, sem espera).
+        const how = this.statsUrl()
+          ? ` (após ${this.bootRetryDelays.length} re-tentativa(s) da primeira leitura; sem proxy neste host? declare AGILEHARNESS_HEADROOM_URL=off)`
+          : "";
+        this.log(`[capacity] ${verdict.detail}${how} — o trabalho automático não é limitado pela janela da conta.`);
       }
     } else {
       this.inertLogged = false;
@@ -650,5 +729,6 @@ export function startCapacityGovernor(
   return () => {
     stopped = true;
     if (handle) clearTimeout(handle);
+    g.cancelMeterRetry();
   };
 }
