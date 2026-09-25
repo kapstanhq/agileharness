@@ -7,6 +7,7 @@
 // effect (sound, browser notification, Slack message, …) — see NotificationChannel.
 
 import type { CardType } from "@/lib/storymap/types";
+import type { PushEventKind } from "./push-policy";
 
 export type AgileHarnessEventType =
   | "card.created"
@@ -97,9 +98,23 @@ export type AgentAlertKind =
   /**
    * o GOVERNADOR DE CAPACIDADE viu algo CRÍTICO na conta: a trava engatou, o uso extra (pago) foi ligado,
    * ou um trabalho automático está retido há mais de 24h. Produtor: runner/capacity-service (o laço do
-   * governador), na BORDA — uma vez por transição, nunca por leitura. É o ÚNICO push do governador.
+   * governador), na BORDA — uma vez por transição, nunca por leitura. O `event` diz qual dos três.
    */
-  | "capacity-critical";
+  | "capacity-critical"
+  /**
+   * um deploy de produção FALHOU e o card foi revertido para a parada de publicação: o trabalho aprovado não
+   * está no ar. Produtor: runner/deploy-revert, só quando o revert de fato aconteceu (uma vez por falha — os dois
+   * callbacks de um mesmo deploy são idempotentes lá). O `event` separa o deploy que rodou e falhou
+   * (`deploy-rollback`) da publicação recusada antes de rodar (`deploy-blocked`).
+   */
+  | "deploy-failed"
+  /**
+   * nasceu um card cujo título começa com um prefixo que o BOARD declarou crítico (board.yaml
+   * `notifications.criticalTitlePrefixes`): o jeito GENÉRICO de um monitor do produto (fonte de eventos parada,
+   * fornecedor sem crédito, produção fora do ar) chegar ao dono. Produtor: channels/critical-signal-channel, uma
+   * vez por card.
+   */
+  | "critical-signal";
 
 /**
  * O quanto isto pode interromper. É o eixo que a política por modo do Jido lê (copilot/alert-policy):
@@ -118,6 +133,8 @@ export const ALERT_URGENCY: Record<AgentAlertKind, AlertUrgency> = {
   "terminal-quiet": "pending", // acabou (ou espera instrução) — te espera, mas nada trava
   "publish-blocked": "blocking", // a publicação não sai sozinha: ou o trabalho sobreposto integra, ou alguém dispensa
   "capacity-critical": "blocking", // a frota parou (trava/retenção longa) ou a conta passou a gastar dinheiro
+  "deploy-failed": "blocking", // o trabalho aprovado não está no ar até alguém resolver a causa e republicar
+  "critical-signal": "blocking", // o board declarou este sinal crítico — é o que ele existe para dizer
 };
 
 export interface AgentAlert {
@@ -139,11 +156,11 @@ export interface AgentAlert {
   /** board relacionado, quando houver (um terminal de card sabe o seu). */
   boardId?: string;
   /**
-   * O SERVIDOR deve empurrar para o celular (aba fechada)? Decidido por quem produz — ele é quem sabe
-   * se aquilo trava trabalho ou se o operador pediu para ser avisado daquela origem. O barramento
-   * obedece: uma segunda régua escondida no fan-out seria uma política em dois lugares.
+   * O FATO, no vocabulário da política de push (notifications/push-policy). Quem produz diz O QUE aconteceu; se
+   * isso vai ao celular/Slack quem decide é a política ÚNICA, no barramento (`shouldPush`) — antes cada produtor
+   * carimbava `push: true` sozinho, e "push só para o crítico" era uma promessa espalhada por quatro arquivos.
    */
-  push?: boolean;
+  event: PushEventKind;
 }
 
 /**

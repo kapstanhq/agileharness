@@ -6,17 +6,23 @@
 // mesmo canal exigiria que cada consumidor de card passasse a distinguir "isto é um card?" em todo
 // handler, e o `describeEvent` (que assume um card) teria de virar um `switch` de dois mundos.
 //
-// DUAS SAÍDAS, e só duas:
-//   • SSE  — sempre. O navegador recebe e decide o efeito local (som/notificação) pela política do
-//            modo do Jido (copilot/alert-policy) + os toggles do operador. O servidor NÃO decide o
-//            volume de quem está com a tela aberta: quem está olhando é quem manda.
-//   • PUSH — só quando o PRODUTOR marcou `push` (ver AgentAlert). É o caminho que alcança a aba
-//            fechada; por isso ele é explícito, e não um efeito colateral de "urgência alta".
+// TRÊS SAÍDAS:
+//   • SSE   — sempre. O navegador recebe e decide o efeito local (som/notificação) pela política do
+//             modo do Jido (copilot/alert-policy) + os toggles do operador. O servidor NÃO decide o
+//             volume de quem está com a tela aberta: quem está olhando é quem manda.
+//   • PUSH  — só o que a POLÍTICA DE PUSH manda (notifications/push-policy: "push só para o crítico"),
+//             lida do `event` do aviso. É o caminho que alcança a aba fechada — o bolso do dono —, por
+//             isso a régua é UMA e mora aqui, não carimbada por cada produtor.
+//   • SLACK — a MESMA régua (o Slack é outro jeito de o celular vibrar), menos o opt-in pessoal do
+//             operador (o sininho de um terminal é um pedido de quem o armou, não um aviso para o canal).
 //
 // Process-global (sobrevive ao HMR) e best-effort: um aviso nunca pode derrubar quem o produziu.
 
 import type { AgentAlert } from "../event";
+import { shouldPush, shouldSlack, type PushPolicy } from "../push-policy";
 import { sendPush } from "./channels/web-push-channel";
+import { sendSlackAlert } from "./channels/slack-channel";
+import { currentPushPolicy } from "./push-policy-config";
 
 type Sink = (alert: AgentAlert) => void;
 
@@ -44,10 +50,11 @@ export function agentAlertSinkCount(): number {
 }
 
 /**
- * Publica UM aviso. Síncrono para quem chama (o push sai em fire-and-forget) e à prova de exceção:
- * um sink morto é descartado em vez de travar o laço.
+ * Publica UM aviso. Síncrono para quem chama (push e Slack saem em fire-and-forget) e à prova de exceção:
+ * um sink morto é descartado em vez de travar o laço. `policy` é injetável para o teste; em produção é a
+ * política em vigor (settings.yaml sobre o padrão).
  */
-export function publishAgentAlert(alert: AgentAlert): void {
+export function publishAgentAlert(alert: AgentAlert, policy: PushPolicy = currentPushPolicy()): void {
   const b = bus();
   for (const fn of [...b.sinks]) {
     try {
@@ -56,7 +63,8 @@ export function publishAgentAlert(alert: AgentAlert): void {
       b.sinks.delete(fn); // stream já fechado
     }
   }
-  if (!alert.push) return;
+  if (shouldSlack(alert.event, policy)) void sendSlackAlert(alert.title, alert.body);
+  if (!shouldPush(alert.event, policy)) return;
   void sendPush({
     title: alert.title,
     body: alert.body,

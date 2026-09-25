@@ -613,6 +613,12 @@ export const BoardConfigSchema = z.object({
       auditSampleRate: z.number().min(0).max(1).optional(),
     })
     .optional(),
+  // OS SINAIS CRÍTICOS do board (notifications/push-policy): um card que nasce com um destes prefixos vai ao dono.
+  notifications: z
+    .object({
+      criticalTitlePrefixes: z.array(z.string().min(1)).optional(),
+    })
+    .optional(),
   positioning: z.string().nullable().optional(),
   businessMetric: z.string().nullable().optional(),
   desiredOutcome: z.string().nullable().optional(),

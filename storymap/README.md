@@ -424,6 +424,8 @@ autonomy:                    # opcional: a CHAVE DE AUTONOMIA (ver "Modo ultra",
   mode: ultra                # human | ultra
   proxyModel: sonnet         # opcional (padrão sonnet)
   auditSampleRate: 0.2       # opcional (padrão 0.2): fração das respostas do proxy que vai para a auditoria
+notifications:               # opcional: os SINAIS CRÍTICOS do board (ver "Push só para o crítico", abaixo)
+  criticalTitlePrefixes: ["[sinal:scraper:", "[sinal:credits:"]  # card que NASCE com um destes prefixos vai ao dono (uma vez)
 linkTypes:  [{ id, name, from?: NodeKind[], to?: NodeKind[] }]
              # from/to opcional: ausente = sem restrição (legados). NodeKind = activity | step |
              # story | persona | release | desiredOutcome | inputMetric | opportunity | canvas.
@@ -622,6 +624,34 @@ deploy). "O detalhe de cada etapa aparece como etiqueta dentro do card, não com
   no Inbox como "Resposta do proxy": o dono confirma, ou reabre (a pergunta volta para ele, com as
   premissas do proxy no contexto, e nunca mais vai ao proxy).
 - **O condutor** é avisado na sessão dele quando o proxy responde (o "continuar" que o dono diria).
+
+### Push só para o crítico (`notifications`)
+
+O dono abre o Inbox quando quer; o celular (web-push, chaves `AGILEHARNESS_VAPID_*`) e o Slack
+(`AGILEHARNESS_SLACK_WEBHOOK_URL`) recebem SÓ o crítico. Uma política única
+(`lib/notifications/push-policy.ts`) dá nome a cada fato que poderia interromper e decide, para cada um, se ele
+empurra — nenhum produtor decide sozinho:
+
+| Fato | Produtor | Padrão |
+|---|---|---|
+| `capacity-latch` · `capacity-extra-usage` | o governador: a trava engatou (cota, ou uso extra PAGO) | **empurra** |
+| `capacity-held-24h` | o governador: trabalho automático retido > 24h | painel de capacidade |
+| `deploy-rollback` | o deploy rodou, falhou e o card voltou para Liberar (o aprovado não está no ar) | **empurra** |
+| `deploy-blocked` | publicação recusada antes de rodar (promoção, preflight de frescor) | Inbox (travado) |
+| `critical-signal` | card que NASCE com um prefixo de `notifications.criticalTitlePrefixes` do board | **empurra** (uma vez por card) |
+| `card-demand` · `card-needs-you` · `card-moved` | escrita de card (pergunta/bloqueio/gate, parada manual, coluna) | Inbox / Kanban |
+| `run-failed` | um run headless falhou | Inbox (travado) |
+| `publish-blocked` · `terminal-waiting` | fila de publicação parada · terminal num prompt | tela aberta / Entrega |
+| `terminal-quiet` | o sininho que VOCÊ armou numa página de terminal | empurra (é o seu pedido); nunca vai ao Slack |
+
+- **Trocar a lista:** `settings.yaml` → `notifications.push.critical: [...]` (substitui o padrão; vazia = nada
+  empurra além do sininho; nome desconhecido é descartado com aviso). O exemplo comentado no `settings.yaml` é o
+  padrão.
+- **Sinais do produto, genéricos:** o núcleo não sabe o que é "fonte parada" ou "fornecedor sem crédito" de
+  ninguém. O monitor do produto cria um card com um prefixo combinado (`[sinal:scraper:…] …`) e o board declara o
+  prefixo em `notifications.criticalTitlePrefixes` — casa pelo início do título, sensível a maiúsculas.
+- **Tela aberta ≠ bolso:** o som e a notificação do navegador seguem a régua do modo do Jido
+  (`copilot/alert-policy`); o que empurra também toca na tela, em todo modo.
 
 ### Protocolo ASK_HUMAN (qualquer `harness-*` pode pedir ajuda ao humano e PAUSAR o run)
 

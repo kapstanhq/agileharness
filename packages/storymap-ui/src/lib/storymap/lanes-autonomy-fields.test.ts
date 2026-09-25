@@ -12,7 +12,7 @@ import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { dump } from "js-yaml";
-import { coerceAutonomy, coerceBoardView, coerceCard, deriveBoardConfigForPersist, readBoardConfig } from "./repo";
+import { coerceAutonomy, coerceBoardNotifications, coerceBoardView, coerceCard, deriveBoardConfigForPersist, readBoardConfig } from "./repo";
 import { serializeCard } from "./write";
 import { parseBoardConfig, parseCard } from "./contracts";
 import { FIXTURE_BOARD } from "./board-fixture";
@@ -93,6 +93,33 @@ describe("board `autonomy` — type · coerce · contract · persist", () => {
     const base = await readBoardConfig(FIXTURE_BOARD);
     const autonomy = { mode: "ultra" as const, auditSampleRate: 0.2 };
     expect((await deriveBoardConfigForPersist(FIXTURE_BOARD, { ...base, autonomy })).autonomy).toEqual(autonomy);
+  });
+});
+
+// v0.9 — os SINAIS CRÍTICOS do board (board.yaml `notifications.criticalTitlePrefixes`): dropado pelo coerce, o
+// bloco seria declarado e INERTE (o monitor do produto grita e o dono não ouve); dropado pelo persist, qualquer
+// save do board.yaml apagaria a linha do disco.
+describe("board `notifications` — type · coerce · contract · persist", () => {
+  it("coerceBoardNotifications: só strings não-vazias, sem duplicata, o INÍCIO do prefixo intocado", () => {
+    expect(coerceBoardNotifications(undefined)).toBeUndefined();
+    expect(coerceBoardNotifications({ criticalTitlePrefixes: [] })).toBeUndefined();
+    expect(coerceBoardNotifications({ criticalTitlePrefixes: "[sinal:" })).toBeUndefined();
+    expect(
+      coerceBoardNotifications({ criticalTitlePrefixes: ["[sinal:scraper:", "  ", 7, "[sinal:scraper:", "[sinal:credits: "] }),
+    ).toEqual({ criticalTitlePrefixes: ["[sinal:scraper:", "[sinal:credits:"] });
+  });
+
+  it("o contrato aceita o bloco (e recusa prefixo vazio)", async () => {
+    const base = await readBoardConfig(FIXTURE_BOARD);
+    expect(parseBoardConfig({ ...base, notifications: { criticalTitlePrefixes: ["[sinal:scraper:"] } }).ok).toBe(true);
+    expect(parseBoardConfig({ ...base, notifications: { criticalTitlePrefixes: [""] } }).ok).toBe(false);
+  });
+
+  it("deriveBoardConfigForPersist EMITE o bloco — um save de outra coisa não apaga os sinais", async () => {
+    const base = await readBoardConfig(FIXTURE_BOARD);
+    const notifications = { criticalTitlePrefixes: ["[sinal:scraper:"] };
+    expect((await deriveBoardConfigForPersist(FIXTURE_BOARD, { ...base, notifications })).notifications).toEqual(notifications);
+    expect("notifications" in (await readBoardConfig(FIXTURE_BOARD))).toBe(false);
   });
 });
 
@@ -180,11 +207,13 @@ describe("readBoardConfig — os blocos declarados chegam ao config resolvido", 
       view: { lanes },
       autonomy: { mode: "ultra", auditSampleRate: 0.3 },
       conductor: { enabled: true, fromStatus: ["enriquecer", "corrigir"] },
+      notifications: { criticalTitlePrefixes: ["[sinal:scraper:", "[sinal:credits:"] },
     });
     const cfg = await readBoardConfig(board);
     expect(cfg.view).toEqual({ lanes });
     expect(cfg.autonomy).toEqual({ mode: "ultra", auditSampleRate: 0.3 });
     expect(cfg.conductor).toEqual({ enabled: true, fromStatus: ["enriquecer", "corrigir"] });
+    expect(cfg.notifications).toEqual({ criticalTitlePrefixes: ["[sinal:scraper:", "[sinal:credits:"] });
   });
 
   it("um mapa de raias torto GRITA no log do serviço (nunca apaga o board)", async () => {

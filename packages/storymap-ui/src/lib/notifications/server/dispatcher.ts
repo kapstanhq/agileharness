@@ -11,6 +11,9 @@ import { createSlackChannel } from "./channels/slack-channel";
 import { createCopilotWakeChannel } from "./channels/copilot-wake-channel";
 import { createTriggerRunnerChannel } from "./channels/trigger-runner-channel";
 import { createWebPushChannel, initRunnerFailurePush } from "./channels/web-push-channel";
+import { createCriticalSignalChannel } from "./channels/critical-signal-channel";
+import { publishAgentAlert } from "./alert-bus";
+import { readBoardConfig } from "@/lib/storymap/repo";
 
 class Dispatcher {
   private channels: NotificationChannel[] = [];
@@ -40,14 +43,20 @@ export function getDispatcher(): Dispatcher {
 
   const dispatcher = new Dispatcher();
   dispatcher.register(getBroadcaster()); // always: the bridge to the browser
+  // Slack and phone push both follow the PUSH POLICY (notifications/push-policy — "push só para o crítico"):
+  // by default no plain board write reaches either; the Inbox holds them.
   const slack = createSlackChannel(); // opt-in via AGILEHARNESS_SLACK_WEBHOOK_URL
   if (slack) dispatcher.register(slack);
-  // Phone push: opt-in via AGILEHARNESS_VAPID_* keys. The channel covers card.moved
-  // (advanced + the "needs you" subset); the bridge wires runner failures (which
-  // flow through the registry, NOT this dispatcher) into the same push sender.
+  // Phone push: opt-in via AGILEHARNESS_VAPID_* keys. The channel classifies a card write (demand / needs-you /
+  // moved); the bridge wires runner failures (which flow through the registry, NOT this dispatcher) into the same
+  // push sender. Each fact goes out only when the policy lists it.
   const webPush = createWebPushChannel();
   if (webPush) dispatcher.register(webPush);
-  initRunnerFailurePush(); // no-op when push is unconfigured
+  initRunnerFailurePush(); // no-op when neither push nor Slack is configured
+  // The board-declared CRITICAL signals (board.yaml notifications.criticalTitlePrefixes): a card born with one of
+  // those prefixes becomes a `critical-signal` alert on the bus — once per card. Always registered; a board with no
+  // prefixes never emits.
+  dispatcher.register(createCriticalSignalChannel({ readBoardConfig, publish: (a) => publishAgentAlert(a) }));
   // Always registered; gated LIVE per event by autorun.enabled (settings.yaml)
   // or AGILEHARNESS_AUTORUN=0 (env) — so the Config panel can toggle it without a restart.
   dispatcher.register(createTriggerRunnerChannel());

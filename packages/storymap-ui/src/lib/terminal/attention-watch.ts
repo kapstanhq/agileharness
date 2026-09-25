@@ -336,8 +336,10 @@ function snapshotSig(list: readonly TerminalAttention[]): string {
  * do chat, e conhecimento amplo não custa atenção a ninguém. O ALERTA é outra coisa: ele tira o
  * operador de onde ele está.
  *
- *   • `asking` — trava trabalho ⇒ alerta e empurra SEMPRE, em qualquer sessão. É a capacidade nova.
- *   • `quiet`  — cortesia ⇒ alerta e empurra SÓ na sessão em que o operador armou a campainha.
+ *   • `asking` — trava trabalho ⇒ alerta SEMPRE (tela aberta), em qualquer sessão. Ao celular, só se a
+ *                política de push o listar como crítico (padrão: não — o dono abre o Inbox quando quiser).
+ *   • `quiet`  — cortesia ⇒ alerta SÓ na sessão em que o operador armou a campainha — e aí empurra, porque
+ *                o sininho É o pedido de push dele (o opt-in da política).
  *
  * A segunda regra conserta uma REGRESSÃO que eu tinha introduzido: o antecessor (`idle-watch`) só
  * observava sessões armadas, então "ficou quieto" avisava no máximo pelas que você pediu. Ao passar a
@@ -361,7 +363,10 @@ function announce(item: TerminalAttention, now: number): void {
     body,
     tag: `terminal:${item.session}`,
     url: `/terminal?b=${encodeURIComponent(item.session)}`,
-    // Chegar aqui já significa "merece interromper" (ver o guard acima), então os dois casos empurram.
-    push: true,
+    // Chegar aqui significa "merece aparecer na tela aberta" (ver o guard acima). Se vai ao CELULAR é a política
+    // de push única (notifications/push-policy): `terminal-waiting` fica na tela e no Inbox por padrão (o dono
+    // abre quando quiser); `terminal-quiet` só existe porque o operador ARMOU o sininho daquela sessão — é o
+    // pedido dele, e empurra (opt-in).
+    event: kind,
   });
 }

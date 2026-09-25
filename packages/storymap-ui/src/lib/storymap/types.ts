@@ -12,6 +12,7 @@ import type { WireframeNode } from "./wireframe-dsl";
 import type { FlowGraph } from "./flow-graph";
 import type { StyleGuidePointer } from "./style-guide";
 import type { WsjfCall } from "./wsjf";
+import type { PushEventKind } from "@/lib/notifications/push-policy";
 import type {
   KanoCategory,
   FunnelStage,
@@ -1965,6 +1966,12 @@ export interface BoardConfig {
    */
   autonomy?: AutonomyPolicy;
   /**
+   * The board's NOTIFICATION declarations ({@link BoardNotificationsConfig}) — today the CRITICAL SIGNALS: a card
+   * created with one of `criticalTitlePrefixes` (e.g. a product monitor's `[sinal:scraper:` card) is pushed to the
+   * owner once (push policy fact `critical-signal`). Absent ⇒ no board-declared signal.
+   */
+  notifications?: BoardNotificationsConfig;
+  /**
    * 🟨 NEGÓCIO — Posicionamento estratégico (Kotler/Keller, STP): "Para [segmento], a [Marca] é a
    * [categoria] que [benefício] porque [razão]". Direciona marketing E produto (owner:human; propose_change).
    */
@@ -2178,6 +2185,12 @@ export type AutonomyMode = "human" | "ultra";
 export const AUTONOMY_MODES: AutonomyMode[] = ["human", "ultra"];
 export function isAutonomyMode(v: unknown): v is AutonomyMode {
   return typeof v === "string" && (AUTONOMY_MODES as string[]).includes(v);
+}
+
+/** The board's notification declarations (BoardConfig.notifications). */
+export interface BoardNotificationsConfig {
+  /** title PREFIXES that make a newly-created card a CRITICAL signal (matched at the start, case-sensitive). */
+  criticalTitlePrefixes?: string[];
 }
 
 /** Default share of proxy answers sampled onto the owner's audit list. */
@@ -2690,6 +2703,12 @@ export interface RunnerSettings {
    * (ro < write < full). Absent ⇒ no token enforcement (legacy: every client is full). Deployment concern.
    */
   mcpTokens?: { tokenEnv: string; level: McpLevel }[];
+  /**
+   * PUSH SÓ PARA O CRÍTICO (notifications/push-policy): `push.critical` é a lista dos fatos que vão ao celular e ao
+   * Slack; o resto espera no Inbox. Ausente ⇒ o padrão (trava de capacidade, uso extra pago, deploy revertido,
+   * sinais críticos declarados pelos boards). Lista vazia ⇒ nada empurra (além do sininho que o operador arma).
+   */
+  notifications?: { push: { critical: PushEventKind[] } };
   /**
    * DEPLOYMENT-wide deploy knobs. `canaryCommand`: the DEFAULT publication-fidelity canary for boards
    * that do not declare their own (`board.yaml` `deploy.canaryCommand` wins). A deployment where every

@@ -22,6 +22,9 @@ import { readBoardConfig } from "@/lib/storymap/repo";
 import { DEPLOY_FAILURE_FINDING_ID, isDeployStep } from "@/lib/storymap/demands";
 import { terminalStatusIds } from "@/lib/storymap/views";
 import { evaluateAutorunOnEntry } from "@/lib/notifications/server/channels/autorun-eval";
+import { ALERT_URGENCY, type AgentAlert } from "@/lib/notifications/event";
+import type { PushEventKind } from "@/lib/notifications/push-policy";
+import { publishAgentAlert } from "@/lib/notifications/server/alert-bus";
 import { logFileFor } from "./product-deploy";
 import { upsertFinding } from "./findings";
 import { appendTransition } from "./transitions";
@@ -163,6 +166,44 @@ export function buildDeployFailureFinding(detail: DeployFailureDetail, today: st
       ` A causa pode ser EXTERNA (um pacote não-relacionado quebrou o deploy em lote), não necessariamente ` +
       `do seu código. O card entrou em "No ar" otimista mas não está no ar (revertido para Liberar em ` +
       `${today}). Diagnostique; resolvida a causa, reentre no Deploy.`,
+  };
+}
+
+/**
+ * O nome da falha na política de push: o deploy que RODOU e falhou (a produção não recebeu o que devia —
+ * `deploy-rollback`, empurra por padrão) × a publicação recusada ANTES de rodar (promoção stage→main, preflight de
+ * frescor — nada tocou a produção: `deploy-blocked`, só o Inbox). PURA.
+ */
+export function deployFailurePushEvent(detail: Pick<DeployFailureDetail, "phase">): PushEventKind {
+  return detail.phase === "release" || detail.phase === "freshness" ? "deploy-blocked" : "deploy-rollback";
+}
+
+/**
+ * O AVISO de um revert de deploy — o produtor do "produção não recebeu" da política de push. Mesmo texto do
+ * finding (o operador não lê duas versões do mesmo fato) e leva ao Inbox, onde o item `deploy-failed` tem o
+ * botão de republicar. PURA — exportada para o teste.
+ */
+export function deployFailureAlert(
+  board: string,
+  cardId: string,
+  cardTitle: string | null | undefined,
+  finding: Pick<Finding, "title">,
+  detail: DeployFailureDetail,
+  now: number,
+): AgentAlert {
+  const event = deployFailurePushEvent(detail);
+  return {
+    id: `deploy-failed-${board}-${cardId}-${now}`,
+    kind: "deploy-failed",
+    urgency: ALERT_URGENCY["deploy-failed"],
+    at: now,
+    title: event === "deploy-rollback" ? "Deploy falhou — o trabalho aprovado não está no ar" : "Publicação recusada antes de rodar",
+    body: `${cardTitle ? `“${cardTitle}” · ` : ""}${board}: ${finding.title}`,
+    // um por card: dois reverts do mesmo card colapsam numa notificação no celular em vez de empilhar
+    tag: `deploy-failed:${board}:${cardId}`,
+    url: `/board/${board}/inbox`,
+    boardId: board,
+    event,
   };
 }
 
@@ -376,10 +417,12 @@ export async function revertCardOnDeployFailure(
     let clearedStamp = false;
     let outOfStatus: string | null | undefined;
     let revertFrom: string | null = null;
+    let cardTitle: string | null = null;
     await updateCardOnDisk(board, cardId, (card) => {
       const r = applyDeploySettleFailure(card, { revertableIds, finding, destination, detail, today });
       reverted = r.reverted;
       clearedStamp = r.clearedStamp;
+      cardTitle = card.title ?? null;
       if (r.clearedStamp) outOfStatus = card.status;
       if (r.reverted) revertFrom = card.status ?? null; // 6.1 — the terminal status we're reverting OUT of
       return r.next;
@@ -400,6 +443,14 @@ export async function revertCardOnDeployFailure(
       // 6.1 — the most forensic hop (No ar → Liberar por deploy falho) was invisible in the ledger.
       // actor="system" (automatic revert, no human in the loop); append is itself fail-open.
       void appendTransition({ board, cardId, from: revertFrom, to: destination, actor: "system", note: "deploy:reverted" });
+      // "Produção fora do ar" na política de push: UM aviso por revert — o guard de idempotência acima já faz o
+      // segundo callback do mesmo deploy (onDone + webhook) chegar aqui com reverted=false. Se vai ao celular e ao
+      // Slack decide a política (deploy-rollback empurra; deploy-blocked fica no Inbox).
+      try {
+        publishAgentAlert(deployFailureAlert(board, cardId, cardTitle, finding, detail, Date.now()));
+      } catch (err) {
+        console.error(`[deploy-revert ${board}/${cardId}] aviso falhou:`, err instanceof Error ? err.message : err);
+      }
       console.warn(
         `[deploy-revert ${board}/${cardId}] deploy falhou (exit ${detail.exitCode ?? -1}) → revertido para ${destination} (redeploy, não é fix de código)`,
       );

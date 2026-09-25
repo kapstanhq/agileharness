@@ -48,6 +48,7 @@ import type {
   CardType,
   ColumnDef,
   AutonomyPolicy,
+  BoardNotificationsConfig,
   BoardViewConfig,
   ConductorPolicy,
   CommitRange,
@@ -866,6 +867,20 @@ export function coerceAutonomy(raw: unknown): AutonomyPolicy | undefined {
   const rate = Number(r.auditSampleRate);
   if (r.auditSampleRate != null && r.auditSampleRate !== "" && Number.isFinite(rate)) out.auditSampleRate = Math.min(1, Math.max(0, rate));
   return out;
+}
+
+/**
+ * The board's NOTIFICATION declarations (board.yaml `notifications:`) — today the CRITICAL SIGNAL prefixes
+ * (notifications/push-policy `criticalSignalPrefix`). Keeps only non-empty strings (trimmed at the END only: a
+ * prefix like `[sinal:scraper:` is matched literally at the start of a title, so its own leading characters are
+ * the contract). Nothing left ⇒ undefined (no board-declared signal).
+ */
+export function coerceBoardNotifications(raw: unknown): BoardNotificationsConfig | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const list = (raw as Record<string, unknown>).criticalTitlePrefixes;
+  if (!Array.isArray(list)) return undefined;
+  const prefixes = [...new Set(list.filter((x): x is string => typeof x === "string").map((x) => x.trimEnd()).filter((x) => x.trim().length > 0))];
+  return prefixes.length ? { criticalTitlePrefixes: prefixes } : undefined;
 }
 
 /**
@@ -1698,6 +1713,7 @@ async function resolveBoardConfigFromOwnRaw(
   const conductor = coerceConductor((parsed as { conductor?: unknown }).conductor);
   const view = coerceBoardView((parsed as { view?: unknown }).view);
   const autonomy = coerceAutonomy((parsed as { autonomy?: unknown }).autonomy);
+  const notifications = coerceBoardNotifications((parsed as { notifications?: unknown }).notifications);
   const config: BoardConfig = {
     id: parsed.id ?? boardId,
     name: parsed.name ?? boardId,
@@ -1736,6 +1752,8 @@ async function resolveBoardConfigFromOwnRaw(
     // declarado, aceito pelo contrato e INERTE. Spread condicional: board sem o bloco não carrega chave fantasma.
     ...(view ? { view } : {}),
     ...(autonomy ? { autonomy } : {}),
+    // Os sinais críticos do board (push-policy): mesma whitelist — sem esta linha o bloco seria aceito e inerte.
+    ...(notifications ? { notifications } : {}),
     // Strategy bench artifacts (owner:human) — declared in BoardConfigSchema but historically dropped
     // here, which broke the governance round-trip (approve→write→read showed the stale value). Coerced +
     // persisted (deriveBoardConfigForPersist) so the strategy ladder (Posicionamento/Métrica/Resultado-alvo)
@@ -1915,6 +1933,7 @@ export async function deriveBoardConfigForPersist(
   // A vista em raias e a chave de autonomia: board-locais pelo mesmo motivo — um save de outra coisa não apaga.
   if (config.view) out.view = config.view;
   if (config.autonomy) out.autonomy = config.autonomy;
+  if (config.notifications) out.notifications = config.notifications;
   // story-fr5bnt kill-switch — board-local operational flag (never inherited from _base): persist when
   // set, else ANY board.yaml save (vocab/canvas/strategy) silently DELETED the line from disk (D15).
   if (config.autorunDisabled) out.autorunDisabled = true;

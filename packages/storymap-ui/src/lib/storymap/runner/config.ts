@@ -27,6 +27,7 @@ import { maskSecret, secretWeakness, weaknessAdvice } from "@/lib/storymap/mcp/a
 // escopados) — ver `normalizeScopedMcpTokenEnv` logo abaixo de `mcpSecretWarned`.
 import { MCP_TOKEN_ENV, normalizeMcpTokenEnv } from "@/lib/storymap/mcp/token-bootstrap";
 import { patchYamlScalars } from "./settings-yaml";
+import { coerceNotificationSettings } from "@/lib/notifications/push-policy";
 import { DEFAULT_GOVERNOR_SETTINGS, coerceGovernorSettings, governorEnvSwitch } from "./capacity-governor";
 import { budgetFlags, columnFlags } from "./flags";
 import { deriveCardMaxTurns, deriveCardModelEffort, type CardComplexitySignals } from "./model-routing";
@@ -415,6 +416,7 @@ export function coerceRunnerSettings(raw: unknown): RunnerSettings {
   // skill, isto é, o teto continua LIGADO. Só um `0` explícito desliga.
   const maxBudgetUSD = coerceRunBudgetSetting(a.maxBudgetUSD);
   const surfaceMaxBudgetUSD = coerceSurfaceBudgets(a.surfaceMaxBudgetUSD);
+  const notifications = coerceNotificationSettings(r.notifications);
 
   return {
     version: asPosInt(r.version) ?? d.version,
@@ -554,6 +556,9 @@ export function coerceRunnerSettings(raw: unknown): RunnerSettings {
     // teto nunca some em silêncio. Sempre materializado: quem lê recebe um objeto completo.
     governor: coerceGovernorSettings(r.governor, d.governor),
     ...(coerceMcpTokens(r.mcpTokens) ? { mcpTokens: coerceMcpTokens(r.mcpTokens) } : {}),
+    // A política de push (notifications/push-policy): só quando DECLARADA — ausente, quem lê aplica o padrão (o
+    // crítico). Coerção explícita: um fato desconhecido na lista é descartado com aviso, nunca aceito às cegas.
+    ...(notifications ? { notifications } : {}),
   };
 }
 
