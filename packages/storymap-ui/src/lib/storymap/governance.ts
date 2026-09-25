@@ -159,7 +159,7 @@ export const GOVERNANCE_DRAFT_TTL_DAYS = 14;
  * visível. O erro barato aqui é o operador ver um item a mais; o caro é uma proposta sumir da tela
  * dele por causa de uma data que ninguém conseguiu ler.
  */
-export function isGovernanceDraftStale(draft: GovernanceDraft, now: number = Date.now()): boolean {
+export function isGovernanceDraftStale(draft: Pick<GovernanceDraft, "status" | "createdAt">, now: number = Date.now()): boolean {
   if (draft.status !== "pending") return false;
   const nascida = Date.parse(`${draft.createdAt}T00:00:00Z`);
   if (!Number.isFinite(nascida)) return false;

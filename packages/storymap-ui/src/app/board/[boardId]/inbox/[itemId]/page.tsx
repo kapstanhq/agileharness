@@ -1,8 +1,11 @@
 import { notFound } from "next/navigation";
 import { getBoard, listBoards } from "@/lib/storymap/repo";
 import { collectBoardCockpitItems } from "@/lib/storymap/cockpit-collect";
-import { decodeInboxItemId } from "@/lib/storymap/deep-links";
+import { decodeInboxItemId, findInboxItem } from "@/lib/storymap/deep-links";
+import { governanceDraftIdFromItemId } from "@/lib/storymap/demands";
+import { readGovernanceDraft } from "@/lib/storymap/sidecars";
 import { InboxItemScreen } from "@/components/inicio/InboxItemScreen";
+import { inboxAbsentState } from "@/components/inicio/cockpit-labels";
 
 export const dynamic = "force-dynamic";
 
@@ -11,9 +14,10 @@ export const dynamic = "force-dynamic";
  * Agêntico feed links to). Mirrors the card page's shape: it resolves the item out of the same
  * collector the cockpit uses (collectBoardCockpitItems), so the page shows the SAME item with the
  * SAME inline actions the inbox has. `params.itemId` arrives PERCENT-ENCODED (Next does not decode
- * App-Router params) — decodeInboxItemId is the inverse of the link builder. A resolved/absent
- * item renders a graceful "resolvido" state (never a 404) — an action taken here can remove the item
- * under the reader.
+ * App-Router params) — and sometimes encoded TWICE by whatever rendered the link; findInboxItem peels
+ * the layers. An absent item renders a graceful state (never a 404) — an action taken here can remove
+ * the item under the reader — and that state says only what is known: the real outcome of a
+ * governance draft still on disk, otherwise "not in the Inbox (resolved, or a broken link)".
  */
 export default async function InboxItemPage(props: {
   params: Promise<{ boardId: string; itemId: string }>;
@@ -27,8 +31,15 @@ export default async function InboxItemPage(props: {
   ]);
   if (!board) notFound();
 
-  const itemId = decodeInboxItemId(params.itemId);
-  const item = items.find((i) => i.id === itemId) ?? null;
+  const item = findInboxItem(items, params.itemId);
 
-  return <InboxItemScreen board={board} boards={boards} item={item} />;
+  // Ausente: a proposta de governança em disco sabe o próprio desfecho (um arquivo só); o resto não sabe.
+  let absent = null;
+  if (!item) {
+    const draftId = governanceDraftIdFromItemId(decodeInboxItemId(params.itemId));
+    const draft = draftId ? await readGovernanceDraft(board.config.id, draftId) : null;
+    absent = inboxAbsentState(draft);
+  }
+
+  return <InboxItemScreen board={board} boards={boards} item={item} absent={absent} />;
 }

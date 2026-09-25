@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   cardCockpitItems,
   designItemsFromWireframes,
+  governanceDraftIdFromItemId,
+  governanceItemId,
   governanceItemsFromDrafts,
   proposalItemsFromContainers,
 } from "./demands";
@@ -168,6 +170,20 @@ const makeDraft = (id: string, overrides: Partial<GovernanceDraft> = {}): Govern
   createdAt: new Date().toISOString().slice(0, 10),
   decidedAt: null,
   ...overrides,
+});
+
+describe("governanceDraftIdFromItemId — o inverso de governanceItemId", () => {
+  it("devolve o draftId de um item de governança", () => {
+    expect(governanceDraftIdFromItemId(governanceItemId("85f22b8e-4601-43f8-bcb8-7ea1423aa0b2"))).toBe(
+      "85f22b8e-4601-43f8-bcb8-7ea1423aa0b2",
+    );
+  });
+
+  it("outro kind, ou id fora do alfabeto do nome do sidecar ⇒ null (sem apelido: nunca lê a proposta de OUTRO id)", () => {
+    for (const id of ["apr:x", "story-x:q:q1", "gov:", "gov:../board", "gov:a.b", "gov:a:b", "gov:a%41", "gov"]) {
+      expect(governanceDraftIdFromItemId(id), id).toBeNull();
+    }
+  });
 });
 
 describe("governanceItemsFromDrafts — governance drafts folded into the cockpit inbox (AC4/AC5/AC6)", () => {

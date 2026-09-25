@@ -1382,6 +1382,16 @@ export function governanceItemId(draftId: string): string {
 }
 
 /**
+ * The inverse of {@link governanceItemId}: the draftId of a governance item id, or `null`. The id comes from a URL,
+ * so it must also be in the alphabet a sidecar FILENAME can have (`sanitizeId`: letters, digits, `-`) — a stray
+ * character would be stripped on the way to disk and the lookup would read the draft of a DIFFERENT id.
+ */
+export function governanceDraftIdFromItemId(itemId: string): string | null {
+  const m = /^gov:([A-Za-z0-9-]{1,100})$/.exec(itemId);
+  return m ? m[1] : null;
+}
+
+/**
  * Project pending GovernanceDrafts into GovernanceCockpitItems (pure — no IO).
  * Only `pending` drafts generate an item; `approved` and `rejected` are silent.
  * `conflicts` is pre-computed by the caller (cockpit-collect reads the live config).

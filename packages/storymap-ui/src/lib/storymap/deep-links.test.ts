@@ -4,6 +4,7 @@ import {
   decodeInboxItemId,
   decodeRouteParam,
   demandHref,
+  findInboxItem,
   inboxFocusHref,
   inboxItemHref,
   newCardHref,
@@ -105,8 +106,77 @@ describe("cardHref / vocabEntityHref — simetria com decodeRouteParam", () => {
     expect(vocabEntityHref("acme", "sistema", "api")).toBe("/board/acme/vocabulario/sistema/api");
   });
 
-  it("decodeRouteParam e decodeInboxItemId são a MESMA função (um alias, não uma segunda regra)", () => {
-    expect(decodeInboxItemId).toBe(decodeRouteParam);
+  // Eram a MESMA função até o link do Inbox chegar re-codificado (abaixo). Divergem só aí: num segmento de UMA
+  // camada as duas dão o mesmo valor — e decodeRouteParam segue em uma passada, porque compara segredo e ids abertos.
+  it("decodeInboxItemId concorda com decodeRouteParam em todo link de uma camada", () => {
+    for (const id of ["story-abc:q:q1", "gov:draft-12", "apr:req 7/x&y?z=1", "Mãe Solo"]) {
+      const segment = encodeURIComponent(id);
+      expect(decodeInboxItemId(segment), id).toBe(decodeRouteParam(segment));
+    }
+  });
+});
+
+// ── Link do Inbox re-codificado ──────────────────────────────────────────────────────────────────
+// MEDIDO em produção: /inbox/gov%3A<id> e /inbox/gov:<id> abriam o item com Aprovar; /inbox/gov%253A<id> — o `%`
+// re-codificado por quem renderizou o link, e foi esse o que o dono clicou — mostrava «resolvido» para um item
+// que seguia pendente.
+
+describe("decodeInboxItemId — o link que chega re-codificado", () => {
+  const ID = "gov:85f22b8e-4601-43f8-bcb8-7ea1423aa0b2";
+  const once = encodeURIComponent(ID);
+
+  it("uma camada — o link que o app monta", () => {
+    expect(decodeInboxItemId(once)).toBe(ID);
+  });
+
+  it("duas camadas — gov%253A<id> vira o id, não um item fantasma", () => {
+    expect(encodeURIComponent(once)).toBe("gov%253A85f22b8e-4601-43f8-bcb8-7ea1423aa0b2");
+    expect(decodeInboxItemId(encodeURIComponent(once))).toBe(ID);
+  });
+
+  it("cru — o id escrito à mão na barra", () => {
+    expect(decodeInboxItemId(ID)).toBe(ID);
+  });
+
+  it("malformado (%E0%A4%A): devolve o segmento, nunca lança", () => {
+    expect(() => decodeInboxItemId("%E0%A4%A")).not.toThrow();
+    expect(decodeInboxItemId("%E0%A4%A")).toBe("%E0%A4%A");
+    // malformado DEPOIS de uma camada boa: para no último passo que decodificou
+    expect(decodeInboxItemId(encodeURIComponent("%E0%A4%A"))).toBe("%E0%A4%A");
+  });
+
+  it("limitado: três camadas decodificam; a quarta fica como veio da terceira", () => {
+    const enc = (s: string, n: number): string => (n === 0 ? s : enc(encodeURIComponent(s), n - 1));
+    expect(decodeInboxItemId(enc(ID, 3))).toBe(ID);
+    expect(decodeInboxItemId(enc(ID, 4))).toBe(once);
+  });
+});
+
+describe("findInboxItem — o primeiro degrau de decodificação que nomeia um item vence", () => {
+  const items = [{ id: "gov:d1" }, { id: "story-x:q:q%41" }, { id: "story-x:q:qA" }];
+  const seg = (id: string) => inboxItemHref("acme", id).split("/").pop()!;
+
+  it("link de uma camada, de duas, e cru — o mesmo item", () => {
+    expect(findInboxItem(items, seg("gov:d1"))).toBe(items[0]);
+    expect(findInboxItem(items, encodeURIComponent(seg("gov:d1")))).toBe(items[0]);
+    expect(findInboxItem(items, "gov:d1")).toBe(items[0]);
+  });
+
+  it("um id com %XX de verdade (dado escrito à mão no card) segue abrindo pelo PRÓPRIO link — não vira outro item", () => {
+    expect(findInboxItem(items, seg("story-x:q:q%41"))).toBe(items[1]);
+    expect(findInboxItem(items, seg("story-x:q:qA"))).toBe(items[2]);
+  });
+
+  it("nenhum degrau casa ⇒ null", () => {
+    expect(findInboxItem(items, seg("gov:outro"))).toBeNull();
+    expect(findInboxItem(items, "%E0%A4%A")).toBeNull();
+  });
+});
+
+describe("decodeRouteParam fica em UMA passada", () => {
+  it("não colapsa camadas: o segredo do MCP e o id aberto de vocabulário comparam exatamente o que veio", () => {
+    expect(decodeRouteParam("a%2541")).toBe("a%41");
+    expect(decodeRouteParam(encodeURIComponent("50%41 off"))).toBe("50%41 off");
   });
 });
 

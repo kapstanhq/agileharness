@@ -11,6 +11,7 @@ import {
   docProposalHeadline,
   docProposalNotices,
   governanceDecision,
+  inboxAbsentState,
   governanceSections,
   meterRenewMessage,
   meterStallHeadline,
@@ -355,6 +356,71 @@ describe("docProposalNotices", () => {
   it("uma linha por proposta, na ordem recebida", () => {
     const notices = docProposalNotices([draft({ id: "x" }), draft({ id: "y" })], "b");
     expect(notices.map((n) => n.draftId)).toEqual(["x", "y"]);
+  });
+});
+
+// ── O item que não está no Inbox ─────────────────────────────────────────────────────────────────
+// A página do item dizia «Este item já foi resolvido» para QUALQUER id que não achasse — inclusive o de um link
+// quebrado para um item pendente. Agora ela diz o que sabe: o desfecho real, quando é uma proposta em disco; senão,
+// que o item não está lá.
+
+describe("inboxAbsentState", () => {
+  const AGORA = Date.parse("2026-09-25T12:00:00Z");
+  const decidida = (over: Partial<GovernanceDraft>): GovernanceDraft => ({
+    id: "d1",
+    board: "b",
+    status: "approved",
+    reason: "",
+    origin: { skill: "harness-plan", cardId: null },
+    changes: [],
+    createdAt: "2026-09-20",
+    decidedAt: "2026-09-24",
+    ...over,
+  });
+
+  it("sem proposta em disco: não afirma que foi resolvido — pode ter sido, ou o link pode estar quebrado", () => {
+    const st = inboxAbsentState(null, AGORA);
+    expect(st.title).toBe("Este item não está no Inbox.");
+    expect(st.detail).toBe("Ele pode já ter sido resolvido — ou o link pode estar quebrado.");
+    expect(`${st.title} ${st.detail}`).not.toMatch(/já foi resolvido\./);
+  });
+
+  it("aprovada: o desfecho e o dia; por revisor par quando foi ele", () => {
+    expect(inboxAbsentState(decidida({}), AGORA)).toEqual({
+      title: "Esta proposta já foi aprovada.",
+      detail: "Aprovada em 24/09 — as mudanças já valem no board.",
+    });
+    expect(inboxAbsentState(decidida({ approvedBy: "peer:run-7" }), AGORA).detail).toBe(
+      "Aprovada em 24/09 por um revisor par — as mudanças já valem no board.",
+    );
+  });
+
+  it("rejeitada × retirada: a segunda é do proponente, não um «não» de quem decide", () => {
+    expect(inboxAbsentState(decidida({ status: "rejected" }), AGORA)).toEqual({
+      title: "Esta proposta foi rejeitada.",
+      detail: "Rejeitada em 24/09 — o board ficou como estava.",
+    });
+    expect(inboxAbsentState(decidida({ status: "rejected", withdrawnBy: "agent" }), AGORA)).toEqual({
+      title: "Esta proposta foi retirada.",
+      detail: "Retirada por quem a propôs em 24/09 — o board ficou como estava.",
+    });
+  });
+
+  it("pendente e vencida: saiu do Inbox pelo prazo, sem decisão", () => {
+    const st = inboxAbsentState(decidida({ status: "pending", decidedAt: null, createdAt: "2026-09-01" }), AGORA);
+    expect(st.title).toBe("Esta proposta venceu sem decisão.");
+    expect(st.detail).toBe(
+      "Ficou mais de 14 dias pendente e saiu do Inbox — o board ficou como estava. Se ela ainda fizer sentido, peça uma nova.",
+    );
+  });
+
+  it("pendente e NÃO vencida (mas fora da lista): não inventa desfecho — cai no texto honesto genérico", () => {
+    const st = inboxAbsentState(decidida({ status: "pending", decidedAt: null, createdAt: "2026-09-25" }), AGORA);
+    expect(st).toEqual(inboxAbsentState(null, AGORA));
+  });
+
+  it("sem data de decisão: o desfecho sem o dia, nunca «em undefined»", () => {
+    expect(inboxAbsentState(decidida({ decidedAt: null }), AGORA).detail).toBe("Aprovada — as mudanças já valem no board.");
   });
 });
 

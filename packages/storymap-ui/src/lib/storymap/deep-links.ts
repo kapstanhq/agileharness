@@ -52,8 +52,58 @@ export function decodeRouteParam(segment: string): string {
   }
 }
 
-/** Named alias at the Inbox call site — the item id is the one that provably needed it. */
-export const decodeInboxItemId = decodeRouteParam;
+/** How many decode passes an Inbox segment gets — one for the link we build, two more for re-encoders. */
+const INBOX_DECODE_PASSES = 3;
+
+/**
+ * The successive decodings of an Inbox item segment, shallowest first: `[once, twice, …]`, at most
+ * {@link INBOX_DECODE_PASSES}. A pass happens only while the value still carries a `%XX` escape AND decoding
+ * changes it, so a raw id, a malformed one and a fully-decoded one all stop at one rung — and nothing throws.
+ *
+ * Why more than one: the link is sometimes RE-encoded by whatever rendered it (a chat, an e-mail client, a
+ * markdown renderer). `gov%3A<id>` arrives as `gov%253A<id>`; one decode leaves `gov%3A<id>`, which names no
+ * item, and the page used to tell the owner a still-pending item "was resolved". Measured in production.
+ *
+ * Only the Inbox gets this — {@link decodeRouteParam} stays ONE pass on purpose: the MCP route compares a
+ * SECRET with it (peeling layers in an auth comparison widens what it accepts: `%2541` would equal `A`), and
+ * vocabulary ids are open-ended text where a literal `%41` is plausible.
+ */
+export function inboxItemIdCandidates(segment: string): string[] {
+  const rungs = [decodeRouteParam(segment)];
+  while (rungs.length < INBOX_DECODE_PASSES) {
+    const last = rungs[rungs.length - 1];
+    if (!/%[0-9A-Fa-f]{2}/.test(last)) break;
+    const next = decodeRouteParam(last);
+    if (next === last) break; // malformed — decodeRouteParam fell back to the input
+    rungs.push(next);
+  }
+  return rungs;
+}
+
+/**
+ * Read an Inbox item segment back into the id — as deep as {@link inboxItemIdCandidates} goes. Use it where
+ * there is no list to match against; to FIND the item use {@link findInboxItem}, which prefers the shallowest
+ * rung that names one.
+ */
+export function decodeInboxItemId(segment: string): string {
+  const rungs = inboxItemIdCandidates(segment);
+  return rungs[rungs.length - 1];
+}
+
+/**
+ * The item a segment names: the FIRST rung of {@link inboxItemIdCandidates} that matches an item id. Generated
+ * ids never carry `%`, but hand-authored card data (a card file stem, a question/finding id written in the
+ * frontmatter, a status id in board.yaml) is not validated against it — so an id with a literal `%41` must keep
+ * opening through its own link. Shallowest-first gives it that: its single decode matches before any deeper
+ * rung is tried.
+ */
+export function findInboxItem<T extends { id: string }>(items: readonly T[], segment: string): T | null {
+  for (const id of inboxItemIdCandidates(segment)) {
+    const hit = items.find((i) => i.id === id);
+    if (hit) return hit;
+  }
+  return null;
+}
 
 /**
  * A visão do documento de um card. Vive aqui — e não na tela — porque quem MANDA alguém para uma

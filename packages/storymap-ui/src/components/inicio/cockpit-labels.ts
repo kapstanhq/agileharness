@@ -6,6 +6,7 @@
 import type { CockpitGroup, CockpitItem, CockpitItemKind, GovernanceCockpitItem } from "@/lib/storymap/demands";
 import { governanceItemId } from "@/lib/storymap/demands";
 import { inboxItemHref } from "@/lib/storymap/deep-links";
+import { GOVERNANCE_DRAFT_TTL_DAYS, isGovernanceDraftStale } from "@/lib/storymap/governance";
 import { PRD_SCHEMA } from "@/lib/storymap/doc/schemas/prd";
 import type { GovernanceArtifact, GovernanceChange, GovernanceDraft } from "@/lib/storymap/types";
 import type { KeepaliveNowResult } from "@/lib/storymap/runner/capacity-service";
@@ -263,16 +264,69 @@ export function docProposalNotices(
 ): DocProposalNotice[] {
   return drafts.map((d) => {
     const skill = d.origin?.skill?.trim();
-    const day = /^\d{4}-(\d{2})-(\d{2})/.exec(d.createdAt);
+    const day = dayMonth(d.createdAt);
     const detail = [
       governanceScope(d.changes),
       skill ? `proposta por um agente (${skill})` : "proposta por uma pessoa",
-      day ? `em ${day[2]}/${day[1]}` : null,
+      day ? `em ${day}` : null,
     ]
       .filter(Boolean)
       .join(" · ");
     return { draftId: d.id, href: inboxItemHref(boardId, governanceItemId(d.id)), detail };
   });
+}
+
+/** "25/09" de uma data ISO (`YYYY-MM-DD…`), ou `null` — o dia sem fuso: é a data que o sidecar gravou. */
+function dayMonth(iso: string | null | undefined): string | null {
+  const m = /^\d{4}-(\d{2})-(\d{2})/.exec(iso ?? "");
+  return m ? `${m[2]}/${m[1]}` : null;
+}
+
+// ── O item que não está no Inbox ─────────────────────────────────────────────────────────────────
+//
+// A página do item dizia «Este item já foi resolvido» para QUALQUER id que não achasse — inclusive o de um link
+// quebrado para um item que seguia pendente. Ela passa a dizer só o que sabe.
+
+export interface InboxAbsentState {
+  title: string;
+  detail: string;
+}
+
+/**
+ * O que a página de um item AUSENTE diz. PURA. `draft` é a proposta de governança em disco quando o id era
+ * `gov:<id>` e ela existe (lê-la é um arquivo só); aí o desfecho é FATO — aprovada, rejeitada, retirada, vencida.
+ * Sem ela (outro kind, ou nada em disco), a página não sabe se o item foi resolvido ou se o link está quebrado, e
+ * diz exatamente isso. Uma proposta pendente e dentro do prazo que não está na lista também não ganha desfecho
+ * inventado.
+ */
+export function inboxAbsentState(
+  draft: Pick<GovernanceDraft, "status" | "createdAt" | "decidedAt" | "approvedBy" | "withdrawnBy"> | null,
+  now: number = Date.now(),
+): InboxAbsentState {
+  const day = dayMonth(draft?.decidedAt);
+  const when = day ? ` em ${day}` : "";
+  if (draft?.status === "approved") {
+    const peer = draft.approvedBy?.startsWith("peer:") ? " por um revisor par" : "";
+    return { title: "Esta proposta já foi aprovada.", detail: `Aprovada${when}${peer} — as mudanças já valem no board.` };
+  }
+  if (draft?.status === "rejected" && draft.withdrawnBy) {
+    return { title: "Esta proposta foi retirada.", detail: `Retirada por quem a propôs${when} — o board ficou como estava.` };
+  }
+  if (draft?.status === "rejected") {
+    return { title: "Esta proposta foi rejeitada.", detail: `Rejeitada${when} — o board ficou como estava.` };
+  }
+  if (draft?.status === "pending" && isGovernanceDraftStale(draft, now)) {
+    return {
+      title: "Esta proposta venceu sem decisão.",
+      detail:
+        `Ficou mais de ${GOVERNANCE_DRAFT_TTL_DAYS} dias pendente e saiu do Inbox — o board ficou como estava. ` +
+        "Se ela ainda fizer sentido, peça uma nova.",
+    };
+  }
+  return {
+    title: "Este item não está no Inbox.",
+    detail: "Ele pode já ter sido resolvido — ou o link pode estar quebrado.",
+  };
 }
 
 /**

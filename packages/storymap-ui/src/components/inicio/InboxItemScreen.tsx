@@ -3,8 +3,8 @@
 // The full-page detail of ONE Inbox item — the "página individual e página inteira" the Início
 // Agêntico feed links to, styled like the card page (BoardHeader shell + a single reading column). The
 // body is the REAL per-kind cockpit renderer with its inline actions (CockpitItemDetail), so answering
-// / approving / resolving here does exactly what the cockpit does. A resolved/absent item shows a
-// graceful "resolvido" state instead of a 404.
+// / approving / resolving here does exactly what the cockpit does. An absent item shows a graceful
+// state instead of a 404 — saying only what is known (inboxAbsentState), never "resolved" by default.
 
 import Link from "next/link";
 import { ArrowLeft, ExternalLink, Inbox } from "lucide-react";
@@ -16,6 +16,8 @@ import {
   COCKPIT_DEMAND_LABEL,
   cockpitItemShowsStatus,
   cockpitItemTitle,
+  inboxAbsentState,
+  type InboxAbsentState,
 } from "@/components/inicio/cockpit-labels";
 import { cardSurface } from "@/lib/ui";
 import { cn } from "@/lib/cn";
@@ -26,12 +28,16 @@ export function InboxItemScreen({
   board,
   boards,
   item,
+  absent,
 }: {
   board: Board;
   boards: BoardSummary[];
   item: CockpitItem | null;
+  /** o que dizer quando `item` é null — resolvido no servidor (o desfecho de uma proposta em disco). */
+  absent?: InboxAbsentState | null;
 }) {
   const config = board.config;
+  const missing = absent ?? inboxAbsentState(null);
   // Mesma régua do cartão aberto: o status do pipeline só aparece quando descreve MESMO um card
   // (nunca o "Capturando" do contêiner efêmero de uma proposta).
   const statusName =
@@ -94,14 +100,14 @@ export function InboxItemScreen({
           </>
         ) : (
           <div className={cn(cardSurface, "px-5 py-12 text-center")}>
-            <p className="text-[14px] font-semibold text-fg">Este item já foi resolvido.</p>
-            <p className="mt-1 text-[13px] text-fg-muted">Nada mais te espera aqui.</p>
+            <p className="text-[14px] font-semibold text-fg">{missing.title}</p>
+            <p className="mt-1 text-[13px] text-fg-muted">{missing.detail}</p>
             <Link
               href={`/board/${config.id}/inbox`}
               prefetch={false}
               className="mt-5 inline-flex items-center gap-1 text-[13px] font-semibold text-accent transition hover:underline"
             >
-              Voltar para o Inbox
+              Abrir o Inbox do board
             </Link>
           </div>
         )}
