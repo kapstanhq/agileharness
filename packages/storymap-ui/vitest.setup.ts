@@ -79,6 +79,14 @@ afterAll(() => {
 // dentro do código de produção; quem quer provar o default o remove localmente (autorun-eval.test.ts).
 process.env.AGILEHARNESS_HEADROOM_URL = "off";
 
+// O HALT DO HOST, pelo mesmo princípio (governador de capacidade, runner/capacity-service.ts). Existir o
+// arquivo `/etc/agileharness/HALT` é uma trava DURA para todo trabalho automático — e o default aponta para o
+// host REAL. Sem isto, o dono puxando o freio de emergência na máquina que roda a suíte faria toda prova que
+// exercita um run automático ficar retida, e o gate de integração (que roda esta suíte) reprovaria o train
+// inteiro por um fato do HOST. O caminho abaixo mora no diretório temporário deste arquivo e nunca existe;
+// quem prova o HALT cria o seu próprio.
+process.env.AGILEHARNESS_HALT_FILE = path.join(MEU_DIRETORIO, "HALT-nunca-existe");
+
 // O BINÁRIO DO CLAUDE, DECLARADO NA SUÍTE — mesmo princípio da linha acima (2026-08-26).
 //
 // Desde que `runner/claude-bin.ts` passou a resolver o CLI pela régua das ferramentas do host, o

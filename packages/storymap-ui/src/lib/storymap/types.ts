@@ -2472,6 +2472,12 @@ export interface RunnerSettings {
    */
   orchestrator?: OrchestratorSettings;
   /**
+   * O GOVERNADOR DE CAPACIDADE (runner/capacity-governor.ts) — a admissão do trabalho AUTOMÁTICO pela janela
+   * real de uso da assinatura (7d e 5h), não pela RAM. Sempre materializado pela coerção; ausente só em um
+   * `RunnerSettings` montado à mão (teste), e aí vale o default. ENV `AGILEHARNESS_GOVERNOR=off` desliga.
+   */
+  governor?: GovernorSettings;
+  /**
    * WS8 (F7) — server-side MCP AUTHORITY tokens: each maps an env-var holding a token to an authority
    * {@link McpLevel}. register.ts resolves the request's URL token to a level and filters the tool surface
    * (ro < write < full). Absent ⇒ no token enforcement (legacy: every client is full). Deployment concern.
@@ -2519,6 +2525,29 @@ export interface RunnerSettings {
      */
     composedFace?: { target: string; recipe: string; manifest: string };
   };
+}
+
+/**
+ * O GOVERNADOR DE CAPACIDADE (settings.yaml `governor:`). Percentuais são da janela REAL da assinatura — o uso
+ * TOTAL (o dono interativo + a frota), porque é esse número que o limite mede. Ver runner/capacity-governor.ts.
+ */
+export interface GovernorSettings {
+  /** liga a admissão por capacidade. Sem medidor disponível ele é INERTE mesmo ligado (admite tudo). */
+  enabled: boolean;
+  /** teto da janela de 7 dias para trabalho automático (default 80). */
+  weekCapPct: number;
+  /** o teto nas ÚLTIMAS 24h antes do reset semanal — só vale com a janela de 5h abaixo do teto dela (default 90). */
+  weekCapLast24hPct: number;
+  /** teto da janela de 5 horas para trabalho automático (default 85). */
+  fiveHourCapPct: number;
+  /** trava automática (latch) quando a semana chega aqui (default 92). */
+  latchWeekPct: number;
+  /** trava automática quando a janela de 5h chega aqui (default 90). */
+  latchFiveHourPct: number;
+  /** leitura mais velha que isto (min) é DEFASADA ⇒ o trabalho automático espera (default 20). */
+  staleMinutes: number;
+  /** fuso IANA que define o "dia" do ritmo diário; ausente ⇒ o fuso do host. */
+  timezone?: string;
 }
 
 /** WS8 — the orchestrator deployment settings (settings.yaml). All optional; absent ⇒ enabled:false. */

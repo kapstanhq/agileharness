@@ -32,6 +32,9 @@ const ALERT_TONES: Record<AgentAlertKind, Tone> = {
   // três notas DESCENDENTES, graves e lentas — "isto parou". Distinta da batida do terminal de propósito:
   // ela não pede que você vá a um terminal, avisa que a entrega travou.
   "publish-blocked": { freqs: [493.88, 415.3, 349.23], step: 0.16, duration: 0.18 },
+  // duas notas graves e LONGAS, a segunda mais baixa — "a conta parou a frota". Nenhum outro aviso usa
+  // notas tão longas: não pede um terminal nem uma entrega, pede que você olhe a capacidade.
+  "capacity-critical": { freqs: [392.0, 293.66], step: 0.28, duration: 0.3 },
 };
 
 export class SoundChannel implements NotificationChannel {

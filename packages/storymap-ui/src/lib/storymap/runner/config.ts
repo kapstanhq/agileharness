@@ -27,6 +27,7 @@ import { maskSecret, secretWeakness, weaknessAdvice } from "@/lib/storymap/mcp/a
 // escopados) — ver `normalizeScopedMcpTokenEnv` logo abaixo de `mcpSecretWarned`.
 import { MCP_TOKEN_ENV, normalizeMcpTokenEnv } from "@/lib/storymap/mcp/token-bootstrap";
 import { patchYamlScalars } from "./settings-yaml";
+import { DEFAULT_GOVERNOR_SETTINGS, coerceGovernorSettings, governorEnvSwitch } from "./capacity-governor";
 import { budgetFlags, columnFlags } from "./flags";
 import { deriveCardMaxTurns, deriveCardModelEffort, type CardComplexitySignals } from "./model-routing";
 import {
@@ -216,6 +217,9 @@ export const DEFAULT_RUNNER_SETTINGS: RunnerSettings = {
     // wake: o spawn do tick lê um objeto completo, nunca "ausente = sem teto".
     tick: { ...DEFAULT_TICK_LIMITS },
   },
+  // O governador de capacidade (runner/capacity-governor.ts) — LIGADO por default e INERTE sem medidor: quem
+  // adota sem o proxy de uso não percebe que ele existe; quem tem o medidor ganha os tetos do dono.
+  governor: { ...DEFAULT_GOVERNOR_SETTINGS },
 };
 
 function asModel(v: unknown): ModelTier | undefined {
@@ -459,6 +463,9 @@ export function coerceRunnerSettings(raw: unknown): RunnerSettings {
     columnDefaults,
     ...(coerceDeploySettings(r.deploy) ? { deploy: coerceDeploySettings(r.deploy) } : {}),
     orchestrator: coerceOrchestratorSettings(r.orchestrator, d.orchestrator!),
+    // Coerção EXPLÍCITA campo a campo, sem spread (capacity-governor.ts): lixo cai no default com aviso — um
+    // teto nunca some em silêncio. Sempre materializado: quem lê recebe um objeto completo.
+    governor: coerceGovernorSettings(r.governor, d.governor),
     ...(coerceMcpTokens(r.mcpTokens) ? { mcpTokens: coerceMcpTokens(r.mcpTokens) } : {}),
   };
 }
@@ -902,6 +909,9 @@ export function applyEnvOverrides(s: RunnerSettings): RunnerSettings {
     columnDefaults: { ...s.columnDefaults },
     deploy: s.deploy ? { ...s.deploy } : undefined,
     orchestrator: s.orchestrator ? { ...s.orchestrator } : undefined,
+    // Clone quando PRESENTE, ausente quando ausente (a mesma regra do orchestrator): esta camada só MOVE o que o
+    // env manda, nunca inventa config que o arquivo não declarou.
+    governor: s.governor ? { ...s.governor } : undefined,
     // story-6h3ioj — a força do SEGREDO é julgada AQUI, não na coerção do arquivo: esta camada não é
     // memoizada (roda a cada loadRunnerConfig(), logo a cada requisição do endpoint MCP), então uma env
     // var que chegue depois do primeiro load passa a autenticar sem precisar tocar o settings.yaml.
@@ -917,6 +927,14 @@ export function applyEnvOverrides(s: RunnerSettings): RunnerSettings {
     next.deploy = { ...next.deploy, canaryCommand: env.AGILEHARNESS_DEPLOY_CANARY_COMMAND };
   }
   if (env.AGILEHARNESS_ORCH_ENABLED === "1" && next.orchestrator) next.orchestrator.enabled = true;
+  // O kill switch do governador de capacidade. `off` desliga a governança (o HALT do host continua valendo —
+  // ver capacity-service.ts); `on` a liga por cima do arquivo. Qualquer outro valor é ignorado COM aviso: uma
+  // env malformada não liga nem desliga nada por acidente.
+  if (isSetEnv(env.AGILEHARNESS_GOVERNOR)) {
+    const governor = governorEnvSwitch(env.AGILEHARNESS_GOVERNOR);
+    if (governor !== undefined) next.governor = { ...(next.governor ?? DEFAULT_GOVERNOR_SETTINGS), enabled: governor };
+    else console.warn(`[storymap] AGILEHARNESS_GOVERNOR inválida (${JSON.stringify(env.AGILEHARNESS_GOVERNOR)}) — ignorada; vale o settings.yaml.`);
+  }
   const max = asPosInt(env.AGILEHARNESS_AUTORUN_MAX);
   if (max) next.autorun.maxConcurrent = max;
   // ADR-063 (4b): the loop-guard cap. 0 is a VALID value (disable), so — like the RAM/load thresholds —

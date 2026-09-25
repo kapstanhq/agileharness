@@ -43,7 +43,12 @@ function bucket(raw: any): UsageBucket | null {
   if (!raw || typeof raw !== "object") return null;
   const pct = num(raw.utilization_pct);
   if (pct == null) return null;
-  return { usedPct: clampPct(pct), resetsInMinutes: minutesFromSeconds(raw.seconds_to_reset) };
+  const resetsAt = typeof raw.resets_at === "string" ? Date.parse(raw.resets_at) : NaN;
+  return {
+    usedPct: clampPct(pct),
+    resetsInMinutes: minutesFromSeconds(raw.seconds_to_reset),
+    resetsAt: Number.isFinite(resetsAt) ? resetsAt : null,
+  };
 }
 
 /**

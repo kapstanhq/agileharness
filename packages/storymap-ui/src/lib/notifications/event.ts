@@ -93,7 +93,13 @@ export type AgentAlertKind =
    * espera longa + contagem alta). Produtor: o dreno da fila (`instrumentation` → `publish-queue
    * onBlocked`), na BORDA — uma vez, nunca por tentativa.
    */
-  | "publish-blocked";
+  | "publish-blocked"
+  /**
+   * o GOVERNADOR DE CAPACIDADE viu algo CRÍTICO na conta: a trava engatou, o uso extra (pago) foi ligado,
+   * ou um trabalho automático está retido há mais de 24h. Produtor: runner/capacity-service (o laço do
+   * governador), na BORDA — uma vez por transição, nunca por leitura. É o ÚNICO push do governador.
+   */
+  | "capacity-critical";
 
 /**
  * O quanto isto pode interromper. É o eixo que a política por modo do Jido lê (copilot/alert-policy):
@@ -111,6 +117,7 @@ export const ALERT_URGENCY: Record<AgentAlertKind, AlertUrgency> = {
   "terminal-waiting": "blocking", // um prompt parado não anda sem você
   "terminal-quiet": "pending", // acabou (ou espera instrução) — te espera, mas nada trava
   "publish-blocked": "blocking", // a publicação não sai sozinha: ou o trabalho sobreposto integra, ou alguém dispensa
+  "capacity-critical": "blocking", // a frota parou (trava/retenção longa) ou a conta passou a gastar dinheiro
 };
 
 export interface AgentAlert {

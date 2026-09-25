@@ -30,6 +30,13 @@ describe("parseHeadroomStats — subscription window (the real /usage numbers)",
     expect(usage?.week?.resetsInMinutes).toBe(Math.round(48747 / 60));
   });
 
+  it("keeps the ABSOLUTE reset instant when the proxy reports `resets_at` (null when it does not)", () => {
+    const { usage } = parseHeadroomStats(STATS_FIXTURE);
+    expect(usage?.week?.resetsAt).toBe(Date.parse("2026-06-10T05:00:00Z"));
+    expect(usage?.session?.resetsAt).toBe(Date.parse("2026-06-09T19:20:00Z"));
+    expect(usage?.weekSonnet?.resetsAt).toBeNull(); // o fixture não traz resets_at nesta janela
+  });
+
   it("reads extra-usage credits and the poll timestamp", () => {
     const { usage } = parseHeadroomStats(STATS_FIXTURE);
     expect(usage?.extra).toEqual({ enabled: true, usedUsd: 0, limitUsd: 250 });

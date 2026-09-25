@@ -80,6 +80,12 @@ export interface UsageBucket {
   usedPct: number;
   /** minutes until this window resets (>= 0) */
   resetsInMinutes: number;
+  /**
+   * The ABSOLUTE reset instant (epoch ms) when the source reports one (`resets_at`). `resetsInMinutes` is
+   * relative to whenever the source computed it; the capacity governor needs the fixed instant to tell one
+   * weekly window from the next. Absent/null ⇒ derive from `resetsInMinutes`.
+   */
+  resetsAt?: number | null;
 }
 
 /**
