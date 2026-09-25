@@ -65,6 +65,13 @@ export interface GateTreeDeps {
   join: (...parts: string[]) => string;
   /** lê um arquivo da árvore — usado só pela captura do conflito */
   readFile: (absPath: string) => Promise<string>;
+  /**
+   * Escreve na árvore, ANTES do commit, o que NÃO viaja por patch. O gate de DADOS o usa para os cards que a
+   * aterrissagem funde por CAMPO (os que `main` também moveu desde a base) — aplicá-los por linha aqui
+   * divergiria da aterrissagem, que é exatamente a régua duplicada que este módulo existe para fechar.
+   * Lançar ⇒ `setup` (inconclusivo). Ausente ⇒ nada muda.
+   */
+  beforeCommit?: (treePath: string) => Promise<void>;
 }
 
 export interface GateTreeOpts {
@@ -81,6 +88,11 @@ export interface GateTreeOpts {
   deltaHead: string;
   /** onde escrever o patch temporário (`.runner/gate-<runId>.patch`) */
   patchFile: string;
+  /**
+   * Restringe o patch a ESTES caminhos do delta. O gate de dados monta `main` + só a metade que aterrissa em
+   * main (a de código vai para `stage`, e não existe em main). Ausente ⇒ o delta inteiro, byte a byte.
+   */
+  paths?: readonly string[];
   timeoutMs?: number;
 }
 
@@ -131,8 +143,10 @@ export async function prepareGateTree(deps: GateTreeDeps, opts: GateTreeOpts): P
   // símbolos que já não existiam). Sem renames, o par vira delete+add e as duas metades entram.
   const names = await g(opts.repoRoot, `diff --name-only --no-renames ${quote(opts.deltaBase)}..${quote(opts.deltaHead)}`);
   if (!names.ok) return { ok: false, kind: "setup", log: `gate setup falhou (diff do delta): ${names.stderr.slice(0, LOG_CAP)}` };
-  const files = names.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
-  if (files.length === 0) {
+  const delta = names.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
+  const only = opts.paths ? new Set(opts.paths) : null;
+  const files = only ? delta.filter((f) => only.has(f)) : delta;
+  if (files.length === 0 && !deps.beforeCommit) {
     // Delta vazio: não há o que aplicar e não há o que validar. É um resultado LEGÍTIMO (o chamador
     // decide) — nunca um erro, e nunca um "passou" fabricado aqui.
     return { ok: true, baseSha, snapRegenerated: false };
@@ -185,6 +199,14 @@ export async function prepareGateTree(deps: GateTreeDeps, opts: GateTreeOpts): P
     }
     snapRegenerated = regen.status === "regenerated";
     await g(opts.treePath, `add -- ${snapFiles.map((p) => quote(p)).join(" ")}`);
+  }
+
+  if (deps.beforeCommit) {
+    try {
+      await deps.beforeCommit(opts.treePath);
+    } catch (err) {
+      return { ok: false, kind: "setup", log: `gate setup falhou (escrita pré-commit na árvore): ${execErrorDetail(err, LOG_CAP)}` };
+    }
   }
 
   // Commita o delta na árvore descartável para que o `--changed <baseSha>` do affected gate enxergue

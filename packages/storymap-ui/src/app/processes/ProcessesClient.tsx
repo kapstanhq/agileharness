@@ -202,7 +202,7 @@ function MergeQueueRow({
           // O que o gate EXECUTOU: sem a contagem, "gate verde" não diz se algum teste rodou.
           <p
             className="mt-1 truncate font-mono text-[10px] text-fg-subtle"
-            title={entry.gateReport.units.map((u) => `[${u.label}] ${u.argv.join(" ")}`).join("\n")}
+            title={entry.gateReport.units.map((u) => `[${u.label}${u.half === "data" ? " · main" : ""}] ${u.argv.join(" ")}`).join("\n")}
           >
             gate: {entry.gateReport.testsExecuted ?? "?"} teste(s) · {entry.gateReport.units.length} unidade(s) ·{" "}
             {entry.gateReport.isolation === "systemd" ? "selado" : "SEM selo"}

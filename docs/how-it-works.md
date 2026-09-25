@@ -375,7 +375,25 @@ autorun:
   host without systemd, or with a non-root service, the gate falls back to the old behaviour
   (sanitized environment, no seal). It says so in every gate log and in the preflight report
   (`gate.isolation`). `isolation: none` (or `AGILEHARNESS_AUTORUN_GATE_ISOLATION=none`) records
-  that you accept the risk.
+  that you accept the risk. Under the seal the checkout's `node_modules` is read-only, so every
+  vitest the gate runs gets `--configLoader runner --no-cache`: the config loads in memory and
+  nothing is written under `node_modules`.
+- **What lands on `main` is gated too.** With staging on, the split sends everything outside
+  `staging.codePrefixes` straight to `main`, and that is not only cards: deploy scripts,
+  operational scripts, the `justfile`. `mergeGate.dataUnits` (same unit shape as `scope.packages`)
+  names the prefixes whose own suites must pass first. When an entry's data half touches one, its
+  units run, sealed and counted like the code units, in a throwaway tree built from the current
+  `main` plus that data half. The half lands only if they pass, and nothing from the split lands
+  before the verdict. A prefix you don't declare lands as before.
+
+  ```yaml
+      dataUnits:
+        scripts/deploy: { command: bunx vitest run scripts/deploy/__tests__, cwd: . }
+        scripts/ops:
+          command: node --test --test-reporter=junit --test-reporter-destination=junit.xml '**/*.test.mjs'
+          reporter: junit-xml
+          junitPath: junit.xml
+  ```
 
 A related rule sits on the board side. A card that carries code (it has been staged, or a review
 recorded its commit range) can only enter the human review column with a QA stamp that says

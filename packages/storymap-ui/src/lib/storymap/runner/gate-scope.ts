@@ -231,3 +231,40 @@ export function resolveGateUnits(
   const extra = unmapped.length > 0 ? ` + ${unmapped.length} arquivo(s) fora do mapa` : "";
   return { units, reason: `${names.join(", ")}${extra}` };
 }
+
+/**
+ * As unidades de DADOS que a metade `main` de uma entrada exige (`mergeGate.dataUnits`).
+ *
+ * O split manda para `main` tudo o que está fora de `staging.codePrefixes` — e isso inclui ferramental com
+ * suíte própria (o sistema de deploy, scripts de operação, o `justfile`), que o gate de código nunca mediu:
+ * a árvore dele é `stage`, e o que não casa o mapa dele cai no fallback, que não é a suíte desses arquivos.
+ *
+ * DIFERENTE de {@link resolveGateUnits} em duas regras, e as duas são deliberadas:
+ *   · SEM FALLBACK — um arquivo de dados fora dos prefixos declarados (um card, um doc) segue exatamente
+ *     como hoje, sem gate. A regra 3 de lá ("o desconhecido puxa a suíte que cobre tudo") faria TODO
+ *     board-data (~93% das entradas) rodar uma suíte — o custo que o split existe para não pagar.
+ *   · SEM TETO — cada unidade aqui é uma declaração explícita do operador, não uma inferência a colapsar.
+ * O casamento é o MESMO: prefixo da chave, ou um `triggers` declarado; ordem do mapa. PURA.
+ */
+export function resolveDataUnits(
+  dataFiles: readonly string[],
+  dataUnits: Record<string, string | GateUnitSpec> | undefined,
+): GateScopeDecision {
+  const files = dataFiles.map((f) => f.trim()).filter(Boolean);
+  const touched: Array<{ key: string; spec: GateUnitSpec; via: string | null }> = [];
+  for (const [key, raw] of Object.entries(dataUnits ?? {})) {
+    const spec = normalizeUnitSpec(raw);
+    if (!spec) continue;
+    if (files.some((f) => underPrefix(f, key))) {
+      touched.push({ key, spec, via: null });
+      continue;
+    }
+    const g = (spec.triggers ?? []).find((t) => files.some((f) => matchesGatePattern(f, t)));
+    if (g) touched.push({ key, spec, via: g });
+  }
+  if (touched.length === 0) return { units: [], reason: "nenhuma unidade de dados no delta" };
+  return {
+    units: touched.map((t) => toUnit(t.key, t.spec)),
+    reason: touched.map((t) => (t.via ? `${t.key} (gatilho ${t.via})` : t.key)).join(", "),
+  };
+}

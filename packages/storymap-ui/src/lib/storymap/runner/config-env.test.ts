@@ -746,6 +746,45 @@ describe("coerceRunnerSettings — mergeGate.scope com unidades DECLARADAS (a ch
   });
 });
 
+describe("coerceRunnerSettings — mergeGate.dataUnits (o gate do que aterrissa em main CHEGA ao motor)", () => {
+  const mgDe = (raw: unknown) => coerceRunnerSettings({ autorun: { mergeGate: { enabled: true, ...(raw as object) } } }).autorun.mergeGate!;
+
+  it("carrega a unidade-objeto inteira e a string legada — a MESMA forma de scope.packages", () => {
+    const mg = mgDe({
+      dataUnits: {
+        "scripts/deploy": { command: "bunx vitest run scripts/deploy/__tests__", cwd: "." },
+        "scripts/ops": { command: "node --test", reporter: "junit-xml", junitPath: "junit.xml", network: "deny", triggers: ["justfile"] },
+        "scripts/gc": "bunx vitest run",
+      },
+    });
+    expect(mg.dataUnits).toEqual({
+      "scripts/deploy": { command: "bunx vitest run scripts/deploy/__tests__", cwd: "." },
+      "scripts/ops": { command: "node --test", reporter: "junit-xml", junitPath: "junit.xml", network: "deny", triggers: ["justfile"] },
+      "scripts/gc": "bunx vitest run",
+    });
+  });
+
+  it("ausente, vazio ou só com unidades inválidas ⇒ a chave NÃO existe (nenhuma entrada ganha gate de dados)", () => {
+    expect(mgDe({}).dataUnits).toBeUndefined();
+    expect(mgDe({ dataUnits: {} }).dataUnits).toBeUndefined();
+    expect(mgDe({ dataUnits: { a: { reporter: "exit-code" } } }).dataUnits).toBeUndefined();
+  });
+
+  it("a unidade descartada é AVISADA pelo nome do mapa e pela consequência real (aterrissa SEM gate)", () => {
+    const warn = console.warn;
+    const seen: string[] = [];
+    console.warn = (...a: unknown[]) => void seen.push(a.map(String).join(" "));
+    try {
+      mgDe({ dataUnits: { "scripts/ops": { reporter: "junit" , command: "x" }, "scripts/gc": { cwd: "." } } });
+    } finally {
+      console.warn = warn;
+    }
+    expect(seen.filter((l) => l.includes("mergeGate.dataUnits"))).toHaveLength(2);
+    expect(seen.join("\n")).toContain("aterrissa em main SEM gate");
+    expect(seen.join("\n")).not.toContain("cai no fallback");
+  });
+});
+
 describe("coerceRunnerSettings — mergeGate.isolation / sealed (o selo)", () => {
   const mgDe = (raw: unknown) => coerceRunnerSettings({ autorun: { mergeGate: { enabled: true, ...(raw as object) } } }).autorun.mergeGate!;
 
