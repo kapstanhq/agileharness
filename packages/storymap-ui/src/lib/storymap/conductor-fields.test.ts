@@ -65,6 +65,23 @@ describe("board `conductor` — type · coerce · contract · persist", () => {
     expect(coerceConductor({ enabled: true, fromStatus: "pronta", maxSessions: 0, model: "gpt" })).toEqual({ enabled: true, fromStatus: "pronta" });
   });
 
+  it("coerceConductor: fromStatus em LISTA — ids aparados, sem vazio/duplicata, na ordem autorada; lista vazia ⇒ sem bloco", () => {
+    expect(coerceConductor({ enabled: true, fromStatus: [" interview ", "enriquecer", "", 7, "enriquecer", "corrigir"] })).toEqual({
+      enabled: true,
+      fromStatus: ["interview", "enriquecer", "corrigir"],
+    });
+    expect(coerceConductor({ enabled: true, fromStatus: [] })).toBeUndefined();
+    expect(coerceConductor({ enabled: true, fromStatus: ["", "  "] })).toBeUndefined();
+  });
+
+  it("a lista round-tripa pelo contrato e pelo persist (um save não a achata em string)", async () => {
+    const base = await readBoardConfig(FIXTURE_BOARD);
+    const conductor = { enabled: true, fromStatus: ["pronta", "enriquecer"] };
+    expect(parseBoardConfig({ ...base, conductor }).ok).toBe(true);
+    expect(parseBoardConfig({ ...base, conductor: { enabled: true, fromStatus: [] } }).ok).toBe(false);
+    expect((await deriveBoardConfigForPersist(FIXTURE_BOARD, { ...base, conductor })).conductor).toEqual(conductor);
+  });
+
   it("o contrato BoardConfig aceita o bloco (e recusa um fromStatus vazio)", async () => {
     const base = await readBoardConfig(FIXTURE_BOARD);
     expect(parseBoardConfig({ ...base, conductor: { enabled: true, fromStatus: "pronta", maxSessions: 2, model: "opus" } }).ok).toBe(true);

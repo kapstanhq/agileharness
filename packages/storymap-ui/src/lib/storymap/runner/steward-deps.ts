@@ -9,6 +9,7 @@
 
 import { findRepoRoot } from "@/lib/storymap/paths";
 import { readBoardConfig, readCard, readCards } from "@/lib/storymap/repo";
+import { conductedCardIds } from "@/lib/storymap/driver";
 import { runDeployRecoveryPass, runStewardPass, type GateCandidate, type StewardEntry, type StewardPorts, type StewardReport, conflictedFilesFromDetail } from "@/lib/storymap/copilot/steward";
 import { appendCopilotActivity } from "@/lib/storymap/copilot/activity";
 import { getCardClaims } from "./claims";
@@ -271,6 +272,8 @@ export function buildStewardPorts(board: string): StewardPorts {
       const state = await readOrchestratorState(board);
       await writeOrchestratorState(board, markObservedFact(state, itemId, deployProven));
     },
+
+    conductedCardIds: async () => conductedCardIds(await readCards(board).catch(() => [])),
 
     // 8.3 — the board.
     gateCandidates: () => gateCandidates(board).catch(() => []),

@@ -78,6 +78,7 @@
 
 import type { BoardConfig, Card, OrchestratorPolicy, RiskClass } from "@/lib/storymap/types";
 import { moveRiskClass } from "@/lib/storymap/entry-effect";
+import { isConducted } from "@/lib/storymap/driver";
 import { evaluateGate, gateForStatus } from "@/lib/storymap/gates";
 import { mayActAutonomously } from "@/lib/storymap/runner/orchestrator-policy";
 import { isJudgeableFile } from "@/lib/storymap/runner/semantic-resolution";
@@ -506,6 +507,12 @@ export function planGateSatisfied(input: {
   if (input.claimedByOther) {
     return { action: "stand-down", reason: "outro ator tem o claim deste card — o steward não mexe em trabalho vivo alheio" };
   }
+  // A CONDUCTED card is its conductor's projection — even with no claim alive (the queue gap before the session
+  // is born, or a conductor that died and is now the operator's call). Moving it would race the conductor's own
+  // landings, or overrule the operator. The driver, not the claim, is what says "not yours".
+  if (isConducted(input.card)) {
+    return { action: "stand-down", reason: "card conduzido (routing.driver: conductor) — quem move é o condutor, ou o operador" };
+  }
   if (input.from === input.to) return { action: "stand-down", reason: "sem coluna seguinte a avaliar" };
   // The gate is the point: a target column with NO gate is not this playbook's business at all. Moving a card
   // just because it CAN move is the cascade's job (and it is deliberately event-driven); the steward only
@@ -597,6 +604,10 @@ export interface StewardPorts {
   deployRecoveryFor: (cardId: string) => Promise<DeployRecoveryMeasurement | null>;
   /** Persist the baseline for an item that had none. Observes only — it must NOT re-arm. */
   recordObservedFact: (itemId: string, deployProven: boolean) => Promise<void>;
+
+  /** The board's CONDUCTED cards (`routing.driver: conductor`) — a dead conductor's card is the operator's call,
+   *  never a steward redrive or question (8.2). Optional: absent ⇒ none (the legacy ports). */
+  conductedCardIds?: () => Promise<Set<string>>;
 
   // 8.3
   gateCandidates: () => Promise<GateCandidate[]>;
@@ -705,8 +716,15 @@ async function parkedConflictPlaybook(ports: StewardPorts, policy: OrchestratorP
 
 /** 8.2 — dead sessions (converge / offer a redrive, NEVER discard) + the courtesy ping before a lapse. */
 async function claimsPlaybook(ports: StewardPorts, policy: OrchestratorPolicy | null, report: StewardReport, now: number): Promise<void> {
+  const conducted = (await ports.conductedCardIds?.().catch(() => null)) ?? new Set<string>();
   for (const claim of await ports.releasedClaims()) {
     if (claim.released !== "session-died" || !claim.cardId) continue;
+    // A dead CONDUCTOR is the operator's decision (runner/conductor.ts: never respawned, never re-driven by a
+    // machine): no redrive offer, no question, no cycle-close on its card — the driver stays and the human sees it.
+    if (conducted.has(claim.cardId)) {
+      report.standDowns += 1;
+      continue;
+    }
     const landed = await ports.deltaLandedForCard(claim.cardId).catch(() => null);
     const plan = planOrphanClaim({ claim, landed, policy });
     if (plan.action === "stand-down") {

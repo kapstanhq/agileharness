@@ -66,6 +66,10 @@ const DESTRUCTIVE_SURFACE = [
   "reject_change",
   "approve_action",
   "reject_action",
+  // lanes-ultra (revisão exigida por este teste): a CHAVE DE AUTONOMIA por story e o fecho da auditoria do proxy
+  // são decisões do dono — um agente que se pusesse em `ultra` se auto-responderia pelo proxy.
+  "set_card_autonomy",
+  "resolve_proxy_audit",
 ];
 
 // `reversible-delete` (M2) — soft-delete de board-data: move para `.trash/`, GC 7d, restore_deleted. Montável em

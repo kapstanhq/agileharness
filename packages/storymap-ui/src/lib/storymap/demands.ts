@@ -13,12 +13,13 @@
 // from the queue snapshot — see `mergeQueueDemands` below.
 
 import { openQuestions } from "./questions";
+import { isOwnerOnlyQuestion, isPendingProxyAudit, isProxiableQuestion } from "./autonomy";
 import { draftTitle, isGovernanceDraftStale } from "./governance";
 import { hasCanvasContent } from "./design-canvas";
 // type-only: apagado em runtime, então não cria ciclo (copilot/tier.ts não importa demands.ts) e mantém este
 // módulo puro. O TIER é a projeção canônica de (mode, riskMatrix.deploy) — ver copilot/tier.ts.
 import type { CopilotTier } from "./copilot/tier";
-import type { BoardConfig, Card, DesignArtifact, DesignFeedbackEntry, FindingSeverity, GovernanceChange, GovernanceDraft, QuestionMode, QuestionOption, RiskClass, StatusDef, WireframeDoc, WireframeJourney, WireframeOption } from "./types";
+import type { BoardConfig, Card, DesignArtifact, DesignFeedbackEntry, FindingSeverity, GovernanceChange, GovernanceDraft, QuestionCategory, QuestionMode, QuestionOption, RiskClass, StatusDef, WireframeDoc, WireframeJourney, WireframeOption } from "./types";
 import type { ProposalDoc, ProposedItem } from "./smart-capture/types";
 import type { RunnerFailure } from "./runner/types";
 import type { MergeQueueSnapshot } from "./runner/types";
@@ -326,7 +327,10 @@ export function cardDemands(card: Card, config: BoardConfig, boardId: string, op
 
   if (!def || def.terminal) return out;
 
-  const open = openQuestions(card);
+  // A question an ULTRA story's PROXY is taking (autonomy.ts) does not wait on the owner — it leaves the demand the
+  // moment it is proxiable, and comes back the moment the proxy hands it back (declined/failed, written on the card).
+  // A human story (every board without the autonomy block) has no proxiable question: the count is the legacy one.
+  const open = openQuestions(card).filter((q) => !isProxiableQuestion(q, card, config));
   if (open.length) {
     const since = open.map((q) => q.askedAt).filter((d): d is string => Boolean(d)).sort()[0] ?? null;
     out.push({
@@ -454,7 +458,9 @@ export type CockpitItemKind =
   /** WS-5 (D9) — código staged sem release além do SLA: o phantom-done aprovado-e-parado. */
   | "release-aging"
   /** WS-5 (D9) — entry TERMINAL `failed` do merge train (a mais recente do card): trabalho fora da main. */
-  | "merge-failed";
+  | "merge-failed"
+  /** lanes-ultra — uma resposta que o PROXY (modo ultra) deu no lugar do dono e caiu na AMOSTRA de auditoria. */
+  | "proxy-audit";
 
 interface CockpitItemBase {
   /** stable id, unique within the board (e.g. `<cardId>:q:<questionId>`) */
@@ -492,6 +498,28 @@ export interface QuestionCockpitItem extends CockpitItemBase {
   context?: string;
   /** the agent's prose recommendation for a PURE free-text question (no discrete options). */
   recommendation?: string;
+  /** the asker's CATEGORY (autonomy.ts) — the renderer names it. */
+  category?: QuestionCategory;
+  /** a decision only the OWNER makes (money / [humano]) — never proxied, never the copiloto's. */
+  ownerOnly?: true;
+  /** the story is ULTRA and this question is the PROXY's right now — the owner may still answer first. */
+  awaitingProxy?: true;
+}
+
+/**
+ * 🟢 A proxy answer on the owner's AUDIT list (ultra mode): the answer the proxy gave FOR the owner, with the
+ * premissas it recorded and its confidence. The owner confirms it, or reopens the question (it comes back to them
+ * — never to the proxy). It is the owner's review of a decision made on their behalf: never the copiloto's.
+ */
+export interface ProxyAuditCockpitItem extends CockpitItemBase {
+  kind: "proxy-audit";
+  questionId: string;
+  prompt: string;
+  /** the proxy's answer — the free text plus the labels of the options it picked. */
+  answer: string;
+  assumptions: string;
+  confidence: number;
+  category?: QuestionCategory;
 }
 
 /** 🔴 An open blocker finding (code review) keeping the card stuck. */
@@ -673,7 +701,8 @@ export type CockpitItem =
   | GovernanceCockpitItem
   | DeployUnsettledCockpitItem
   | ReleaseAgingCockpitItem
-  | MergeFailedCockpitItem;
+  | MergeFailedCockpitItem
+  | ProxyAuditCockpitItem;
 
 /**
  * 6.4 — quem pode ACIONAR cada kind do cockpit, POR TIER do copiloto. O princípio (herdado da F8) é um só:
@@ -734,6 +763,10 @@ const KIND_AUTONOMY: Record<CockpitItemKind, KindAutonomy> = {
   "release-aging": "autonomo", // código staged sem release: publicar → classe `deploy`
 
   // ── never: invariante anti-laço (vale em TODO tier, inclusive Autônomo) ──────────────────────────────────
+  // lanes-ultra — a auditoria de uma resposta do PROXY é a revisão do DONO sobre uma decisão tomada em nome dele;
+  // um copiloto que a fechasse apagaria justamente o controle que a amostra existe para dar. (A tool que a fecha é
+  // full-only também — as duas travas dizem a mesma coisa.)
+  "proxy-audit": "never",
   approval: "never", // é o pedido que o PRÓPRIO copiloto abriu — ele aguarda VOCÊ. Se fosse acionável, o tick
   // acordaria por causa de si mesmo, veria "trabalho", e re-acordaria: laço. O gate DO CARD (que ele PODE
   // empurrar) é o kind `gate` — outro item, outra semântica.
@@ -780,6 +813,10 @@ export function isCopilotActionable(item: CockpitItem, tier: CopilotTier): boole
   if (item.kind === "stuck" && item.outcome != null && NON_ACTIONABLE_STUCK_OUTCOMES.has(item.outcome)) {
     return false;
   }
+  // lanes-ultra — duas perguntas que NÃO são do copiloto, em todo tier: a de DINHEIRO (do dono, sempre — a tool
+  // answer_question também a recusa) e a que o PROXY de uma story ultra está respondendo (acordar o tick para ela
+  // seria correr contra o proxy pela mesma resposta).
+  if (item.kind === "question" && (item.ownerOnly || item.awaitingProxy)) return false;
   return true;
 }
 
@@ -833,6 +870,30 @@ export function cardCockpitItems(card: Card, config: BoardConfig, boardId: strin
   }
 
   const def = config.statuses.find((s) => s.id === card.status);
+
+  // lanes-ultra — the PROXY AUDIT list: a proxy answer sampled for the owner's review. BEFORE the terminal guard:
+  // a story can ship before the owner audits, and a decision made on their behalf stays reviewable after it did.
+  if (def) {
+    for (const q of card.questions ?? []) {
+      if (!isPendingProxyAudit(q) || !q.proxy) continue;
+      const picked = (q.selectedOptionIds ?? []).map((id) => q.options?.find((o) => o.id === id)?.label).filter(Boolean);
+      out.push({
+        ...base,
+        id: `${card.id}:pa:${q.id}`,
+        kind: "proxy-audit",
+        lane: "aprovar",
+        severity: q.proxy.confidence < 0.5 ? "medium" : "low",
+        since: q.answeredAt ?? null,
+        questionId: q.id,
+        prompt: q.text,
+        answer: [picked.join(" + "), q.answer].filter(Boolean).join(" — "),
+        assumptions: q.proxy.assumptions,
+        confidence: q.proxy.confidence,
+        ...(q.category ? { category: q.category } : {}),
+      });
+    }
+  }
+
   if (!def || def.terminal) return out;
 
   for (const q of openQuestions(card)) {
@@ -850,6 +911,10 @@ export function cardCockpitItems(card: Card, config: BoardConfig, boardId: strin
       askedBy: q.askedBy,
       context: q.context,
       recommendation: q.recommendation,
+      // Sparse (a legacy question carries none of the three — the item is byte-identical to what it was).
+      ...(q.category ? { category: q.category } : {}),
+      ...(isOwnerOnlyQuestion(q) ? { ownerOnly: true as const } : {}),
+      ...(isProxiableQuestion(q, card, config) ? { awaitingProxy: true as const } : {}),
     });
   }
 

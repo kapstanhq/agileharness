@@ -285,6 +285,15 @@ export const SPAWN_SURFACES: Record<string, SpawnSurfaceDef> = {
     declaration: "explicit",
     note: "escreve o veredito no próprio diretório temporário; a contenção são três camadas — tempdir + env sem token MCP + a postura (sandbox do SO), não o tier",
   },
+  decisionProxy: {
+    module: "lib/storymap/runner/proxy-spawn.ts",
+    // lanes-ultra: o PROXY do modo ultra — nasce SEM humano no laço (a pergunta de um agente num card ultra o
+    // dispara), então nasceu já na forma do revisor par: postura contida, tempdir, env sem token MCP, zero MCP.
+    postureModule: "lib/storymap/runner/autonomy-sandbox.ts",
+    tier: "full",
+    declaration: "explicit",
+    note: "responde perguntas de entrevista/escolha de tela no lugar do dono, escrevendo UM arquivo no próprio diretório temporário; contido por tempdir + env sem token MCP + a postura, e com teto de custo",
+  },
   conflictJudge: {
     module: "lib/storymap/runner/resolution-judge-spawn.ts",
     // F0 (ADR-067): MIGRADA. Também alcançável EM BANDA: um run CONTIDO produz o diff, o diff diverge,

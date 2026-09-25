@@ -219,6 +219,10 @@ const CLAUDE_SPAWN_SURFACES: Record<string, string> = {
   "src/lib/storymap/runner/engine.ts": "run de autorun — `claude -p` por card; o coração do sistema",
   "src/lib/storymap/runner/orchestrator-spawn.ts": "tick do copiloto/orquestrador por board",
   "src/lib/storymap/runner/peer-review-spawn.ts": "revisor par — chokepoint MENOS todo tier MCP (ele não usa MCP)",
+  // lanes-ultra: o PROXY do modo ultra responde, no lugar do dono, as perguntas proxiáveis (entrevista/escolha de
+  // tela) de uma story ultra. Nasce SEM humano no laço (a pergunta de um agente o dispara), por isso a mesma forma
+  // do revisor par: tempdir, env sem NENHUM token MCP, zero MCP montado, postura contida e teto de custo.
+  "src/lib/storymap/runner/proxy-spawn.ts": "proxy do modo ultra — chokepoint MENOS todo tier MCP (ele não usa MCP)",
   "src/lib/storymap/runner/resolution-judge-spawn.ts": "juiz LLM de conflito do merge train",
   "src/lib/storymap/runner/deploy-agent-spawn.ts": "agente de deploy (recuperação da face)",
   "src/lib/storymap/copilot/agent-session.ts": "sessão de chat do copiloto (Jido) — o dono conversa por aqui",

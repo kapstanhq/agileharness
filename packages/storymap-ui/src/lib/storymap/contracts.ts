@@ -37,6 +37,7 @@ import {
   OWNER_IDS,
 } from "./frameworks";
 import {
+  AUTONOMY_MODES,
   CARD_DRIVERS,
   CARD_TYPES,
   CARD_MODES,
@@ -52,6 +53,8 @@ import {
   FAILURE_CLASSES,
   QUESTION_STATUSES,
   QUESTION_MODES,
+  QUESTION_CATEGORIES,
+  LANE_DEMANDS,
   ROUTING_DECIDED_BY,
   NODE_KIND_IDS,
   ORCHESTRATOR_MODES,
@@ -190,6 +193,19 @@ const CardQuestionSchema = z.object({
   selectedOptionIds: z.array(z.string()).optional(),
   context: z.string().optional(),
   recommendation: z.string().optional(),
+  category: oneOf(QUESTION_CATEGORIES).optional(),
+  // o rastro de auditoria de uma resposta do PROXY (modo ultra): premissas + confiança 0..1 + a amostra.
+  proxy: z
+    .object({
+      assumptions: z.string().min(1),
+      confidence: z.number().min(0).max(1),
+      runId: z.string().optional(),
+      declined: z.boolean().optional(),
+      audit: z.boolean().optional(),
+      auditedAt: z.string().optional(),
+      auditOutcome: z.enum(["confirmed", "reopened"]).optional(),
+    })
+    .optional(),
 });
 
 // ── OST schemas ───────────────────────────────────────────────────────────
@@ -257,6 +273,7 @@ export const CardSchema = z.object({
   parent: z.string().nullable(),
   serves: z.string().nullable().optional(),
   routing: CardRoutingSchema.nullable().optional(),
+  autonomyMode: oneOf(AUTONOMY_MODES).optional(),
   release: z.string().nullable(),
   unplaced: z.boolean().optional(),
   via: oneOf(CARD_PROVENANCES).optional(), // WS6 (F5) — creation provenance
@@ -567,9 +584,33 @@ export const BoardConfigSchema = z.object({
   conductor: z
     .object({
       enabled: z.boolean(),
-      fromStatus: z.string().min(1),
+      // um status, ou a LISTA deles (o aceite manda o card a colunas diferentes por tipo).
+      fromStatus: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]),
       maxSessions: z.number().int().positive().optional(),
       model: oneOf(MODEL_TIERS).optional(),
+    })
+    .optional(),
+  // A VISTA do Kanban em raias (lanes.ts): cada raia rotula um conjunto de status; o status real vira etiqueta.
+  view: z
+    .object({
+      lanes: z
+        .array(
+          z.object({
+            id: z.string().min(1),
+            label: z.string().min(1),
+            statuses: z.array(z.string().min(1)),
+            demand: z.union([z.boolean(), z.array(oneOf(LANE_DEMANDS))]).optional(),
+          }),
+        )
+        .optional(),
+    })
+    .optional(),
+  // A CHAVE DE AUTONOMIA (autonomy.ts): human × ultra; o proxy responde as decisões proxiáveis no ultra.
+  autonomy: z
+    .object({
+      mode: oneOf(AUTONOMY_MODES),
+      proxyModel: oneOf(MODEL_TIERS).optional(),
+      auditSampleRate: z.number().min(0).max(1).optional(),
     })
     .optional(),
   positioning: z.string().nullable().optional(),

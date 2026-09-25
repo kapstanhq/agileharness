@@ -26,6 +26,7 @@ export const COCKPIT_KIND_LABEL: Record<CockpitItemKind, string> = {
   "deploy-unsettled": "Deploy não confirmado",
   "release-aging": "Release parada em stage",
   "merge-failed": "Merge falhou",
+  "proxy-audit": "Resposta do proxy",
 };
 
 /**
@@ -59,6 +60,7 @@ export const COCKPIT_DEMAND_LABEL: Record<CockpitItemKind, string> = {
   "deploy-unsettled": "Confirmar deploy",
   "release-aging": "Publicar release parada",
   "merge-failed": "Resolver merge que falhou",
+  "proxy-audit": "Auditar resposta do proxy",
 };
 
 /**
@@ -161,6 +163,8 @@ export function cockpitItemSnippet(item: CockpitItem): string {
       return `Código aprovado parado em stage há ${item.ageDays}d — falta publicar.`;
     case "merge-failed":
       return firstText(item.failureReason, `Branch ${item.branch} ficou fora da main.`);
+    case "proxy-audit":
+      return firstText(item.prompt && `${item.prompt} → ${item.answer}`, item.answer);
     default: {
       const exhaustive: never = item;
       return exhaustive;

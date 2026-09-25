@@ -2,7 +2,8 @@
 // server actions (answerQuestionAction / askQuestionsAction), the /perguntas queue, and harness-grill all
 // derive from these, so the ask/answer invariant lives in ONE place (mirrors reopen.ts / findings.ts).
 
-import type { Card, CardQuestion } from "./types";
+import { isQuestionCategory } from "./types";
+import type { Card, CardQuestion, QuestionCategory } from "./types";
 
 /** The card's questions still awaiting a human answer. */
 export function openQuestions(card: Pick<Card, "questions">): CardQuestion[] {
@@ -103,6 +104,8 @@ export interface StructuredQuestionInput {
   mode?: "single" | "multi";
   /** the agent's recommended answer in prose — for a question with NO discrete options. */
   recommendation?: string;
+  /** WHAT KIND of decision this is — the autonomy key's primary signal (autonomy.ts). */
+  category?: QuestionCategory;
 }
 
 /**
@@ -158,6 +161,7 @@ export function addStructuredQuestions(
         ...(options.length ? { options, mode: raw.mode ?? "single" } : {}),
         ...(raw.context?.trim() ? { context: raw.context.trim() } : {}),
         ...(!options.length && raw.recommendation?.trim() ? { recommendation: raw.recommendation.trim() } : {}),
+        ...(isQuestionCategory(raw.category) ? { category: raw.category } : {}),
       },
     ];
   }

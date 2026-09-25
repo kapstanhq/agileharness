@@ -29,9 +29,10 @@ import type { TriggerId } from "@/lib/storymap/types";
  *   session    — an agent session's own work (WS-1/WS-6 spawn), card-ful or card-less.
  *   steward    — the copilot tick / integration steward (WS-8) acting on the board.
  *   resolution — a conflict-resolution / semantic-judge run (WS-10, `mechanical` profile).
+ *   proxy      — the ultra-mode decision PROXY (runner/proxy.ts): answers a story's proxiable questions for the owner.
  */
-export type TelemetryRole = "run" | "session" | "steward" | "resolution";
-export const TELEMETRY_ROLES = ["run", "session", "steward", "resolution"] as const;
+export type TelemetryRole = "run" | "session" | "steward" | "resolution" | "proxy";
+export const TELEMETRY_ROLES = ["run", "session", "steward", "resolution", "proxy"] as const;
 
 /**
  * The role of a record, defaulting to `run` — the SPARSE contract. Every record written before WS-7 (and
@@ -51,7 +52,7 @@ export function roleOf(record: Pick<TelemetryRecord, "role">): TelemetryRole {
  * instead of lying with a cast: a consumer that needs a real {@link TriggerId} (the handoff, the step history)
  * must narrow, and the compiler now says so.
  */
-export type TelemetryTrigger = TriggerId | "harness-conductor";
+export type TelemetryTrigger = TriggerId | "harness-conductor" | "harness-proxy";
 
 /** One settled run, the persisted unit of telemetry. Keyed by `id` (the run's sessionId). */
 export interface TelemetryRecord {

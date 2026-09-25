@@ -586,6 +586,14 @@ export interface Card {
    * See {@link CardRouting} + `routeSkip` (skip-routing.ts). null/omitted = no override (rules decide live).
    */
   routing?: CardRouting | null;
+  /**
+   * The AUTONOMY KEY of THIS story — the per-story exception to the board's `autonomy.mode`
+   * ({@link AutonomyPolicy}). Absent ⇒ the board decides (and a board without the block is `human`).
+   * `ultra` hands the proxiable human decisions (interview answers, UI choice) to a PROXY agent with a clean
+   * context; `human` keeps them with the owner even on an ultra board. Money is never proxied in either mode.
+   * Set through the MCP tool `set_card_autonomy` (or the card file); shown on the card.
+   */
+  autonomyMode?: AutonomyMode;
   /** release slice id (stories only); null = unscheduled */
   release: string | null;
   /**
@@ -1070,6 +1078,39 @@ export const QUESTION_STATUSES: QuestionStatus[] = ["open", "answered"];
 export type QuestionMode = "single" | "multi";
 export const QUESTION_MODES: QuestionMode[] = ["single", "multi"];
 
+/**
+ * WHAT KIND of decision a question asks for — the asker's declaration, and the primary signal the autonomy key
+ * reads (autonomy.ts): `interview` (a product/user-story question a persona-informed answer can settle),
+ * `ui-choice` (pick among 2–3 design variants), `delivery` (approve a delivery) and `money` (new spend, vendor,
+ * price, external publication, PRD & goals — ALWAYS the owner's, in every mode). Absent ⇒ uncategorized, which
+ * the proxy never answers (the owner does).
+ */
+export type QuestionCategory = "interview" | "ui-choice" | "delivery" | "money";
+export const QUESTION_CATEGORIES: QuestionCategory[] = ["interview", "ui-choice", "delivery", "money"];
+export function isQuestionCategory(v: unknown): v is QuestionCategory {
+  return typeof v === "string" && (QUESTION_CATEGORIES as string[]).includes(v);
+}
+
+/**
+ * The audit trail of an answer written by the PROXY (ultra mode) instead of the owner. `assumptions` is the
+ * "premissas" block the proxy MUST record (what it assumed, from which source — PRD, persona, a past decision);
+ * `confidence` its own 0..1 estimate. `audit: true` puts the answer on the owner's audit list in the Inbox (a
+ * deterministic sample at `autonomy.auditSampleRate`, plus every low-confidence answer); `auditedAt` +
+ * `auditOutcome` close it (`confirmed` — the owner agreed; `reopened` — the question went back to the owner).
+ */
+export interface ProxyAnswerRecord {
+  /** the premissas — or, on a DECLINE, why the proxy handed the question back to the owner. */
+  assumptions: string;
+  confidence: number;
+  /** the proxy DECLINED (or failed on it past the cap): the question is the owner's from now on (never re-proxied). */
+  declined?: boolean;
+  /** the proxy run that answered (forensics; its spend lives in the card ledger). */
+  runId?: string;
+  audit?: boolean;
+  auditedAt?: string;
+  auditOutcome?: "confirmed" | "reopened";
+}
+
 /** One agent-suggested answer option on a question (harness-grill proposes; the human picks). */
 export interface QuestionOption {
   /** stable id within the question (o1, o2, …) */
@@ -1114,6 +1155,10 @@ export interface CardQuestion {
   context?: string;
   /** the agent's recommended answer in prose, for a PURE free-text question (no discrete options). */
   recommendation?: string;
+  /** what KIND of decision this is ({@link QuestionCategory}) — declared by the asker; drives the autonomy key. */
+  category?: QuestionCategory;
+  /** present when the PROXY answered (ultra mode) — the premissas, the confidence and the audit state. */
+  proxy?: ProxyAnswerRecord;
 }
 
 export type ReviewLens = "firestore" | "nextjs" | "perf" | "security" | "testing" | "general";
@@ -1908,6 +1953,18 @@ export interface BoardConfig {
    */
   conductor?: ConductorPolicy;
   /**
+   * How the Kanban PRESENTS the pipeline ({@link BoardViewConfig}). `view.lanes` folds the statuses into a few
+   * LANES (a view — no card moves, no status changes): each card sits in the lane that declares its status and
+   * carries the real status as a tag. Absent ⇒ the legacy Kanban, byte-identical.
+   */
+  view?: BoardViewConfig;
+  /**
+   * The AUTONOMY KEY of the board ({@link AutonomyPolicy}) — `human` (the owner answers every decision) or
+   * `ultra` (a PROXY answers the proxiable ones, recorded for audit). A story can override it
+   * (`Card.autonomyMode`). Absent ⇒ `human`, byte-identical legacy behaviour.
+   */
+  autonomy?: AutonomyPolicy;
+  /**
    * 🟨 NEGÓCIO — Posicionamento estratégico (Kotler/Keller, STP): "Para [segmento], a [Marca] é a
    * [categoria] que [benefício] porque [razão]". Direciona marketing E produto (owner:human; propose_change).
    */
@@ -2082,9 +2139,62 @@ export const CONDUCTOR_DEFAULT_MAX_SESSIONS = 2;
  */
 export interface ConductorPolicy {
   enabled: boolean;
-  fromStatus: string;
+  /**
+   * The status(es) whose ENTRY is the "go". A LIST when the acceptance sends a card to different statuses by
+   * type (e.g. `[interview, enriquecer, corrigir, refinar]`); a plain string is the one-status form (kept
+   * as authored, so a save round-trips what the owner wrote).
+   */
+  fromStatus: string | string[];
   maxSessions?: number;
   model?: ModelTier;
+}
+
+/**
+ * One LANE of the board view (BoardConfig.view.lanes): a label over a set of statuses. The lane is presentation
+ * only — the card keeps its status (shown as a tag). `demand` makes it the "needs you" lane: a card with an OPEN
+ * demand of those kinds (the Inbox demand model, demands.ts) is shown HERE whatever its status. `true` means
+ * {@link LANE_DEFAULT_DEMANDS} (an open question/decision); a list names the demand kinds explicitly.
+ */
+export interface LaneDef {
+  id: string;
+  label: string;
+  statuses: string[];
+  demand?: boolean | LaneDemand[];
+}
+
+/** The demand kinds a lane may pull by (a subset of demands.ts `DemandType` — asserted there at compile time). */
+export type LaneDemand = "question" | "blocker" | "review" | "deploy-failed";
+export const LANE_DEMANDS: LaneDemand[] = ["question", "blocker", "review", "deploy-failed"];
+/** What `demand: true` pulls: an open question/decision is waiting on the owner. */
+export const LANE_DEFAULT_DEMANDS: LaneDemand[] = ["question"];
+
+/** The board's view settings (BoardConfig.view). */
+export interface BoardViewConfig {
+  lanes?: LaneDef[];
+}
+
+/** Who answers the proxiable decisions of a story — see {@link AutonomyPolicy}. */
+export type AutonomyMode = "human" | "ultra";
+export const AUTONOMY_MODES: AutonomyMode[] = ["human", "ultra"];
+export function isAutonomyMode(v: unknown): v is AutonomyMode {
+  return typeof v === "string" && (AUTONOMY_MODES as string[]).includes(v);
+}
+
+/** Default share of proxy answers sampled onto the owner's audit list. */
+export const AUTONOMY_DEFAULT_AUDIT_SAMPLE_RATE = 0.2;
+
+/**
+ * The board's AUTONOMY KEY (BoardConfig.autonomy). `human` — the owner answers interview questions, picks the UI
+ * variant and approves deliveries (the legacy behaviour). `ultra` — a PROXY agent (a separate headless run with a
+ * clean context, `runner/proxy.ts`) answers the proxiable questions (`interview`, `ui-choice`) guided by the PRD,
+ * the personas, the style guide and the owner's past answers, recording its premissas + confidence; a sample
+ * (`auditSampleRate`, default {@link AUTONOMY_DEFAULT_AUDIT_SAMPLE_RATE}) lands on the owner's audit list. Money
+ * questions are NEVER proxied in either mode. `proxyModel` is the proxy's tier (absent ⇒ sonnet).
+ */
+export interface AutonomyPolicy {
+  mode: AutonomyMode;
+  proxyModel?: ModelTier;
+  auditSampleRate?: number;
 }
 
 /** WS8 / F8 — server-side MCP authority LEVELS keyed by the URL token (settings.mcpTokens). A level MOUNTS a
@@ -2293,11 +2403,11 @@ export interface RunnerSettings {
     /**
      * The $ breaker of the OTHER autonomous spawn surfaces — the ones outside the engine that start `claude`
      * with no human in the loop: the governance peer reviewer, the merge train's resolution judge, the deploy
-     * agent and the one-shot smart-capture/triage call. Each has a conservative default (2 / 2 / 4 / 2 USD,
-     * runner/run-budget.ts); a key here overrides that surface, `0` disables it. Absent ⇒ the defaults. The
+     * agent, the one-shot smart-capture/triage call and the ultra-mode decision PROXY. Each has a conservative
+     * default (2 / 2 / 4 / 2 / 1.5 USD, runner/run-budget.ts); a key here overrides that surface, `0` disables it. Absent ⇒ the defaults. The
      * operator's interactive chat is deliberately NOT a surface here: a person is watching it.
      */
-    surfaceMaxBudgetUSD?: { peerReview?: number; resolutionJudge?: number; deployAgent?: number; smartCapture?: number };
+    surfaceMaxBudgetUSD?: { peerReview?: number; resolutionJudge?: number; deployAgent?: number; smartCapture?: number; proxy?: number };
     timeouts: {
       /** watchdog for fast skills (enrich/tasks/prioritize), ms */
       fastMs: number;

@@ -142,7 +142,10 @@ import {
   sanitizeIntakeText,
 } from "@/lib/storymap/triage/parse";
 import type { TriageOutcome, TriageReport } from "@/lib/storymap/triage/types";
+import { effectiveAutonomy, resolveProxyAudit } from "@/lib/storymap/autonomy";
+import { isAutonomyMode } from "@/lib/storymap/types";
 import type {
+  AutonomyMode,
   BoardConfig,
   BugReport,
   Card,
@@ -299,6 +302,9 @@ export async function askQuestionsAction(input: {
     }));
     if (!card) return { ok: false, error: `card não encontrado: ${input.cardId}` };
     revalidateBoard(input.boardId);
+    // ULTRA: a categorized question lands ⇒ offer it to the proxy NOW (an ultra conductor then waits seconds, not
+    // for a human). The dispatcher re-judges everything (mode, category, money) — this is only the doorbell.
+    if (structured.some((q) => q.category)) nudgeProxyFor(input.boardId, input.cardId);
     return { ok: true, data: { card } };
   } catch (e) {
     return fail(e);
@@ -3277,6 +3283,82 @@ export async function setCardDriverAction(input: {
   } catch (e) {
     return fail(e);
   }
+}
+
+/**
+ * `set_card_autonomy` — the per-story exception to the board's AUTONOMY KEY (autonomy.ts): `ultra` hands this
+ * story's proxiable decisions (interview, UI choice) to the proxy; `human` keeps them with the owner even on an
+ * ultra board; `null` follows the board again. An OWNER decision: the MCP tool is full-token only. Turning a story
+ * ultra with questions already open offers them to the proxy right away (the same nudge an ask gets).
+ */
+export async function setCardAutonomyAction(input: {
+  boardId: string;
+  cardId: string;
+  mode: AutonomyMode | null;
+}): Promise<Result<{ card: Card; changed: boolean; effective: ReturnType<typeof effectiveAutonomy> }>> {
+  await requireSession("setCardAutonomyAction");
+  try {
+    if (input.mode !== null && !isAutonomyMode(input.mode)) return { ok: false, error: `modo desconhecido: ${String(input.mode)} (human | ultra | null)` };
+    let changed = false;
+    const written = await updateCardOnDisk(input.boardId, input.cardId, (card) => {
+      if ((card.autonomyMode ?? null) === input.mode) return null;
+      changed = true;
+      const { autonomyMode: _drop, ...rest } = card;
+      return input.mode ? { ...rest, autonomyMode: input.mode } : rest;
+    });
+    const card = written ?? (await readCard(input.boardId, input.cardId));
+    if (!card) return { ok: false, error: `card não encontrado: ${input.cardId}` };
+    const config = await readBoardConfig(input.boardId).catch(() => null);
+    if (changed) {
+      revalidateBoard(input.boardId);
+      nudgeProxyFor(input.boardId, input.cardId);
+    }
+    return { ok: true, data: { card, changed, effective: effectiveAutonomy(card, config) } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * The owner closes an item of the PROXY AUDIT list (Inbox): `confirmed` keeps the proxy's answer, `reopened`
+ * sends the question back to the owner (open, with what the proxy assumed in its context — and never to the
+ * proxy again). Only a PENDING proxy audit changes; anything else is refused with the reason.
+ */
+export async function resolveProxyAuditAction(input: {
+  boardId: string;
+  cardId: string;
+  questionId: string;
+  outcome: "confirmed" | "reopened";
+}): Promise<Result<{ card: Card }>> {
+  await requireSession("resolveProxyAuditAction");
+  try {
+    if (input.outcome !== "confirmed" && input.outcome !== "reopened") return { ok: false, error: "outcome: confirmed | reopened" };
+    let found = false;
+    const card = await updateCardOnDisk(input.boardId, input.cardId, (prev) => {
+      const next = resolveProxyAudit(prev.questions ?? [], input.questionId, input.outcome, today());
+      if (next === (prev.questions ?? [])) return null;
+      found = true;
+      return { ...prev, questions: next };
+    });
+    if (!found || !card) {
+      return { ok: false, error: `nenhuma auditoria de proxy pendente em ${input.cardId}/${input.questionId}` };
+    }
+    revalidateBoard(input.boardId);
+    return { ok: true, data: { card } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * Offer a card's open questions to the ULTRA proxy (runner/proxy.ts) without holding the caller: the dispatcher
+ * decides in milliseconds whether there is anything proxiable (a human story, money, an uncategorized question ⇒
+ * nothing) and the spawn itself runs detached. Lazy import — the proxy's IO graph stays off the action's path.
+ */
+function nudgeProxyFor(boardId: string, cardId: string): void {
+  void import("@/lib/storymap/runner/proxy-deps")
+    .then((m) => m.nudgeProxy(boardId, cardId))
+    .catch((err) => console.error(`[proxy] nudge falhou (${boardId}/${cardId}):`, err instanceof Error ? err.message : err));
 }
 
 /** Load the wireframe sidecar for a card (Fase C) — null when none exists. */

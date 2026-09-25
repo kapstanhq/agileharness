@@ -257,7 +257,8 @@ retorna `null` quando permitido ou a mensagem PT-BR de bloqueio).
 | `wireframeChosen` | id do artefato/opção \| omitido | ponteiro leve: o artefato de tela PRIMÁRIO do canvas (ou a opção legada escolhida) em `wireframes/<id>.json`. Gate de `com-design`. |
 | `findings` | lista de `{ id, lens, severity, title, status, detail?, file?, line?, suggestion? }` | achados do `harness-review`. `lens`=firestore\|nextjs\|perf\|security\|testing\|general; `severity`=blocker\|high\|medium\|low; `status`=open\|acknowledged\|fixed\|wontfix. Um `blocker` `open` trava o gate `hasNoBlockers` (entrada em `qa-automatizado`). Só emitido quando ≥1. |
 | `reviewedAt` / `reviewCommit` | string \| omitido | quando o `harness-review` rodou + o commit/HEAD revisado. |
-| `questions` | lista de `{ id, text, status, askedBy?, askedAt?, answer?, answeredAt?, context?, mode?, options?, selectedOptionIds?, recommendation? }` \| omitido | perguntas HITL na **Pilotagem** — o canal agente↔orquestrador humano. Qualquer `harness-*` que bata numa decisão que **só o humano resolve** grava uma pergunta rica aqui e PAUSA o run (protocolo **ASK_HUMAN**, abaixo). `text`=a pergunta; `context`=o PORQUÊ/stakes (1-2 linhas); `options[]`=caminhos discretos, cada um com `pros[]`/`cons[]` e no máx. UMA com `recommended: true`; `mode`=`single`\|`multi`; `recommendation`=recomendação em prosa quando NÃO há opções discretas. `status: open` até o humano responder na Pilotagem; o free-text answer está sempre disponível. Setado por `harness-grill` e por qualquer skill via ASK_HUMAN; resolvido na UI `/perguntas`. |
+| `questions` | lista de `{ id, text, status, askedBy?, askedAt?, answer?, answeredAt?, answeredBy?, context?, mode?, options?, selectedOptionIds?, recommendation?, category?, proxy? }` \| omitido | perguntas HITL na **Pilotagem** — o canal agente↔orquestrador humano. Qualquer `harness-*` que bata numa decisão que **só o humano resolve** grava uma pergunta rica aqui e PAUSA o run (protocolo **ASK_HUMAN**, abaixo). `text`=a pergunta; `context`=o PORQUÊ/stakes (1-2 linhas); `options[]`=caminhos discretos, cada um com `pros[]`/`cons[]` e no máx. UMA com `recommended: true`; `mode`=`single`\|`multi`; `recommendation`=recomendação em prosa quando NÃO há opções discretas. `status: open` até o humano responder na Pilotagem; o free-text answer está sempre disponível. Setado por `harness-grill` e por qualquer skill via ASK_HUMAN; resolvido na UI `/perguntas`. `category` = o TIPO da decisão (`interview` \| `ui-choice` \| `delivery` \| `money`), o sinal que a chave de autonomia lê (ver "Modo ultra"); `proxy` = o rastro de uma resposta dada pelo PROXY (`answeredBy: proxy`): `{ assumptions, confidence, runId?, declined?, audit?, auditedAt?, auditOutcome? }`. |
+| `autonomyMode` | `human` \| `ultra` \| omitido | a EXCEÇÃO da story à chave de autonomia do board (`board.yaml` `autonomy`). Omitido = segue o board. Posto por `set_card_autonomy` (decisão do dono — só o token `full`). |
 | `routing` | `{ skips, decidedBy, decidedAt, profile?, modelCap?, effortCap?, rationale?, driver? }` \| omitido | rota por instância (do pipeline — o drawer não edita). `driver: conductor` = o card é CONDUZIDO por uma sessão `harness-conductor`: a cascata e o engine não disparam skill de coluna nele (em silêncio — sem no-op, sem finding de travado). Posto pela dispatch do condutor (`board.yaml` `conductor`) ou por `set_card_driver`; só o condutor (ao terminar) ou o operador o limpa — a sessão morrer NÃO limpa. `set_card_route` preserva o driver. |
 | `order` | número | ordenação entre irmãos. Esparso (10, 20, 30…); arrastar insere o ponto médio |
 | `created` / `updated` | string `YYYY-MM-DD` | a UI atualiza `updated` ao salvar |
@@ -412,6 +413,17 @@ conductor:                   # opcional: UMA sessão condutora por story (ver "C
   fromStatus: pronta         # a ENTRADA neste status é o "vai"
   maxSessions: 2             # condutores vivos por board (padrão 2); o excedente espera numa fila durável
   model: opus                # opcional (padrão opus)
+  # fromStatus aceita também uma LISTA: [interview, enriquecer, corrigir, refinar] — o aceite manda o card a
+  # status diferentes por tipo, e a entrada em QUALQUER um deles é o "vai".
+view:                        # opcional: o Kanban em RAIAS (ver "Vista em raias", abaixo) — ausente = Kanban de sempre
+  lanes:
+    - { id: triagem,  label: Triagem,         statuses: [capturando, triage, priorizar, pronta] }
+    - { id: voce,     label: Precisa de você, statuses: [com-design, ready, revisao, release], demand: true }
+    # … cada status (menos os terminais de arquivo) em EXATAMENTE uma raia
+autonomy:                    # opcional: a CHAVE DE AUTONOMIA (ver "Modo ultra", abaixo) — ausente = human
+  mode: ultra                # human | ultra
+  proxyModel: sonnet         # opcional (padrão sonnet)
+  auditSampleRate: 0.2       # opcional (padrão 0.2): fração das respostas do proxy que vai para a auditoria
 linkTypes:  [{ id, name, from?: NodeKind[], to?: NodeKind[] }]
              # from/to opcional: ausente = sem restrição (legados). NodeKind = activity | step |
              # story | persona | release | desiredOutcome | inputMetric | opportunity | canvas.
@@ -562,6 +574,50 @@ contexto; as colunas viram PROJEÇÃO do progresso dela.
   estruturadas, `set_card_driver`, `claim_card`/`release_claim` (o claim da PRÓPRIA sessão),
   `approve_qa`/`approve_review` (colunas resolvidas pelo pipeline do board: o passo que roda
   `harness-qa`, o com gate `hasQaPassed`, o que roda `harness-review`).
+
+### Vista em raias (`view.lanes`)
+
+Uma VISTA sobre os status — nenhum card muda de status, nenhum dado migra. Com `view.lanes` no `board.yaml`
+o Kanban desenha as raias declaradas no lugar das colunas; cada card fica na raia que lista o seu status e
+carrega o status REAL como etiqueta (mais `integrando` numa passagem do train e `publicando` no passo do
+deploy). "O detalhe de cada etapa aparece como etiqueta dentro do card, não como coluna."
+
+- **Nada some:** um status que nenhuma raia declara (typo, coluna nova) põe os cards dele numa raia
+  visível **Outros**. O mapa torto se explica em palavras — no log do serviço e no topo da própria vista:
+  status sem raia, status em duas raias, status inexistente, id repetido, duas raias com `demand`.
+- **O que precisa de você fica onde você olha:** uma raia com `demand: true` recebe todo card com uma
+  pergunta ABERTA (a mesma derivação do Inbox, `demands.ts`), qualquer que seja o status. `demand` aceita
+  também a lista explícita de tipos de demanda (`[question, blocker]`).
+- **Arrastar para uma raia** = mover para o primeiro status visível dela; o gate desse status decide.
+- Os terminais de ARQUIVO (coluna `system`) não precisam de raia — eles nunca aparecem no Kanban.
+
+### Modo ultra (`autonomy`) — o PROXY decide no lugar do dono
+
+| Ponto de decisão | human | ultra |
+|---|---|---|
+| Entrevista (stories de produto/usuário) | o dono responde | um PROXY responde, guiado pelo PRD, personas e decisões passadas do dono, e registra as premissas |
+| Escolha de tela (2–3 variantes) | o dono escolhe/comenta | o proxy escolhe pela rubrica (aderência ao guia, qualidade, originalidade, acabamento, funcionalidade) |
+| Prova de entrega | aviso depois (classes autônomas), senão aprovação antes | aviso depois, auditoria por amostra |
+| Dinheiro (gasto, fornecedor, preço, publicação externa, PRD e metas) | o dono | o dono — fila só dele; o resto do board segue |
+
+- **Quem decide o modo:** `autonomy.mode` do board; a story pode ter a sua exceção (`autonomyMode`, via
+  `set_card_autonomy`). Ausente = `human` (comportamento de sempre).
+- **Categoria:** a pergunta estruturada leva `category` (`ask_question`). Só `interview` e `ui-choice` vão
+  ao proxy; `money` NUNCA — e um piso determinístico também segura o que o autor marcou `[humano]` ou
+  que fala de preço/fornecedor/gasto. Pergunta sem categoria é do dono.
+- **O proxy:** uma execução headless SEPARADA, com contexto LIMPO (diretório temporário, nenhum token nem
+  servidor MCP, postura contida), que recebe o PRD (`docs/prd.md`), as personas, o guia de estilo, as
+  respostas passadas do DONO no board e as variantes — sem a recomendação de quem perguntou. A saída é um
+  arquivo de respostas validado no código: cada resposta traz premissas e confiança (0–1), ou é recusada.
+  O escritor único aplica sobre o card FRESCO (`answeredBy: proxy`) só o que segue aberto e proxiável.
+  Recusa, ou 2 falhas, devolvem a pergunta ao dono (gravado na própria pergunta).
+- **Limites:** teto de custo por execução (`autorun.surfaceMaxBudgetUSD.proxy`, padrão US$ 1,5), no
+  máximo 2 tentativas por pergunta, um proxy por card, o master switch do autorun, o `autorunDisabled` do
+  board e a admissão da máquina (RAM/load). O gasto entra no ledger do card (role `proxy`).
+- **Auditoria:** `auditSampleRate` (padrão 0.2) das respostas — e toda resposta com confiança < 0,5 — cai
+  no Inbox como "Resposta do proxy": o dono confirma, ou reabre (a pergunta volta para ele, com as
+  premissas do proxy no contexto, e nunca mais vai ao proxy).
+- **O condutor** é avisado na sessão dele quando o proxy responde (o "continuar" que o dono diria).
 
 ### Protocolo ASK_HUMAN (qualquer `harness-*` pode pedir ajuda ao humano e PAUSAR o run)
 

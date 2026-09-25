@@ -43,6 +43,7 @@ import {
   type DeployUnsettledCockpitItem,
   type ReleaseAgingCockpitItem,
   type MergeFailedCockpitItem,
+  type ProxyAuditCockpitItem,
 } from "@/lib/storymap/demands";
 import type {
   BoardConfig,
@@ -91,6 +92,7 @@ import {
   refineProposalAction,
   rejectGovernanceDraftAction,
   requestDesignChangeAction,
+  resolveProxyAuditAction,
 } from "@/app/actions";
 import { rearmCopilotItemAction } from "@/app/copilot-actions";
 import { cn } from "@/lib/cn";
@@ -150,6 +152,8 @@ const KIND_RENDERER: Record<CockpitItemKind, (item: CockpitItem, ctx: RendererCt
   "deploy-unsettled": (item, ctx) => <DeployUnsettledRenderer item={item as DeployUnsettledCockpitItem} ctx={ctx} />,
   "release-aging": (item, ctx) => <ReleaseAgingRenderer item={item as ReleaseAgingCockpitItem} ctx={ctx} />,
   "merge-failed": (item, ctx) => <MergeFailedRenderer item={item as MergeFailedCockpitItem} ctx={ctx} />,
+  // lanes-ultra — the owner's AUDIT of an answer the proxy gave on their behalf (ultra mode).
+  "proxy-audit": (item, ctx) => <ProxyAuditRenderer item={item as ProxyAuditCockpitItem} ctx={ctx} />,
 };
 
 // ── Shell: ToastProvider wrapper ──────────────────────────────────────────────
@@ -760,6 +764,22 @@ function QuestionRenderer({ item, ctx }: { item: QuestionCockpitItem; ctx: Rende
       {context && (
         <p className="pl-7 text-[12px] leading-snug text-fg-muted">
           <span className="font-medium text-fg-subtle">Por quê:</span> {dejargonText(context)}
+        </p>
+      )}
+
+      {/* The AUTONOMY KEY on the question (autonomy.ts): money is the owner's queue in every mode; an ultra story's
+          interview/UI question is the proxy's right now — the owner may still answer first. */}
+      {(item.ownerOnly || item.awaitingProxy) && (
+        <p className="pl-7 text-[11px] leading-snug">
+          {item.ownerOnly ? (
+            <span className="rounded bg-amber-400/15 px-1.5 py-0.5 font-medium text-amber-800 dark:text-amber-300">
+              Só você decide — dinheiro/escopo nunca vai ao proxy; o resto do board segue andando.
+            </span>
+          ) : (
+            <span className="rounded bg-accent/10 px-1.5 py-0.5 font-medium text-accent">
+              Modo ultra: o proxy está respondendo esta — responda antes se quiser decidir você.
+            </span>
+          )}
         </p>
       )}
 
@@ -1931,6 +1951,82 @@ function MergeFailedRenderer({ item, ctx }: { item: MergeFailedCockpitItem; ctx:
         </p>
       )}
       <ItemActions ctx={ctx} cardId={item.cardId} qa={qa} escRef={escRef} />
+    </div>
+  );
+}
+
+/**
+ * lanes-ultra — a PROXY answer sampled for the owner's audit. Shows the question, what the proxy answered, the
+ * premissas it recorded and its confidence; the owner CONFIRMS it (it stands) or REOPENS it (the question comes
+ * back to them, with what the proxy assumed in its context — never to the proxy again). Owner-only by design: the
+ * copiloto never acts on this kind (KIND_AUTONOMY `never`) and the MCP tool is full-token only.
+ */
+function ProxyAuditRenderer({ item, ctx }: { item: ProxyAuditCockpitItem; ctx: RendererCtx }) {
+  const router = useRouter();
+  const toast = useToast();
+  const escRef = escalationRefFor(item, ctx.boardId);
+  const [pending, startTransition] = useTransition();
+
+  const resolve = (outcome: "confirmed" | "reopened") => {
+    if (pending) return;
+    startTransition(async () => {
+      const res = await resolveProxyAuditAction({ boardId: ctx.boardId, cardId: item.cardId, questionId: item.questionId, outcome });
+      if (!res.ok) {
+        toast(res.error);
+        return;
+      }
+      toast(outcome === "confirmed" ? "Resposta do proxy confirmada." : "Pergunta devolvida para você.", "success");
+      router.refresh();
+    });
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-start gap-2">
+        <span className="mt-0.5 select-none font-mono text-[11px] text-fg-subtle">{item.questionId}</span>
+        <p className="flex-1 text-[13px] leading-snug text-fg">{dejargonText(item.prompt)}</p>
+      </div>
+      <div className="space-y-1.5 pl-7">
+        <p className="text-[12.5px] leading-snug text-fg">
+          <span className="font-medium text-fg-subtle">O proxy respondeu:</span> {item.answer || "—"}
+        </p>
+        <p className="text-[12px] leading-snug text-fg-muted">
+          <span className="font-medium text-fg-subtle">Premissas:</span> {item.assumptions}
+        </p>
+        <p className="text-[11px] text-fg-subtle">
+          confiança {Math.round(item.confidence * 100)}%
+          {item.category ? ` · ${item.category}` : ""}
+          {item.confidence < 0.5 ? " · baixa — sempre auditada" : " · amostra de auditoria"}
+        </p>
+      </div>
+      <ItemActions
+        ctx={ctx}
+        cardId={item.cardId}
+        escRef={escRef}
+        openCard={Boolean(item.cardId)}
+        lead={
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => resolve("confirmed")}
+            title="Você concorda: a resposta do proxy fica valendo."
+            className={PRIMARY_BTN}
+          >
+            {pending ? "Salvando…" : "Confirmar"}
+          </button>
+        }
+        trail={
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => resolve("reopened")}
+            title="A pergunta volta para você responder (com o que o proxy assumiu à vista). O proxy não a responde de novo."
+            className={SECONDARY_BTN}
+          >
+            Reabrir para mim
+          </button>
+        }
+      />
     </div>
   );
 }

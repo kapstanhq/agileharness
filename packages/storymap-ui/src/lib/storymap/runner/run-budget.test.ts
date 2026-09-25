@@ -243,9 +243,11 @@ describe("orchestrator.tick — a contenção do tick do copiloto (coerção)", 
 });
 
 describe("autorun.surfaceMaxBudgetUSD — as superfícies autônomas fora do engine", () => {
-  it("defaults: revisor 2, juiz 2, agente de deploy 4, captura 2", () => {
-    expect(DEFAULT_SURFACE_BUDGET_USD).toEqual({ peerReview: 2, resolutionJudge: 2, deployAgent: 4, smartCapture: 2 });
+  it("defaults: revisor 2, juiz 2, agente de deploy 4, captura 2, proxy do ultra 1,5", () => {
+    expect(DEFAULT_SURFACE_BUDGET_USD).toEqual({ peerReview: 2, resolutionJudge: 2, deployAgent: 4, smartCapture: 2, proxy: 1.5 });
     expect(resolveSurfaceBudgetUSD("deployAgent", undefined)).toBe(4);
+    expect(resolveSurfaceBudgetUSD("proxy", undefined)).toBe(1.5);
+    expect(resolveSurfaceBudgetUSD("proxy", coerceSurfaceBudgets({ proxy: 0.5 }))).toBe(0.5);
   });
 
   it("uma chave sobrescreve só a sua superfície; 0 desliga; lixo/desconhecida é descartada", () => {

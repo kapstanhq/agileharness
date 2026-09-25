@@ -257,6 +257,11 @@ const TOOL_ANNOTATIONS: Record<string, ToolHints> = {
   // 5.4 — the copiloto's OWN approval-grant surface (approve/reject an ApprovalRequest). Human-only, same lever.
   approve_action: DESTRUCTIVE,
   reject_action: DESTRUCTIVE,
+  // A CHAVE DE AUTONOMIA (autonomy.ts) — o mesmo cadeado proponente≠aprovador: um agente que pusesse a PRÓPRIA
+  // story em `ultra` passaria as perguntas dele a um proxy e se auto-responderia; um agente que fechasse a
+  // auditoria do proxy apagaria a revisão que o dono pediu. Decisão do dono ⇒ DESTRUCTIVE ⇒ só `full`.
+  set_card_autonomy: DESTRUCTIVE,
+  resolve_proxy_audit: DESTRUCTIVE,
   wait_for_approval: RO, // blocks until a pending ApprovalRequest is decided/expires (event wait, like wait_for_run)
 };
 
@@ -428,6 +433,9 @@ const RISK_CLASS_EXCEPTIONS: Record<string, RiskClass> = {
   reject_change: "destructive",
   approve_action: "destructive",
   reject_action: "destructive",
+  // A chave de autonomia e a auditoria do proxy: decisões do dono pelo mesmo motivo (ver TOOL_ANNOTATIONS).
+  set_card_autonomy: "destructive",
+  resolve_proxy_audit: "destructive",
 };
 
 /** Classe de risco DERIVADA dos presets de anotação (uma fonte). Pura — exportada p/ o guard e o teste. */

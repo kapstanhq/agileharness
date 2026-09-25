@@ -292,6 +292,13 @@ describe("8.3 — card parado com o gate factualmente satisfeito", () => {
     expect(planGateSatisfied({ card: card(), from: "desenvolver", to: "revisar-codigo", config: noGate, policy: AUTONOMO, claimedByOther: false }).action).toBe("stand-down");
   });
 
+  it("card CONDUZIDO ⇒ stand-down mesmo SEM claim vivo e com o gate passando (é do condutor, ou do operador)", () => {
+    const conducted = card({ routing: { skips: [], decidedBy: "rules", decidedAt: "", driver: "conductor" } });
+    const plan = planGateSatisfied({ card: conducted, from: "desenvolver", to: "revisar-codigo", config: config(), policy: AUTONOMO, claimedByOther: false });
+    expect(plan.action).toBe("stand-down");
+    expect(plan.reason).toMatch(/conduzido/);
+  });
+
   it("outro ator tem o claim ⇒ stand-down (não mexe em trabalho vivo alheio)", () => {
     expect(
       planGateSatisfied({ card: card(), from: "desenvolver", to: "revisar-codigo", config: config(), policy: AUTONOMO, claimedByOther: true }).action,
@@ -507,6 +514,53 @@ describe("runStewardPass — o executor", () => {
     expect(report.cyclesClosed).toEqual(["story-1"]);
     expect(report.rearmed).toEqual(["story-1:approval:release"]);
     expect(rearm).toHaveBeenCalledWith("story-1:approval:release", { kind: "delta-landed", detail: "está em main" });
+  });
+
+  it("condutor MORTO (claim session-died) num card conduzido ⇒ nada: sem redrive, sem pergunta, sem fechar ciclo", async () => {
+    const askQuestion = vi.fn(async () => {});
+    const deltaLandedForCard = vi.fn(async () => ({ verdict: "landed" as const, detail: "está em main" }));
+    const report = await runStewardPass(
+      makePorts({
+        releasedClaims: async () => [
+          { board: "nest", cardId: "story-1", actor: "session:a", kind: "implement", scope: "both", acquiredAt: "", expiresAt: "", heartbeatAt: "", released: "session-died" },
+        ],
+        conductedCardIds: async () => new Set(["story-1"]),
+        deltaLandedForCard,
+        askQuestion,
+      }),
+    );
+    expect(report.cyclesClosed).toEqual([]);
+    expect(report.redrivesOffered).toEqual([]);
+    expect(report.escalated).toEqual([]);
+    expect(askQuestion).not.toHaveBeenCalled();
+    expect(deltaLandedForCard).not.toHaveBeenCalled();
+    expect(report.standDowns).toBeGreaterThanOrEqual(1);
+  });
+
+  it("o passe NÃO move um card conduzido parado num gate que já passa (8.3)", async () => {
+    const moveCard = vi.fn(async () => ({ ok: true }));
+    const report = await runStewardPass(
+      makePorts({
+        gateCandidates: async () => [
+          {
+            card: {
+              id: "story-9",
+              title: "t",
+              status: "a",
+              tasks: [{ id: "t1", title: "x", done: true }],
+              routing: { skips: [], decidedBy: "rules", decidedAt: "", driver: "conductor" },
+            } as unknown as Card,
+            from: "a",
+            to: "b",
+          },
+        ],
+        config: async () =>
+          ({ id: "nest", name: "N", statuses: [{ id: "a", name: "A" }, { id: "b", name: "B", gate: "hasTasks" }] }) as unknown as BoardConfig,
+        moveCard,
+      }),
+    );
+    expect(moveCard).not.toHaveBeenCalled();
+    expect(report.moved).toEqual([]);
   });
 
   it("uma porta que explode não derruba o passe nem cala os outros playbooks", async () => {

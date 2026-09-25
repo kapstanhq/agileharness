@@ -109,7 +109,7 @@ describe("resolveConductorPolicy", () => {
 
   it("defaults: 2 sessões por board e opus", () => {
     expect(resolveConductorPolicy(board({ enabled: true, fromStatus: "pronta" }))).toEqual({
-      fromStatus: "pronta",
+      fromStatuses: ["pronta"],
       maxSessions: 2,
       model: "opus",
     });
@@ -117,10 +117,45 @@ describe("resolveConductorPolicy", () => {
 
   it("o board sobrescreve cap e modelo", () => {
     expect(resolveConductorPolicy(board({ enabled: true, fromStatus: "pronta", maxSessions: 1, model: "sonnet" }))).toEqual({
-      fromStatus: "pronta",
+      fromStatuses: ["pronta"],
       maxSessions: 1,
       model: "sonnet",
     });
+  });
+
+  it("fromStatus em LISTA resolve para todos os ids (e uma lista vazia é desligado)", () => {
+    expect(resolveConductorPolicy(board({ enabled: true, fromStatus: ["enriquecer", "pronta"] }))?.fromStatuses).toEqual([
+      "enriquecer",
+      "pronta",
+    ]);
+    expect(resolveConductorPolicy(board({ enabled: true, fromStatus: [] }))).toBeNull();
+  });
+});
+
+describe("conductor.fromStatus em LISTA — o aceite manda o card a status diferentes por tipo", () => {
+  const multi = board({ enabled: true, fromStatus: ["pronta", "enriquecer"] });
+
+  it("uma story entrando em QUALQUER status da lista é despachada; fora dela, não", () => {
+    expect(conductorEntryVerdict(story, multi)).toEqual({ dispatch: true });
+    expect(conductorEntryVerdict({ ...story, status: "enriquecer" }, multi)).toEqual({ dispatch: true });
+    expect(conductorEntryVerdict({ ...story, status: "desenvolver" }, multi).dispatch).toBe(false);
+  });
+
+  it("a forma string segue valendo sozinha (retrocompatível)", () => {
+    const single = board({ enabled: true, fromStatus: "pronta" });
+    expect(conductorEntryVerdict(story, single)).toEqual({ dispatch: true });
+    expect(conductorEntryVerdict({ ...story, status: "enriquecer" }, single).dispatch).toBe(false);
+  });
+
+  it("a classe de risco reconhece cada status da lista como spawn (`run`)", () => {
+    const plain = { ...story, routing: null };
+    expect(moveRiskClass(multi, "enriquecer", "triage", plain)).toBe("run");
+  });
+
+  it("o alarme julga CADA id da lista: um typo ou um terminal no meio é problema", () => {
+    expect(conductorConfigProblem(board({ enabled: true, fromStatus: ["pronta", "nao-existe"] }))).toMatch(/nao-existe/);
+    expect(conductorConfigProblem(board({ enabled: true, fromStatus: ["pronta", "concluida"] }))).toMatch(/terminal/);
+    expect(conductorConfigProblem(multi)).toBeNull();
   });
 });
 

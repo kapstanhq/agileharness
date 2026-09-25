@@ -203,7 +203,7 @@ The AgileHarness server is mounted as `storymap` in a fleet session (`mcp__story
 | `list_claims` | `{board?, released?}` |
 | `update_card` | `{board, cardId, title?, storyType?, narrative?{role,want,soThat}, acceptance?[], personas?[], systems?[], body?}` — `body` REPLACES the whole body |
 | `move_card` | `{board, cardId, status?, parent?, serves?, release?, order?}` |
-| `ask_question` | `{board, cardId, texts?[], questions?[], askedBy?}` — `questions[]`: `{text, context?, options?[{label, pros?[], cons?[], recommended?}], mode?: "single" \| "multi", recommendation?}` (2–8 options, at most ONE recommended; `recommendation` only without options) |
+| `ask_question` | `{board, cardId, texts?[], questions?[], askedBy?}` — `questions[]`: `{text, context?, options?[{label, pros?[], cons?[], recommended?}], mode?: "single" \| "multi", recommendation?, category?: "interview" \| "ui-choice" \| "delivery" \| "money"}` (2–8 options, at most ONE recommended; `recommendation` only without options). ALWAYS set `category`: it is what the autonomy key reads (see "ULTRA mode") |
 | `write_sidecar` | `{board, cardId, kind: "plans" \| "wireframes" \| "proposals", content}` — full file, ≤512KB; `wireframes` is VALIDATED (bad JSON, `format: "html"` without html, html over 32KB or sanitized to nothing ⇒ error naming the artifact) and returns `avisos` for what the sanitizer strips / fixed widths over 390px |
 | `add_finding` | `{board, cardId, severity, title, detail?, lens?, id?, file?, line?, suggestion?}` — on MAIN; a stable `id` is idempotent (refreshes content, never the status) |
 | `set_tasks` | `{board, cardId, sessionId, tasks: [{id, title, done}]}` — REPLACES the list on MAIN; only the session holding the card's live claim |
@@ -268,9 +268,10 @@ the SAME args. Never use `deploy`, `publish_when_idle`, `update_vps`, `write_doc
    ambiguity**: 0–5 choices whose answers change design or scope, each with `context` (the
    stakes), 2–5 `options` with short `pros`/`cons`, at most ONE `recommended: true`
    (`CardQuestion` in `types.ts`; format exactly as the `harness-review` skill shows, `askedBy:
-   harness-conductor`, ids `q<N>` not colliding with existing ones). Money/price, vendor or new
-   external dependency, external publication and PRD changes are ALWAYS human questions — mark
-   them `[humano]` at the start of `context`.
+   harness-conductor`, ids `q<N>` not colliding with existing ones), each with its `category`:
+   `interview` for a product/user question, `money` for money/price, vendor or new external
+   dependency, external publication and PRD/goal changes — those are ALWAYS the owner's; also mark
+   them `[humano]` at the start of `context` (the floor the code reads too).
    - Ask them on MAIN at once: `ask_question({board, cardId, askedBy: "harness-conductor",
      questions: [{text, context, options: [{label, pros, cons, recommended?}], mode}]})` (a
      question without discrete options: `recommendation` in prose). It works mid-build too — no
@@ -315,7 +316,9 @@ the SAME args. Never use `deploy`, `publish_when_idle`, `update_vps`, `write_doc
      warns), body text ≥14px, AA contrast per the guide.
    - `choose_wireframe({board, cardId, optionId: "<recommended>"})` — the gate `hasWireframe`
      needs a primary; it is only your RECOMMENDATION. Move the card to `com-design` (Aprovar
-     design) → **P2**.
+     design) → **P2**. In ULTRA mode also ask ONE `ui-choice` question whose options are the
+     variants (label = the artifact id, no `recommended` flag needed — the proxy never sees it): the
+     proxy picks by rubric; on resume, `choose_wireframe` the picked one if it differs.
 6. **Freeze.** After the pauses resolve, the acceptance is the contract VERIFICAR judges. If
    building shows it is wrong: user-facing ⇒ ask (P1); technical ⇒ an explicit amendment in
    `## Premissas`. Never quietly edit acceptance to match what you built.
@@ -480,24 +483,33 @@ re-read the card (answers, `chosenOptionId`, feedback) before acting.
 - Scoped writes count against `orchestrator.maxActionsPerHour`: batch (one `update_card` per
   block, not per field).
 
-## ULTRA mode (hook — the flag is future core work)
+## ULTRA mode (the autonomy key — core since lanes-ultra)
 
-Expected: a card-level `routing.autonomy: ultra`, defaulting from a board-level
-`orchestrator.autonomy: ultra`. Neither exists today (`CardRouting` carries only
-`skips/decidedBy/decidedAt/profile`; `OrchestratorPolicy` only `mode/maxActionsPerHour/
-riskMatrix`), so **absent or unknown ⇒ human in control**. When the flag exists and says `ultra`:
+The board declares `autonomy: {mode: human | ultra, proxyModel?, auditSampleRate?}` in `board.yaml`; a story
+can carry its own exception (`autonomyMode`, set by the OWNER with `set_card_autonomy` — never by you).
+`get_card` returns `_autonomy: {mode, source}` whenever either is declared; absent ⇒ **human**.
 
-- P1 and P2 are resolved by a **PROXY**: a fresh Task subagent per pause, guided ONLY by the PRD
-  (`decisoes`, `escopo`, `prontoQuando`), the brandbook, the style guide, the personas and past
-  decisions (answered questions on sibling cards). It receives the questions WITHOUT your
-  `recommended` flags and the variants WITHOUT your note's recommendation — never your reasoning.
-  It records its own answers (`answer_question`, rationale citing the source) and its choice
-  (`choose_wireframe` + `design_feedback` kind `approve` with the rationale).
-- **You never answer your own questions.** Anything tagged `[humano]` — money/price, vendor or
-  new external dependency, external publication, PRD changes — the proxy must refuse; it waits
-  for the human exactly as in human mode.
-- After the Prova, instead of P5, move `revisao` -> `merge` (Integrar), unless the delivery
-  touches an always-human category (then P5). Publishing stays with the release policy.
+In **ultra**:
+
+- **P1 (questions) and P2 (design choice) are resolved by the PROXY — not by you.** Ask exactly as in human
+  mode (structured, with `category`). The service spawns a PROXY for every open `interview` / `ui-choice`
+  question: a separate headless run with a CLEAN context (no MCP, a temp dir), guided only by the PRD,
+  personas, style guide and the OWNER's past answers — it never sees your `recommended` flags, your prose
+  recommendation or your variants note. It answers with recorded premissas + a confidence
+  (`answeredBy: "proxy"`), and the service types `continuar — o PROXY … respondeu qN …` into THIS session.
+  Then re-read the card (`get_card`) and go on. It may DECLINE (or fail twice): the question is then the
+  owner's (`proxy.declined`), exactly as in human mode.
+- **You never answer your own questions** — not with `answer_question`, not by editing the card.
+- **Money never goes to the proxy** (category `money`, the `[humano]` marker, or price/vendor/spend words):
+  it waits for the owner in the Inbox. Keep working on whatever does not depend on it; stop at the boundary
+  that does (the rest of the board is never blocked by it). `answer_question` refuses a money question from
+  any agent.
+- **P5 (delivery):** after the `## Prova da entrega`, move `revisao` -> `merge` (Integrar) yourself instead of
+  pausing — unless the delivery touches an always-human category (money, auth/rules/payments, PRD), then P5.
+  Publishing stays with the board's release policy.
+- A sample of the proxy's answers (`auditSampleRate`, default 0.2, plus every answer below 0.5 confidence) goes
+  to the owner's audit list; a REOPENED answer returns to the owner and is never proxied again — treat its new
+  answer as authoritative on resume.
 
 ## Guardrails
 
@@ -518,7 +530,8 @@ riskMatrix`), so **absent or unknown ⇒ human in control**. When the flag exist
 
 ## Known limits (core follow-ups — do not pretend otherwise)
 
-Screenshots have no durable per-card home; the ULTRA flag does not exist yet. A conductor that
+Screenshots have no durable per-card home; the ultra DELIVERY audit (sampling notices of autonomous
+deliveries) is not in core yet — only the proxy's answers are sampled. A conductor that
 dies is never reopened automatically (the driver stays; the operator reopens with `claude_new` or
 clears it). The session's cost is an ESTIMATE (embedded price table; a model it does not know is
 priced by family or left unpriced), booked when the session ends — a tail spent after
