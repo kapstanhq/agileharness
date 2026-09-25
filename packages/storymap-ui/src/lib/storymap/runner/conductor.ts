@@ -77,6 +77,15 @@ export interface ConductorQueueEntry {
   /** spawn attempts that failed for a reason no slot explains (plumbing) — bounded by {@link CONDUCTOR_MAX_SPAWN_ATTEMPTS}. */
   attempts: number;
   lastError?: string;
+  /**
+   * POR QUE a entrada está esperando, dito na última passada — e DESDE QUANDO esse motivo vale. A espera era
+   * muda: medido na v0.8.0 no ar, um condutor retido pela janela da conta não deixava rastro nenhum (nem log, nem
+   * estado, e o painel do governador dizia «retidos: nenhum»). `lastWaitKind` é a classe estável do motivo (o
+   * texto traz números que mudam a cada passada): o log sai só quando ELA muda, e `lastWaitAt` é quando começou.
+   */
+  lastWaitReason?: string;
+  lastWaitKind?: string;
+  lastWaitAt?: string;
 }
 
 export interface ConductorQueueStore {
@@ -162,6 +171,13 @@ export interface ConductorDeps {
    * dropped) and the next pump re-asks. Absent ⇒ admitted (tests / an adopter without a meter).
    */
   admission?(): GateVerdict;
+  /**
+   * Tell the governor WHICH queue entries its window is holding (the complete set; it replaces the previous one),
+   * so the capacity panel counts them and the >24h alert covers them. Reported only by a pass that actually ASKED
+   * the governor (or found the queue empty): a pass that stopped earlier (box full, slots taken) does not know,
+   * and must not reset the clock of an entry that was already waiting — the engine's rule for its own queue.
+   */
+  reportHeld?(keys: string[]): void;
   now?(): number;
   log?(line: string): void;
 }
@@ -218,11 +234,23 @@ export async function pumpConductorQueue(deps: ConductorDeps): Promise<Conductor
   return withKeyedLock(QUEUE_LOCK, () => pumpUnlocked(deps));
 }
 
+/** O registro do retido é escrituração — nunca pode travar o pump. */
+function reportHeldSafe(deps: ConductorDeps, keys: string[]): void {
+  try {
+    deps.reportHeld?.(keys);
+  } catch {
+    /* best-effort */
+  }
+}
+
 async function pumpUnlocked(deps: ConductorDeps): Promise<ConductorPumpReport> {
   const log = logOf(deps);
   const report: ConductorPumpReport = { spawned: [], waiting: [], dropped: [] };
   const entries = await deps.queue.load();
-  if (!entries.length) return report;
+  if (!entries.length) {
+    reportHeldSafe(deps, []);
+    return report;
+  }
   const sessions = await deps.sessions().catch(() => [] as AgentSession[]);
   const live = await deps.liveTmux().catch(() => null);
   const liveConductors = sessions.filter((s) => isLiveConductor(s, live, deps.heartbeatAlive));
@@ -231,18 +259,31 @@ async function pumpUnlocked(deps: ConductorDeps): Promise<ConductorPumpReport> {
 
   const keep: ConductorQueueEntry[] = [];
   let boxFull = false;
+  /** a passada PERGUNTOU ao governador por alguma entrada (ver {@link ConductorDeps.reportHeld}) */
+  let consulted = false;
+  const heldByAccount: string[] = [];
+  const nowIso = () => new Date((deps.now ?? Date.now)()).toISOString();
   const drop = (e: ConductorQueueEntry, reason: string) => {
     report.dropped.push({ board: e.board, cardId: e.cardId, reason });
     log(`${e.board}/${e.cardId} saiu da fila: ${reason}`);
   };
-  const wait = (e: ConductorQueueEntry, reason: string) => {
-    keep.push(e);
+  /** Espera: persiste o motivo e desde quando; loga só quando a CLASSE do motivo muda (sem spam por passada). */
+  const wait = (e: ConductorQueueEntry, reason: string, kind: string, patch: Partial<ConductorQueueEntry> = {}) => {
+    const changed = e.lastWaitKind !== kind;
+    keep.push({
+      ...e,
+      ...patch,
+      lastWaitReason: reason.slice(0, 300),
+      lastWaitKind: kind,
+      lastWaitAt: changed || !e.lastWaitAt ? nowIso() : e.lastWaitAt,
+    });
     report.waiting.push({ board: e.board, cardId: e.cardId, reason });
+    if (changed) log(`${e.board}/${e.cardId} esperando: ${reason}`);
   };
 
   for (const e of entries) {
     if (boxFull) {
-      wait(e, "máquina saturada (admissão da frota)");
+      wait(e, "máquina saturada (admissão da frota)", "box-full");
       continue;
     }
     const [config, card] = await Promise.all([
@@ -268,7 +309,7 @@ async function pumpUnlocked(deps: ConductorDeps): Promise<ConductorPumpReport> {
       continue;
     }
     if (!deps.masterEnabled() || config?.autorunDisabled) {
-      wait(e, "autorun desligado (master switch ou board desarmado) — a fila espera");
+      wait(e, "autorun desligado (master switch ou board desarmado) — a fila espera", "autorun-off");
       continue;
     }
     if (liveConductors.some((s) => s.board === e.board && s.cardId === e.cardId)) {
@@ -276,12 +317,14 @@ async function pumpUnlocked(deps: ConductorDeps): Promise<ConductorPumpReport> {
       continue;
     }
     if ((liveCount.get(e.board) ?? 0) >= policy.maxSessions) {
-      wait(e, `${policy.maxSessions} condutor(es) vivo(s) no board — esperando uma vaga`);
+      wait(e, `${policy.maxSessions} condutor(es) vivo(s) no board — esperando uma vaga`, "slots");
       continue;
     }
     const gate = deps.admission?.();
+    if (gate) consulted = true;
     if (gate && !gate.admit) {
-      wait(e, `janela da conta: ${gate.detail}`);
+      heldByAccount.push(`${e.board}/${e.cardId}`);
+      wait(e, `janela da conta: ${gate.detail}`, `account:${gate.reason}`);
       continue;
     }
 
@@ -310,14 +353,14 @@ async function pumpUnlocked(deps: ConductorDeps): Promise<ConductorPumpReport> {
     }
     if (res.code === "no_capacity") {
       boxFull = true;
-      wait(e, `máquina saturada: ${res.reason}`);
+      wait(e, `máquina saturada: ${res.reason}`, "box-full");
       continue;
     }
     if (res.code === "card_claimed") {
       if (res.holder?.actor.startsWith("session:")) {
         drop(e, `outra sessão já é dona do card (${res.holder.actor}) — nenhum condutor novo`);
       } else {
-        wait(e, `card reservado por ${res.holder?.actor ?? "?"} — tento no próximo tick`);
+        wait(e, `card reservado por ${res.holder?.actor ?? "?"} — tento no próximo tick`, "claimed");
       }
       continue;
     }
@@ -332,10 +375,13 @@ async function pumpUnlocked(deps: ConductorDeps): Promise<ConductorPumpReport> {
       drop(e, `spawn falhou ${attempts}x (${res.code}) — finding no card`);
       continue;
     }
-    keep.push({ ...e, attempts, lastError: `${res.code}: ${res.reason}`.slice(0, 300) });
-    report.waiting.push({ board: e.board, cardId: e.cardId, reason: `spawn falhou (${res.code}) — tentativa ${attempts}/${CONDUCTOR_MAX_SPAWN_ATTEMPTS}` });
+    wait(e, `spawn falhou (${res.code}) — tentativa ${attempts}/${CONDUCTOR_MAX_SPAWN_ATTEMPTS}`, "spawn-failed", {
+      attempts,
+      lastError: `${res.code}: ${res.reason}`.slice(0, 300),
+    });
   }
 
   await deps.queue.persist(keep);
+  if (consulted || keep.length === 0) reportHeldSafe(deps, heldByAccount);
   return report;
 }

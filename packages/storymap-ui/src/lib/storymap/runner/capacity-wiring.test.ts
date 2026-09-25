@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CapacityGovernor, setCapacityGovernorForTests } from "./capacity-service";
 import { DAY_MS, DEFAULT_GOVERNOR_SETTINGS } from "./capacity-governor";
 import { buildTickDeps } from "./orchestrator-run";
+import { defaultConductorDeps } from "./fleet-deps";
 import { tickOutcomeText } from "@/lib/storymap/copilot/activity";
 import { RunnerEngine } from "./engine";
 import { CardClaims, memoryClaimStore, setCardClaimsSingletonForTests } from "./claims";
@@ -127,5 +128,20 @@ describe("o boot arma o governador ANTES da recuperação, com a trava dura liga
     expect(at, "armado DEPOIS da recuperação: os runs re-despachados no boot sairiam antes da 1ª leitura").toBeLessThan(
       src.indexOf("const makeRecoveryDeps"),
     );
+  });
+});
+
+describe("o despacho do condutor conta no governador de produção", () => {
+  it("defaultConductorDeps: a admissão é a do singleton, e o que ela retém entra em «retidos» do painel", async () => {
+    const g = heldGovernor();
+    await g.refresh();
+    setCapacityGovernorForTests(g);
+    const deps = defaultConductorDeps();
+    expect(deps.admission!()).toMatchObject({ admit: false, reason: "five-hour" });
+    deps.reportHeld!(["nook/story-a"]);
+    expect(g.snapshot().held.count).toBe(1);
+    deps.reportHeld!([]);
+    expect(g.snapshot().held.count).toBe(0);
+    await g.flush();
   });
 });

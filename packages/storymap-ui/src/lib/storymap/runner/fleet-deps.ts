@@ -259,6 +259,8 @@ export function defaultConductorDeps(): ConductorDeps {
     masterEnabled: () => loadRunnerConfig().autorun.enabled,
     // A despacho do condutor é AUTOMAÇÃO para a janela da conta (ver ConductorDeps.admission).
     admission: () => getCapacityGovernor().admission("automation"),
+    // …e o que ela retém ENTRA na conta do painel ("retidos") e no aviso de >24h, como a fila do engine.
+    reportHeld: (keys) => getCapacityGovernor().reportHeld("conductor", keys),
   };
 }
 

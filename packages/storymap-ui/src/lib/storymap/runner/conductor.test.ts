@@ -292,6 +292,97 @@ describe("pumpConductorQueue — o cap POR BOARD, a espera e a vaga que volta", 
   });
 });
 
+describe("a espera do condutor NÃO é muda — motivo persistido, log na mudança, e o governador sabe quem ele retém", () => {
+  // Medido na v0.8.0 no ar: o despacho esperava em silêncio — `wait(e, reason)` não era logado nem persistido, e
+  // o painel do governador dizia «retidos: nenhum» com um condutor parado pela janela da conta.
+  function observed() {
+    const h = harness();
+    const logs: string[] = [];
+    const held: string[][] = [];
+    let t = Date.UTC(2026, 8, 25, 2, 0);
+    let pct = 90;
+    h.deps.log = (l) => void logs.push(l);
+    h.deps.reportHeld = (keys) => void held.push([...keys]);
+    h.deps.now = () => t;
+    // o detalhe do governador muda a cada passada (números) — a CLASSE do motivo, não
+    h.deps.admission = () =>
+      h.gate.admit
+        ? { admit: true, reason: "admit", detail: "ok", retryAt: null }
+        : { admit: false, reason: "stale", detail: `leitura de uso defasada (${pct++}min, limite 20min)`, retryAt: null };
+    return { h, logs, held, tick: (ms: number) => void (t += ms) };
+  }
+
+  it("o motivo e DESDE QUANDO ficam na entrada da fila; o log sai UMA vez por classe de motivo", async () => {
+    const { h, logs, tick } = observed();
+    h.cards.set("s1", conducted("s1"));
+    await admitConductorCard(h.deps, "b", "s1");
+    h.gate.admit = false;
+    const t0 = new Date(h.deps.now!()).toISOString();
+    await pumpConductorQueue(h.deps);
+    tick(300_000);
+    await pumpConductorQueue(h.deps);
+    tick(300_000);
+    await pumpConductorQueue(h.deps);
+
+    const e = h.queue.entries[0];
+    expect(e.lastWaitKind).toBe("account:stale");
+    expect(e.lastWaitReason).toMatch(/^janela da conta: leitura de uso defasada \(92min/);
+    expect(e.lastWaitAt).toBe(t0); // desde a PRIMEIRA passada com este motivo, não a última
+    expect(logs.filter((l) => l.includes("esperando"))).toEqual([
+      expect.stringContaining("b/s1 esperando: janela da conta: leitura de uso defasada (90min"),
+    ]);
+
+    // o motivo MUDA de classe ⇒ uma linha nova, e o relógio recomeça
+    h.master.on = false;
+    tick(60_000);
+    await pumpConductorQueue(h.deps);
+    expect(h.queue.entries[0]).toMatchObject({ lastWaitKind: "autorun-off", lastWaitAt: new Date(h.deps.now!()).toISOString() });
+    expect(logs.filter((l) => l.includes("esperando"))).toHaveLength(2);
+  });
+
+  it("o governador recebe o conjunto RETIDO PELA JANELA — e ele se esvazia quando a janela libera", async () => {
+    const { h, held } = observed();
+    h.cards.set("s1", conducted("s1"));
+    h.cards.set("s2", conducted("s2"));
+    await admitConductorCard(h.deps, "b", "s1");
+    await admitConductorCard(h.deps, "b", "s2");
+    h.gate.admit = false;
+    await pumpConductorQueue(h.deps);
+    expect(held.at(-1)).toEqual(["b/s1", "b/s2"]);
+    h.gate.admit = true;
+    await pumpConductorQueue(h.deps);
+    expect(h.spawns).toHaveLength(2);
+    expect(held.at(-1)).toEqual([]);
+  });
+
+  it("uma passada que NÃO perguntou ao governador não zera o retido (não sabe) — fila vazia zera", async () => {
+    const { h, held } = observed();
+    h.cards.set("s1", conducted("s1"));
+    await admitConductorCard(h.deps, "b", "s1");
+    h.gate.admit = false;
+    await pumpConductorQueue(h.deps);
+    expect(held).toEqual([["b/s1"]]);
+    h.master.on = false; // a passada para antes do governador
+    await pumpConductorQueue(h.deps);
+    expect(held).toEqual([["b/s1"]]);
+    h.cards.delete("s1"); // o card sumiu: a fila esvazia
+    await pumpConductorQueue(h.deps);
+    await pumpConductorQueue(h.deps);
+    expect(held.at(-1)).toEqual([]);
+  });
+
+  it("a falha de encanamento também é dita (antes só ia para o contador em silêncio)", async () => {
+    const { h, logs } = observed();
+    h.deps.spawn = async () => ({ ok: false, code: "spawn_failed", reason: "tmux: no server" });
+    h.cards.set("s1", conducted("s1"));
+    await admitConductorCard(h.deps, "b", "s1");
+    await pumpConductorQueue(h.deps);
+    await pumpConductorQueue(h.deps);
+    expect(h.queue.entries[0]).toMatchObject({ attempts: 2, lastWaitKind: "spawn-failed", lastError: "spawn_failed: tmux: no server" });
+    expect(logs.filter((l) => l.includes("esperando: spawn falhou"))).toHaveLength(1);
+  });
+});
+
 describe("isLiveConductor — a contagem do cap", () => {
   const s = (over: Partial<AgentSession> = {}): AgentSession => ({
     sessionId: "x",
