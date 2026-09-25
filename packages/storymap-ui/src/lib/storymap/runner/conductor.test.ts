@@ -54,6 +54,7 @@ interface Harness {
   findings: Array<{ cardId: string; detail: string }>;
   config: { value: BoardConfig };
   master: { on: boolean };
+  gate: { admit: boolean };
 }
 
 function harness(opts: { spawn?: (i: SpawnSessionInput) => SpawnSessionResult; config?: BoardConfig } = {}): Harness {
