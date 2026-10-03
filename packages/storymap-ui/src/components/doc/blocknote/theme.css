@@ -1,0 +1,141 @@
+/*
+ * theme.css — maps BlockNote's own `--bn-*` CSS custom properties onto this app's semantic tokens
+ * (globals.css) AND puts the EDITOR on the same typographic scale as the reading surface
+ * (components/doc/typography.ts). O que se vê editando tem de ser o que se vê lendo: enquanto o
+ * editor usava a escala de fábrica (h1 48px/700, corpo 16/1.5) e o <DocRead> a nossa, entrar em
+ * "Editar" mudava o documento de tamanho debaixo do cursor.
+ *
+ * BlockNote's default stylesheet (@blocknote/react's dist/style.css) declares them
+ * on `.bn-root` (the class BlockNoteView always stamps on both the editor container AND its portal
+ * element) with a light default and a `.bn-root[data-color-scheme=dark]` override — that override
+ * selector has specificity (1 class + 1 attribute); a bare `.bn-root{...}` here would LOSE to it in
+ * dark mode regardless of import order. `BlockNoteView`'s `theme` prop is always an explicit
+ * "light" | "dark" string (see DocEditorImpl.tsx), so `data-color-scheme` is always present — using
+ * `.bn-root[data-color-scheme]` (attribute-exists, no value) matches that same specificity and wins
+ * in BOTH modes by being the LATER rule (this file is imported after "@blocknote/mantine/style.css").
+ * Because every value below is `rgb(var(--token))` and the referenced tokens already flip under
+ * `.dark` (globals.css), ONE rule covers both themes — no separate dark block needed.
+ */
+.bn-root[data-color-scheme] {
+  --bn-colors-editor-text: rgb(var(--fg));
+  --bn-colors-editor-background: rgb(var(--canvas));
+  --bn-colors-menu-text: rgb(var(--fg));
+  --bn-colors-menu-background: rgb(var(--surface));
+  --bn-colors-tooltip-text: rgb(var(--fg));
+  --bn-colors-tooltip-background: rgb(var(--surface));
+  --bn-colors-hovered-text: rgb(var(--fg));
+  --bn-colors-hovered-background: rgb(var(--surface-hover));
+  --bn-colors-selected-text: rgb(var(--primary-fg));
+  --bn-colors-selected-background: rgb(var(--accent));
+  --bn-colors-disabled-text: rgb(var(--fg-subtle));
+  --bn-colors-disabled-background: rgb(var(--inset));
+  --bn-colors-shadow: rgb(var(--line-emphasis));
+  --bn-colors-border: rgb(var(--line));
+  --bn-colors-side-menu: rgb(var(--fg-subtle));
+  --bn-font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --bn-border-radius: 8px;
+}
+
+/* Notion-like density: the DocShell (DocShell.tsx) already centers + sizes the reading column, so
+   BlockNote's own default 54px inline padding on `.bn-editor` would double it up. */
+.bn-root .bn-editor {
+  padding-inline: 0;
+  width: 100%;
+}
+
+/* ── A escala (typography.ts) dentro do editor ────────────────────────────────────────────────────
+   O BlockNote dimensiona um heading por uma custom property (`--level`, em `em` de fábrica: 3em/2em/
+   1.3em ⇒ 48/32/20.8 px) e crava `font-weight:700` num seletor de especificidade alta
+   (`.bn-block-outer:not([data-prev-type])>.bn-block>.bn-block-content[data-content-type=heading]`).
+   Redefinir `--level` em px é o gancho limpo — a regra de fábrica continua valendo, só passa a ler
+   o NOSSO número; o peso precisa de um `.bn-root` na frente para vencer aquele seletor.
+   Mapa: level 1 = título do documento · 2 = seção · 3 = subseção (a mesma tabela do DocRead). */
+.bn-root [data-content-type="heading"][data-level="1"] {
+  --level: 30px;
+  padding-top: 22px;
+}
+.bn-root [data-content-type="heading"][data-level="2"] {
+  --level: 24px;
+  padding-top: 18px;
+}
+.bn-root [data-content-type="heading"][data-level="3"] {
+  --level: 20px;
+  padding-top: 12px;
+}
+@media (min-width: 640px) {
+  .bn-root [data-content-type="heading"][data-level="1"] {
+    --level: 40px;
+  }
+  .bn-root [data-content-type="heading"][data-level="2"] {
+    --level: 30px;
+  }
+  .bn-root [data-content-type="heading"][data-level="3"] {
+    --level: 24px;
+  }
+}
+.bn-root .bn-block-outer > .bn-block > .bn-block-content[data-content-type="heading"] {
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+.bn-root .bn-block-outer > .bn-block > .bn-block-content[data-content-type="heading"][data-level="1"] {
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+}
+
+/* Corpo: 16px/1.6 — o mesmo `DOC.body` do lado de leitura (a fábrica entrega 1.5). */
+.bn-root .bn-block-outer {
+  line-height: 1.6;
+}
+
+/* Citação = a ÚNICA caixa do documento, e por isso a mesma dos dois lados: poço neutro em vez do
+   cinza cravado (#7d797a) que o BlockNote traz de fábrica e que ignora o tema. */
+.bn-root [data-content-type="quote"] blockquote {
+  color: rgb(var(--fg-muted));
+  border-left: 3px solid rgb(var(--line-emphasis));
+  background: rgb(var(--inset) / 0.6);
+  border-radius: 0 6px 6px 0;
+  padding: 6px 12px 6px 16px;
+  font-size: 15px;
+}
+
+/* This pinned version (@blocknote/core 0.52.1) ships no "Ask AI" affordance at all — that lives
+   exclusively in the GPL @blocknote/xl-ai add-on, which this project never installs (see the
+   package's license-guard test) — so there is nothing to hide here today. */
+
+/* ── `section`: um TÍTULO, não uma caixa ─────────────────────────────────────────────────────────
+   Existia aqui um par de regras `:has()` que desenhava a caixa (border+fundo, e a variante âmbar do
+   tom "hero") em volta do bloco inteiro para que os filhos coubessem DENTRO dela. Saiu junto com a
+   caixa: uma região ancorada agora lê como seção do documento (o rótulo é um heading — ver
+   schema.tsx), e o que sobra é remover a INDENTAÇÃO que o BlockNote dá a qualquer bloco aninhado
+   (`.bn-block-group .bn-block-group{margin-left:24px}`) — o corpo de uma seção é texto do
+   documento, alinhado com o resto, não uma sub-lista. */
+.bn-root .bn-block:has(> .react-renderer.node-section) > .bn-block-group {
+  margin-left: 0;
+}
+/* …e o FILETE vertical que o BlockNote desenha ao lado de qualquer grupo aninhado
+   (`.bn-block-group .bn-block-group > .bn-block-outer:before`): com a caixa fora, ele virava a
+   última marca de "isto é um bloco à parte" no meio do texto corrido. */
+.bn-root .bn-block:has(> .react-renderer.node-section) > .bn-block-group > .bn-block-outer:before {
+  content: none;
+}
+.bn-root .bn-block:has(> .react-renderer.node-section) {
+  margin-top: 28px;
+}
+
+/* Nó SELECIONADO: o BlockNote crava um contorno azul de 4px (`#64a0ff`) que é a cor de outro
+   produto e grita mais alto que o conteúdo — no bloco de propriedades (que é atômico, e por isso
+   recebe a seleção assim que o editor ganha foco) ele abria a tela como uma caixa azul. Mesmo
+   sinal, no tom da casa e com metade da espessura. */
+.bn-root .bn-block-content.ProseMirror-selectednode > *,
+.bn-root .ProseMirror-selectednode > .bn-block-content > * {
+  outline: 2px solid rgb(var(--accent) / 0.55);
+  outline-offset: 2px;
+}
+
+/* "Pedir ao agente" only renders as live UI when the surface passed a handler — a dead button is
+   worse than none (M5). */
+.doc-editor[data-section-agent="off"] [data-section-agent-btn] {
+  display: none;
+}

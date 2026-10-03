@@ -1,0 +1,22 @@
+[
+  {
+    "at": "2026-05-06T16:03:48.215Z",
+    "outcome": "no-op",
+    "finalText": "Parei antes de começar o card `story-ex9743` (grade de sessões do planetário).\n\n- Primeira tentativa, o script de avanço do card: `apply-seccomp: write /proc/self/setgroups ... Permission denied`.\n- Segunda, só um `pwd` para testar o shell: o mesmo erro.\n- Arquivos do card: intocados; `status:` segue `enriquecer`.\n\nSem Bash eu não cumpro o último passo da etapa. O ambiente precisa ser consertado primeiro."
+  },
+  {
+    "at": "2026-05-06T21:40:12.870Z",
+    "outcome": "no-op",
+    "finalText": "Sandbox sem Bash outra vez (`apply-seccomp: write /proc/self/setgroups … Permission denied`). `story-ex9743` ficou onde estava."
+  },
+  {
+    "at": "2026-05-07T07:22:59.004Z",
+    "outcome": "no-op",
+    "finalText": "Resumo do run:\n\n1. Abri o card e o PRD do board; entendi o pedido (cadastrar sessões noturnas e o limite de lugares por sessão).\n2. Tentei carimbar o avanço pelo script do board e recebi, antes de qualquer saída do script, `apply-seccomp: write /proc/self/setgroups ... Permission denied`.\n3. Não contornei: editar o cabeçalho do card à mão violaria a regra de que o status só muda pelo script.\n\nResultado: nada foi gravado. Recomendo olhar a configuração de user namespaces do host antes de mandar outro run."
+  },
+  {
+    "at": "2026-05-07T07:58:31.446Z",
+    "outcome": "no-op",
+    "finalText": "Nenhum avanço. Causa única, repetida em todas as chamadas de shell deste run: `apply-seccomp: write /proc/self/setgroups ... Permission denied`.\n\nO que eu consegui fazer sem shell: reler o card `story-ex9743` e confirmar que o critério 2 (lotação máxima por sessão) ainda não aparece no texto. O que ficou por fazer: gravar esse critério e avançar a etapa — as duas coisas dependem de executar o script, e o script não executa neste ambiente."
+  }
+]

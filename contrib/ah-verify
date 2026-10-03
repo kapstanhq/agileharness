@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# ah-verify — a PROVA que a publicação exige: typecheck + suíte inteira + gate de publicação, presos à ÁRVORE do HEAD.
+#
+# POR QUE existe: `contrib/ah-publish` não confia em «eu rodei os testes»; ele pede o recibo que este script grava. O recibo é
+# do conteúdo (o hash da árvore do HEAD), não do commit: um commit que não muda nenhum arquivo não invalida a prova, e QUALQUER
+# edição a invalida — não dá para publicar uma árvore que não passou.
+#
+# Uso:  contrib/ah-verify [--skip-suite]
+#   --skip-suite   só typecheck + gate (para conferir a limpeza sem esperar a suíte; NÃO grava o recibo de publicação).
+#
+# O recibo fica em `<git-dir comum>/ah-verified/<hash-da-árvore>.json` — dentro do .git, nunca no que é versionado.
+# Saídas: 0 verde (e recibo gravado, sem --skip-suite) · 1 algo reprovou · 2 uso/pré-condição.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$HERE"
+die() { echo "✗ ah-verify: $*" >&2; exit "${2:-2}"; }
+
+SKIP_SUITE=0
+for a in "$@"; do
+  case "$a" in
+    --skip-suite) SKIP_SUITE=1 ;;
+    *) die "argumento desconhecido: $a (uso: contrib/ah-verify [--skip-suite])" ;;
+  esac
+done
+
+[ -z "$(git status --porcelain --untracked-files=no)" ] || die "a árvore tem alterações não commitadas — a prova é do que está commitado"
+HEAD_SHA="$(git rev-parse HEAD)"
+TREE="$(git rev-parse 'HEAD^{tree}')"
+BASE="${AH_PUBLISH_REMOTE:-origin}/${AH_PUBLISH_BRANCH:-main}"
+
+echo "== 1/3 gate de publicação (base: $BASE)"
+node scripts/oss/publication-gate.mjs --base "$BASE" --tree --require-terms || die "o gate reprovou — reescreva o que ele apontou" 1
+# O gate acima vê o que o operador LISTOU; este vê o que ninguém listou: frases e nomes copiados das fontes privadas.
+node scripts/oss/derivation-check.mjs --names --require-sources || die "há texto copiado das fontes privadas — reescreva do zero (trocar substantivos não é inventar)" 1
+
+echo "== 2/3 typecheck"
+# `.next/types/**` é SAÍDA DE BUILD (gitignored): num checkout de desenvolvimento ela sobrevive a rotas apagadas e o tsc a
+# lê — «Cannot find module …/src/app/…» de uma rota que não existe mais. Esse erro, e só ele, em `.next/types`, é ruído do
+# disco, não do código; qualquer OUTRO erro (inclusive em `.next/types`, onde vivem os contratos de props das páginas) reprova.
+TSC_OUT="$(cd packages/storymap-ui && nice -n 10 bun run typecheck 2>&1)" && TSC_RC=0 || TSC_RC=$?
+STALE_RE="^\.next/types/.*error TS2307: Cannot find module '[^']*/src/app/"
+REAL="$(printf '%s\n' "$TSC_OUT" | grep -E ' error TS[0-9]+' | grep -Ev "$STALE_RE" || true)"
+STALE="$(printf '%s\n' "$TSC_OUT" | grep -Ec "$STALE_RE" || true)"
+if [ -n "$REAL" ]; then printf '%s\n' "$REAL" >&2; die "o typecheck reprovou" 1; fi
+[ "$TSC_RC" = 0 ] || [ "${STALE:-0}" -gt 0 ] || { printf '%s\n' "$TSC_OUT" >&2; die "o typecheck falhou sem apontar erro de tipo" 1; }
+[ "${STALE:-0}" = 0 ] || echo "   (ignorados $STALE erro(s) de rota apagada em .next/types — saída de build velha; um build limpo os remove)"
+
+if [ "$SKIP_SUITE" = 1 ]; then
+  echo "== 3/3 suíte: PULADA (--skip-suite) — nenhum recibo de publicação foi gravado"
+  exit 0
+fi
+
+echo "== 3/3 suíte inteira (leva alguns minutos)"
+(cd packages/storymap-ui && nice -n 10 npx --no-install vitest run) || die "a suíte reprovou" 1
+
+DIR="$(git rev-parse --git-common-dir)/ah-verified"
+mkdir -p "$DIR"
+printf '{"tree":"%s","head":"%s","at":"%s","checks":["gate","typecheck","suite"]}\n' "$TREE" "$HEAD_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$DIR/$TREE.json"
+echo "✓ verde — recibo da árvore ${TREE:0:12} gravado (HEAD ${HEAD_SHA:0:12})"

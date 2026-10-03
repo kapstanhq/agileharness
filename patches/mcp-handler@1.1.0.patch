@@ -1,0 +1,120 @@
+diff --git a/dist/index.js b/dist/index.js
+index 11072f724e74ff9e0b4c3bfec04a6fafa1b0a7bd..edc28f8947c9837e0de25ebc942be52ddbe4dc20 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -728,6 +728,10 @@ function createServerResponseAdapter(signal, fn) {
+   return new Promise((resolve) => {
+     let controller;
+     let shouldClose = false;
++    // AGILEHARNESS PATCH (mcp-handler@1.1.0, ver patches/README): o consumidor do corpo pode ir embora (o cliente desligou
++    // no meio de uma chamada longa, e o Next cancela o corpo). Sem isto, o resultado da tool era enfileirado num stream
++    // JÁ FECHADO e `controller.enqueue` lançava "Invalid state: Controller is already closed" como unhandledRejection.
++    let closed = false;
+     let wroteHead = false;
+     let statusCode = 200;
+     let headers;
+@@ -767,10 +771,22 @@ function createServerResponseAdapter(signal, fn) {
+         bufferedData.push(data);
+         return true;
+       }
+-      controller.enqueue(data);
++      if (closed) return true;
++      try {
++        controller.enqueue(data);
++      } catch (e) {
++        markClosed();
++      }
++      // SEMPRE true: quem escreve aqui (hono/node-server) trata `false` como contrapressão e espera um `drain` que este
++      // objeto nunca emite — devolver false a um consumidor que já foi embora penduraria a chamada para sempre.
+       return true;
+     };
+     const eventEmitter = new events.EventEmitter();
++    const markClosed = () => {
++      if (closed) return;
++      closed = true;
++      eventEmitter.emit("close");
++    };
+     const fakeServerResponse = {
+       writeHead,
+       write,
+@@ -806,7 +822,7 @@ function createServerResponseAdapter(signal, fn) {
+       }
+     };
+     signal.addEventListener("abort", () => {
+-      eventEmitter.emit("close");
++      markClosed();
+     });
+     void fn(fakeServerResponse);
+     void (() => chunkUILOG6SR_js.__async(this, null, function* () {
+@@ -821,6 +837,11 @@ function createServerResponseAdapter(signal, fn) {
+             if (shouldClose) {
+               controller.close();
+             }
++          },
++          // O corpo foi cancelado por quem o consome (cliente desligou). Avisa o transporte (evento "close", que o
++          // hono/node-server usa para parar de ler) e passa a descartar o que ainda chegar.
++          cancel() {
++            markClosed();
+           }
+         }),
+         {
+diff --git a/dist/index.mjs b/dist/index.mjs
+index c1110409315d81bd1d440dc5910ba720c17f3722..93657277c366c782faf11f00769a908bc5eecd87 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -722,6 +722,10 @@ function createServerResponseAdapter(signal, fn) {
+   return new Promise((resolve) => {
+     let controller;
+     let shouldClose = false;
++    // AGILEHARNESS PATCH (mcp-handler@1.1.0, ver patches/README): o consumidor do corpo pode ir embora (o cliente desligou
++    // no meio de uma chamada longa, e o Next cancela o corpo). Sem isto, o resultado da tool era enfileirado num stream
++    // JÁ FECHADO e `controller.enqueue` lançava "Invalid state: Controller is already closed" como unhandledRejection.
++    let closed = false;
+     let wroteHead = false;
+     let statusCode = 200;
+     let headers;
+@@ -761,10 +765,22 @@ function createServerResponseAdapter(signal, fn) {
+         bufferedData.push(data);
+         return true;
+       }
+-      controller.enqueue(data);
++      if (closed) return true;
++      try {
++        controller.enqueue(data);
++      } catch (e) {
++        markClosed();
++      }
++      // SEMPRE true: quem escreve aqui (hono/node-server) trata `false` como contrapressão e espera um `drain` que este
++      // objeto nunca emite — devolver false a um consumidor que já foi embora penduraria a chamada para sempre.
+       return true;
+     };
+     const eventEmitter = new EventEmitter();
++    const markClosed = () => {
++      if (closed) return;
++      closed = true;
++      eventEmitter.emit("close");
++    };
+     const fakeServerResponse = {
+       writeHead,
+       write,
+@@ -800,7 +816,7 @@ function createServerResponseAdapter(signal, fn) {
+       }
+     };
+     signal.addEventListener("abort", () => {
+-      eventEmitter.emit("close");
++      markClosed();
+     });
+     void fn(fakeServerResponse);
+     void (() => __async(this, null, function* () {
+@@ -815,6 +831,11 @@ function createServerResponseAdapter(signal, fn) {
+             if (shouldClose) {
+               controller.close();
+             }
++          },
++          // O corpo foi cancelado por quem o consome (cliente desligou). Avisa o transporte (evento "close", que o
++          // hono/node-server usa para parar de ler) e passa a descartar o que ainda chegar.
++          cancel() {
++            markClosed();
+           }
+         }),
+         {

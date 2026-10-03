@@ -1,0 +1,6 @@
+[deploy loja] $ bun run tools/ship/run.ts --pkg loja --auto
+ship loja @ 6ff3f53f3
+parado: 2 mudanças esperam uma decisão sua (web-edge, nightly-mailer)
+   ação manual: bun run tools/ship/run.ts --pkg loja --only web-edge
+{"package":"loja","head":"6ff3f53f3bd8710789db07abbe3feb13fa14dee1","dryRun":false,"exitCode":3,"status":"needs-human","proof":null,"proofError":null,"missingProofs":[],"plan":{"package":"loja","head":"6ff3f53f3bd8710789db07abbe3feb13fa14dee1","status":"needs-human","refusals":[],"human":[{"unit":"web-edge","file":"packages/loja/web/lib/cobranca-boleto.ts","klass":"human","rule":"billing-code","why":"este arquivo monta a cobrança que o cliente paga: mexer nele é decisão de dinheiro, do dono","guards":[],"proofs":[]},{"unit":"nightly-mailer","file":"packages/loja/jobs/nightly-mailer/main.ts","klass":"human","rule":"unit-operator-only","why":"nightly-mailer ainda não tem classe autônoma","guards":[],"proofs":[]}],"proofs":[],"notes":["nightly-mailer: usa a imagem do web-edge"],"units":[],"face":null,"steps":[],"commands":[]},"units":[]}
+[deploy loja] finished exit 3

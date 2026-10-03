@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# ah-publish — leva a ferramenta ao repositório PÚBLICO como UM commit limpo por release, sem vazar a operação privada.
+#
+# POR QUE existe: o repositório público ficou dezenas de versões sem receber nada. Ninguém decidiu
+# parar: o `git push` era um passo manual sem dono, e na hora de fazê-lo a medição mostrou o que o lint de hoje não vê —
+# centenas de linhas de contexto privado (ids de cards reais, nomes de produtos, caminhos de máquina) em comentários e testes.
+# Pior: o diff líquido pode estar limpo e a HISTÓRIA não — centenas de commits e mensagens com contexto privado, que
+# um `push` comum publicaria para sempre. Por isso este script NÃO empurra o histórico privado: ele cria UM commit com a
+# árvore exata do HEAD, pai = o que já é público, mensagem = o resumo do que mudou (também passada pelo gate), e empurra
+# SÓ esse commit (avanço rápido — nunca força) e a tag da versão.
+#
+# Uso:  contrib/ah-publish [--yes] [--new-history] [--tag vX.Y.Z] [--message-file ARQ] [--remote origin] [--branch main]
+#   (sem --yes)    DRY-RUN: confere tudo, monta o commit, mostra o que iria e NÃO envia nada.
+#   --yes          envia o commit e a tag. Só depois de o dono ver o dry-run.
+#   --new-history  publica a árvore como um commit SEM PAI, no lugar do histórico público (ver abaixo).
+#   --tag          a versão; default = a maior tag `v*` que aponta para o HEAD.
+#   --message-file corpo da mensagem à mão (quando o resumo automático carrega algo que o gate reprova).
+#
+# QUEM ASSINA o commit público: `$AH_PUBLISH_AUTHOR_NAME` e `$AH_PUBLISH_AUTHOR_EMAIL`, quando definidos (a identidade do
+# projeto); senão, a identidade do git local. O dry-run mostra qual vai — o e-mail do autor fica público para sempre.
+#
+# PRÉ-CONDIÇÕES (todas conferidas, na ordem; a primeira que falha para):
+#   1. árvore commitada, no branch certo; o HEAD descende do que está público (o público não tem nada que o local não tenha);
+#   2. há o que publicar (a árvore difere da pública) e a tag ainda não existe no remoto;
+#   3. o gate de publicação passa sobre o diff líquido, sobre a ÁRVORE inteira e sobre a mensagem, com os termos privados
+#      do operador (fail-closed);
+#   4. existe o recibo de `contrib/ah-verify` para a ÁRVORE do HEAD (typecheck + suíte + gate passaram NESTE conteúdo).
+# DEPOIS de enviar: o local funde o commit público com `-s ours` (a árvore não muda; o público passa a ser ancestral do HEAD)
+# e `refs/ah-publish/last` guarda o ponto — o próximo resumo lista só o que veio depois.
+#
+# HISTÓRICO NOVO (`--new-history`) — para quando o que JÁ é público carrega contexto privado: limpar a árvore não limpa os
+# commits antigos, que continuam mostrando o texto velho. Este modo publica a árvore do HEAD como um commit sem pai e
+# apaga do remoto as tags antigas (elas apontam para o histórico que sai). Duas situações:
+#   • o remoto NÃO tem o branch (repositório recém-criado): é um push comum;
+#   • o remoto TEM o branch: é uma SUBSTITUIÇÃO forçada (`--force-with-lease`, presa ao commit público conferido). Só uma
+#     PESSOA faz isso: o script pede, num terminal, o nome do repositório digitado. Sem terminal (um agente, um cron), recusa.
+# O que este modo NÃO alcança: o que o serviço de hospedagem guarda por conta própria — commits antigos acessíveis pelo
+# hash, referências de pull requests, cópias e forks. Isso só sai pelo suporte do serviço ou recriando o repositório.
+#
+# Saídas: 0 ok (ou dry-run limpo) · 2 uso/pré-condição · 3 gate reprovou · 4 sem recibo de verificação · 5 falha ao enviar.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$HERE"
+die() { echo "✗ ah-publish: $*" >&2; exit "${2:-2}"; }
+
+YES=0 NEWHIST=0 TAG="" MSGFILE="" REMOTE="${AH_PUBLISH_REMOTE:-origin}" BRANCH="${AH_PUBLISH_BRANCH:-main}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --yes) YES=1 ;;
+    --new-history) NEWHIST=1 ;;
+    --tag) TAG="${2:-}"; shift ;;
+    --message-file) MSGFILE="${2:-}"; shift ;;
+    --remote) REMOTE="${2:-}"; shift ;;
+    --branch) BRANCH="${2:-}"; shift ;;
+    *) die "argumento desconhecido: $1" ;;
+  esac
+  shift
+done
+
+# 1. onde estamos --------------------------------------------------------------------------------------------------------
+[ -z "$(git status --porcelain --untracked-files=no)" ] || die "a árvore tem alterações não commitadas"
+[ "$(git rev-parse --abbrev-ref HEAD)" = "$BRANCH" ] || die "o HEAD não está em $BRANCH"
+TREE="$(git rev-parse 'HEAD^{tree}')"
+
+PUBLIC=""
+if git ls-remote --exit-code --heads "$REMOTE" "$BRANCH" >/dev/null 2>&1; then
+  git fetch "$REMOTE" "+refs/heads/$BRANCH:refs/remotes/$REMOTE/$BRANCH" --no-tags --quiet || die "não consegui buscar $REMOTE/$BRANCH"
+  PUBLIC="$(git rev-parse "$REMOTE/$BRANCH")"
+elif [ "$NEWHIST" != 1 ]; then
+  die "o remoto $REMOTE não tem o branch $BRANCH — a primeira publicação num repositório vazio é com --new-history"
+fi
+
+if [ "$NEWHIST" != 1 ]; then
+  git merge-base --is-ancestor "$PUBLIC" HEAD || die "o público ($REMOTE/$BRANCH) tem commits que o local não tem — traga-os (git merge $REMOTE/$BRANCH) e confira de novo; este script nunca força fora do --new-history"
+  [ "$TREE" != "$(git rev-parse "$PUBLIC^{tree}")" ] || { echo "✓ nada a publicar: a árvore do HEAD é a do público."; exit 0; }
+fi
+
+# A base da CATRACA (as regras de forma só valem para o que é novo): o que está público agora; sem branch no remoto, o
+# último público que este clone conheceu; sem nenhum dos dois, a árvore vazia (tudo é novo).
+RATCHET_BASE="$PUBLIC"
+[ -n "$RATCHET_BASE" ] || RATCHET_BASE="$(git rev-parse --verify --quiet "refs/remotes/$REMOTE/$BRANCH" || true)"
+[ -n "$RATCHET_BASE" ] || RATCHET_BASE="$(git hash-object -t tree /dev/null)"
+
+# 2. a versão ------------------------------------------------------------------------------------------------------------
+if [ -z "$TAG" ]; then
+  TAG="$(git tag --points-at HEAD 'v*' | sort -V | tail -1)"
+  [ -n "$TAG" ] || die "nenhuma tag v* aponta para o HEAD — tagueie a versão (ex.: git tag v0.9.30) e rode de novo"
+fi
+[[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "tag fora do formato vX.Y.Z: $TAG"
+REMOTE_TAGS="$(git ls-remote --tags "$REMOTE" 2>/dev/null | awk '{print $2}' | grep -v '\^{}$' | sed 's#^refs/tags/##' || true)"
+if [ "$NEWHIST" != 1 ] && printf '%s\n' "$REMOTE_TAGS" | grep -qxF "$TAG"; then die "a tag $TAG já existe no remoto"; fi
+
+# 3. o gate: diff líquido, árvore inteira E mensagem ---------------------------------------------------------------------
+node scripts/oss/publication-gate.mjs --base "$RATCHET_BASE" --tree --require-terms || die "o gate reprovou — nada foi enviado" 3
+node scripts/oss/derivation-check.mjs --names --require-sources || die "o cruzamento com as fontes privadas reprovou (texto copiado, ou nenhuma fonte declarada) — nada foi enviado" 3
+
+SCRATCH="$(mktemp -d)"
+trap 'rm -rf "${SCRATCH:?}"' EXIT
+MSG="$SCRATCH/message"
+LAST="$(git rev-parse --verify --quiet refs/ah-publish/last || true)"
+RANGE="${LAST:-${PUBLIC:-$RATCHET_BASE}}..HEAD"
+if [ -n "$MSGFILE" ]; then
+  [ -f "$MSGFILE" ] || die "--message-file não existe: $MSGFILE"
+  cp "$MSGFILE" "$MSG"
+elif [ "$NEWHIST" = 1 ]; then
+  {
+    echo "AgileHarness $TAG"
+    echo
+    echo "Fresh public history: this commit holds the complete tree of $TAG."
+    echo "The earlier public history was replaced so that references to the private"
+    echo "boards the tool is developed against no longer ship with the repository."
+  } > "$MSG"
+else
+  {
+    echo "release $TAG"
+    echo
+    git log --no-merges --reverse --format='- %s' "$RANGE"
+  } > "$MSG"
+fi
+node scripts/oss/publication-gate.mjs --text "$MSG" --require-terms || die "a mensagem carrega contexto privado — escreva-a à mão e passe --message-file" 3
+
+# 4. o recibo da verificação ---------------------------------------------------------------------------------------------
+RECEIPT="$(git rev-parse --git-common-dir)/ah-verified/$TREE.json"
+[ -f "$RECEIPT" ] || die "sem recibo de verificação para a árvore ${TREE:0:12} — rode contrib/ah-verify (typecheck + suíte + gate) neste HEAD" 4
+
+# 5. o commit limpo ------------------------------------------------------------------------------------------------------
+AUTHOR_NAME="${AH_PUBLISH_AUTHOR_NAME:-$(git config user.name || true)}"
+AUTHOR_EMAIL="${AH_PUBLISH_AUTHOR_EMAIL:-$(git config user.email || true)}"
+[ -n "$AUTHOR_NAME" ] && [ -n "$AUTHOR_EMAIL" ] || die "sem identidade para assinar o commit — defina AH_PUBLISH_AUTHOR_NAME e AH_PUBLISH_AUTHOR_EMAIL"
+commit_tree() {
+  GIT_AUTHOR_NAME="$AUTHOR_NAME" GIT_AUTHOR_EMAIL="$AUTHOR_EMAIL" GIT_COMMITTER_NAME="$AUTHOR_NAME" GIT_COMMITTER_EMAIL="$AUTHOR_EMAIL" git commit-tree "$@"
+}
+if [ "$NEWHIST" = 1 ]; then SQUASH="$(commit_tree "$TREE" -F "$MSG")"; else SQUASH="$(commit_tree "$TREE" -p "$PUBLIC" -F "$MSG")"; fi
+
+REPO_URL="$(git remote get-url "$REMOTE")"
+OLD_TAGS=""
+echo "── ah-publish: $REMOTE ($REPO_URL)"
+echo "   versão ........ $TAG"
+echo "   assina ........ $AUTHOR_NAME <$AUTHOR_EMAIL>  (fica público)"
+if [ "$NEWHIST" = 1 ]; then
+  OLD_TAGS="$(printf '%s\n' "$REMOTE_TAGS" | grep -v '^$' || true)"
+  N_OLD_TAGS="$(printf '%s\n' "$OLD_TAGS" | grep -c . || true)"
+  echo "   commit público  ${SQUASH:0:12}  (SEM PAI; árvore ${TREE:0:12})"
+  if [ -n "$PUBLIC" ]; then
+    echo "   SUBSTITUI ..... os $(git rev-list --count "$PUBLIC") commit(s) hoje públicos em $BRANCH (envio forçado, preso a ${PUBLIC:0:12})"
+  else
+    echo "   remoto ........ sem o branch $BRANCH — é um push comum"
+  fi
+  echo "   tags .......... apaga do remoto as ${N_OLD_TAGS:-0} tag(s) antigas e envia $TAG"
+  echo "   NÃO alcança ... commits antigos acessíveis pelo hash, referências de pull requests, cópias e forks no serviço"
+else
+  N="$(git rev-list --count --no-merges "$RANGE")"
+  echo "   commit público  ${SQUASH:0:12}  (pai ${PUBLIC:0:12}; árvore ${TREE:0:12})"
+  echo "   resume ........ $N commit(s) do histórico privado — o histórico NÃO é enviado"
+  echo "   mudança ....... $(git diff --shortstat "$PUBLIC" "$SQUASH")"
+fi
+echo "   verificação ... recibo de $(sed -n 's/.*"at":"\([^"]*\)".*/\1/p' "$RECEIPT")"
+echo "── mensagem do commit:"
+sed 's/^/   | /' "$MSG" | head -60
+[ "$(wc -l < "$MSG")" -le 60 ] || echo "   | … ($(wc -l < "$MSG") linhas no total)"
+
+if [ "$YES" != 1 ]; then
+  echo "── DRY-RUN: nada foi enviado. Para publicar: contrib/ah-publish --yes$([ "$NEWHIST" = 1 ] && echo ' --new-history' || true)${MSGFILE:+ --message-file $MSGFILE}${TAG:+ --tag $TAG}"
+  exit 0
+fi
+
+# 6. enviar --------------------------------------------------------------------------------------------------------------
+if [ "$NEWHIST" = 1 ]; then
+  if [ -n "$PUBLIC" ]; then
+    # Substituir o que é público é a única operação forçada deste script, e só uma pessoa a faz.
+    SLUG="$(printf '%s' "$REPO_URL" | sed -E 's#\.git$##; s#^.*[:/]([^/:]+/[^/]+)$#\1#')"
+    { [ -r /dev/tty ] && [ -t 1 ]; } || die "substituir o histórico público exige uma pessoa num terminal — rode este comando você mesmo"
+    printf 'Isto SUBSTITUI o histórico público de %s. Digite o nome do repositório para confirmar: ' "$SLUG" > /dev/tty
+    read -r ANSWER < /dev/tty || die "sem confirmação — nada foi enviado"
+    [ "$ANSWER" = "$SLUG" ] || die "confirmação não confere («$ANSWER» ≠ «$SLUG») — nada foi enviado"
+    git push --force-with-lease="$BRANCH:$PUBLIC" "$REMOTE" "$SQUASH:refs/heads/$BRANCH" || die "o envio forçado foi recusado — nada mudou; confira o remoto e a proteção do branch" 5
+  else
+    git push "$REMOTE" "$SQUASH:refs/heads/$BRANCH" || die "o push do $BRANCH foi recusado — nada mudou; confira o remoto" 5
+  fi
+  if [ -n "$OLD_TAGS" ]; then
+    # shellcheck disable=SC2046
+    git push "$REMOTE" $(printf '%s\n' "$OLD_TAGS" | sed 's#^#:refs/tags/#') || die "o $BRANCH foi enviado mas nem todas as tags antigas saíram — confira: git ls-remote --tags $REMOTE" 5
+  fi
+  git push "$REMOTE" "$SQUASH:refs/tags/$TAG" || die "o $BRANCH foi enviado mas a tag $TAG não — envie-a: git push $REMOTE $SQUASH:refs/tags/$TAG" 5
+  git fetch "$REMOTE" "+refs/heads/$BRANCH:refs/remotes/$REMOTE/$BRANCH" --no-tags --quiet || true
+  git merge -s ours --allow-unrelated-histories --no-edit -m "chore(oss): publicado como $TAG (histórico novo)" "$SQUASH" >/dev/null
+  git update-ref refs/ah-publish/last HEAD
+  echo "✓ publicado com histórico novo: $TAG em $REMOTE/$BRANCH (${SQUASH:0:12}). O local fundiu o commit público (-s ours); a árvore não mudou."
+  exit 0
+fi
+
+# avanço rápido: o git recusa o que não for; nada de --force, nada de --tags em bloco
+git push "$REMOTE" "$SQUASH:refs/heads/$BRANCH" || die "o push do $BRANCH foi recusado — nada mudou; confira o remoto" 5
+git push "$REMOTE" "$SQUASH:refs/tags/$TAG" || die "o $BRANCH foi enviado mas a tag $TAG não — envie-a: git push $REMOTE $SQUASH:refs/tags/$TAG" 5
+git fetch "$REMOTE" "+refs/heads/$BRANCH:refs/remotes/$REMOTE/$BRANCH" --no-tags --quiet || true
+git merge -s ours --no-edit -m "chore(oss): publicado como $TAG" "$SQUASH" >/dev/null
+git update-ref refs/ah-publish/last HEAD
+echo "✓ publicado: $TAG em $REMOTE/$BRANCH (${SQUASH:0:12}). O local fundiu o commit público (-s ours); a árvore não mudou."

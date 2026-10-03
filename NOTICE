@@ -1,0 +1,93 @@
+AgileHarness
+Copyright 2026 Jonatas Salgado
+
+This product includes software developed by Jonatas Salgado and contributors,
+licensed under the Apache License, Version 2.0 (see the LICENSE file).
+
+
+THIRD-PARTY ATTRIBUTIONS
+========================
+
+AgileHarness is distributed as SOURCE, and its npm DEPENDENCIES are not
+redistributed here — they are fetched from the registry at install time by
+whoever builds the project. The attributions for those are informational: they
+identify the third-party components whose licenses impose obligations that
+survive into a derivative work, so that a fork knows the terms before it bundles
+them.
+
+There is one exception, and it is not informational. A few third-party FILES are
+checked into this repository, so they travel with every clone, tarball and fork
+of it. They are listed under "Redistributed third-party files" below, and the
+notices their licenses require live inside the files themselves. That section
+carries a legal obligation of its own.
+
+Neither list is decorative — both are measured against the tree on disk, and the
+measurement is what keeps this file from drifting into fiction:
+
+  * packages/storymap-ui/src/lib/storymap/oss-license.test.ts walks the real
+    dependency closure of `packages/storymap-ui` and fails when a component that
+    requires attribution is missing from this file.
+
+  * packages/storymap-ui/src/lib/storymap/vendored-notice.test.ts sweeps the
+    files git actually TRACKS, singles out the ones that carry third-party code,
+    and fails when one of them is missing from the list below, is listed but no
+    longer on disk, or has lost the copyright notice its license requires. It is
+    how anyone — a fork, a reviewer, CI — finds out that this section stopped
+    being true.
+
+
+Redistributed third-party files (they travel INSIDE this repository)
+--------------------------------------------------------------------
+
+Each entry is `path — component version — SPDX`.
+
+  * packages/storymap-ui/public/terminal/vendor/xterm.js — xterm 5.3.0 — MIT
+  * packages/storymap-ui/public/terminal/vendor/xterm.css — xterm 5.3.0 — MIT
+  * packages/storymap-ui/public/terminal/vendor/addon-fit.js — xterm-addon-fit 0.8.0 — MIT
+  * packages/storymap-ui/public/terminal/vendor/addon-search.js — xterm-addon-search 0.13.0 — MIT
+  * packages/storymap-ui/public/terminal/vendor/addon-web-links.js — xterm-addon-web-links 0.9.0 — MIT
+  * packages/storymap-ui/public/terminal/vendor/addon-webgl.js — xterm-addon-webgl 0.16.0 — MIT
+
+All six are unmodified builds published by the xterm.js project
+(https://github.com/xtermjs/xterm.js), vendored so that the terminal page
+`packages/storymap-ui/public/terminal/index.html` loads no CDN. The copyright
+holders, as the upstream LICENSE files state them:
+
+    Copyright (c) 2017-2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
+    Copyright (c) 2014-2016, SourceLair Private Company (https://www.sourcelair.com)
+    Copyright (c) 2012-2013, Christopher Jeffrey (https://github.com/chjj/)
+
+The three lines above are the notice for `xterm` itself; each addon carries only
+the "The xterm.js authors" line, dated by the year that addon appeared (2017 for
+search and web-links, 2018 for webgl, 2019 for fit). The header of each file is
+the authoritative notice for that file — MIT requires the copyright notice and
+the permission notice to be included in every copy, so they are kept where a
+copy of the file cannot leave them behind, not only in this NOTICE.
+
+Adding another vendored file without adding a line above is a test failure, not
+a judgement call.
+
+
+Mozilla Public License 2.0 (MPL-2.0) — https://mozilla.org/MPL/2.0/
+-------------------------------------------------------------------
+
+MPL-2.0 is a FILE-level copyleft: it attaches to the MPL-licensed files
+themselves and to modifications of those files. It does not reach the code that
+merely uses them, so it does not affect the Apache-2.0 licensing of AgileHarness.
+Anyone who MODIFIES one of these files must publish that file under MPL-2.0 and
+keep its notices intact (MPL-2.0 sections 3.1, 3.2 and 3.4).
+
+  * @blocknote/core     — BlockNote, Copyright (c) TypeCell OS and contributors
+  * @blocknote/mantine  — BlockNote, Copyright (c) TypeCell OS and contributors
+  * @blocknote/react    — BlockNote, Copyright (c) TypeCell OS and contributors
+      Source: https://github.com/TypeCellOS/BlockNote
+
+  * web-push            — Copyright (c) web-push contributors
+      Source: https://github.com/web-push-libs/web-push
+
+Every other component in the published closure is under a permissive license
+(MIT, ISC, BSD-2-Clause, BSD-3-Clause, 0BSD, Apache-2.0, Python-2.0 or
+CC-BY-4.0), whose only obligation is to preserve the copyright notice shipped
+inside the package itself. No component in the closure is under a strong
+copyleft (GPL, AGPL, SSPL, LGPL) or a non-OSI license — that is enforced, not
+asserted: the same test above fails if one ever enters the closure.

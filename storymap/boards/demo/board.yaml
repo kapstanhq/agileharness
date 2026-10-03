@@ -1,0 +1,206 @@
+# BOARD DE DEMONSTRAÇÃO — dado SINTÉTICO, e é ele que a suíte usa como sujeito.
+#
+# Por que ele existe: os boards reais do dono (produto) NÃO viajam na extração OSS, e sem nenhum
+# board no disco ~40 provas viravam ENOENT ou passavam medindo zero. Este board é o SUJEITO que
+# viaja junto com a ferramenta: uma livraria fictícia mapeada em atividades → passos → histórias,
+# grande o bastante para que os lints de integridade tenham o que medir.
+#
+# Ele é também o exemplo canônico de "novo board = id + deltas": herda a pipeline Stage→Step
+# inteira de `_base` e declara aqui só o que é dele.
+#
+# `autorunDisabled: true` NÃO é decoração: sem essa trava, o sweep de autorun do runner encontraria
+# os cards deste board parados em colunas com `trigger` e dispararia runs de verdade na máquina de
+# quem clonou o repo. Um board de demonstração jamais pode gastar o token de ninguém.
+id: demo
+name: Livraria Aurora (demo)
+autorunDisabled: true
+release:
+  mode: auto
+# Deltas por passo — o que este board muda na pipeline canônica. Cada um é { id, faceta }: NUNCA um
+# passo re-inlinado (isso cortaria a propagação de futuras mudanças do `_base`).
+statuses:
+  - id: desenvolver
+    autorun: true
+    maxTurns: 120
+  - id: revisar-codigo
+    autorun: true
+  - id: qa-automatizado
+    autorun: true
+releases:
+  - id: r1
+    name: Loja mínima
+    order: 10
+    outcome: Uma pessoa encontra um livro, compra e recebe — sem falar com ninguém.
+    metric: '% de visitas que terminam em pedido pago'
+  - id: r2
+    name: Pós-compra e curadoria
+    order: 20
+    outcome: Quem já comprou volta por recomendação, resenha e listas.
+    metric: '% de pedidos de clientes que voltam em 90 dias'
+personas:
+  - id: leitor
+    name: Leitora que compra por indicação
+    color: '#7e9ac2'
+    kind: Segmento de mercado
+    role: Compra 1–2 livros por mês, decide pela sinopse e por resenhas de quem ela segue.
+    prompt: >-
+      Você é a leitora da Livraria Aurora: compra por indicação, lê a sinopse antes de tudo e desiste
+      quando o custo total só aparece no fim. Decide por evidência, não por promessa.
+  - id: colecionador
+    name: Colecionador de edições especiais
+    color: '#9889c6'
+    kind: Segmento de mercado
+    role: Procura edição, tiragem e estado; paga mais por capa dura e por saber o que está levando.
+    prompt: >-
+      Você é o colecionador da Livraria Aurora: a EDIÇÃO importa mais que o preço. Falta de ficha
+      técnica é motivo de abandono.
+  - id: livreiro
+    name: Livreiro que opera a loja
+    color: '#7daa76'
+    kind: Interna
+    role: Cadastra obras, controla estoque e responde chamados — quase sempre sozinho.
+    prompt: >-
+      Você é o livreiro da Livraria Aurora: opera catálogo, estoque e atendimento sem time de apoio.
+      Toda tarefa que exige mais de dois cliques compete com o balcão.
+systems:
+  - id: catalogo
+    name: Catálogo
+    color: '#6366f1'
+    kind: Serviço
+    prompt: O catálogo detém obra, edição e capa. Preço e estoque NÃO moram aqui.
+  - id: busca
+    name: Busca
+    color: '#0ea5e9'
+    kind: Serviço
+    prompt: A busca indexa o catálogo. É um índice derivado — nunca a fonte da verdade.
+  - id: checkout
+    name: Checkout
+    color: '#f59e0b'
+    kind: Serviço
+    prompt: O checkout detém carrinho, cupom e pagamento. Não fala com a transportadora.
+  - id: entrega
+    name: Entrega
+    color: '#22c55e'
+    kind: Serviço
+    prompt: A entrega cota frete e recebe o rastreio da transportadora.
+  - id: contas
+    name: Contas
+    color: '#a855f7'
+    kind: Serviço
+    prompt: Contas detém cadastro, endereços e preferências. É a fonte da verdade de identidade.
+
+# ── ESCADA ESTRATÉGICA + LEAN CANVAS (dado SINTÉTICO da livraria fictícia) ────────────────────────
+# Existe para que as telas de negócio do artefato tenham o que mostrar. Um board de demonstração com
+# o canvas vazio ensina o formulário, não o modelo — e é a primeira tela que um adotante abre para
+# entender o que a ferramenta faz com estratégia.
+positioning: >-
+  Para leitores que compram por indicação e não por catálogo, a Aurora é a livraria que conhece o seu
+  gosto — ao contrário dos marketplaces, que conhecem o seu histórico de compra.
+businessMetric: Valor de vida do cliente (CLV) em 24 meses
+desiredOutcome: >-
+  Dobrar a fração de pedidos que nascem de uma recomendação da casa (hoje 11%) até o fim do r2.
+
+canvasTags:
+  - id: demanda
+    name: Demanda
+    color: '#E8A13C'
+  - id: oferta
+    name: Oferta
+    color: '#60a5fa'
+  - id: risco
+    name: Risco
+    color: '#f87171'
+
+canvas:
+  problem:
+    items:
+      - id: p1
+        text: Quem lê muito não descobre o próximo livro — descobre o mais vendido.
+        tags: [demanda]
+      - id: p2
+        text: A indicação boa vem de gente, e não escala além do balcão.
+        tags: [demanda]
+      - id: p3
+        text: Devolver um livro que não era o esperado custa mais caro que o livro.
+        tags: [demanda, risco]
+  existingAlternatives:
+    items:
+      - id: a1
+        text: Marketplace com "quem comprou também comprou".
+      - id: a2
+        text: Grupo de WhatsApp do clube do livro.
+      - id: a3
+        text: Perguntar para o livreiro — quando existe um.
+  solution:
+    items:
+      - id: s1
+        text: Curadoria da casa por gosto declarado, não por histórico de compra.
+        tags: [oferta]
+      - id: s2
+        text: Trecho do audiolivro antes de comprar.
+        tags: [oferta]
+      - id: s3
+        text: Devolução em um clique nos primeiros 7 dias.
+        tags: [oferta]
+  uniqueValueProposition:
+    items:
+      - id: u1
+        text: A livraria que te conhece pelo gosto, não pelo histórico.
+        highlight: true
+  highLevelConcept:
+    items:
+      - id: h1
+        text: O livreiro de bairro, com o acervo de um marketplace.
+  unfairAdvantage:
+    items:
+      - id: v1
+        text: Sete anos de fichas de gosto escritas à mão, digitalizadas.
+      - id: v2
+        text: Relação direta com 40 editoras pequenas que o marketplace não lista.
+  keyMetrics:
+    items:
+      - id: k1
+        text: Fração de pedidos originados de recomendação da casa.
+      - id: k2
+        text: Taxa de devolução nos primeiros 7 dias.
+      - id: k3
+        text: Segunda compra em 90 dias.
+  channels:
+    items:
+      - id: c1
+        text: Loja física do centro — onde a ficha de gosto nasce.
+      - id: c2
+        text: Newsletter semanal de lançamentos por gosto.
+      - id: c3
+        text: Clube de assinatura mensal.
+  customerSegments:
+    items:
+      - id: g1
+        text: Leitor frequente que compra 1+ livro por mês.
+        tags: [demanda]
+      - id: g2
+        text: Colecionador de edições especiais.
+        tags: [demanda]
+      - id: g3
+        text: Quem presenteia e não sabe o que escolher.
+        tags: [demanda]
+  earlyAdopters:
+    items:
+      - id: e1
+        text: Os 300 clientes que já têm ficha de gosto na loja física.
+  costStructure:
+    items:
+      - id: x1
+        text: Estoque próprio das editoras pequenas.
+      - id: x2
+        text: Frete subsidiado nos primeiros 7 dias (a devolução fácil).
+      - id: x3
+        text: Curadoria — tempo de gente lendo.
+  revenueStreams:
+    items:
+      - id: r1
+        text: Margem sobre venda avulsa.
+      - id: r2
+        text: Assinatura mensal do clube.
+      - id: r3
+        text: Pré-venda de edições especiais.

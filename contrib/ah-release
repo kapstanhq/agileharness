@@ -1,0 +1,282 @@
+#!/usr/bin/env bash
+# ah-release — leva uma TAG LOCAL da ferramenta ao serviço em produção, de forma idempotente, com recibo e rollback.
+#
+# POR QUE existe: até a v0.9.23 cada release era uma receita de 8 passos digitada à mão (fetch da tag no clone de
+# release → checkout destacado → bun install → suíte → build:staged → swap de .next e do bundle → ah-safe-restart).
+# Em 7 dias foram 23 trocas à mão, sem recibo e sem rollback automático: um passo esquecido deixava o serviço com
+# o bundle de uma versão e o `.next` de outra, e NADA provava qual código o serviço vivo rodava. Este script é a MESMA
+# receita, em ordem fixa, que para no primeiro erro, guarda o bundle anterior com nome (rollback), só reinicia por
+# `ah-safe-restart` (o único caminho autorizado: espera runner e merge train ociosos e prova a saúde depois) e, DEPOIS do
+# restart, CONFERE que o serviço vivo roda a tag pretendida — o recibo é o `dist/ah-version.json` que ele grava no swap
+# ({tag, sha, at, prev, buildId}); o processo o fotografa NO BOOT e a rota autenticada `/api/version` devolve essa foto
+# (tool-version.ts), então a conferência mede o processo, não o disco. A tag e o BUILD_ID têm de bater.
+#
+# Uso:  contrib/ah-release <tag> [--dry-run] [--skip-tests] [--force] [--rollback]
+#   <tag>          tag LOCAL do repositório da ferramenta (ex.: v0.9.24), num commit da main — o código já passou na
+#                  suíte inteira e no typecheck NO CHECKOUT DE DESENVOLVIMENTO antes de ser tagueado.
+#   --dry-run      só imprime o plano (e confere tag, árvore limpa e descendência); não toca em nada.
+#   --skip-tests   pula a suíte no clone de release (use só quando ela acabou de passar no mesmo sha).
+#   --force        refaz o release mesmo que o disco já registre esta tag como a que está no ar.
+#   --rollback     volta DE PROPÓSITO a uma tag que não descende da que está no ar (a versão anterior).
+#
+# DESCENDÊNCIA: a tag tem de conter o commit que está no ar (o sha do recibo; sem recibo, o HEAD do clone). Uma tag de
+# branch que não foi integrada apagaria em silêncio um conserto já liberado; só `--rollback` volta para trás.
+#
+# DE ONDE PARTE: a versão no ar é a do RECIBO (quando ele descreve o build do disco: o buildId bate com o .next), não o
+# HEAD do clone — um rollback antigo podia deixar o clone na tag recusada e o próximo release gravava um `prev` falso.
+#
+# IDEMPOTENTE: rodar de novo a MESMA tag, com o recibo já dizendo que ela está no ar, não reconstrói nem reinicia nada —
+# só confere que o serviço vivo a roda (e se não roda, diz, sem desfazer nada: a causa é um restart pendente, não um swap).
+# Rode em SEGUNDO PLANO (o restart espera ociosidade por até 15 min): morto no meio, ele deixa o swap feito e o restart
+# por fazer — a reexecução sai 7, nunca «conferido».
+#
+# CONFERÊNCIA DA VERSÃO (`/api/version`, Authorization: Bearer — nível >= ro). A credencial vem, nesta ordem, de
+# $AH_VERSION_TOKEN, de $AGILEHARNESS_MCP_TOKEN ou da variável AGILEHARNESS_MCP_TOKEN_RO do arquivo $AH_TOKEN_ENV_FILE
+# (default /etc/agileharness/ro-token.env, o token de LEITURA). Nunca é impressa nem vai na linha de comando (o curl a lê
+# do stdin). Sem credencial, ou com credencial recusada, o release NÃO é desfeito (nada divergiu: não deu para medir):
+# sai com 6 dizendo que a versão não foi conferida — confira com a tool `ah_health` (campo release).
+#
+# Saídas: 0 ok (e, no swap, versão conferida) · 2 uso/pré-condição (inclusive tag que não descende do que está no ar) ·
+#         3 clone fora do sha · 4 build sem o esperado ·
+#         5 restart ou conferência falhou (rollback feito) · 6 no ar, versão NÃO conferida · 7 disco diz a tag, serviço roda outra.
+#
+# Variáveis: AH_SRC (default: o repositório que contém este script) · AH_REL (default: «<AH_SRC>-release», ao lado) ·
+#            AH_VERSION_URL (default http://127.0.0.1:3008/api/version) · AH_VERIFY_SLEEP (s entre tentativas, default 2).
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SRC="${AH_SRC:-$HERE}"
+REL="${AH_REL:-${SRC}-release}"
+UI="$REL/packages/storymap-ui"
+VERSION_URL="${AH_VERSION_URL:-http://127.0.0.1:3008/api/version}"
+VERSION_FILE="dist/ah-version.json"
+TAG="${1:-}"
+DRY=0
+SKIP_TESTS=0
+FORCE=0
+ROLLBACK=0
+shift || true
+for a in "$@"; do
+  case "$a" in
+    --dry-run) DRY=1 ;;
+    --skip-tests) SKIP_TESTS=1 ;;
+    --force) FORCE=1 ;;
+    --rollback) ROLLBACK=1 ;;
+    *) echo "argumento desconhecido: $a" >&2; exit 2 ;;
+  esac
+done
+[ -n "$TAG" ] || { echo "uso: contrib/ah-release <tag> [--dry-run] [--skip-tests] [--force] [--rollback]" >&2; exit 2; }
+# A tag entra em nome de arquivo (o bundle anterior) e no JSON do recibo: só o alfabeto de uma tag.
+[[ "$TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] || { echo "tag inválida (só letras, dígitos e . _ + -): $TAG" >&2; exit 2; }
+
+say() { printf '\n== %s\n' "$*"; }
+
+# 1) a tag existe e a árvore de desenvolvimento está limpa (o que foi taguado é o que está no disco)
+git -C "$SRC" rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null || { echo "tag inexistente em $SRC: $TAG" >&2; exit 2; }
+SHA="$(git -C "$SRC" rev-parse --short "$TAG^{commit}")"
+FULL_SHA="$(git -C "$SRC" rev-parse "$TAG^{commit}")"
+if [ -n "$(git -C "$SRC" status --porcelain --untracked-files=no)" ]; then
+  echo "árvore de desenvolvimento SUJA em $SRC — commite ou descarte antes de liberar." >&2; exit 2
+fi
+git -C "$REL" rev-parse -q --git-dir >/dev/null 2>&1 || { echo "clone de release ausente: $REL" >&2; exit 2; }
+
+# O recibo do disco — SÓ quando ele descreve o build que está no disco (o buildId dele é o BUILD_ID do .next). Imprime
+# «tag sha buildId», ou nada. Um recibo de outro build (o self-deploy troca .next e bundle sem tocar nele; um swap manual
+# também) não diz o que está no ar, e partir dele mentiria no `prev`, no backup e na descendência.
+disk_receipt() {
+  python3 - "$UI/$VERSION_FILE" "$UI/.next/BUILD_ID" <<'PY' 2>/dev/null || true
+import json, re, sys
+try:
+    r = json.load(open(sys.argv[1]))
+    built = open(sys.argv[2]).read().strip()
+except Exception:
+    sys.exit(0)
+tag, sha, bid = str(r.get("tag") or ""), str(r.get("sha") or ""), str(r.get("buildId") or "")
+if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}", tag) and re.fullmatch(r"[0-9a-fA-F]{7,40}", sha) and bid and bid == built:
+    print(tag, sha, bid)
+PY
+}
+DISK_TAG="" DISK_SHA="" DISK_BUILD=""
+read -r DISK_TAG DISK_SHA DISK_BUILD <<<"$(disk_receipt)" || true
+
+# De onde o release parte: o recibo quando ele vale; sem ele, o clone (o que o release manual de antes deixava no ar).
+if [ -n "$DISK_TAG" ]; then
+  PREV="$DISK_TAG"
+  PREV_SHA="$DISK_SHA"
+else
+  PREV="$(git -C "$REL" describe --tags --exact-match 2>/dev/null || git -C "$REL" rev-parse --short HEAD)"
+  [[ "$PREV" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*$ ]] || PREV="$(git -C "$REL" rev-parse --short HEAD)"
+  PREV_SHA="$(git -C "$REL" rev-parse HEAD)"
+fi
+
+# A tag contém o que está no ar? Sem isso, uma tag de branch não integrada apaga em silêncio um conserto já liberado (a
+# revisão do WP6b: ciclo 1 libera A da branch wt-a, ciclo 2 libera B da main, e A some da produção). Um sha no ar que o
+# repositório de desenvolvimento nem conhece também recusa: a descendência não é provável.
+if [ "$ROLLBACK" = 0 ] && ! git -C "$SRC" merge-base --is-ancestor "$PREV_SHA" "$FULL_SHA" 2>/dev/null; then
+  echo "$TAG ($SHA) não descende do que está no ar ($PREV, ${PREV_SHA:0:9}) — liberá-la descartaria commits que já rodam." >&2
+  echo "Integre a branch na main e tagueie o commit da main; para voltar de propósito a uma versão anterior, use --rollback." >&2
+  exit 2
+fi
+
+# A mesma tag, no mesmo commit, com o recibo valendo para o build do disco: nada a reconstruir.
+ALREADY=0
+if [ "$FORCE" = 0 ] && [ "$DISK_TAG" = "$TAG" ] && [ "$DISK_SHA" = "$FULL_SHA" ]; then ALREADY=1; fi
+
+# ── a conferência da versão viva ──────────────────────────────────────────────────────────────────────────
+version_token() {
+  if [ -n "${AH_VERSION_TOKEN:-}" ]; then printf '%s' "$AH_VERSION_TOKEN"; return; fi
+  if [ -n "${AGILEHARNESS_MCP_TOKEN:-}" ]; then printf '%s' "$AGILEHARNESS_MCP_TOKEN"; return; fi
+  local f="${AH_TOKEN_ENV_FILE:-/etc/agileharness/ro-token.env}"
+  if [ -r "$f" ]; then sed -n 's/^AGILEHARNESS_MCP_TOKEN_RO=//p' "$f" | head -1 | tr -d "\"' \r"; fi
+}
+
+# Imprime «tag buildId» que o serviço VIVO diz rodar (a foto do boot dele). Retorno: 0 respondeu · 10 sem credencial ·
+# 11 credencial recusada · 12 sem resposta.
+live_version() {
+  local tok out code
+  tok="$(version_token)"
+  [ -n "$tok" ] || return 10
+  # O token vai pelo STDIN do curl (--config -): fora do argv, que qualquer usuário da máquina lê em `ps`.
+  out="$(printf 'header = "Authorization: Bearer %s"\n' "$tok" | curl -sS -m 5 -K - -w '\n%{http_code}' "$VERSION_URL" 2>/dev/null)" || return 12
+  code="${out##*$'\n'}"
+  out="${out%$'\n'*}"
+  case "$code" in
+    200) printf '%s' "$out" | python3 -c 'import json,sys; d = json.load(sys.stdin); print(d.get("tag") or "-", d.get("buildId") or "-")' ;;
+    401) return 11 ;;
+    *) return 12 ;;
+  esac
+}
+
+# Espera o serviço responder e compara a tag E o build ($1 = o BUILD_ID esperado): a tag sozinha não separa o processo
+# velho do novo quando os dois são da mesma tag (`--force`). Retorno: 0 é o pretendido · 1 é OUTRO (ou não respondeu) ·
+# 20 sem credencial · 21 recusada.
+verify_live_version() {
+  local want_build="$1" i rc live live_tag live_build
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    rc=0
+    live="$(live_version)" || rc=$?
+    case "$rc" in
+      0)
+        read -r live_tag live_build <<<"$live"
+        if [ "$live_tag" = "$TAG" ] && [ "$live_build" = "$want_build" ]; then return 0; fi
+        echo "o serviço vivo diz rodar «${live_tag/#-/?}» (build ${live_build/#-/?}), não $TAG (build $want_build)" >&2
+        return 1
+        ;;
+      10) return 20 ;;
+      11) return 21 ;;
+    esac
+    sleep "${AH_VERIFY_SLEEP:-2}"
+  done
+  echo "o serviço não respondeu em $VERSION_URL" >&2
+  return 1
+}
+
+say "plano: $PREV → $TAG ($SHA)$( [ "$ROLLBACK" = 1 ] && echo " (rollback explícito)" )"
+if [ "$ALREADY" = 1 ]; then
+  echo "  o recibo do disco ($UI/$VERSION_FILE) já diz $TAG: nada a reconstruir — só conferir que o serviço vivo a roda (--force refaz)."
+else
+  cat <<PLAN
+  1. git -C $REL fetch $SRC tag $TAG ; checkout --detach $TAG
+  2. bun install --frozen-lockfile
+  3. $( [ "$SKIP_TESTS" = 1 ] && echo "(suíte pulada)" || echo "suíte inteira (vitest run)" )
+  4. bun run build:staged   (em $UI)
+  5. swap atômico: dist/ah-server.$PREV.bak.mjs · .next → .next-prev · .next-staging → .next · bundle staged → ah-server.mjs ·
+     recibo $VERSION_FILE {tag, sha, at, prev, buildId} (o anterior fica em dist/ah-version.$PREV.bak.json)
+  6. ah-safe-restart (espera ocioso, reinicia, prova a saúde)
+  7. conferir $VERSION_URL == $TAG e o build novo (Authorization: Bearer; nunca na linha de comando)
+  8. se o restart OU a conferência falharem: volta ao bundle, ao .next e ao recibo de $PREV, devolve o clone a
+     ${PREV_SHA:0:9} (com as dependências dele) e reinicia de novo
+PLAN
+fi
+[ "$DRY" = 1 ] && { echo; echo "(dry-run: nada foi alterado)"; exit 0; }
+
+# 2) idempotência: o recibo já diz esta tag — só confere o serviço vivo
+if [ "$ALREADY" = 1 ]; then
+  say "conferindo o serviço vivo"
+  vrc=0
+  verify_live_version "$DISK_BUILD" || vrc=$?
+  case "$vrc" in
+    0) say "já no ar e conferido: $TAG — nada a fazer"; exit 0 ;;
+    20|21) echo "NÃO CONFERIDA: sem credencial utilizável para $VERSION_URL (defina AH_VERSION_TOKEN ou AH_TOKEN_ENV_FILE). Confira com a tool ah_health (campo release)." >&2; exit 6 ;;
+    *) echo "o disco registra $TAG, mas o serviço vivo roda outra versão — provável restart pendente: use ah-safe-restart (ou --force para refazer o release)." >&2; exit 7 ;;
+  esac
+fi
+
+# O rollback é UMA função: a falha do restart e a divergência de versão desfazem a mesma coisa, do mesmo jeito.
+rollback() {
+  echo "$1 — voltando ao $PREV" >&2
+  (
+    cd "$UI"
+    mv .next .next-failed 2>/dev/null || true
+    mv .next-prev .next
+    cp "dist/ah-server.$PREV.bak.mjs" dist/ah-server.mjs
+    # o recibo volta com o bundle: o que ele diz tem de ser o que roda (sem recibo anterior, nenhum recibo)
+    if [ -f "dist/ah-version.$PREV.bak.json" ]; then cp "dist/ah-version.$PREV.bak.json" "$VERSION_FILE"; else rm -f "$VERSION_FILE"; fi
+    rm -rf .next-failed
+  )
+  # …e o CLONE volta junto, com as dependências dele, ANTES do restart: o bundle revertido sobre o node_modules da tag
+  # recusada é um terceiro estado que nunca foi testado. Falhar aqui não impede o restart (melhor o bundle anterior de pé).
+  if git -C "$REL" checkout -q --detach "$PREV_SHA"; then
+    ( cd "$REL" && bun install --frozen-lockfile ) || echo "ATENÇÃO: bun install de $PREV falhou no rollback — o node_modules pode ser o de $TAG." >&2
+  else
+    echo "ATENÇÃO: não consegui devolver o clone a ${PREV_SHA:0:9} — ele segue em $TAG." >&2
+  fi
+  ah-safe-restart || echo "ATENÇÃO: o rollback também não restabeleceu a saúde — olhe o journal." >&2
+}
+
+# 3) o clone de release no sha da tag
+say "1/7 checkout da tag no clone de release"
+git -C "$REL" fetch -q "$SRC" "refs/tags/$TAG:refs/tags/$TAG" 2>/dev/null || git -C "$REL" fetch -q "$SRC" tag "$TAG"
+git -C "$REL" checkout -q --detach "$TAG"
+[ "$(git -C "$REL" rev-parse --short HEAD)" = "$SHA" ] || { echo "o clone de release não ficou no sha da tag" >&2; exit 3; }
+
+say "2/7 dependências (lockfile congelado)"
+( cd "$REL" && bun install --frozen-lockfile )
+
+if [ "$SKIP_TESTS" = 0 ]; then
+  say "3/7 suíte inteira"
+  ( cd "$UI" && nice -n 10 npx --no-install vitest run 2>&1 | tail -8 )
+fi
+
+say "4/7 build em .next-staging (não toca no que está no ar)"
+( cd "$UI" && rm -rf .next-staging dist/ah-server.staged.mjs && nice -n 10 bun run build:staged )
+[ -s "$UI/dist/ah-server.staged.mjs" ] && [ -f "$UI/.next-staging/BUILD_ID" ] || { echo "build:staged não produziu o bundle/.next esperados" >&2; exit 4; }
+# o BUILD_ID do build novo entra no recibo (é o que o processo confere no boot) — só o alfabeto que o Next gera
+NEW_BUILD="$(tr -d '[:space:]' < "$UI/.next-staging/BUILD_ID")"
+[[ "$NEW_BUILD" =~ ^[A-Za-z0-9_-]{1,128}$ ]] || { echo "BUILD_ID inesperado em .next-staging: «$NEW_BUILD»" >&2; exit 4; }
+
+say "5/7 swap (o bundle e o recibo anteriores ficam guardados com o nome de $PREV)"
+(
+  cd "$UI"
+  cp dist/ah-server.mjs "dist/ah-server.$PREV.bak.mjs"
+  if [ -f "$VERSION_FILE" ]; then cp "$VERSION_FILE" "dist/ah-version.$PREV.bak.json"; else rm -f "dist/ah-version.$PREV.bak.json"; fi
+  rm -rf .next-prev
+  mv .next .next-prev
+  mv .next-staging .next
+  mv dist/ah-server.staged.mjs dist/ah-server.mjs
+  # o recibo: escrito ao lado do bundle que acabou de entrar, por tmp + mv (nunca meio-escrito)
+  printf '{"tag":"%s","sha":"%s","at":"%s","prev":"%s","buildId":"%s"}\n' "$TAG" "$FULL_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PREV" "$NEW_BUILD" > "$VERSION_FILE.tmp"
+  mv "$VERSION_FILE.tmp" "$VERSION_FILE"
+)
+
+say "6/7 reinício seguro"
+if ! ah-safe-restart; then
+  rollback "REINÍCIO FALHOU"
+  exit 5
+fi
+
+say "7/7 conferindo a versão viva"
+vrc=0
+verify_live_version "$NEW_BUILD" || vrc=$?
+case "$vrc" in
+  0) say "no ar e CONFERIDO: $TAG ($SHA) — rollback, se precisar: bundle dist/ah-server.$PREV.bak.mjs + .next-prev + dist/ah-version.$PREV.bak.json" ;;
+  20|21)
+    echo "NO AR, VERSÃO NÃO CONFERIDA: $TAG ($SHA) foi posto no ar e o serviço está saudável, mas não há credencial utilizável para $VERSION_URL (defina AH_VERSION_TOKEN ou AH_TOKEN_ENV_FILE)." >&2
+    echo "Confira com a tool ah_health (campo release); rollback, se precisar: bundle dist/ah-server.$PREV.bak.mjs + .next-prev." >&2
+    exit 6
+    ;;
+  *)
+    rollback "A VERSÃO VIVA NÃO É $TAG"
+    exit 5
+    ;;
+esac

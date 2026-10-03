@@ -1,0 +1,116 @@
+# A rede de proteção do repositório — ela precisa viver AQUI, na raiz do que é publicado.
+#
+# O QUE ISTO IMPEDE: que o repositório nasça carregando o segredo do operador. O PRIMEIRO
+# `git add -A` de quem clona (ou de um repo novo criado a partir desta árvore) publicaria
+# `.env.local` (token do operador, token MCP, chave VAPID privada, tokens de ingest de feedback) e
+# `storymap/.runner/auth-token` — cada um deles suficiente para um terceiro operar o board de quem
+# instalou, e o board spawna agentes com poder de execução. Um segredo commitado não tem volta
+# limpa: o histórico o guarda mesmo depois de um rebase.
+#
+# Vale igual para o DEV de quem clona: os mesmos arquivos nascem no primeiro boot dele.
+#
+# Os caminhos são relativos à raiz do repositório, que é onde `storymap/.runner/` passa a existir.
+# Guardado por `src/lib/storymap/oss-secret-hygiene.test.ts`, que simula um clone limpo e reprova se
+# um `.env*` voltar a ser stageável.
+
+# === SEGREDO DO OPERADOR (nunca versionado, em nenhum checkout) ===
+.env
+.env.local
+.env.*.local
+.env.production
+# Enumerar variante por variante DEIXA BURACO — e aqui o buraco é definitivo, porque ESTE é o
+# único `.gitignore` do repositório. Testado: `.env.development`, `.env.staging` e `.env.dev` eram
+# stageados pelo primeiro `git add -A` de um clone limpo, com `AGILEHARNESS_MCP_TOKEN` dentro. E não é
+# hipotético: `@next/env` (loadEnvConfig, src/server/main.ts) LÊ `.env.<ambiente>` — com
+# AGILEHARNESS_DEV=1 isso é `.env.development` —, então é um arquivo que o produto pede ao adotante.
+# Qualquer `.env.<algo>` é segredo por default; o que é DOCUMENTO (sem valores) volta por negação.
+.env.*
+# `.env.example` é o CONTRÁRIO disto: é o documento (sem valores) e tem de viajar.
+!.env.example
+!.env.*.example
+!.env.example.*
+# Estado do runner: `auth-token` (o token do operador, 0600) e `session-secret` (assina o cookie de
+# sessão) nascem aqui no 1º boot — ver src/lib/auth/token.ts.
+storymap/.runner/
+.keys/
+*.pem
+*.key
+*-key.json
+# Testado num clone limpo: as seis classes abaixo escapavam do primeiro `git add -A` —
+# `id_rsa`, `keystore.p12`, `certs/bundle.pfx`, `config/service-account.json` e
+# `sa/serviceAccount.json` eram todos stageáveis.
+#
+# As três linhas acima cobriam PEM e `.key` e paravam aí, enquanto o material de chave real chega
+# em `.p12`/`.pfx` (keystore Java/Windows) e o service account do Google chega como
+# `serviceAccount.json` — que `*-key.json` não pega, porque o hífen não está lá.
+#
+# Classe, não instância: cobrir só o formato que já apareceu deixa a classe viva.
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+id_ecdsa*
+# As DUAS grafias, porque o Google emite as duas: o console baixa `serviceAccount.json` (camelCase) e
+# o gcloud CLI escreve `service-account.json`. Cobrir só a com hífen deixa passar justamente o arquivo
+# que o caminho mais comum produz — `sa/serviceAccount.json` era stageável depois de as outras
+# cinco classes já terem sido fechadas.
+*service-account*.json
+*serviceAccount*.json
+# ...e a terceira grafia, que as duas de cima NÃO pegam: glob de gitignore é CASE-SENSITIVE, então
+# `*serviceAccount*` não casa `gcpServiceAccount.json` — o "S" ali é maiúsculo porque o nome vem
+# concatenado a um prefixo (`gcp`, `firebase`, `prod`). Pego pelo teste-gêmeo desta cerca, no
+# primeiro caso que ele rodou: `infra/gcpServiceAccount.json` era stageável.
+# Duas grafias fechavam a instância e deixavam a classe viva.
+*ServiceAccount*.json
+
+# === ARTEFATOS DE BUILD (o repo novo builda o seu; artefato versionado = drift silencioso) ===
+node_modules
+node_modules/
+.next/
+# O self-deploy builda em `.next-staging` e guarda o anterior em `.next-prev` (runner/deploy.ts).
+.next-staging/
+.next-prev/
+dist/
+# `next-env.d.ts` é GERADO pelo Next a cada `build`/`dev`, e a doc oficial manda gitignorá-lo
+# (nextjs.org/docs/app/api-reference/config/typescript). Ele CONTINUA no `include` do tsconfig —
+# ignorar no git não é remover do TypeScript, e `tsc --noEmit` sai 0 sem ele (verificado).
+#
+# Sem a regra, o `bun run build` de quem clona cria o arquivo, o `git add -A` o rastreia, e a suíte
+# reprova por causa de um artefato gerado.
+next-env.d.ts
+*.tsbuildinfo
+.eslintcache
+.swc/
+coverage/
+
+# === ARTEFATOS EFÊMEROS ===
+# `.artifacts/` é onde o PRODUTO grava: a captura de tela que o operador anexa no terminal e no
+# copiloto (`api/terminal/upload`, `api/copilot/upload`) e os spikes/relatórios que as skills mandam
+# escrever. Nada disso é código nem dado de board.
+#
+# POR QUE A REGRA PRECISA ESTAR AQUI: sem ela, uma captura do operador salva durante um run é varrida
+# pelo `git add -A` do commit de código do run (`worktree.ts commitAllPending`) e vai para o branch,
+# para o merge e para o remoto.
+#
+# O padrão preserva o ESQUELETO (README + os diretórios + os .gitkeep) e ignora o CONTEÚDO.
+.artifacts/*
+!.artifacts/README.md
+!.artifacts/*/
+.artifacts/*/*
+!.artifacts/*/.gitkeep
+
+# === LOGS, TRAÇOS E DUMPS ===
+# Não é higiene de repositório: log e trace de run carregam corpo de card, prompt do agente e
+# caminho absoluto da máquina do dono — conteúdo do usuário, publicado por acidente.
+*.log
+.logs/
+.cli-traces/
+test-results/
+playwright-report/
+.playwright-mcp/
+
+# As árvores efêmeras que o provisionador de isolamento corta por run e por sessão. O código DEPENDE
+# desta regra (runner/worktree.ts a cita por nome: "Sibling of the repo working tree, gitignored at the
+# root"). Sem a regra o problema fica latente até alguém apontar o alvo para o próprio clone, e aí
+# cada run sujaria o `git status` da árvore de onde o artefato é medido.
+.worktrees/
