@@ -7,9 +7,12 @@
 // não tinha onde dizer sim, e a publicação do board inteiro ficava parada atrás de um card.
 //
 // O CONTRATO (do alvo; a ferramenta não conhece o script dele). O pedido traz o ASSUNTO (o hash do diff, base, head,
-// arquivos) e o comando que grava (`record`, com `<approval.json>` no lugar do arquivo). No clique do dono a ferramenta
-// escreve a autorização — o assunto é o do pedido, copiado — e roda esse comando, sem shell. Quem confere que o assunto
-// ainda é o do checkout é o ALVO, ao gravar: uma autorização de outra mudança é recusada lá, e aqui vira «o código mudou».
+// arquivos) e, informativo, o texto do comando que o log imprimiu (`record`). No clique do dono a ferramenta escreve a
+// autorização — o assunto é o do pedido, copiado — e roda o comando que o ALVO DECLAROU (settings.yaml →
+// `deploy.proof.record.ownerApproval`, um argv com `{file}`), sem shell: o TEXTO `record` do log não escolhe o programa
+// que roda com o privilégio do serviço. Quem confere que o assunto ainda é o do checkout é o ALVO, ao gravar: uma
+// autorização de outra mudança é recusada lá (a frase é a que ele declara em `deploy.proof.staleMarkers`), e aqui vira
+// «o código mudou».
 // Depois a publicação é disparada de novo pelo mesmo efeito do «Publicar de novo».
 //
 // O núcleo ({@link authorizeOwnerPublish}) só fala por dependências — o disco, o comando e o disparo ficam na borda
@@ -20,7 +23,7 @@ import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { findRepoRoot } from "@/lib/storymap/paths";
-import { OWNER_APPROVAL_PLACEHOLDER, buildOwnerApproval, recordCommandFor, type OwnerApproval, type OwnerApprovalRequest } from "./deploy-proof";
+import { buildOwnerApproval, declaredStaleMarkers, recordRefusedAsStale, runDeclaredRecord, type OwnerApproval, type OwnerApprovalRequest } from "./deploy-proof";
 import { grantDeployApprovals, mutateDeployBlocks, readDeployBlocks, type DeployBlockRow } from "./deploy-blocks";
 
 const pexec = promisify(execFile);
@@ -43,9 +46,14 @@ export type AuthorizeOutcome =
   | { ok: true; recorded: number; stale: number; republished: string | null; message: string }
   | { ok: false; error: string };
 
-/** A gravação recusou porque a autorização é de OUTRA mudança (o código guardado andou desde o pedido)? PURA. */
-export function approvalRefusedAsStale(stderr: string): boolean {
-  return /OUTRA mudança|another change|OUTRO assunto|another subject/i.test(stderr ?? "");
+/**
+ * A gravação recusou porque a autorização é de OUTRA mudança (o código guardado andou desde o pedido)? A frase é a do
+ * script do ALVO, então é o ALVO quem a declara (`deploy.proof.staleMarkers`) — a ferramenta não supõe o idioma nem o
+ * texto de erro dele. SEM marcas nunca é «stale»: a falha vira erro nomeado para o dono, jamais um «o código mudou»
+ * adivinhado. PURA sobre `markers` (o default lê a declaração do alvo).
+ */
+export function approvalRefusedAsStale(stderr: string, markers: readonly string[] = declaredStaleMarkers()): boolean {
+  return recordRefusedAsStale(stderr, markers);
 }
 
 /** Quantos cards da causa se tenta republicar até um disparar (o deploy é do pacote: um basta). */
@@ -98,20 +106,21 @@ export async function authorizeOwnerPublish(deps: OwnerApprovalDeps, input: { bo
 export function defaultOwnerApprovalDeps(): OwnerApprovalDeps {
   return {
     readRow: async (board, causeKey) => (await readDeployBlocks()).find((r) => r.board === board && r.causeKey === causeKey) ?? null,
-    record: async (approval, request) => {
+    // O comando que GRAVA é o que o ALVO declarou (settings.yaml → deploy.proof.record.ownerApproval) — nunca o texto
+    // `request.record` que o log do deploy imprimiu: uma linha de saída de comando não escolhe o programa que roda
+    // com o privilégio do serviço.
+    record: async (approval) => {
       const { withHarnessTempDir } = await import("./temp");
+      const { resolveDeclaredProgram } = await import("./product-deploy");
       return withHarnessTempDir("owner-approval", async (dir) => {
         const file = path.join(dir, "approval.json");
         await fsp.writeFile(file, `${JSON.stringify(approval, null, 2)}\n`, "utf8");
-        const argv = recordCommandFor(request.record, file, OWNER_APPROVAL_PLACEHOLDER);
-        if (!argv) return { ok: false as const, stale: false, error: `o comando de gravação está fora do contrato: ${request.record.slice(0, 120)}` };
-        try {
-          await pexec(argv[0], argv.slice(1), { cwd: findRepoRoot(), timeout: 120_000, maxBuffer: 8 * 1024 * 1024 });
-          return { ok: true as const };
-        } catch (err) {
-          const stderr = String((err as { stderr?: unknown }).stderr ?? (err instanceof Error ? err.message : err));
-          return { ok: false as const, stale: approvalRefusedAsStale(stderr), error: stderr.trim().slice(-300) };
-        }
+        return runDeclaredRecord("ownerApproval", file, {
+          resolveProgram: (name) => resolveDeclaredProgram(name),
+          exec: async (program, args) => {
+            await pexec(program, args, { cwd: findRepoRoot(), timeout: 120_000, maxBuffer: 8 * 1024 * 1024 });
+          },
+        });
       });
     },
     grant: async (board, causeKey, hashes) => {

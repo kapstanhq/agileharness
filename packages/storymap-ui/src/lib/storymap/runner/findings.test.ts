@@ -112,15 +112,41 @@ describe("parseFindingBatch", () => {
   });
 
   it("fails CLOSED: one invalid item among valid ones → ok:false (keeps only the valid items)", () => {
-    const r = parseFindingBatch([
-      validItem,
-      { lens: "nope", severity: "low", title: "ruim" },
-      { lens: "nextjs", severity: "high", title: "ok" },
-    ]);
+    // `nextjs` é uma lente de DOMÍNIO: vale porque o alvo (inventado: uma oficina de bicicletas) a declarou.
+    const r = parseFindingBatch(
+      [
+        validItem,
+        { lens: "nope", severity: "low", title: "ruim" },
+        { lens: "nextjs", severity: "high", title: "ok" },
+      ],
+      new Set(["security", "testing", "perf", "general", "design", "nextjs"]),
+    );
     expect(r.ok).toBe(false);
     expect(r.items).toHaveLength(2); // the two valid ones survive in `items`
     expect(r.errors).toHaveLength(1);
     expect(r.errors[0]).toMatch(/item\[1\]/);
+    expect(r.errors[0]).toContain('lens "nope" não declarada (declaradas: security, testing, perf, general, design, nextjs');
+  });
+
+  it("sem o conjunto declarado só as lentes EMBUTIDAS valem; com ele, as do alvo valem e o erro lista as válidas", () => {
+    const item = { lens: "bicicletas", severity: "low", title: "câmbio solto" };
+    const semDeclaracao = parseFindingBatch([item]);
+    expect(semDeclaracao.ok).toBe(false);
+    expect(semDeclaracao.errors[0]).toContain('lens "bicicletas" não declarada (declaradas: security, testing, perf, general, design');
+    const comDeclaracao = parseFindingBatch([item], new Set(["general", "bicicletas"]));
+    expect(comDeclaracao.ok).toBe(true);
+    expect(comDeclaracao.items[0].lens).toBe("bicicletas");
+    // o conjunto declarado MANDA: uma embutida fora dele é recusada (o alvo escolheu as suas)
+    const fora = parseFindingBatch([{ lens: "security", severity: "low", title: "x" }], new Set(["general", "bicicletas"]));
+    expect(fora.ok).toBe(false);
+    expect(fora.errors[0]).toContain('lens "security" não declarada (declaradas: general, bicicletas');
+  });
+
+  it("uma lente MAL FORMADA segue sendo erro de forma (não vira «não declarada»)", () => {
+    const r = parseFindingBatch([{ lens: "Bogus lens!", severity: "low", title: "x" }]);
+    expect(r.ok).toBe(false);
+    expect(r.errors[0]).toMatch(/slug/);
+    expect(r.errors[0]).not.toContain("não declarada");
   });
 });
 
@@ -501,5 +527,13 @@ describe("liveOpenBlockers — shared terminal-aware blocker read filter", () =>
     expect(liveOpenBlockers(f, true)).toEqual([]);
     expect(liveOpenBlockers(undefined)).toEqual([]);
     expect(liveOpenBlockers(undefined, true)).toEqual([]);
+  });
+});
+
+describe("withPendingEffectFailureFinding — a orientação ao operador é a do alvo, não a de um repositório de origem", () => {
+  it("manda rodar o comando de deploy do ALVO (sem o verbo do orquestrador de ninguém)", () => {
+    const [f] = withPendingEffectFailureFinding([], "story-ex9985", "promote-and-deploy", "falhou ao publicar");
+    expect(f.detail).toContain("comando de deploy do alvo");
+    expect(f.detail).not.toMatch(/orch-deploy|harness-ship/);
   });
 });

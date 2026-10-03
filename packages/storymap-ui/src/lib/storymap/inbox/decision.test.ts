@@ -614,6 +614,25 @@ describe("F6 — toda opção com pré-condição avaliável no cliente aparece 
   });
 });
 
+describe("a «Área» do problema: o nome que o alvo declarou para a lente, ou o id dela", () => {
+  const areaOf = (d: ItemDecision) => d.details.find((x) => x.label === "Área")?.value;
+  const withLens = { ...FIXTURES.blocker.item, lens: "freios" } as CockpitItem;
+
+  it("sem mapa de nomes (ou lente fora do mapa) o detalhe mostra o id, como sempre — uma lente removida do settings nunca some", () => {
+    expect(areaOf(decideItem(withLens, ctx(HUMAN, FIXTURES.blocker.card)))).toBe("freios");
+    expect(areaOf(decideItem(withLens, { ...ctx(HUMAN, FIXTURES.blocker.card), lensNames: { cambio: "Câmbio" } }))).toBe("freios");
+  });
+
+  it("com o nome declarado pelo alvo, mostra o nome humano", () => {
+    expect(areaOf(decideItem(withLens, { ...ctx(HUMAN, FIXTURES.blocker.card), lensNames: { freios: "Freios e pinças" } }))).toBe("Freios e pinças");
+  });
+
+  it("`testing` é lente embutida: o gabarito qa-red não depende de declaração do alvo", () => {
+    const qaRed = decideItem({ ...FIXTURES.blocker.item, lens: "testing" } as CockpitItem, ctx(HUMAN, mkCard({ status: "qa-automatizado" })));
+    expect([...qaRed.options, ...qaRed.more].map((o) => (o.invoke.kind === "escalate" ? o.invoke.ref.templateId : null))).toContain("qa-red");
+  });
+});
+
 describe("B12 — o «Pedir ao Jido» leva o modelo de conversa específico do item, com um rótulo só", () => {
   const templateOf = (d: ItemDecision) => [...d.options, ...d.more].map((o) => (o.invoke.kind === "escalate" ? o.invoke.ref.templateId : null)).filter(Boolean);
   it("os kinds que caíam no genérico ganham o modelo próprio", () => {

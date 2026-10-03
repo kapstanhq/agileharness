@@ -426,3 +426,97 @@ describe("cardLiveFactsFor — recorta os retratos inteiros para um card", () =>
     expect(f.judging).toBe(false);
   });
 });
+
+describe("o motivo de espera do escopo de tipos — «fora do que o board pode começar agora»", () => {
+  // o escopo «só consertos e manutenção» como o portão o entrega
+  const fixes = {
+    types: ["bug", "technical", "chore", "spike"],
+    by: { kind: "owner" },
+    at: "2026-09-28T20:00:00.000Z",
+    ownerTypes: ["bug", "technical", "chore", "spike"],
+    agentTypes: null,
+  } as NonNullable<CardLiveFacts["scope"]>;
+  const story = (over: Partial<Card> = {}) => card({ type: "story", storyType: "user", status: "desenvolver", ...over });
+
+  it("uma funcionalidade nova esperando a construção diz que espera DE PROPÓSITO, e por quê — espera, não alarme", () => {
+    const s = projectCardLiveStatus(story(), CONFIG, { scope: fixes }, NOW)!;
+    expect(s).toMatchObject({ kind: "waiting", presence: "waiting", actor: "Board", label: "Esperando: fora do que o board pode começar agora" });
+    expect(s.note).toMatch(/Funcionalidade nova fica de fora/);
+    expect(s.note).toMatch(/Erro, Trabalho técnico, Manutenção e Investigação/);
+  });
+
+  it("card sem storyType vale 'user' (o padrão): espera também", () => {
+    expect(projectCardLiveStatus(story({ storyType: null }), CONFIG, { scope: fixes }, NOW)?.label).toMatch(/^Esperando: fora do que/);
+  });
+
+  it.each(["bug", "technical", "chore", "spike"] as const)("um card %s passa: nenhuma linha de espera", (storyType) => {
+    expect(projectCardLiveStatus(story({ storyType }), CONFIG, { scope: fixes }, NOW)).toBeNull();
+  });
+
+  it("um 'user' em modo conserto (fix) conta como erro: passa", () => {
+    expect(projectCardLiveStatus(story({ mode: "fix" }), CONFIG, { scope: fixes }, NOW)).toBeNull();
+  });
+
+  it("sem escopo no board: nada muda (a linha de sempre)", () => {
+    expect(projectCardLiveStatus(story(), CONFIG, { scope: null }, NOW)).toBeNull();
+    expect(projectCardLiveStatus(story(), CONFIG, {}, NOW)).toBeNull();
+  });
+
+  it("só o que está onde o escopo o segura: na triagem (que segue andando) e no passo final, nenhuma linha", () => {
+    expect(projectCardLiveStatus(story({ status: "triage" }), CONFIG, { scope: fixes }, NOW)).toBeNull();
+    expect(projectCardLiveStatus(story({ status: "concluida" }), CONFIG, { scope: fixes }, NOW)?.kind).not.toBe("waiting");
+  });
+
+  it("C5: só mostra «Esperando» onde o escopo SEGURA — design, «pronta» e o fechamento (revisão/QA) andam e não levam a linha", () => {
+    for (const status of ["design-ux", "design-ui", "com-design", "pronta", "ready", "revisar-codigo", "qa-automatizado"]) {
+      expect(projectCardLiveStatus(story({ status }), CONFIG, { scope: fixes }, NOW), status).toBeNull();
+    }
+    for (const status of ["plano-tecnico", "quebrar-tasks", "desenvolver"]) {
+      expect(projectCardLiveStatus(story({ status }), CONFIG, { scope: fixes }, NOW)?.label, status).toMatch(/^Esperando: fora do que/);
+    }
+  });
+
+  it("C5: um card CONDUZIDO (o que já começou termina) nunca mostra a espera do escopo, nem com a sessão fora do ar", () => {
+    const conducted = story({ routing: { skips: [], decidedBy: "rules", decidedAt: "2026-09-28", driver: "conductor" } as Card["routing"] });
+    expect(projectCardLiveStatus(conducted, CONFIG, { scope: fixes }, NOW)).toBeNull();
+  });
+
+  it("C5: num board com condutor o despacho dele também é barrado (entrevista, refinar…), menos a classificação, onde a skill roda", () => {
+    const withConductor = { ...CONFIG, conductor: { enabled: true, fromStatus: ["enriquecer", "interview", "refinar"] } } as unknown as typeof CONFIG;
+    expect(projectCardLiveStatus(story({ status: "interview" }), withConductor, { scope: fixes }, NOW)?.label).toMatch(/^Esperando: fora do que/);
+    expect(projectCardLiveStatus(story({ status: "refinar" }), withConductor, { scope: fixes }, NOW)?.label).toMatch(/^Esperando: fora do que/);
+    expect(projectCardLiveStatus(story({ status: "enriquecer" }), withConductor, { scope: fixes }, NOW)).toBeNull();
+    expect(projectCardLiveStatus(story({ status: "interview" }), CONFIG, { scope: fixes }, NOW)).toBeNull(); // sem condutor a entrevista anda
+  });
+
+  it("só story entra na regra: uma ideia ou um passo do mapa não espera por tipo", () => {
+    expect(projectCardLiveStatus(story({ type: "idea" }), CONFIG, { scope: fixes }, NOW)).toBeNull();
+    expect(projectCardLiveStatus(story({ type: "step" }), CONFIG, { scope: fixes }, NOW)).toBeNull();
+  });
+
+  it("quem tem ator vivo mostra o ator: o escopo só fala quando ninguém age no card", () => {
+    const run = projectCardLiveStatus(story(), CONFIG, { scope: fixes, run: { trigger: "harness-do", startedAt: NOW - min(2) } }, NOW)!;
+    expect(run.kind).toBe("run");
+    const queued = projectCardLiveStatus(
+      story(),
+      CONFIG,
+      { scope: fixes, queue: { board: "armazem", cardId: "x", position: 1, total: 1, queuedAt: iso(NOW - min(1)), waitReason: "esperando o escopo" } },
+      NOW,
+    )!;
+    expect(queued.kind).toBe("queued");
+    expect(queued.note).toBe("esperando o escopo");
+  });
+
+  it("não é falha nem travamento: a presença é «waiting», nunca «stopped»", () => {
+    const s = projectCardLiveStatus(story(), CONFIG, { scope: fixes }, NOW)!;
+    expect(CARD_PRESENCE[s.kind]).toBe("waiting");
+    expect(bannedTermsIn([s.label, s.note].filter(Boolean).join("\n")).map((b) => b.id)).toEqual([]);
+  });
+
+  it("cardLiveFactsFor recorta o escopo do board do card, e só dele", () => {
+    const feed = { at: NOW, sessions: [], queue: [], throttles: [], judging: [], scopes: [{ board: "oficina", scope: fixes }] } as CardLiveFeed;
+    expect(cardLiveFactsFor("oficina", "story-ex9902", { feed }).scope).toEqual(fixes);
+    expect(cardLiveFactsFor("armazem", "story-ex9902", { feed }).scope).toBeNull();
+    expect(cardLiveFactsFor("oficina", "story-ex9902", { feed: { ...feed, scopes: undefined } }).scope).toBeNull();
+  });
+});

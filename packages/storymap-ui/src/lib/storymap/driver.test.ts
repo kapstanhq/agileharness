@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   conductorCommand,
   conductorConfigProblem,
+  CONDUCTOR_SCOPE_WAIT_KIND,
   conductorEntryVerdict,
   conductorModelFor,
   conductorTask,
@@ -14,6 +15,7 @@ import {
   withoutDriver,
 } from "./driver";
 import { moveRiskClass } from "./entry-effect";
+import { resolveBoardGate, type BoardPaceRow } from "./runner/board-pace";
 import type { BoardConfig, CardRouting, StatusDef } from "./types";
 
 const statuses: StatusDef[] = [
@@ -189,6 +191,58 @@ describe("conductorEntryVerdict — só uma STORY entrando em fromStatus", () =>
   it("o comando e a tarefa carregam board/card", () => {
     expect(conductorCommand("b", "story-x")).toBe("/harness-conductor b/story-x");
     expect(conductorTask("b", "story-x")).toContain("/harness-conductor b/story-x");
+  });
+});
+
+describe("conductorEntryVerdict — o ESCOPO DE TIPOS do board (board-pace.ts) é a última pergunta", () => {
+  const on = board({ enabled: true, fromStatus: "pronta" });
+  const NOW = Date.parse("2026-10-02T12:00:01.000Z");
+  const fixesOnly = resolveBoardGate({}, { board: "b", ownerScope: { types: ["bug", "technical", "chore", "spike"], by: { kind: "owner" }, at: "2026-10-02T12:00:00.000Z" } } as BoardPaceRow, NOW);
+  const noScope = resolveBoardGate({}, null, NOW);
+
+  it("a classe de espera da fila tem nome estável", () => {
+    expect(CONDUCTOR_SCOPE_WAIT_KIND).toBe("tipo-nao-admitido");
+  });
+
+  it("funcionalidade nova (user) é recusada com a frase do dono e a marca `scopeRefused`", () => {
+    const v = conductorEntryVerdict({ ...story, id: "s1", storyType: "user" }, on, fixesOnly);
+    expect(v).toEqual({
+      dispatch: false,
+      reason: "Funcionalidade nova fica de fora: o board só começa Erro, Trabalho técnico, Manutenção e Investigação por enquanto",
+      scopeRefused: true,
+    });
+  });
+
+  it("card sem storyType vale user (o padrão) e é recusado; bug, technical, chore e spike despacham", () => {
+    expect(conductorEntryVerdict({ ...story, id: "s1" }, on, fixesOnly).dispatch).toBe(false);
+    for (const storyType of ["bug", "technical", "chore", "spike"] as const) {
+      expect(conductorEntryVerdict({ ...story, id: "s1", storyType }, on, fixesOnly)).toEqual({ dispatch: true });
+    }
+  });
+
+  it("um `user` em modo `fix` conta como erro e despacha; em modo `refine` continua funcionalidade", () => {
+    expect(conductorEntryVerdict({ ...story, id: "s1", storyType: "user", mode: "fix" }, on, fixesOnly).dispatch).toBe(true);
+    expect(conductorEntryVerdict({ ...story, id: "s1", storyType: "user", mode: "refine" }, on, fixesOnly).dispatch).toBe(false);
+  });
+
+  it("a recusa por tipo só aparece quando TODO o resto admitiria: as outras razões não carregam `scopeRefused`", () => {
+    const user = { ...story, id: "s1", storyType: "user" as const };
+    expect(conductorEntryVerdict({ ...user, status: "enriquecer" }, on, fixesOnly)).toMatchObject({ dispatch: false, reason: expect.stringContaining("fora de fromStatus") });
+    expect(conductorEntryVerdict({ ...user, status: "enriquecer" }, on, fixesOnly)).not.toHaveProperty("scopeRefused");
+    expect(conductorEntryVerdict(user, board(), fixesOnly)).not.toHaveProperty("scopeRefused");
+    expect(conductorEntryVerdict({ ...user, deferred: { reason: "x", since: "2026-10-02", by: "human" } }, on, fixesOnly)).toEqual({ dispatch: false, reason: "card adiado (não agora)" });
+    expect(conductorEntryVerdict({ ...user, type: "step" as const }, on, fixesOnly)).not.toHaveProperty("scopeRefused");
+  });
+
+  it("sem escopo (portão sem limite, ausente ou nulo) a régua é a de sempre", () => {
+    const user = { ...story, id: "s1", storyType: "user" as const };
+    expect(conductorEntryVerdict(user, on, noScope)).toEqual({ dispatch: true });
+    expect(conductorEntryVerdict(user, on, null)).toEqual({ dispatch: true });
+    expect(conductorEntryVerdict(user, on)).toEqual({ dispatch: true });
+  });
+
+  it("a classe de risco do move NÃO muda (ela não conhece o escopo: continua «run» para o que despacharia sem ele)", () => {
+    expect(moveRiskClass(on, "pronta", "triage", { ...story, routing: null })).toBe("run");
   });
 });
 

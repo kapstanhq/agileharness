@@ -95,4 +95,23 @@ describe("readQuota — a manchete é a janela de assinatura", () => {
     expect(block?.buckets.map((b) => b.id)).toEqual(["week"]);
     expect(block?.costUSD).toBe(38.45);
   });
+  it("ccusage SEM limite declarado (usedPct null) não cria balde de fallback: nenhuma cota é inventada", async () => {
+    const tokens: TokenWindow = {
+      source: "ccusage",
+      startedAt: NOW - 3 * 24 * 60 * 60_000,
+      resetsAt: NOW + 4 * 24 * 60 * 60_000,
+      resetsInMinutes: 5760,
+      usedTokens: 1_000_000,
+      costUSD: 4.2,
+      limitTokens: null,
+      remainingPct: null,
+      usedPct: null,
+      projectedTokens: null,
+      willExceedBeforeReset: null,
+      burnTokensPerMin: null,
+      burnCostPerHour: null,
+      models: [],
+    };
+    expect(await readQuota(NOW, async () => snapshot({ usage: null, tokens }))).toBeNull();
+  });
 });

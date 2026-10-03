@@ -14,6 +14,8 @@ import type { StyleGuidePointer } from "./style-guide";
 import type { WsjfCall } from "./wsjf";
 import type { PushEventKind } from "@/lib/notifications/push-policy";
 import type { TargetProfile } from "./target-profile";
+import type { DeployPolicyDecl } from "./deploy-policy";
+import type { VpsSettings } from "./vps-settings";
 import type {
   KanoCategory,
   FunnelStage,
@@ -304,7 +306,7 @@ export interface CommitRange {
  * `source` names WHICH settle/reconcile handler ran the ancestry measurement:
  *   - "settle-webhook":     the durable /api/runner/deploy-webhook settle (self-deploy / external CI) —
  *                           works on a FRESH process post-restart, reading everything from disk;
- *   - "registry-ondone":    the in-process ProductDeployRegistry onDone settle (orch-deploy / face);
+ *   - "registry-ondone":    the in-process ProductDeployRegistry onDone settle (the declared legacy command / face);
  *   - "reconcile-evidence": the evidence sweep (deploy-reconcile) proved it from the deploy state files —
  *                           the publish happened OUTSIDE the board (e.g. operator CLI), no settle event.
  */
@@ -863,7 +865,7 @@ export interface Card {
   deployTargets?: string[];
   /**
    * WS1.1 (pipeline-owned — set by the deploy onEnter effect, NEVER the drawer). ISO timestamp the
-   * board's deploy was FIRED (systemd-run self-deploy / orch-deploy) but has not yet SETTLED (the
+   * board's deploy was FIRED (systemd-run self-deploy / the declared legacy command) but has not yet SETTLED (the
    * deploy-webhook has not posted ok/failed back). Since deploy-truth, EVERY card-triggered deploy
    * stamps it (not only the self-deploy that armed a webhook): the card now WAITS in `deploy`
    * ("Publicando") until the settle proves the publish, so a settle that never arrives would strand it
@@ -1274,13 +1276,25 @@ export interface CardQuestion {
   proxy?: ProxyAnswerRecord;
 }
 
-export type ReviewLens = "firestore" | "nextjs" | "perf" | "security" | "testing" | "general";
+/**
+ * As lentes EMBUTIDAS — o vocabulário da PRÓPRIA ferramenta: o mecanismo minera findings de `general`/`testing`/`security`
+ * e o `harness-qa` grava `design`. Sempre válidas, em qualquer alvo. As lentes de DOMÍNIO (acesso a dados, frontend…)
+ * são do alvo: ele as declara em `storymap/settings.yaml → target.reviewLenses` (target-profile.ts).
+ */
+export type CoreLens = "security" | "testing" | "perf" | "general" | "design";
+/**
+ * A lente de um finding: uma embutida ou qualquer slug que o alvo declarou. `(string & {})` mantém o autocomplete das
+ * embutidas nos sítios que as mintam e deixa a pertinência à declaração para a ESCRITA (add_finding) — a leitura de um
+ * id antigo nunca é recusada (uma lente removida do settings não corrompe card antigo).
+ */
+export type ReviewLens = CoreLens | (string & {});
 /** blocker gates `revisao`; high/medium/low only annotate. */
 export type FindingSeverity = "blocker" | "high" | "medium" | "low";
 /** open blocks the gate; the human clears it via fixed/wontfix (or re-running). */
 export type FindingStatus = "open" | "acknowledged" | "fixed" | "wontfix";
 
-export const REVIEW_LENSES: ReviewLens[] = ["firestore", "nextjs", "perf", "security", "testing", "general"];
+/** Os ids das lentes embutidas (a mesma lista de `CORE_REVIEW_LENSES` em target-profile.ts — um teste trava a igualdade). */
+export const CORE_LENS_IDS: readonly CoreLens[] = ["security", "testing", "perf", "general", "design"];
 export const FINDING_SEVERITIES: FindingSeverity[] = ["blocker", "high", "medium", "low"];
 export const FINDING_STATUSES: FindingStatus[] = ["open", "acknowledged", "fixed", "wontfix"];
 
@@ -1291,6 +1305,10 @@ export const FINDING_STATUSES: FindingStatus[] = ["open", "acknowledged", "fixed
  * the spec/selector is wrong (passes at another layer, bad locator); `app` = the criterion is
  * genuinely unmet by the product. Sparse/optional (old findings and review findings carry none).
  * Auto-attributed by `classifyFailure` (runner/findings.ts); the harness-qa skill stamps it on the blocker.
+ *
+ * O QUE É «infra» é DECLARAÇÃO DO ALVO: as regras que reconhecem o ambiente dele (portas, mensagens do emulador, do banco…)
+ * moram em settings.yaml → `target.qa.failureClasses` (regex ≤ 200 caracteres, a primeira que casar vence). A ferramenta só
+ * traz as classes de falha de PROCESSO (módulo não resolvido, OOM, timeout) — nunca o vocabulário de um ambiente específico.
  */
 export type FailureClass = "infra" | "test" | "app";
 export const FAILURE_CLASSES: FailureClass[] = ["infra", "test", "app"];
@@ -1958,7 +1976,7 @@ export interface ColumnDef extends NamedColor {
  * Deploy agnóstico (D-AG1) — the board's OPTIONAL deploy DESCRIPTOR: how
  * THIS app is published, declared as board config instead of hardcoded per-app routing. Absent (every
  * current board) or `kind: "auto"` ⇒ the LEGACY byte-identical routing derived from `package`
- * (o próprio harness → self-deploy destacado; app na allowlist declarada em settings.yaml → `just orch-deploy`).
+ * (o próprio harness → self-deploy destacado; app na allowlist declarada em settings.yaml → o comando diff-aware que o alvo declara em `deploy.legacy.command`).
  * The descriptor is authored by a human in board.yaml (in the OSS target: by the onboarding agent) —
  * it is the SAME trust class as column triggers: board config, never caller free text.
  *
@@ -1971,7 +1989,8 @@ export interface BoardDeployConfig {
   /** explicit routing; omitted ⇒ inferred from the fields (command ⇒ "command", description ⇒ "agent", neither ⇒ "auto"). */
   kind?: "auto" | "command" | "agent";
   /** kind:"command" — the user's shell that publishes the app (e.g. `vercel deploy --prod`), run
-   *  `bash -lc` from the repo root by the SAME registry/launcher as orch-deploy (tracked, logged, onDone). */
+   *  `bash -lc` from the repo root by the SAME registry/launcher as the target's declared legacy command (tracked, logged, onDone).
+   *  Passa pela allow-list do alvo (`authorizeDeployCommand`: `deploy.launchers`/`recipes`/`recipeRunners` do settings.yaml). */
   command?: string;
   /** kind:"agent" — free text "how this app is deployed"; a bounded headless claude executes it and
    *  answers the strict {ok, liveSha?} verdict. The verdict NEVER stamps proof by itself — a claimed
@@ -2519,28 +2538,53 @@ export interface AutonomyPolicy {
 }
 
 /**
- * The owner's monthly ceilings, in BRL: `cashMonthlyBRL` (all the cash the product spends) and
- * `infraMonthlyBRL` (the infrastructure part). The optional baselines are the owner's own figure of what is spent today
- * — a projection without one assumes 0 and says so. Absent ceiling ⇒ any cost increase is the owner's (nothing proves
- * it fits).
+ * The owner's monthly ceilings: `cashMonthly` (all the cash the product spends) and `infraMonthly` (the infrastructure
+ * part), in the board's currency. The optional baselines are the owner's own figure of what is spent today — a
+ * projection without one assumes 0 and says so. Absent ceiling ⇒ any cost increase is the owner's (nothing proves it fits).
+ *
+ * THE CURRENCY is never assumed (currency.ts): `currency` (ISO 4217) names it when the board differs from the target's
+ * `target.currency`. The LEGACY spelling `cashMonthlyBRL`… is still READ forever (the unit rides in the key name, so it
+ * means BRL) and is kept AS READ — coerce never renames a key, so a save of the board never rewrites the owner's
+ * board.yaml. Read both through `budgetFigures` (cost-impact.ts); a key present in both spellings keeps the neutral one.
  */
 export interface AutonomyBudget {
+  currency?: string;
+  cashMonthly?: number;
+  infraMonthly?: number;
+  baselineCashMonthly?: number;
+  baselineInfraMonthly?: number;
+  /** @deprecated legacy spelling (BRL in the name) — read as an alias, written back as read. */
   cashMonthlyBRL?: number;
+  /** @deprecated see `cashMonthlyBRL`. */
   infraMonthlyBRL?: number;
+  /** @deprecated see `cashMonthlyBRL`. */
   baselineCashMonthlyBRL?: number;
+  /** @deprecated see `cashMonthlyBRL`. */
   baselineInfraMonthlyBRL?: number;
 }
 
 /**
- * The monthly COST IMPACT a delivery projects before publishing (Card.costImpact — cost-impact.ts): the increment in
- * BRL, which ceiling it counts against, the assumptions in plain words (honest, not precise), the baseline it assumed,
- * and whether it brings a NEW vendor, paid plan or paid API (each of those is the owner's regardless of the amount).
+ * The monthly COST IMPACT a delivery projects before publishing (Card.costImpact — cost-impact.ts): the increment, in
+ * the currency it carries, which ceiling it counts against, the assumptions in plain words (honest, not precise), the
+ * baseline it assumed, and whether it brings a NEW vendor, paid plan or paid API (each of those is the owner's
+ * regardless of the amount).
+ *
+ * TWO SPELLINGS of the same fact, exactly ONE of them present (read both through `costImpactFigures`):
+ *   • neutral — `monthlyAmount` (+ `baselineMonthlyAmount`) and `currency` (ISO 4217);
+ *   • legacy  — `monthlyBRL` (+ `baselineMonthlyBRL`): the unit rides in the key name (BRL). Existing cards keep it and
+ *     are written back byte-for-byte as read; the app never migrates a card's spelling on its own (an older release
+ *     reads a neutral card as «no projection» and the next write of that card would erase it).
  */
 export interface CostImpact {
-  monthlyBRL: number;
+  monthlyAmount?: number;
+  baselineMonthlyAmount?: number;
+  currency?: string;
+  /** @deprecated legacy spelling (BRL in the name) — read as an alias, written back as read. */
+  monthlyBRL?: number;
+  /** @deprecated see `monthlyBRL`. */
+  baselineMonthlyBRL?: number;
   scope: "infra" | "cash";
   assumptions: string;
-  baselineMonthlyBRL?: number;
   newVendor?: string;
   paidPlan?: boolean;
   paidApi?: boolean;
@@ -2921,8 +2965,19 @@ export interface RunnerSettings {
       enabled: boolean;
       /** integration branch app code is staged on, awaiting the human release gate; default `"stage"` */
       branch: string;
-      /** path prefixes treated as deployable CODE routed to `branch` (everything else → main); default `["packages/"]` */
-      codePrefixes: string[];
+      /**
+       * path prefixes treated as deployable CODE routed to `branch` (everything else → main). SEM DEFAULT: AUSENTE =
+       * indeclarado (tudo fora de `storymap/boards/` é código — o neutro seguro) e `[]` explícito = «nada é código». Ligar o
+       * staging sem declarar é recusado no boot (`stagingBootRefusal`, config.ts). Leia por `declaredCodePrefixes` (staging.ts).
+       */
+      codePrefixes?: string[];
+      /**
+       * O que o ARQUIVO declarou (e não o default que a coerção preencheu): `branch`/`codePrefixes` só são `true` quando a
+       * chave estava no settings.yaml. É o que distingue «`codePrefixes: []` = nada é código» de «não declarei» (que os
+       * consumidores tratam de forma conservadora: tudo fora de storymap/boards/ é código). Ver `layoutOf` em target-profile.ts.
+       * Ausente quando o arquivo não tinha a seção `staging`.
+       */
+      declared?: { branch?: true; codePrefixes?: true };
       /**
        * Artifacts that LIVE under a `codePrefixes` path but are DERIVED FROM board data — so they belong
        * to the DATA half and are REGENERATED on main, never patched. Empty by default: a repo that
@@ -3133,7 +3188,7 @@ export interface RunnerSettings {
     /**
      * ONDE OS NOMES DOS APPS DO DEPLOYMENT MORAM — e por que aqui, e não no código.
      *
-     * Estes são os alvos que o caminho diff-aware legado publica (`just orch-deploy <alvo>`): o motor
+     * Estes são os alvos que o caminho diff-aware legado publica (`deploy.legacy.command` com `{target}`): o motor
      * resolve `BoardConfig.package` para o basename e só dispara quando o basename está NESTA lista.
      * A lista era um literal no fonte do motor, o que punha os nomes de produto de UM deployment no
      * CONTRATO PUBLICADO do protocolo MCP — três tools os expunham como `z.enum`. Um motor que vai ser
@@ -3152,17 +3207,46 @@ export interface RunnerSettings {
     /**
      * A SUPERFÍCIE COMPOSTA deste deployment, quando existe: um artefato único construído a partir das
      * árvores web de VÁRIOS apps, publicado por uma receita própria FORA de qualquer manifesto de
-     * pacote. Como `orch-deploy <alvo>` publica o backend e não a face, um release cujo diff toca um
+     * pacote. Como o comando legado de um alvo publica o backend e não a face, um release cujo diff toca um
      * caminho da face precisa encadear a publicação dela — senão o card diz "No ar" com uma face velha.
      *
      * AUSENTE ⇒ este deployment não tem superfície composta, e o motor responde `absent` (não há o que
      * encadear). Isso é diferente de "declarada e ilegível", que é `unreadable` e trata conservador.
      *   `target`   — a chave do job no registry (também gravada em `deployTargets` dos cards)
-     *   `recipe`   — o argumento de `just` que publica a face
+     *   `recipe`   — só o RÓTULO legado da face: sozinho NÃO publica nada (quem publica é `command`)
      *   `manifest` — o JSON, relativo à raiz do alvo, que declara quais caminhos COMPÕEM a face
      */
-    composedFace?: { target: string; recipe: string; manifest: string };
+    composedFace?: {
+      target: string;
+      recipe: string;
+      manifest: string;
+      /** o comando que publica a face, como ARGV sem shell (ausente ⇒ o consumidor recusa dizendo `deploy.composedFace.command`). */
+      command?: string[];
+    };
+    /**
+     * O ferramental de publicação DECLARADO pelo alvo (lançadores, receitas, comando diff-aware, estado, prova): a forma e o
+     * porquê vivem em deploy-policy.ts. Tudo opcional; AUSENTE = não declarado (os consumidores recusam, nunca supõem).
+     *
+     * O PAR `launchers` + `recipeRunners`: `launchers` é a allow-list do programa que um comando de board-data (editável por
+     * agente) pode chamar; `recipeRunners` marca quais deles são TASK RUNNERS (`just`, `task`, `mise`, `rake`, `mask`…), que
+     * INTERPOLAM o argumento como texto numa linha de shell — esses recebem a régua extra da cadeia receita→argumento
+     * (`recipes` é a allow-list das receitas). Declarar um task runner em `launchers` e esquecer `recipeRunners` perde essa
+     * régua em silêncio: o carregador avisa alto e o preflight (`deploy.declared-commands`) mede. O env
+     * `AGILEHARNESS_DEPLOY_LAUNCHERS`/`_RECIPES`/`_RECIPE_RUNNERS` do serviço só ACRESCENTA ao que o arquivo declara.
+     * `proof.record.*` é o argv que GRAVA a prova (o texto impresso pelo log do deploy nunca decide o que roda) e
+     * `proof.staleMarkers` as frases que o script do alvo usa para dizer «prova de OUTRO assunto».
+     */
+    launchers?: DeployPolicyDecl["launchers"];
+    recipeRunners?: DeployPolicyDecl["recipeRunners"];
+    recipes?: DeployPolicyDecl["recipes"];
+    legacy?: DeployPolicyDecl["legacy"];
+    proof?: DeployPolicyDecl["proof"];
   };
+  /**
+   * O HOST (settings.yaml `vps:`) — o limite semanal de tokens e o proxy de uso de onde se LÊ o medidor. Declaração do
+   * operador, ver vps-settings.ts. Ausente ⇒ sem % e sem medidor (o governador de capacidade fica inerte).
+   */
+  vps?: VpsSettings;
   /**
    * O PERFIL DO ALVO (target-profile.ts) — como ESTE repositório roda os próprios checks (`checks`), sobe o ambiente de
    * desenvolvimento (`dev`) e onde guarda as regras que os agentes leem (`docs`). É o que deixa as skills e a tool

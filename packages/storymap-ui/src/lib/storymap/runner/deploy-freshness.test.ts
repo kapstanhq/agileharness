@@ -25,6 +25,7 @@ import {
   redeemDeployClearance,
   type DeployFreshnessRequest,
 } from "./deploy-freshness";
+import { deployPolicyFromSettings } from "./deploy-command-guard";
 import { isolatedGitExec } from "./git-test-env";
 import { describePosix } from "./test-platform";
 import type { ExecFn } from "./worktree";
@@ -32,6 +33,10 @@ import type { ExecFn } from "./worktree";
 const baseExec = promisify(nodeExec) as unknown as ExecFn;
 const SCOPE = ["packages/app/"];
 const OFF = { AGILEHARNESS_DEPLOY_FRESHNESS: "off" };
+// A POLÍTICA do passo privilegiado deste alvo de teste, como um settings.yaml a declararia: o task runner `just` e a única
+// receita (`live-sha`) que o `liveShaCommand` de board-data pode nomear. SEM_POLITICA é o alvo que não declarou nada.
+const POLITICA = deployPolicyFromSettings({ launchers: ["just"], recipeRunners: ["just"], recipes: ["live-sha"] }, {});
+const SEM_POLITICA = deployPolicyFromSettings(undefined, {});
 const roots: string[] = [];
 
 afterEach(() => vi.unstubAllEnvs());
@@ -90,7 +95,7 @@ async function preflight(
 ) {
   const lines: string[] = [];
   const verdict = await checkDeployFreshness(
-    { target: "app", repoRoot: f.work, scope: SCOPE, label: "teste", ...over },
+    { target: "app", repoRoot: f.work, scope: SCOPE, policy: POLITICA, label: "teste", ...over },
     {
       exec: deps.exec ?? f.exec,
       env: deps.env ?? {},
@@ -226,11 +231,10 @@ describePosix("checkDeployFreshness — o checkout de runtime carrega o que est�
   });
 
   // ── deploy.liveShaCommand: o HEAD tem de DESCENDER do que está no ar ──────────────────────────────────
-  describe("com deploy.liveShaCommand declarado (`just live-sha`, receita liberada pelo env do serviço)", () => {
+  describe("com deploy.liveShaCommand declarado (`just live-sha`, receita declarada na política do alvo)", () => {
     const LIVE = ["just live-sha"];
 
     it("o sha no ar é ANCESTRAL do HEAD ⇒ autoriza, dizendo o que mediu", async () => {
-      vi.stubEnv("AGILEHARNESS_DEPLOY_RECIPES", "live-sha");
       const f = await fixture();
       const live = await f.git(f.work, "rev-parse HEAD");
       await f.commit(f.work, "packages/app/c.ts", "export const c = 1;\n", "novo, ainda não no ar");
@@ -240,7 +244,6 @@ describePosix("checkDeployFreshness — o checkout de runtime carrega o que est�
     });
 
     it("VÁRIAS unidades (um sha por linha), todas ancestrais ⇒ autoriza", async () => {
-      vi.stubEnv("AGILEHARNESS_DEPLOY_RECIPES", "live-sha");
       const f = await fixture();
       const velho = await f.git(f.work, "rev-parse HEAD");
       const novo = await f.commit(f.work, "packages/app/c.ts", "export const c = 1;\n", "c");
@@ -250,7 +253,6 @@ describePosix("checkDeployFreshness — o checkout de runtime carrega o que est�
     });
 
     it("o ar está À FRENTE do HEAD (publicado de um commit que este checkout não tem no branch) ⇒ RECUSA", async () => {
-      vi.stubEnv("AGILEHARNESS_DEPLOY_RECIPES", "live-sha");
       const f = await fixture();
       await f.git(f.work, "checkout -q -b publicado-a-frente");
       const aFrente = await f.commit(f.work, "packages/app/c.ts", "export const c = 1;\n", "no ar, à frente");
@@ -263,7 +265,6 @@ describePosix("checkDeployFreshness — o checkout de runtime carrega o que est�
     });
 
     it("o ar DIVERGIU do HEAD (irmão, não ancestral) ⇒ RECUSA", async () => {
-      vi.stubEnv("AGILEHARNESS_DEPLOY_RECIPES", "live-sha");
       const f = await fixture();
       const base = await f.git(f.work, "rev-parse HEAD");
       await f.commit(f.work, "packages/app/b.ts", "export const b = 1;\n", "main anda");
@@ -277,7 +278,6 @@ describePosix("checkDeployFreshness — o checkout de runtime carrega o que est�
     });
 
     it("o sha no ar NÃO EXISTE neste checkout (nunca chegou ao upstream) ⇒ RECUSA", async () => {
-      vi.stubEnv("AGILEHARNESS_DEPLOY_RECIPES", "live-sha");
       const f = await fixture();
       const { verdict } = await preflight(f, { liveShaCommands: LIVE }, {
         exec: withLiveSha(f, async () => "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
@@ -287,7 +287,6 @@ describePosix("checkDeployFreshness — o checkout de runtime carrega o que est�
     });
 
     it("o comando FALHA ⇒ RECUSA (fail-closed)", async () => {
-      vi.stubEnv("AGILEHARNESS_DEPLOY_RECIPES", "live-sha");
       const f = await fixture();
       const { verdict } = await preflight(f, { liveShaCommands: LIVE }, {
         exec: withLiveSha(f, async () => {
@@ -301,7 +300,6 @@ describePosix("checkDeployFreshness — o checkout de runtime carrega o que est�
     });
 
     it("o comando imprime LIXO ⇒ RECUSA (não é sha, não é aprovação)", async () => {
-      vi.stubEnv("AGILEHARNESS_DEPLOY_RECIPES", "live-sha");
       const f = await fixture();
       const { verdict } = await preflight(f, { liveShaCommands: LIVE }, { exec: withLiveSha(f, async () => "v1.2.3 (latest)\n") });
       expect(verdict.ok).toBe(false);
@@ -309,13 +307,37 @@ describePosix("checkDeployFreshness — o checkout de runtime carrega o que est�
     });
 
     it("a régua dos comandos declarados vale: receita fora da allow-list ⇒ RECUSA sem executar nada", async () => {
-      // sem AGILEHARNESS_DEPLOY_RECIPES a receita `live-sha` não é alcançável de board-data
+      // sem a receita `live-sha` na política, ela não é alcançável de board-data
       const f = await fixture();
       const answer = vi.fn(async () => "x");
-      const { verdict } = await preflight(f, { liveShaCommands: LIVE }, { exec: withLiveSha(f, answer) });
+      const semReceita = deployPolicyFromSettings({ launchers: ["just"], recipeRunners: ["just"] }, {});
+      const { verdict } = await preflight(f, { liveShaCommands: LIVE, policy: semReceita }, { exec: withLiveSha(f, answer) });
       expect(verdict.ok).toBe(false);
-      if (!verdict.ok) expect(verdict.code).toBe("live-sha-refused");
+      if (!verdict.ok) {
+        expect(verdict.code).toBe("live-sha-refused");
+        expect(verdict.reason, "a recusa nomeia a chave a declarar").toMatch(/settings\.yaml → deploy\.recipes/);
+      }
       expect(answer).not.toHaveBeenCalled();
+    });
+
+    it("SEM política nenhuma (alvo que não declarou lançadores) o comando é recusado e nada é executado", async () => {
+      const f = await fixture();
+      const answer = vi.fn(async () => "x");
+      const { verdict } = await preflight(f, { liveShaCommands: LIVE, policy: SEM_POLITICA }, { exec: withLiveSha(f, answer) });
+      expect(verdict.ok).toBe(false);
+      if (!verdict.ok) {
+        expect(verdict.code).toBe("live-sha-refused");
+        expect(verdict.reason).toMatch(/settings\.yaml → deploy\.launchers/);
+      }
+      expect(answer).not.toHaveBeenCalled();
+    });
+
+    it("a receita vinda do ENV do serviço (canal aditivo) abre a mesma porta que a do settings", async () => {
+      const f = await fixture();
+      const live = await f.git(f.work, "rev-parse HEAD");
+      const doEnv = deployPolicyFromSettings({ launchers: ["just"], recipeRunners: ["just"] }, { AGILEHARNESS_DEPLOY_RECIPES: "live-sha" });
+      const { verdict } = await preflight(f, { liveShaCommands: LIVE, policy: doEnv }, { exec: withLiveSha(f, async () => `${live}\n`) });
+      expect(verdict.ok).toBe(true);
     });
   });
 
@@ -349,7 +371,7 @@ describePosix("checkDeployFreshness — o checkout de runtime carrega o que est�
     await f.commit(f.other, "packages/app/a.ts", "export const a = 2;\n", "x");
     await f.git(f.other, "push -q origin main");
     const run = () =>
-      checkDeployFreshness({ target: "app", repoRoot: f.work, scope: SCOPE, label: "t" }, { exec: f.exec, log: () => {} });
+      checkDeployFreshness({ target: "app", repoRoot: f.work, scope: SCOPE, policy: SEM_POLITICA, label: "t" }, { exec: f.exec, log: () => {} });
     vi.stubEnv("AGILEHARNESS_DEPLOY_FRESHNESS", "off");
     expect((await run()).ok).toBe(true);
     vi.stubEnv("AGILEHARNESS_DEPLOY_FRESHNESS", "");
@@ -361,7 +383,7 @@ describePosix("checkDeployFreshness — o checkout de runtime carrega o que est�
 describe("redeemDeployClearance — a autorização não se forja, não se reusa, não se desvia", () => {
   const cunhar = async (target: string, now = () => 1_000) => {
     const v = await checkDeployFreshness(
-      { target, repoRoot: "/r", scope: [], label: "t" },
+      { target, repoRoot: "/r", scope: [], policy: SEM_POLITICA, label: "t" },
       { exec: baseExec, env: OFF, log: () => {}, now },
     );
     if (!v.ok) throw new Error("escape deveria cunhar");
@@ -427,16 +449,29 @@ describe("partes puras do preflight", () => {
     }
   });
 
-  it("legacyTargetFreshnessInputs: o escopo dos boards que publicam o alvo; sem board, a convenção packages/<alvo>/", () => {
+  it("legacyTargetFreshnessInputs: o escopo dos boards que publicam o alvo; sem board, o escopo DECLARADO pelo alvo", () => {
     const boards = [
       { package: "packages/app", scope: ["packages/app/", "packages/shared/"], liveShaCommand: "just live-sha" },
       { package: "packages/other", scope: ["packages/other/"], liveShaCommand: "just outro" },
       { package: "packages/app/", scope: ["packages/app/"], liveShaCommand: "just live-sha" },
     ];
-    expect(legacyTargetFreshnessInputs("app", boards)).toEqual({
+    const declarado = { packageRoot: "packages/", scope: ["packages/sem-board/"] };
+    expect(legacyTargetFreshnessInputs("app", boards, declarado)).toEqual({
       scope: ["packages/app/", "packages/shared/"],
       liveShaCommands: ["just live-sha"],
     });
-    expect(legacyTargetFreshnessInputs("sem-board", boards)).toEqual({ scope: ["packages/sem-board/"], liveShaCommands: [] });
+    expect(legacyTargetFreshnessInputs("sem-board", boards, declarado)).toEqual({ scope: ["packages/sem-board/"], liveShaCommands: [] });
+  });
+
+  it("legacyTargetFreshnessInputs SEM declaração: escopo VAZIO (= repositório inteiro, fail-closed) e o `package` inteiro é o id", () => {
+    const boards = [{ package: "packages/app", scope: ["packages/app/"], liveShaCommand: "just live-sha" }];
+    // sem packageRoot a ferramenta não supõe a pasta dos pacotes: `packages/app` NÃO é o alvo `app`
+    expect(legacyTargetFreshnessInputs("app", boards)).toEqual({ scope: [], liveShaCommands: [] });
+    expect(legacyTargetFreshnessInputs("sem-board", boards)).toEqual({ scope: [], liveShaCommands: [] });
+    // com o packageRoot declarado mas sem scope, o board dono ainda resolve e a falta de scope só vale para o alvo sem board
+    expect(legacyTargetFreshnessInputs("app", boards, { packageRoot: "packages/" })).toEqual({ scope: ["packages/app/"], liveShaCommands: ["just live-sha"] });
+    expect(legacyTargetFreshnessInputs("sem-board", boards, { packageRoot: "packages/" })).toEqual({ scope: [], liveShaCommands: [] });
+    // outra pasta de pacotes, declarada: o prefixo é o do ALVO
+    expect(legacyTargetFreshnessInputs("app", [{ package: "apps/app", scope: ["apps/app/"] }], { packageRoot: "apps/" })).toEqual({ scope: ["apps/app/"], liveShaCommands: [] });
   });
 });

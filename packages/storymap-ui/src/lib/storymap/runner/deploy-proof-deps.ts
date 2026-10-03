@@ -20,7 +20,8 @@ import { appendSystemDecision } from "./decision-log";
 import { automationAdmission, diskProxyLedger } from "./proxy-deps";
 import { appendTransition } from "./transitions";
 import { withHarnessTempDir } from "./temp";
-import { recordCommandFor, recordRefusedAsStale, resolveNeedsProofFinding, securityReopen, type ProofSubject } from "./deploy-proof";
+import { resolveNeedsProofFinding, runDeclaredRecord, securityReopen, type ProofSubject } from "./deploy-proof";
+import { resolveDeclaredProgram } from "./product-deploy";
 import { produceDeployProofs, startDeployProofs, sweepDeployProofs, type DeployProofDeps, type ProofPending, type ReviewMaterial } from "./deploy-proof-producer";
 import { SECURITY_REVIEW_MODEL, agentRoleBody, spawnSecurityReviewer } from "./security-review-spawn";
 import { boardGateNow } from "./board-pace-store";
@@ -109,19 +110,18 @@ export function defaultDeployProofDeps(): DeployProofDeps {
       const role = await reviewerRole(request.reviewer);
       return spawnSecurityReviewer({ board, cardId, reviewer: request.reviewer, role, subject: request.subject, material, model: SECURITY_REVIEW_MODEL }, { claudeBin });
     },
-    recordVerdict: async (verdict, request) =>
+    recordVerdict: async (verdict) =>
       withHarnessTempDir("security-verdict", async (dir) => {
         const file = path.join(dir, "verdict.json");
         await fsp.writeFile(file, `${JSON.stringify(verdict, null, 2)}\n`, "utf8");
-        const argv = recordCommandFor(request.record, file);
-        if (!argv) return { ok: false as const, stale: false, error: `comando de gravação fora do contrato: ${request.record.slice(0, 120)}` };
-        try {
-          await pexec(argv[0], argv.slice(1), { cwd: findRepoRoot(), timeout: 120_000, maxBuffer: GIT_MAX_BUFFER });
-          return { ok: true as const };
-        } catch (err) {
-          const stderr = String((err as { stderr?: unknown }).stderr ?? (err instanceof Error ? err.message : err));
-          return { ok: false as const, stale: recordRefusedAsStale(stderr), error: stderr.trim().slice(-300) };
-        }
+        // O comando que GRAVA é o que o ALVO declarou (settings.yaml → deploy.proof.record.securityReview), nunca o
+        // texto `request.record` que o log do deploy imprimiu: essa linha é saída de comando, não configuração.
+        return runDeclaredRecord("securityReview", file, {
+          resolveProgram: (name) => resolveDeclaredProgram(name),
+          exec: async (program, args) => {
+            await pexec(program, args, { cwd: findRepoRoot(), timeout: 120_000, maxBuffer: GIT_MAX_BUFFER });
+          },
+        });
       }),
     resolveFinding: async (board, cardId) => {
       await updateCardOnDisk(board, cardId, (fresh) => resolveNeedsProofFinding(fresh));

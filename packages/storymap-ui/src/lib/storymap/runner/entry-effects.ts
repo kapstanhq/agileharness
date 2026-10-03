@@ -337,7 +337,10 @@ export async function fireReleaseStaged(
   // slash normalization as package/sharedPackages via the shared map below.
   // A derivação vive em `release-scope.ts` (pura): a página de Entrega mede o delta que ESTA promoção
   // levaria, e as duas têm de ler o escopo do mesmo lugar — duas cópias divergem no primeiro campo novo.
-  const codePrefixes = releaseCodePrefixes(config, staging.codePrefixes);
+  // `staging.codePrefixes` é opcional (indeclarado ⇒ undefined): um board SEM `package` cai no global, e global indeclarado
+  // vira [] — o `promoteStageToMain` recusa («nenhum prefixo de código configurado — declare autorun.staging.codePrefixes»).
+  // Na prática nem chega aqui: ligar o staging sem declarar é recusado no boot (stagingBootRefusal, config.ts).
+  const codePrefixes = releaseCodePrefixes(config, staging.codePrefixes ?? []);
   // story-ex0025 — the OTHER boards' packages, excluded from the out-of-scope probe so foreign-board code left
   // on the shared `stage` (each board promotes on its own frontier) never mis-reverts THIS board's release.
   const otherBoardPrefixes = await otherBoardPackagePrefixes(boardId);
@@ -567,7 +570,7 @@ async function settleByEvidence(boardId: string, cardId: string) {
 /**
  * Fase 4c — fire the board DEPLOY when a card enters an `onEnter: deploy-board` step (the `deploy` column):
  * publish the released code to Live. Board-aware off `BoardConfig.package` (storymap → detached
- * rebuild+restart; product → orch-deploy). Best-effort, never throws to the caller.
+ * rebuild+restart; product → the declared legacy deploy command). Best-effort, never throws to the caller.
  */
 export async function fireDeployBoard(
   boardId: string,
@@ -654,7 +657,7 @@ export async function fireDeployBoard(
   }
   // WS1.1 + deploy-truth (D-DT7) — EVERY card-triggered deploy arms the watchdog now, not only the
   // self-deploy that armed a webhook: since the terminal is settle-gated (WS-3), the card WAITS in the
-  // deploy step, and a settle that never arrives (dead restart, killed orch-deploy child, service crash
+  // deploy step, and a settle that never arrives (dead restart, killed deploy child, service crash
   // mid-deploy) would strand it there silently. deployFiredAt is what lets the deploy-unsettled demand
   // surface a card stuck in "Publicando" past its SLA. Cleared by the settle only WITH proof (or on
   // failure by the revert). Best-effort (a failed stamp only forfeits the watchdog, never the deploy).
@@ -769,7 +772,7 @@ export async function redispatchPendingSelfDeploy(
  *      (#4): only THIS board's `package` is promoted, not all of `stage`. If the promote is secret-scan blocked it leaves cards un-stamped
  *      (best-effort, never throws) — the deploy still fires (the build runs before the restart, so a
  *      no-op promote can't ship bad code; the operator's verify-then-claim catches an un-promoted card).
- *   2. `fireDeployBoard` — rebuild+restart (storymap) / orch-deploy (product). Detached, best-effort.
+ *   2. `fireDeployBoard` — rebuild+restart (storymap) / the declared legacy deploy command (product). Detached, best-effort.
  * Best-effort + never throws to the caller (the move/forward stays done; both steps are idempotent and
  * retriable on a re-entry). The optimistic `autoEnterTerminal` forward to `concluida` happens in the
  * cascade kernel AFTER this dispatches — the harness-ship runbook proves health post-fact (No ar é otimista).

@@ -172,6 +172,12 @@ export interface DecisionCtx {
    * só pelo que o card mostra, e o que depende do board não é oferecido.
    */
   facts?: InboxFacts;
+  /**
+   * O nome humano de cada lente de revisão (`id → name`), resolvido no SERVIDOR a partir de `target.reviewLenses`
+   * (o settings não atravessa para o cliente). Ausente ⇒ o detalhe «Área» mostra o id da lente, como sempre: uma lente
+   * removida do settings (ou um id antigo) nunca some do item.
+   */
+  lensNames?: Readonly<Record<string, string>>;
 }
 
 // ── Peças comuns ─────────────────────────────────────────────────────────────────────────────────────
@@ -586,7 +592,7 @@ const DECIDE: DecideMap = {
       details: [
         { label: "Problema", value: item.title },
         ...(item.suggestion ? [{ label: "Sugestão da revisão", value: item.suggestion }] : []),
-        ...(item.lens ? [{ label: "Área", value: item.lens }] : []),
+        ...(item.lens ? [{ label: "Área", value: c.lensNames?.[item.lens] ?? item.lens }] : []),
       ],
       systemIgnored: `O card não passa de «${stepName}» enquanto o problema estiver aberto; o pipeline decide o conserto.`,
       dot: "amber",
@@ -1690,6 +1696,7 @@ const capitalize = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 function blockerTemplateId(findingId: string, lens: string | undefined, cardStatus: string | null | undefined): EscalationRef["templateId"] {
   if (findingId.startsWith("merge-back-")) return "blocker-merge-back";
   if (findingId.startsWith("secret-scan-")) return "blocker-secret-scan";
+  // `testing` é uma lente EMBUTIDA (types.ts `CoreLens`): o id é contrato do mecanismo, não vocabulário do alvo.
   if (lens === "testing" && cardStatus === "qa-automatizado") return "qa-red";
   return "blocker-generic";
 }

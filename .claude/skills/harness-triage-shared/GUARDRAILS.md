@@ -32,7 +32,7 @@ DIAGNOSTICAM uma story já entregue e a ROTEIAM de volta ao pipeline:
    pare, sem reaproveitar o card.
 
 4. **Read-only no código de produto.** As skills de triagem DIAGNOSTICAM; não editam
-   `packages/<pkg>/`. Os únicos arquivos escritos são o card `.md` (+ o sidecar de
+   o pacote do board (`package:` do `board.yaml`). Os únicos arquivos escritos são o card `.md` (+ o sidecar de
    wireframe, quando há). Quem escreve código de produto é o `harness-do`, depois, em modo
    refine/fix.
 

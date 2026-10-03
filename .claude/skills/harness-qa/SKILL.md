@@ -16,7 +16,7 @@ description: >-
   "/harness qa", "/harness-qa", "QA automatizado", "rodar o QA", "validar aceite",
   "testes de aceite", "E2E da story", or wants to advance AgileHarness cards sitting in
   QA automatizado. Edits storymap data (the card .md) AND product test code (the
-  E2E specs under packages/<pkg>/tests/e2e/). It does NOT edit the storymap-ui package —
+  E2E specs, in the board package's existing E2E folder). It does NOT edit the storymap-ui package —
   EXCEPT when the board under QA IS `storymap` itself (dogfood): there the product under
   test IS storymap-ui, so it runs storymap-ui from the run's worktree (which carries the
   staged code, since runs are cut from `stage`) and may add storymap-ui E2E/visual specs.
@@ -41,11 +41,12 @@ card whose code compiles.
 > guidelines (FIX THE APP, never weaken assertions, prefer the cheapest layer that proves the
 > criterion). Dev stack: the target repo's dev-environment notes. Browser test-auth
 > recipe and the experience rubric: whatever UI-validation skill the target repo ships
-> (the board package's CLAUDE.md points to it). Logs for debugging: the target repo's
+> (the target's declared `docs.conventions` points to it, when it declares one). Logs for debugging: the target repo's
 > operational-scripts notes. This skill edits the card
 > (`qaPassed`/`qaRanAt`/`qaCommit`/`commitRange`/`findings[]`/status) under
 > `storymap/boards/<board>/cards/` AND product test code under
-> `packages/<pkg>/tests/e2e/`. Permission mode: dangerously-skip-permissions (it
+> the board package's existing E2E folder (found through the target's `docs.testing`, or by
+> looking at where the package already keeps its specs). Permission mode: dangerously-skip-permissions (it
 > boots the stack, runs tests and drives the browser MCP).
 
 ## Input
@@ -82,7 +83,7 @@ serving the product yourself, use the in-jail script route. See "Execute + visua
      the CHEAPEST layer that actually renders the surface: prefer a **component/render test**
      (does the form footer stay sticky once the viewport shrinks to phone height) or a mock E2E; escalate to a real-stack browser sweep
      ONLY for criteria a component test can't prove. Right-size the stack per "Bring up the
-     stack" (web + Auth for a layout/visual check — do NOT boot the backend emulators).
+     stack" (the web app plus the sign-in it needs for a layout/visual check — do NOT boot the backing services).
    - **A superfície manda, NÃO o `storyType`.** Antes de escolher o ramo, leia nesta ordem:
      `uiSurfaceEvidence.touched` (MEDIDO pelo engine sobre o diff do run — é FATO, vence tudo),
      senão `hasUiSurface`, senão `storyType === "user"`. **`touched: true` ⇒ o ramo é o de
@@ -98,8 +99,8 @@ serving the product yourself, use the in-jail script route. See "Execute + visua
      é a resposta honesta, e o operador destrava com `approve_qa visual:true` depois de olhar.
    - `storyType: user` (build) → run the full QA below (E2E + visual sweep for UI criteria).
      **DOGFOOD exception** — if `board.yaml.package` is `storymap-ui` (the board IS
-     `storymap`), the product under test IS storymap-ui itself: there is NO emulator/seed
-     stack (it's a board tool that reads files, not Firebase) — instead run storymap-ui
+     `storymap`), the product under test IS storymap-ui itself: there is NO backing-service/seed
+     stack (it's a board tool that reads files) — instead run storymap-ui
      from THIS run's worktree (which carries the staged code, since runs are cut from
      `stage`) on an isolated port + the chrome-devtools visual sweep. See the Dogfood
      path in "Bring up the stack" below; you MAY edit storymap-ui E2E/visual specs here.
@@ -107,9 +108,15 @@ serving the product yourself, use the in-jail script route. See "Execute + visua
      "sem tela") → **the concrete QA gate is the package's test suite green + the
      `harness-review` lenses** — NOT a browser. Um destes COM superfície medida não entra
      aqui: vai para o ramo de browser acima. Do this, in order:
-     1. Run the board package's suite: **`just test-<pkg>`** (for the `storymap` board,
-        `just test-storymap`; the package comes from `board.yaml.package`). Read the
-        full output.
+     1. Run the board package's suite: read the check `test` (`target.checks.test`) in the
+        `target` block of `storymap/settings.yaml` (the run's context note lists the declared
+        check names; fill `{package}` / `{pkg}` / `{board}` from `board.yaml`; if the storymap MCP
+        is mounted, `target_profile({board})` returns the same already resolved) and run the
+        declared command yourself with Bash IN YOUR WORKTREE (`run_check` runs in the runtime
+        checkout, never in your worktree). If
+        the target declares none, discover the command in the repository's own instructions
+        (README, CLAUDE.md/AGENTS.md, the package manifest) — never assume an executor. The
+        package comes from `board.yaml.package`. Read the full output.
      2. **GREEN** → the suite proves the delta. Set `qaPassed: true` + `qaRanAt` +
         `qaEvidence: { suite: true, visual: false, at }` (honesto: este ramo NÃO abre
         browser — e para um card sem superfície `visual: false` não bloqueia nada) +
@@ -155,7 +162,7 @@ serving the product yourself, use the in-jail script route. See "Execute + visua
 > what is allowed to cross the boundary.
 
 > **DOGFOOD path (board `storymap` — product under test IS storymap-ui).** SKIP the whole
-> emulator/seed section below — storymap-ui has NO Firebase/emulator dependency (it's a
+> backing-service/seed section below — storymap-ui has NO backing-service dependency (it's a
 > board tool that reads files). Write ONE script and run it in ONE call:
 >
 > 1. **Boot + readiness + sweep in a single script.** You run in an ISOLATED worktree that
@@ -182,8 +189,8 @@ serving the product yourself, use the in-jail script route. See "Execute + visua
 >    done
 >    [ "$C" != "000" ] || { echo "FALHOU: servidor não respondeu em 180s"; tail -40 /tmp/qa-dev.log; exit 1; }
 >    echo "PRONTO http=$C porta=$P"
->    cd "$WORKTREE"   # visual-sweep.mjs lives at the REPO ROOT, and writes .artifacts/screenshots/ relative to cwd
->    node scripts/visual-sweep.mjs --url "http://127.0.0.1:$P/<rota>" --label "harness-qa-<id>-<step>" \
+>    cd "$WORKTREE"   # visual-sweep.mjs belongs to the TOOL (not to the target repo); it writes .artifacts/screenshots/ relative to cwd
+>    node "${AGILEHARNESS_TOOL_ROOT:-packages/storymap-ui}/../../scripts/visual-sweep.mjs" --url "http://127.0.0.1:$P/<rota>" --label "harness-qa-<id>-<step>" \
 >      --breakpoints 375x812,1440x900 --wait-selector "<seletor que só existe DEPOIS dos dados>" --require-ready
 >    ```
 >    **Budget — measured, and the naive version of this measurement lies.** First HTTP lands
@@ -215,7 +222,7 @@ serving the product yourself, use the in-jail script route. See "Execute + visua
 >    Sweep the surfaces the criteria need, not every screen you can think of.
 >
 > 2. **Acceptance E2E — same call or none.** storymap-ui has NO Playwright harness today. If the
->    unit suite (`just test-storymap-unit`, on Linux) + the visual sweep prove the criteria, that
+>    unit suite (`bun run test:unit` in the storymap-ui package, on Linux) + the visual sweep prove the criteria, that
 >    IS the gate — do NOT scaffold Playwright. If a criterion genuinely needs a browser
 >    assertion, add a minimal spec under `packages/storymap-ui/tests/e2e/` and run it INSIDE THE
 >    SAME script, after readiness, against `http://127.0.0.1:$P`. A spec run from a later call
@@ -248,7 +255,7 @@ broken/slow toolchain is an operator BLOCKER, not your homework. Hard rules:
   service (3008) and every other worktree — a blast radius QA must never touch. If the
   toolchain is broken (`MODULE_NOT_FOUND`, a crashed loader, a corrupt install), STOP and
   file the blocker (below). One exception you MAY do: create a **local** dev env file the
-  boot needs (e.g. `packages/<pkg>/functions/.env.local` from `.env.example`) — that is
+  boot needs (e.g. a `.env.local` copied from the package's `.env.example`) — that is
   config you own, not a shared-state repair.
 - **ONE bounded readiness wait, IN THE SAME CALL as the boot — and readiness is a response,
   not a log line.** Wait with a SINGLE bounded loop (hard ceiling ~180s) that asks the server
@@ -272,28 +279,28 @@ broken/slow toolchain is an operator BLOCKER, not your homework. Hard rules:
 
 ### Right-size the stack to the criteria (don't boot what you won't assert against)
 
-Boot the CHEAPEST stack that proves THIS card's criteria. Every extra emulator is boot time and one more thing
+Boot the CHEAPEST stack that proves THIS card's criteria. Every extra backing service is boot time and one more thing
 that can crash, and a criterion about layout or copy never reads from it:
 
 - **Layout / navigation / visual / copy criteria** (e.g. "the sticky footer keeps the Save
-  button reachable on a 640px-high viewport") → the **web app plus the Auth emulator** is the
-  whole stack. Leave Functions, Storage and any queue emulator down: they only add boot time and
-  interactive prompts. Use the package's dev recipe scoped to web+auth, or reuse a stack that is
-  already healthy.
-- **Criteria that call a Cloud Function / read seeded Firestore** → add Firestore (+ Functions
-  only if a criterion actually invokes one). Seed with the agent toolkit if present.
-- **The Auth emulator port is shared** → never boot a second standalone stack concurrently; the QA column
+  button reachable on a 640px-high viewport") → the **web app plus the sign-in it needs** (when the target runs one locally) is the
+  whole stack. Leave every other backing service (a functions runtime, file storage, queues…) down: they only add boot time and
+  interactive prompts. Use the target's declared dev command (`target.dev.up` in `storymap/settings.yaml`) scoped to web+sign-in,
+  or reuse a stack that is already healthy.
+- **Criteria that call a backend function / read seeded data** → add the service that holds the data (+ a server-side
+  functions runtime only if a criterion actually invokes one). Seed with the agent toolkit if present.
+- **If a local dev port (sign-in, data) is shared** → never boot a second standalone stack concurrently; the QA column
   is capped to one run at a time (`costGuard`).
 
-> Note: prefer the package's real recipes over hand-rolled emulator invocations — run `just --list` first to see what actually exists on this host, and if a helper the step names is missing, boot the scoped web+auth dev path rather than improvising a full emulator bring-up.
+> Note: prefer the target's declared dev command (`target.dev.up` in `storymap/settings.yaml`, or whatever the repository's own instructions name) over hand-rolled invocations, and if a helper the step names is missing, boot the scoped web+sign-in dev path rather than improvising a full-stack bring-up.
 
 ## Run the acceptance E2E (authored by harness-tests; BDD without the framework)
 
 `harness-tests` already authored a FAILING Playwright spec per UI-observable criterion
-(test-first, title = the criterion verbatim) under `packages/<pkg>/tests/e2e/`, and
+(test-first, title = the criterion verbatim) in the package's E2E folder, and
 `harness-do` turned it green. Your job is to RUN them as the gate. Do NOT add cucumber or
-playwright-bdd (the target repo already standardised on plain Playwright specs; see
-`packages/<pkg>/tests/e2e/README.md` when it has one). Concretely:
+playwright-bdd (the target repo already standardised on plain Playwright specs; read the E2E folder's README when it has one, and
+the target's `docs.testing` when it declares one). Concretely:
 
 - **Prefer the spec harness-tests authored** — locate the card's `test-e*` tasks / the
   spec path listed in `## Plano de testes` and RUN it. Only write/refresh a spec
@@ -302,9 +309,9 @@ playwright-bdd (the target repo already standardised on plain Playwright specs; 
   yields BDD-readable `list`/`html` reports with zero new dependency and traces the
   test straight back to the card.
 - Place specs in the package's EXISTING layout (per the target repo's testing guidelines),
-  cheapest layer first: `packages/<pkg>/tests/e2e/mock/<id>.spec.ts` for UI logic
-  (mocked, fast), escalate to `packages/<pkg>/tests/e2e/emulator/<id>.level2.spec.ts`
-  only for criteria that need the real seeded stack. Use the existing auth/storageState
+  cheapest layer first: the mocked layer for UI logic (fast), escalating to the layer that
+  runs against the real seeded stack only for criteria that need it — follow the folder and
+  file-name pattern the package's existing specs already use. Use the existing auth/storageState
   setup the package already has.
 - A criterion that isn't Gherkin-shaped still gets a spec; if it can't be automated,
   note it explicitly in the `## QA` section (no silent skips).
@@ -315,7 +322,10 @@ playwright-bdd (the target repo already standardised on plain Playwright specs; 
 
 ## Execute + visual sweep
 
-1. **Run the specs**: `just test-<pkg>-e2e` (the package recipe). Read the full
+1. **Run the specs**: the target's `e2e` check (`target.checks.e2e` in the `target` block of
+   `storymap/settings.yaml`; `target_profile({board})` returns the same when the MCP is mounted;
+   run the declared command yourself with Bash IN YOUR WORKTREE; with no declaration, discover
+   the command in the repository's own instructions — never assume an executor). Read the full
    output; a connection error usually means the stack/seed isn't ready (go back to
    readiness), NOT a real failure.
 2. **Visual sweep (UI stories only)** — the requirement is a CAPABILITY, not a tool:
@@ -328,11 +338,11 @@ playwright-bdd (the target repo already standardised on plain Playwright specs; 
    — it beats this prose, which describes the capability, not the route.
    - **`browser-script` (THE route for anything this run is serving — deterministic script)**:
      ```
-     node scripts/visual-sweep.mjs --url <url> --label harness-qa-<id>-<step> \
+     node "${AGILEHARNESS_TOOL_ROOT:-packages/storymap-ui}/../../scripts/visual-sweep.mjs" --url <url> --label harness-qa-<id>-<step> \
        --breakpoints 375x812,1440x900 --init-script <auth.js> \
        --wait-selector "<seletor que só existe DEPOIS dos dados>" --require-ready
      ```
-     It writes the PNGs to `.artifacts/screenshots/` and prints a JSON manifest — then
+     It writes the PNGs to `.artifacts/screenshots/` (leave them there; do not commit them) and prints a JSON manifest — then
      **`Read` each PNG and judge it**. The looking is yours either way; only the
      navigation differs.
      - **`--wait-selector` is not optional in practice.** Pick something that renders only
@@ -364,7 +374,7 @@ playwright-bdd (the target repo already standardised on plain Playwright specs; 
 
    In BOTH routes, inject test-auth BEFORE navigation per the target repo's browser
    auth-injection recipe — read its load-bearing pins first (typically: point the client at
-   the emulator, use a test uid in the exact shape the auth layer accepts, clear stale
+   the local test sign-in, use a test uid in the exact shape the auth layer accepts, clear stale
    auth flags left by a previous page, and wait for the app's auth-ready signal before
    asserting).
 
@@ -426,8 +436,9 @@ playwright-bdd (the target repo already standardised on plain Playwright specs; 
 
 ## Teardown
 
-**Product boards (emulator stack):** tear the stack down deterministically with
-the target repo's stack-down recipe (it must kill the dev ports). Leave seeded emulator data intact for
+**Product boards (local product stack):** tear the stack down deterministically with
+the target's declared stack-down command (`target.dev.down` in `storymap/settings.yaml`; with no declaration,
+discover how to stop the environment in the repository's own instructions — it must kill the dev ports). Leave seeded data intact for
 the next run.
 
 **Dogfood board (`storymap`, the `qa-dev` server): there is nothing to tear down.** The
@@ -465,13 +476,13 @@ whether the card advanced to `revisao` or stayed in `qa-automatizado` with block
   interactive prompt waiting for a value, or an unhealthy readiness probe after a
   bounded wait) → record a `testing`/infra `blocker` and STOP within a few turns. Grinding to
   max-turns or resuming into the same wall is itself the bug — it burns cost for zero QA.
-- **Right-size the stack.** Boot only what the card's criteria assert against (web + Auth for
-  a nav/visual sweep); never cold-boot the full multi-emulator stack (Functions + Storage) for a UI check.
+- **Right-size the stack.** Boot only what the card's criteria assert against (web + sign-in for
+  a nav/visual sweep); never cold-boot the full multi-service stack for a UI check.
 - **Don't deadlock infra cards, but don't rubber-stamp them either.** Only `user`
   stories get the seed+E2E+visual sweep; technical/spike/chore/bug are gated by the
-  package's test SUITE (`just test-<pkg>`) green + the `harness-review` lenses — never
+  package's test SUITE (the target's `test` check) green + the `harness-review` lenses — never
   invent browser tests for them, but never advance one to `revisao` with a red suite.
-- **One concurrent QA run** (the shared Auth emulator port + two headless Chromiums would contend);
+- **One concurrent QA run** (the shared dev-stack port + two headless Chromiums would contend);
   the column carries `costGuard` so a hung browser can't hold a slot forever.
 - **mode is load-bearing here** — you are the station that consumes it (delta/regression
   scope) and the ONLY one that clears it (protocolo canônico em

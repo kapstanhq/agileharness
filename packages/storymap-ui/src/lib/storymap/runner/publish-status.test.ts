@@ -20,7 +20,17 @@ describe("publishLogTargets — o log é o do deploy DESTE board, nunca o da fer
 
   it("sem alvos no card: o deploy declarado do board (chave = id do board), ou o pacote entre os alvos declarados", () => {
     expect(publishLogTargets(card(), cfg({ deploy: { kind: "command", command: "x" } } as Partial<BoardConfig>), [])).toEqual({ kind: "registry", targets: ["prod"] });
-    expect(publishLogTargets(card(), cfg({ package: "packages/api" }), ["api"])).toEqual({ kind: "registry", targets: ["api"] });
+    expect(publishLogTargets(card(), cfg({ package: "packages/api" }), ["api"], "packages/")).toEqual({ kind: "registry", targets: ["api"] });
+  });
+
+  it("o prefixo vem da declaração do alvo: sem packageRoot, 'packages/api' NÃO vira 'api' (neutro, sem supor a pasta)", () => {
+    expect(publishLogTargets(card(), cfg({ package: "packages/api" }), ["api"])).toEqual({ kind: "none" });
+    expect(publishLogTargets(card(), cfg({ package: "packages/api" }), ["api"], null)).toEqual({ kind: "none" });
+    // o package que JÁ é o id do alvo continua casando sem declaração nenhuma
+    expect(publishLogTargets(card(), cfg({ package: "api" }), ["api"])).toEqual({ kind: "registry", targets: ["api"] });
+    // e uma raiz diferente da declarada não casa por acidente
+    expect(publishLogTargets(card(), cfg({ package: "apps/api" }), ["api"], "packages/")).toEqual({ kind: "none" });
+    expect(publishLogTargets(card(), cfg({ package: "apps/api" }), ["api"], "apps/")).toEqual({ kind: "registry", targets: ["api"] });
   });
 
   it("só o board DA FERRAMENTA lê o self-deploy.log; um board sem alvo não tem log de deploy", () => {
@@ -52,6 +62,7 @@ describe("readPublishStatus — o modal lê o log do job do board", () => {
     readCard: async () => card({ deployTargets: ["api"], deployFiredAt: "2026-03-05T10:27:46.000Z" }),
     readConfig: async () => cfg({ package: "packages/api" }),
     productTargets: () => ["api"],
+    packageRoot: () => "packages/",
     jobOf: (t) => (t === "api" ? { logFile: "/logs/mcp-deploy-api.log", status: "done", startedAt: 1, finishedAt: 2, exitCode: 0 } : undefined),
     logFileFor: (t) => `/logs/mcp-deploy-${t}.log`,
     selfDeployLog: () => "/runner/self-deploy.log",
@@ -67,6 +78,13 @@ describe("readPublishStatus — o modal lê o log do job do board", () => {
     ]);
     expect(JSON.stringify(s)).not.toContain("self-deploy");
     expect(s?.verdict.state).toBe("not-measured");
+  });
+
+  it("readPublishStatus repassa a raiz DECLARADA: sem ela o board por pacote não acha o log do alvo", async () => {
+    const semRaiz = await readPublishStatus("prod", "story-x", deps({ readCard: async () => card(), packageRoot: () => null }));
+    expect(semRaiz?.logs).toEqual([]);
+    const comRaiz = await readPublishStatus("prod", "story-x", deps({ readCard: async () => card(), packageRoot: () => "packages/" }));
+    expect(comRaiz?.logs.map((l) => l.target)).toEqual(["api"]);
   });
 
   it("sem job na memória (depois de um restart) ⇒ o arquivo de log do alvo", async () => {

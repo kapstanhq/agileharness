@@ -3,8 +3,8 @@ name: harness-review
 description: >-
   AgileHarness automation that REVIEWS and SELF-REPAIRS a freshly implemented story.
   Reads a card in status `revisar-codigo` from storymap/boards/<board>/cards/<id>.md,
-  runs tech-specific review lenses (data-access rules, the frontend framework, mobile performance,
-  security, testing) over the real diff, AUTO-FIXES the safe/mechanical findings
+  runs the review lenses the target declares (security, testing, performance and general are built in;
+  the target adds the domain ones — see `target.reviewLenses` in `storymap/settings.yaml`) over the real diff, AUTO-FIXES the safe/mechanical findings
   (guarded by typecheck + tests — never weakening assertions), and escalates the
   rest by KIND: an objective defect that needs a human (security-rule or risky
   architectural change) stays a `blocker` finding; a genuine human DECISION (a
@@ -31,15 +31,15 @@ triggers:
 # /harness-review — AgileHarness: review + self-repair (revisar-codigo → qa-automatizado)
 
 The `harness-review` trigger automation. After `harness-do` builds a story, this reviews
-the diff through tech-specific lenses, **fixes what's safe to fix**, and escalates
+the diff through the target's review lenses, **fixes what's safe to fix**, and escalates
 only what needs a human decision — so the card reaches the automated QA column
 (`qa-automatizado`), and then human Revisão, already clean.
 
 > Read `storymap/README.md` first. Testing rules: the project's own testing guidance, if it has one
 > (FIX THE APP, never weaken assertions, autonomous loop). Security: the project's security
 > guidance, if it has one. This skill edits the card `findings[]`
-> under `storymap/boards/<board>/cards/` AND product code under `packages/<pkg>/`
-> to apply safe fixes. Permission mode: dangerously-skip-permissions (it writes
+> under `storymap/boards/<board>/cards/` AND product code in the board package (`package:` in
+> `board.yaml`) to apply safe fixes. Permission mode: dangerously-skip-permissions (it writes
 > code + runs tests).
 
 ## Input
@@ -58,7 +58,7 @@ Review the story's CHANGE, scoped to the package from `board.yaml` `package:`:
   now commit INCREMENTALLY, every subject carrying `· <board>/<cardId>` (see harness-do's "Commits
   incrementais"). So the story's change = the cumulative diff of those commits:
   `git log --grep="<board>/<cardId>" --oneline` lists them; review the union of their diffs
-  (e.g. `git diff <earliest>^..HEAD -- packages/<pkg>/`). Record the HEAD sha in `reviewCommit`
+  (e.g. `git diff <earliest>^..HEAD -- <the board package>`). Record the HEAD sha in `reviewCommit`
   AND the DURABLE range `commitRange: { base: <git rev-parse <earliest>^>, head: <HEAD sha> }` —
   a lone sha rots once `main` advances (SM-05); base+head stays diff-able forever.
 - **Fallback (no card-id commits found — legacy/uncommitted run):** the working-tree diff since
@@ -85,14 +85,25 @@ Review the story's CHANGE, scoped to the package from `board.yaml` `package:`:
 2. **Run the lenses (parallel).** Dimension to the diff — skip a lens with nothing
    to review. Spawn them as parallel subagents for isolation, mapping each to the
    project's domain skill/agent:
+   **Which lenses exist is the TARGET's declaration, not this skill's.** Read the `reviewLenses` map in the
+   `target` block of `storymap/settings.yaml` (the run's context note does NOT list them; a headless run has
+   no storymap MCP — in a conductor session `target_profile({board})` returns the same, already resolved):
+   the built-in ones (`security`, `testing`, `perf`, `general`, `design`)
+   plus any domain lens the target added (a data-store access lens, a frontend-framework lens…),
+   each with its `name`, `description` (what it looks for), an optional `agent` (who runs it) and
+   an optional `when` / `mandatoryWhen`. A lens whose `mandatoryWhen` matches the diff is NOT
+   optional. The built-ins look for:
+
    | Lens        | Looks for                                           | Maps to |
    |-------------|-----------------------------------------------------|---------|
-   | `firestore` | rules holes, unsafe queries, data-store access misuse | the project's security skill/rules (if any) |
-   | `security`  | secrets, authz/claims, injection, SSR data exposure | the project's security skill (if any), `/security-review` |
-   | `nextjs`    | server/client boundary, server-action safety, caching | the project's frontend-framework skill (if any) |
-   | `perf`      | mobile jank, re-renders, bundle, layout thrash      | the app's perf-audit skill (if present) |
+   | `security`  | secrets, authz/claims, injection, data exposure     | the lens' declared `agent`, else the project's security skill (if any), `/security-review` |
+   | `perf`      | slow queries, re-renders, bundle, layout thrash     | the lens' declared `agent`, else the app's perf-audit skill (if present) |
    | `testing`   | missing/weak coverage of the acceptance criteria    | the project's testing skill/rules (if any) |
    | `general`   | correctness bugs, dead code, simplification         | `/code-review` |
+   | `design`    | adherence to the style guide and the agreed design  | the board's style guide |
+
+   A lens the target declared that is not in this table maps to its declared `agent` (or, with none,
+   to a general reviewer briefed with the lens `name` and `description`).
 
    **Cooperative structured output (harness #2) — each lens MUST return its findings as a single
    fenced block, and YOU (the orchestrator) MUST validate it before writing anything.** The lens
@@ -106,8 +117,8 @@ Review the story's CHANGE, scoped to the package from `board.yaml` `package:`:
    ```
    ````
 
-   — an ARRAY of objects with EXACTLY these keys: `lens` (one of firestore|security|nextjs|perf|
-   testing|general), `severity` (one of blocker|high|medium|low), `title` (non-empty), and the optional
+   — an ARRAY of objects with EXACTLY these keys: `lens` (one of the built-in ids or one of the keys of
+   `target.reviewLenses`), `severity` (one of blocker|high|medium|low), `title` (non-empty), and the optional
    `detail`/`file`/`line`/`suggestion`. The sub-agent does NOT author `id` or `status` — you assign those
    on write (`status: open`, a stable id). An empty lens returns `[]`.
 
@@ -132,8 +143,10 @@ Review the story's CHANGE, scoped to the package from `board.yaml` `package:`:
    Decide which of THREE buckets it lands in:
    - **Auto-fixable** (mechanical / low-risk: a missing test, a perf re-render, a
      type, a lint/pattern issue, a small correctness bug) → FIX it in
-     `packages/<pkg>/`, then re-run the relevant tests + typecheck to confirm
-     green. Fix the app, NEVER weaken assertions. Mark the finding `status: fixed`
+     the board package, then re-run the relevant tests + typecheck to confirm
+     green (the target's `test` / `typecheck` checks, `target.checks.<name>` in `storymap/settings.yaml` — `target_profile({board})` when the MCP is mounted — run yourself
+     with Bash in your worktree; with none declared, discover the command in the repository's own
+     instructions — never assume an executor). Fix the app, NEVER weaken assertions. Mark the finding `status: fixed`
      and keep it on the card (an audit trail of what was repaired).
    - **Defeito objetivo que precisa de mão humana** (a data-access security-rule
      change, a risky architectural refactor you should not do silently, anything
@@ -221,7 +234,7 @@ harness-review`. Use ids `q<N>` que não colidam com perguntas já existentes:
 > renderiza como o CORPO PRINCIPAL no Inbox; o operador precisa entender num relance
 > O QUE está sendo decidido e POR QUE importa. **NUNCA** despeje nele a investigação:
 > branch/run IDs, hashes de commit, caminhos de arquivo como evidência, o diagnóstico
-> passo-a-passo, "119 commits atrás", ou qualquer log de terminal. Comece o `text` pela
+> passo-a-passo, contagens de commits ("N commits atrás"), ou qualquer log de terminal. Comece o `text` pela
 > decisão em forma de pergunta aberta. As stakes / o PORQUÊ vão no `context:` (1–2 linhas);
 > a prova detalhada (IDs, hashes, diffs) vai num finding `detail` — **nunca** no `text`.
 

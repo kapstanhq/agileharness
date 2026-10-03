@@ -1,8 +1,8 @@
 // O INVARIANTE da raia do dono: os cards da raia `demand` são EXATAMENTE os cards em Decidir do coletor do
 // Inbox — nem um a mais, nem um a menos — e o que Decidir conta sem card na raia é dito como «fora do quadro».
 //
-// Num caso real a raia do dono tinha mais cards que Decidir: os desvios eram cards parados em Liberar/Revisão cujo item
-// estava em ACOMPANHAR (o Jido republicando, o gate do sistema). A raia os puxava pelo STATUS.
+// O desvio que a regra impede: uma raia que puxa pelo STATUS mostra cards cujo item está em ACOMPANHAR (o sistema
+// refazendo uma publicação, um gate com o sistema) como se fossem decisão do dono.
 //
 // A prova roda o modelo REAL do Inbox (cardCockpitItems → itemEntries → foldByCard → ownerDecisionsFromEntries) sobre um
 // corpus sintético — cada status do pipeline × pergunta técnica / pergunta de dinheiro / bloqueio / publicação que
@@ -19,25 +19,21 @@ import { FIXTURE_BOARD } from "./board-fixture";
 import { kanbanStories } from "./views";
 import type { BoardConfig, Card, CardQuestion, Finding, LaneDef } from "./types";
 
-const NOW = Date.parse("2026-10-01T22:45:00Z");
+const NOW = Date.parse("2026-07-14T09:10:00Z");
 
 const OLD_MAP: LaneDef[] = [
-  { id: "entrada", label: "Entrada", statuses: ["capturando", "triage", "priorizar", "pronta", "grill"] },
-  { id: "desenho", label: "Desenho", statuses: ["enriquecer", "interview", "design-ux", "design-ui", "refinar", "corrigir", "descontinuar"] },
-  { id: "obra", label: "Obra", statuses: ["plano-tecnico", "desenvolver", "revisar-codigo"] },
-  { id: "voce", label: "Precisa de você", statuses: ["ready", "com-design", "revisao", "release"], demand: true },
-  { id: "conferencia", label: "Conferência", statuses: ["qa-automatizado", "merge", "stage", "deploy"] },
-  { id: "feito", label: "Feito", statuses: ["concluida"] },
+  { id: "chegada", label: "Chegada", statuses: ["capturando", "triage", "grill", "priorizar", "descontinuar"] },
+  { id: "risco", label: "Risco", statuses: ["enriquecer", "interview", "design-ux", "design-ui", "com-design", "refinar", "corrigir"] },
+  { id: "dono", label: "Com o dono", statuses: ["pronta", "stage", "deploy"], demand: true },
+  { id: "mesa", label: "Mesa", statuses: ["ready", "plano-tecnico", "desenvolver", "revisar-codigo", "qa-automatizado", "revisao", "merge", "release", "concluida"] },
 ];
 const NEW_MAP: LaneDef[] = [
-  { id: "voce", label: "Precisa de você", statuses: [], demand: true },
-  { id: "entrada", label: "Entrada", statuses: ["capturando", "triage", "descontinuar"] },
-  { id: "preparo", label: "Preparo", statuses: ["priorizar", "pronta", "enriquecer", "interview"] },
-  { id: "desenho", label: "Desenho", statuses: ["grill", "design-ux", "design-ui", "com-design", "refinar"] },
-  { id: "obra", label: "Obra", statuses: ["ready", "plano-tecnico", "desenvolver", "corrigir"] },
-  { id: "conferencia", label: "Conferência", statuses: ["revisar-codigo", "qa-automatizado"] },
-  { id: "saida", label: "Saída automática", statuses: ["revisao", "merge", "stage", "release", "deploy"] },
-  { id: "feito", label: "Feito", statuses: ["concluida"] },
+  { id: "fila", label: "Fila", statuses: ["capturando", "triage", "grill", "descontinuar"] },
+  { id: "dono", label: "Com o dono", statuses: [], demand: true },
+  { id: "forma", label: "Forma", statuses: ["priorizar", "pronta", "enriquecer", "interview", "design-ux", "design-ui", "com-design", "refinar"] },
+  { id: "bancada", label: "Bancada", statuses: ["ready", "plano-tecnico", "desenvolver", "corrigir"] },
+  { id: "prova", label: "Prova", statuses: ["revisar-codigo", "qa-automatizado", "revisao", "merge"] },
+  { id: "envio", label: "Envio", statuses: ["stage", "deploy", "release", "concluida"] },
 ];
 
 let base: BoardConfig;
@@ -108,7 +104,7 @@ describe.each([
     const stories = kanbanStories(cards, config);
     const { byLane, outside } = groupStoriesByLane(stories, boardLanes(config)!, { owner });
 
-    const lane = byLane.get("voce")!.map((c) => c.id);
+    const lane = byLane.get("dono")!.map((c) => c.id);
     const shown = new Set(stories.map((c) => c.id));
     const decidir = [...new Set(entries.filter((e) => e.decision.bucket === "decidir" && !e.decision.banner && shown.has(e.cardId)).map((e) => e.cardId))];
     // anti-vácuo: o corpus TEM o que decidir e o que não decidir
@@ -126,8 +122,8 @@ describe.each([
   });
 });
 
-describe("os 4 desvios típicos (Liberar/Revisão com o item em Acompanhar)", () => {
-  // O item deles estava em ACOMPANHAR — o Jido republicando, o gate com o sistema —, então não são decisão do dono.
+describe("cards em passos de entrega com o item em Acompanhar", () => {
+  // O item deles está em ACOMPANHAR — o sistema refazendo, o gate com o sistema —, então não são decisão do dono.
   const card = (id: string, status: string) => ({ id, type: "story", title: id, status, findings: [], questions: [] }) as unknown as Card;
   const following = (cardId: string, kind: InboxEntry["kind"]): InboxEntry =>
     ({
@@ -141,21 +137,16 @@ describe("os 4 desvios típicos (Liberar/Revisão com o item em Acompanhar)", ()
       facets: [],
       decision: { bucket: "acompanhar", ask: "O sistema está cuidando", options: [], dot: "amber", since: null, next: { who: "jido", label: "Jido" } },
     }) as unknown as InboxEntry;
-  const live = [card("story-lib-a", "release"), card("story-lib-b", "release"), card("story-lib-c", "release"), card("story-rev-d", "revisao")];
-  const entries = [
-    following("story-lib-a", "deploy-failed"),
-    following("story-lib-b", "deploy-failed"),
-    following("story-lib-c", "deploy-failed"),
-    following("story-rev-d", "gate"),
-  ];
+  const live = [card("story-pub-1", "deploy"), card("story-pub-2", "deploy"), card("story-stg-3", "stage")];
+  const entries = [following("story-pub-1", "deploy-failed"), following("story-stg-3", "gate"), following("story-pub-2", "deploy-failed")];
 
   it.each([
     ["mapa antigo", OLD_MAP, LANE_OTHERS_ID],
-    ["mapa novo", NEW_MAP, "saida"],
-  ])("%s: nenhum dos 4 entra na raia do dono (vão para %s)", (_m, map, where) => {
+    ["mapa novo", NEW_MAP, "envio"],
+  ])("%s: nenhum deles entra na raia do dono (vão para %s)", (_m, map, where) => {
     const config: BoardConfig = { ...base, view: { lanes: map } };
     const { byLane, outside } = groupStoriesByLane(live, boardLanes(config)!, { owner: ownerDecisionsFromEntries(entries, "demo") });
-    expect(byLane.get("voce")).toEqual([]);
+    expect(byLane.get("dono")).toEqual([]);
     expect(byLane.get(where)!.map((c) => c.id).sort()).toEqual(live.map((c) => c.id).sort());
     expect(outside).toBe(0);
   });

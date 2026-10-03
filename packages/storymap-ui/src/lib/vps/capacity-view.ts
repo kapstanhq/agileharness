@@ -129,10 +129,20 @@ export function capacityView(s: GovernorSnapshot | null | undefined, now: number
     headline = "Automação liberada";
   }
 
+  // A trava guarda o número do ENGATE («janela de 7 dias em 95%»); sem o «quando» e o «agora» ao lado, quem lê
+  // toma o 95% pelo uso de hoje (aconteceu: cota zerada, painel dizendo 95%).
+  const latchDetail = (l: NonNullable<typeof latch>): string => {
+    if (l.halt) return l.reason;
+    const now7d = reading ? `semana em ${r1(reading.usage7dPct)}%` : null;
+    const now5h = reading?.usage5hPct != null ? `sessão em ${r1(reading.usage5hPct)}%` : null;
+    const agora = [now7d, now5h].filter(Boolean).join(", ");
+    return `acionada ${l.since}: ${l.reason}${agora ? ` · agora: ${agora}${reading?.stale ? " (leitura defasada)" : ""}` : ""}`;
+  };
+
   return {
     tone,
     headline,
-    detail: latch ? latch.reason : s.meterStall ? s.meterStall.detail : s.verdict.detail,
+    detail: latch ? latchDetail(latch) : s.meterStall ? s.meterStall.detail : s.verdict.detail,
     retry: !latch && s.verdict.retryAt != null ? `volta a tentar ${when(s.verdict.retryAt, now)}` : null,
     rows,
     latch,

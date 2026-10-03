@@ -57,8 +57,8 @@ Make the board reflect what the app actually is: scan the code, diff against the
 ## Workflow
 
 1. **Map board → package.** Read the board's `board.yaml`: its `package:` field names the
-   package the board maps to (`packages/<app>/`) — that's the code you scan. Discover the
-   existing boards with `list_boards` (also see root `.claude/CLAUDE.md`).
+   package the board maps to (its path under the repository) — that's the code you scan. Discover the
+   existing boards with `list_boards` (and read the repository's own instructions, if it has any).
    **`package:` is OPTIONAL, and a board without one is legitimate** (a discovery board that
    maps a product journey with no code yet — the shipped `demo` board is exactly that). When it
    is absent, do NOT guess a package: say so and ask the operator which tree to scan, or scan

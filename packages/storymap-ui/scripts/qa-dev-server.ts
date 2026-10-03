@@ -31,8 +31,10 @@ import {
   resolveNextBinary,
   writeDevServerPid,
   devServerPidFile,
-  PROD_PORT,
+  prodPorts,
 } from "../src/lib/storymap/runner/dev-server";
+import { loadRunnerConfig } from "../src/lib/storymap/runner/config";
+import { qaOf } from "../src/lib/storymap/target-profile";
 import { unlinkSync } from "node:fs";
 
 // Bounded so a genuinely saturated box surfaces a failure instead of respawning forever.
@@ -40,6 +42,18 @@ const MAX_PORT_ATTEMPTS = 3;
 
 // EADDRINUSE can surface either as the spawn 'error' code or in Next's startup stderr — match both.
 const EADDRINUSE_RE = /EADDRINUSE|address already in use|port \d+ is in use/i;
+
+/**
+ * As portas que a stack do ALVO ocupa (`settings.yaml → target.qa.ports`): o servidor efêmero nunca as escolhe.
+ * Sem declaração (ou settings ilegível) não reserva nada — o comportamento de antes.
+ */
+function reservedPorts(): number[] {
+  try {
+    return qaOf(loadRunnerConfig().target).ports;
+  } catch {
+    return [];
+  }
+}
 
 async function main() {
   // The engine injects AGILEHARNESS_AUTORUN_RUN_ID on every autorun spawn (engine.ts) — that IS the
@@ -59,7 +73,7 @@ async function main() {
   for (let attempt = 1; attempt <= MAX_PORT_ATTEMPTS; attempt++) {
     let port: number;
     try {
-      port = await resolveDevServerPort(runId);
+      port = await resolveDevServerPort(runId, undefined, { reserved: reservedPorts() });
     } catch (err) {
       console.error(
         `[qa-dev-server] não encontrou porta livre: ${err instanceof Error ? err.message : String(err)}`,
@@ -68,10 +82,10 @@ async function main() {
       return;
     }
 
-    // Belt-and-suspenders (the guard already lives in resolveDevServerPort): never proceed on 3008.
-    if (port === PROD_PORT) {
+    // Belt-and-suspenders (the guard already lives in resolveDevServerPort): never proceed on the service port.
+    if (prodPorts().includes(port)) {
       console.error(
-        `[qa-dev-server] guard: porta resolvida é ${PROD_PORT} (prod) — abortando`,
+        `[qa-dev-server] guard: porta resolvida é ${port} (prod) — abortando`,
       );
       process.exit(1);
       return;

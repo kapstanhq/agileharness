@@ -167,7 +167,6 @@ export const SUFIXOS_NATIVOS: readonly string[] = [
   "ORIGIN_TRUST",
   "PORT",
   "PUBLIC_URL",
-  "QA_SEED_PROBE_URL",
   "REAPER_MODE",
   "SANDBOX_ALLOWED_DOMAINS",
   "SANDBOX_DENY_READ",

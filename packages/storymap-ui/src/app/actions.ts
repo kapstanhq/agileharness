@@ -12,13 +12,15 @@ import { requireSession } from "@/lib/auth/action-guard";
 import { resolveActionCaller } from "@/lib/auth/action-guard";
 import { revalidatePath } from "next/cache";
 import { readBoardConfig, readCard, readCards } from "@/lib/storymap/repo";
-import { applyReopen, isReopenDestination, REOPEN_KINDS, type ReopenDestination } from "@/lib/storymap/reopen";
+import { applyReopen, isReopenableStatus, isReopenDestination, REOPEN_KINDS, type ReopenDestination } from "@/lib/storymap/reopen";
 import { appendTransition, readTransitions, type Transition } from "@/lib/storymap/runner/transitions";
 import { isScopedActor, mcpActorAttribution, transitionActorLabel } from "@/lib/storymap/mcp/actor";
 import { moveRiskClass } from "@/lib/storymap/entry-effect";
 import { dispositionFor } from "@/lib/storymap/runner/orchestrator-policy";
 import { consumeGrant, createApprovalRequest, decideApprovalRequest, findMatchingGrant } from "@/lib/storymap/approvals";
 import { appendAgentAction } from "@/lib/storymap/runner/agent-actions";
+import { effectiveScope, scopeCardOf, storyTypeChangeLine, storyTypeChangeRefusal, type PaceActor } from "@/lib/storymap/runner/board-pace";
+import { boardPaceRow } from "@/lib/storymap/runner/board-pace-store";
 // WS-6.4 — a frota: reciclar um agente e liberar o claim dele a partir de /processes.
 import { getCardClaims, sessionClaimActor } from "@/lib/storymap/runner/claims";
 import { sessionOwnsCard } from "@/lib/storymap/runner/session-claims";
@@ -86,6 +88,8 @@ import { listTrashManifests, readTrashManifest, removeTrashEntry, writeTrashMani
 import { ADDRESSES_REL, ideaFingerprint } from "@/lib/storymap/idea";
 import { makeCtx, validateLink } from "@/lib/storymap/link-graph";
 import { loadRunnerConfig, writeRunnerSettings } from "@/lib/storymap/runner/config";
+import { declaredCodePrefixes, stagingBranchOf } from "@/lib/storymap/runner/staging";
+import { lensNamesOf } from "@/lib/storymap/inbox/entries";
 import { getCapacityGovernor, type KeepaliveNowResult } from "@/lib/storymap/runner/capacity-service";
 import type { GovernorSnapshot, LatchLevel } from "@/lib/storymap/runner/capacity-governor";
 import { findRepoRoot } from "@/lib/storymap/paths";
@@ -162,7 +166,7 @@ import type { TriageOutcome, TriageReport } from "@/lib/storymap/triage/types";
 import { defaultQuestionCategory, effectiveAutonomy, resolveProxyAudit } from "@/lib/storymap/autonomy";
 import { appendRecordedDecision, recordedDecisionError, recordedDecisionRefusal } from "@/lib/storymap/recorded-decisions";
 import { optInsRefusal } from "@/lib/storymap/card-opt-ins";
-import { applyCostImpact, costImpactError, costImpactVerdict, type CostImpactInput, type CostImpactVerdict } from "@/lib/storymap/cost-impact";
+import { applyCostImpact, costImpactError, costImpactVerdict, moneyTextOf, type CostImpactInput, type CostImpactVerdict } from "@/lib/storymap/cost-impact";
 import { dilemmaEntry, followUpItems, type FollowUpItem } from "@/lib/storymap/system-decisions";
 import { appendSystemDecision, newSystemDecisionId, readSystemDecisions } from "@/lib/storymap/runner/decision-log";
 import { undoSystemDecision } from "@/lib/storymap/runner/decision-undo";
@@ -954,7 +958,7 @@ export async function commitProposalAction(input: {
         // Antes, um `duplicateOf` que resolvia fazia o commit criar o card já em `duplicado` — um status
         // TERMINAL na coluna `archive`. Efeito prático: o operador capturava uma ideia, a UI mostrava o card
         // que seria criado, ele confirmava… e nada aparecia no board. O card existia, arquivado, invisível.
-        // A decisão tinha sido tomada por ele. (Foi o que aconteceu com a captura de melhoria no headline:
+        // A decisão tinha sido tomada por ele. (Foi o que aconteceu num caso real com a captura de uma melhoria:
         // deduplicada contra uma story JÁ ENTREGUE — e uma melhoria sobre algo entregue não é duplicata dela.)
         //
         // O contrato do campo sempre disse "aviso": ProposedItem.duplicateOf = "existing card id this looks
@@ -1606,6 +1610,15 @@ export async function acceptTriageCardAction(input: {
   }
 }
 
+/** Quem troca o tipo: o token escopado é um AGENTE (com o rótulo dele); a sessão do navegador e o serviço são o dono. */
+function typeChangeActor(): PaceActor {
+  return isScopedActor() ? { kind: "agent", id: mcpActorAttribution() } : { kind: "owner" };
+}
+/** O rótulo do ator na trilha de auditoria. */
+function actorLabel(a: PaceActor): string {
+  return a.kind === "owner" ? "human:card-type" : a.id ?? "agent";
+}
+
 /** Persist the full card (used by the editor drawer). */
 export async function updateCardAction(input: {
   boardId: string;
@@ -1639,6 +1652,8 @@ export async function updateCardAction(input: {
     // snapshot), so we can tell a genuine status change from a plain body/title/RICE edit and only
     // fire autorun on the former — mirroring moveCardAction's prevStatus guard.
     let prevStatus: string | null | undefined;
+    // R6 (escopo de tipos do ritmo): a troca de tipo feita sob escopo, para a trilha de auditoria depois da gravação.
+    let typeChange: { line: string; actor: PaceActor } | null = null;
     const card = await updateCardOnDisk(input.boardId, input.card.id, (prev) => {
       prevStatus = prev.status ?? null;
       if (input.expectedBody !== undefined && (prev.body ?? "") !== input.expectedBody) {
@@ -1652,6 +1667,24 @@ export async function updateCardAction(input: {
         );
       }
       const merged: Card = mergeCardOnSave(input.card, prev);
+      // R6 — o TIPO é a catraca do escopo do ritmo: enquanto o board limita o que começa, trocar o tipo de um card é
+      // registrado (antes/depois/autor), e um agente não reclassifica uma funcionalidade já classificada. Aqui, e não
+      // nas tools, porque é o ÚNICO ponto por onde passam o update_card, o painel do card e as ações do servidor.
+      typeChange = null;
+      if (prev.type === "story" && merged.type === "story" && (prev.storyType ?? "user") !== (merged.storyType ?? "user")) {
+        const scope = effectiveScope(boardPaceRow(input.boardId), Date.now());
+        if (scope) {
+          const after = merged.storyType ?? "user";
+          const actor = typeChangeActor();
+          const refusal = storyTypeChangeRefusal(scope, prev, after, actor);
+          const line = storyTypeChangeLine(prev, after, actor);
+          if (refusal) {
+            void appendAgentAction({ actor: actorLabel(actor), board: input.boardId, cardId: prev.id, tool: "updateCardAction.storyType", cls: "write-board", disposition: "auto", outcome: "refused", note: `${line} — recusado` });
+            throw new Error(refusal);
+          }
+          typeChange = { line, actor };
+        }
+      }
       // As escolhas do dono no início do card (tecnologia, «quero ver as opções de tela») só mudam
       // antes da construção começar: a MESMA régua (card-opt-ins.ts) que desabilita os campos na tela.
       const optIns = optInsRefusal(prev, merged, config);
@@ -1678,6 +1711,10 @@ export async function updateCardAction(input: {
       return merged;
     });
     if (!card) return { ok: false, error: `card não encontrado: ${input.card.id}` };
+    const changed = typeChange as { line: string; actor: PaceActor } | null;
+    if (changed) {
+      void appendAgentAction({ actor: actorLabel(changed.actor), board: input.boardId, cardId: card.id, tool: "updateCardAction.storyType", cls: "write-board", disposition: "auto", outcome: "executed", note: changed.line });
+    }
     revalidateBoard(input.boardId);
     // B2 — o que a ação FEZ: salvou; ou moveu o card (feito); ou disparou o efeito de entrada do passo (iniciado).
     let outcome: ActionOutcome = { status: "done", message: "Card salvo." };
@@ -2068,9 +2105,26 @@ export async function reportBugAction(input: {
     const steps = Array.isArray(input.steps) ? input.steps.map((s) => String(s).trim()).filter(Boolean) : [];
     const today = new Date().toISOString().slice(0, 10);
     let fixFrom: string | null = null;
+    // R6 (escopo de tipos do ritmo): «Reportar bug» RE-TIPA a story como `bug` (applyReopen) — é uma troca de tipo por outra
+    // porta, e sem esta pergunta um agente classificaria uma funcionalidade ainda não entregue como erro e ela passaria pelo
+    // escopo. A mesma régua do update_card: sob escopo, só o dono re-tipa uma funcionalidade já classificada. A exceção é a
+    // funcionalidade ENTREGUE que quebrou (em revisão ou no ar): consertá-la é o que o escopo «só consertos» quer.
+    let typeChange: { line: string; actor: PaceActor } | null = null;
     const next = await updateCardOnDisk(input.boardId, input.cardId, (card) => {
       if (card.type !== "story") throw new Error("Só stories podem ser corrigidas.");
       fixFrom = card.status ?? null;
+      typeChange = null;
+      const scope = effectiveScope(boardPaceRow(input.boardId), Date.now());
+      if (scope && (card.storyType ?? "user") !== "bug") {
+        const actor = typeChangeActor();
+        const line = storyTypeChangeLine(card, "bug", actor);
+        const refusal = isReopenableStatus(card) ? null : storyTypeChangeRefusal(scope, card, "bug", actor);
+        if (refusal) {
+          void appendAgentAction({ actor: actorLabel(actor), board: input.boardId, cardId: card.id, tool: "reportBugAction.storyType", cls: "write-board", disposition: "auto", outcome: "refused", note: `${line} — recusado` });
+          throw new Error(refusal);
+        }
+        typeChange = { line, actor };
+      }
       return {
         ...applyReopen(card, {
           mode: "fix",
@@ -2090,6 +2144,10 @@ export async function reportBugAction(input: {
       };
     });
     if (!next) return { ok: false, error: `card não encontrado: ${input.cardId}` };
+    const retyped = typeChange as { line: string; actor: PaceActor } | null;
+    if (retyped) {
+      void appendAgentAction({ actor: actorLabel(retyped.actor), board: input.boardId, cardId: next.id, tool: "reportBugAction.storyType", cls: "write-board", disposition: "auto", outcome: "executed", note: retyped.line });
+    }
     revalidateBoard(input.boardId);
     if (next.status) void appendTransition({ board: input.boardId, cardId: input.cardId, from: fixFrom, to: next.status, actor: "human", note: "reopen:fix" });
     // A reopen is a REAL status change — fire the cascade in-process (mirrors move/triage actions) so the
@@ -2341,6 +2399,7 @@ export async function approveDataDeletionAction(input: {
       // Uma APROVAÇÃO é decisão do operador: o run que ela dispara não espera o governador de capacidade (sem
       // origin explícita o engine o leria como autorun). Um agente escopado que chegasse aqui seguiria automação.
       initiator: isScopedActor() ? "automation" : "operator",
+      scopeCard: scopeCardOf(approved),
     });
     if (!res.ok) {
       return { ok: false, error: res.reason === "in-flight" ? "Esse card já está rodando." : res.detail };
@@ -2580,6 +2639,20 @@ export async function getEconomyModeAction(): Promise<Result<{ economyMode: bool
   await requireSession("getEconomyModeAction");
   try {
     return { ok: true, data: { economyMode: loadRunnerConfig().economyMode ?? false } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * O nome humano de cada lente de revisão (`id → name`) do alvo: as embutidas e as que ele declarou em
+ * `target.reviewLenses`. O settings não atravessa para o cliente, então as telas que mostram a lente de um finding
+ * (o documento do card) perguntam ao servidor. Leitura.
+ */
+export async function getReviewLensNamesAction(): Promise<Result<{ lensNames: Record<string, string> }>> {
+  await requireSession("getReviewLensNamesAction");
+  try {
+    return { ok: true, data: { lensNames: lensNamesOf(loadRunnerConfig().target) } };
   } catch (e) {
     return fail(e);
   }
@@ -2952,7 +3025,16 @@ export async function getCardFullDiffAction(input: {
     const cwd = findRepoRoot();
     const runGit: GitRunner = async (args) =>
       (await execFileP("git", args, { cwd, maxBuffer: 10 * 1024 * 1024 })).stdout;
-    return { ok: true, data: await cardCumulativeDiff(runGit, input.board, input.cardId) };
+    // O diff de CÓDIGO do card mora no branch de integração DECLARADO e sob os prefixos DECLARADOS (diff.ts não lê
+    // config: quem chama passa o escopo). Sem isto cai no branch/pathspec neutros e o diff do vivo regride.
+    const staging = loadRunnerConfig().autorun.staging;
+    return {
+      ok: true,
+      data: await cardCumulativeDiff(runGit, input.board, input.cardId, {
+        stageBranch: stagingBranchOf(staging),
+        codePrefixes: declaredCodePrefixes(staging),
+      }),
+    };
   } catch (e) {
     return fail(e);
   }
@@ -3110,6 +3192,9 @@ export async function runCardSkillAction(input: {
     const res = getRunnerEngine().runSkill(input.boardId, card.id, effectiveTrigger, status, {
       origin: "manual",
       headroomUrl: resolveHeadroomUrl(config, process.env),
+      // O card já está na mão: o ESCOPO DE TIPOS do board decide pelo pump sem esperar a leitura assíncrona do engine (um
+      // agente escopado que chega por run_skill entra aqui com initiator `automation`).
+      scopeCard: scopeCardOf(card),
     });
     if (!res.ok) {
       return {
@@ -3652,7 +3737,8 @@ export async function recordCostImpactAction(input: {
         cardId: input.cardId,
         agent: by,
         kind: "cost-within-ceiling",
-        what: `Aceitou o aumento de custo de «${card.title}» (+R$${Math.round(input.impact.monthlyBRL)}/mês)`,
+        // a moeda do veredito (a do board/alvo), não um símbolo fixo; no real o texto sai byte a byte como sempre.
+        what: `Aceitou o aumento de custo de «${card.title}» (+${moneyTextOf(input.impact, verdict)}/mês)`,
         why: `${verdict.reason}. Premissas: ${input.impact.assumptions}`,
       });
     }

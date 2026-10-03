@@ -4,6 +4,7 @@
 // node-unit-testable without spawning git.
 
 import type { CommitRange, DiffSnapshot } from "../types";
+import { BOARD_DATA_PREFIX, STAGING_BRANCH_DEFAULT } from "./staging";
 
 /** The throwaway branch a finished run lives on (mirrors MergeQueueEntry.branch). */
 export function runBranchName(sessionId: string): string {
@@ -109,27 +110,51 @@ export async function grepCardCommitRangeDiff(
 }
 
 /**
- * Cumulative CODE diff of a card: ALL of its staged code commits on the `stage` branch — the split's
- * `usm(<cardId>): código staged (run <id>)` convention (merge-queue.ts integrateSplit). Range =
- * parent-of-first..last, scoped to `packages/`. Returns ok:false (no diff run) when the card has no
- * staged code yet (the `do` stage hasn't run / nothing split). `-F` (fixed-strings) because the message
- * carries literal `(`/`)` that `--grep`'s default regex would mis-parse. `runGit` injected for tests.
+ * Onde o repositório DECLAROU que o código mora e em que branch ele espera o release — `autorun.staging.
+ * {branch, codePrefixes}`, lidos por QUEM CHAMA (este módulo é puro e chega ao navegador: não importa config).
+ * Ambos ausentes ⇒ o neutro: o branch default da ferramenta e «tudo fora de storymap/boards/ é código».
+ */
+export interface CodeDiffScope {
+  /** o branch de integração onde o train deixa o código staged (`autorun.staging.branch`) */
+  stageBranch?: string;
+  /** os prefixos de código declarados; `undefined` = indeclarado (tudo fora de storymap/boards/); `[]` = nada é código */
+  codePrefixes?: readonly string[];
+}
+
+/** O pathspec do diff de CÓDIGO: os prefixos declarados, ou «tudo menos o board-data» quando indeclarado. */
+function codePathspec(codePrefixes: readonly string[] | undefined): string[] {
+  if (codePrefixes === undefined) return [".", `:(exclude)${BOARD_DATA_PREFIX}`];
+  return [...codePrefixes];
+}
+
+/**
+ * Cumulative CODE diff of a card: ALL of its staged code commits on the integration branch
+ * (`scope.stageBranch`, default `stage`) — the split's `usm(<cardId>): código staged (run <id>)` convention
+ * (merge-queue.ts integrateSplit). Range = parent-of-first..last, scoped to the declared code prefixes.
+ * Returns ok:false (no diff run) when the card has no staged code yet (the `do` stage hasn't run / nothing
+ * split). `-F` (fixed-strings) because the message carries literal `(`/`)` that `--grep`'s default regex would
+ * mis-parse. `runGit` injected for tests.
  */
 export async function grepStagedCodeRangeDiff(
   runGit: GitRunner,
   cardId: string,
+  scope: CodeDiffScope = {},
 ): Promise<{ ok: true; range: CommitRange; diff: string } | { ok: false; error: string }> {
+  const stageBranch = scope.stageBranch?.trim() || STAGING_BRANCH_DEFAULT;
   let logOut = "";
   try {
-    logOut = await runGit(["log", "stage", "-F", `--grep=usm(${cardId}): código staged`, "--format=%H", "--reverse"]);
+    logOut = await runGit(["log", stageBranch, "-F", `--grep=usm(${cardId}): código staged`, "--format=%H", "--reverse"]);
   } catch {
-    return { ok: false, error: "Sem branch stage / sem código staged." };
+    return { ok: false, error: `Sem branch ${stageBranch} / sem código staged.` };
   }
   const shas = logOut.trim().split("\n").map((s) => s.trim()).filter(Boolean);
   if (shas.length === 0) return { ok: false, error: "Sem código staged para este card." };
   const head = shas[shas.length - 1];
   const base = await resolveRangeBase(runGit, shas[0]);
-  const diff = await runGit(["diff", `${base}..${head}`, "--", "packages/"]);
+  // `[]` declarado (nada é código) ⇒ pathspec vazio seria «o repositório inteiro»: sem código, sem diff de código.
+  const pathspec = codePathspec(scope.codePrefixes);
+  if (pathspec.length === 0) return { ok: false, error: "Sem código staged para este card." };
+  const diff = await runGit(["diff", `${base}..${head}`, "--", ...pathspec]);
   return { ok: true, range: { base, head }, diff };
 }
 
@@ -171,21 +196,22 @@ export interface CumulativeDiffPart {
  * revisão". Two parts because the split scatters them: `board` = every change to the card's board-data
  * files on the current branch (main) — narrative/acceptance/tasks/plan/wireframe, selected by PATH (the
  * board commits use varied subjects, so a message-grep would miss them); `code` = every `usm(<cardId>):
- * código staged` commit on `stage` — the product code held for release. Each is null when absent (e.g.
+ * código staged` commit on the integration branch — the product code held for release. Each is null when absent (e.g.
  * code not written yet). Reconstructed entirely from git history (no new storage) by reusing the two
- * range helpers.
+ * range helpers. `scope` is the repo's DECLARED integration branch + code prefixes (see {@link CodeDiffScope}).
  */
 export async function cardCumulativeDiff(
   runGit: GitRunner,
   board: string,
   cardId: string,
+  scope: CodeDiffScope = {},
 ): Promise<{ board: CumulativeDiffPart | null; code: CumulativeDiffPart | null }> {
   const toPart = (
     r: { ok: true; range: CommitRange; diff: string } | { ok: false; error: string },
   ): CumulativeDiffPart | null => (r.ok ? { diff: r.diff, range: r.range, ...parseDiffStat(r.diff) } : null);
   const [b, c] = await Promise.all([
     cardBoardRangeDiff(runGit, board, cardId).catch(() => ({ ok: false as const, error: "erro" })),
-    grepStagedCodeRangeDiff(runGit, cardId).catch(() => ({ ok: false as const, error: "erro" })),
+    grepStagedCodeRangeDiff(runGit, cardId, scope).catch(() => ({ ok: false as const, error: "erro" })),
   ]);
   return { board: toPart(b), code: toPart(c) };
 }

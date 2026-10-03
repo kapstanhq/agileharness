@@ -103,7 +103,7 @@ async function buildRequest(board: string, card: Card, config: BoardConfig, ques
     styleGuide: guide ? styleGuideToPrompt(guide) : null,
     history: ownerDecisions(cards),
     // as classes do dono DESTE board: o proxy que recusa por ser decisão dele diz qual (o Inbox mostra a classe)
-    ownerClasses: ownerClassesOf(config).map((c) => ({ id: c.id, label: c.label })),
+    ownerClasses: ownerClassesOf(config).map((c) => ({ id: c.id, label: c.label, ...(c.description ? { description: c.description } : {}) })),
     questions: questions.map(blindQuestion).filter((q): q is NonNullable<typeof q> => q !== null),
     // Screens only — the canvas's comparison NOTE carries the asker's recommendation and stays out (invariant 1).
     variants: (wireframes?.artifacts ?? [])

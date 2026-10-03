@@ -29,6 +29,10 @@ import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resetRepoRootCache } from "@/lib/storymap/paths";
 import { branchWorkLandedBySplit } from "./convergence";
+import { cardCumulativeDiff, grepStagedCodeRangeDiff, type GitRunner } from "./diff";
+import { defaultPreservedBranchesDeps, classifyPreservedBranch } from "./preserved-branches";
+import { declaredCodePrefixes, stagingBranchOf } from "./staging";
+import { loadRunnerConfig } from "./config";
 import { isolatedGitExec } from "./git-test-env";
 import { describePosix } from "./test-platform";
 import type { ExecFn } from "./worktree";
@@ -93,6 +97,11 @@ describePosix("repositório de layout PLANO — o motor lê a forma DECLARADA (f
     await escreve("src/a.ts", "export const a = 2; // trabalho da sessão\n");
     await git("add -A");
     await git('commit -q --no-verify -m "integra código"');
+    // O commit do split no formato que a ferramenta grava (`usm(<card>): código staged`) — o diff acumulado do card o procura
+    // no branch de integração DECLARADO.
+    await escreve("src/c.ts", "export const c = 3;\n");
+    await git("add -A");
+    await git('commit -q --no-verify -m "usm(story-ex9967): código staged (run r1)"');
     await git(`checkout -q ${BRANCH_DE_DADOS}`);
     await escreve("storymap/boards/demo/cards/c.md", "# card\nstatus: desenvolver\n");
     await git("add -A");
@@ -142,6 +151,38 @@ describePosix("repositório de layout PLANO — o motor lê a forma DECLARADA (f
       "landed",
     );
   });
+
+  // ── Lote D: diff do card e régua de branches preservados leem o DECLARADO (mesmo repositório, mesmo alvo) ──
+  const runGitEm = (repoDir: string): GitRunner => async (args) => (await exec(`git ${args.map((a) => JSON.stringify(a)).join(" ")}`, { cwd: repoDir })).stdout;
+  const alvo = () => process.env.AGILEHARNESS_TARGET as string;
+
+  it("o settings do repo de mentira chega às réguas: branch `integracao` e codePrefixes `[src/]` (não stage / packages/)", () => {
+    const staging = loadRunnerConfig().autorun.staging;
+    expect(stagingBranchOf(staging)).toBe(BRANCH_DE_CODIGO);
+    expect(declaredCodePrefixes(staging)).toEqual([PREFIXO_DE_CODIGO]);
+    const deps = defaultPreservedBranchesDeps();
+    expect(deps.stageBranch).toBe(BRANCH_DE_CODIGO);
+    expect(deps.codePrefixes).toEqual([PREFIXO_DE_CODIGO]);
+  });
+
+  it("cardCumulativeDiff: com o escopo declarado acha o código staged em `integracao`; sem escopo procura `stage` e não acha", async () => {
+    const staging = loadRunnerConfig().autorun.staging;
+    const scope = { stageBranch: stagingBranchOf(staging), codePrefixes: declaredCodePrefixes(staging) };
+    const comEscopo = await cardCumulativeDiff(runGitEm(alvo()), "demo", "story-ex9967", scope);
+    expect(comEscopo.code, "o diff de código do card não foi achado no branch declarado").not.toBeNull();
+    expect(comEscopo.code?.diff).toContain("src/c.ts");
+    // a CONTRAPROVA: o escopo ausente cai no default da ferramenta (`stage`), que este repo não tem
+    const semEscopo = await grepStagedCodeRangeDiff(runGitEm(alvo()), "story-ex9967");
+    expect(semEscopo.ok).toBe(false);
+  });
+
+  it("branch preservado que toca só `src/`: é CÓDIGO não integrado (touchesCode) — e NÃO um branch «sem código» descartável", async () => {
+    const deps = { ...defaultPreservedBranchesDeps(), liveRunIds: async () => [], liveSessionIds: async () => ({ ok: true as const, ids: [] }) };
+    const b = await classifyPreservedBranch(deps as never, `agent/${SESSAO_PENDENTE}`, new Set());
+    expect(b, "o branch pendente devia ser classificado").not.toBeNull();
+    expect(b!.touchesCode).toBe(true);
+    expect(b!.verdict).toBe("unintegrated-code");
+  });
 });
 
 describe("[CLASSE] a forma do repositório é DECLARADA, nunca fixada na fonte", () => {
@@ -177,10 +218,38 @@ describe("[CLASSE] a forma do repositório é DECLARADA, nunca fixada na fonte",
     ).toEqual([]);
   });
 
+  // Lote D (layout): o ferramental do repositório de ORIGEM não pode voltar como default escondido. `stage` é o ÚNICO
+  // default de branch que a ferramenta mantém (convenção documentada, `STAGING_BRANCH_DEFAULT` em staging.ts); pasta
+  // de código NÃO tem default — é declarada, e indeclarada vira «tudo fora de storymap/boards/».
+  it("nenhuma régua de layout fixa `packages/` nem o branch `stage` na fonte — vêm do alvo, ou do default único e documentado", () => {
+    const raiz = new URL("../../../../", import.meta.url).pathname;
+    const dasReguas = [
+      "src/lib/storymap/runner/worktree.ts",
+      "src/lib/storymap/runner/diff.ts",
+      "src/lib/storymap/runner/preserved-branches.ts",
+      "src/lib/storymap/runner/merge-queue.ts",
+      "src/lib/storymap/runner/release.ts",
+      "src/lib/storymap/runner/staging.ts",
+      "src/lib/storymap/runner/convergence.ts",
+      "src/lib/storymap/runner/delivery-deps.ts",
+      "src/instrumentation.ts",
+    ];
+    const infratores: string[] = [];
+    for (const rel of dasReguas) {
+      expect(fontes, `${rel} sumiu do censo — o instrumento quebrou`).toContain(rel);
+      const texto = semComentario(readFileSync(`${raiz}${rel}`, "utf8"));
+      if (/STAGING_CODE_PREFIXES/.test(texto)) infratores.push(`${rel}: STAGING_CODE_PREFIXES`);
+      if (/["'`]packages\/["'`]/.test(texto)) infratores.push(`${rel}: literal "packages/"`);
+      if (/\?\?\s*["']stage["']/.test(texto)) infratores.push(`${rel}: ?? "stage"`);
+      if (rel !== "src/lib/storymap/runner/staging.ts" && /["']stage["']/.test(texto)) infratores.push(`${rel}: literal "stage"`);
+    }
+    expect(infratores).toEqual([]);
+  });
+
   it("e o idioma DECLARADO está de fato em uso (senão a proibição acima bane uma string que ninguém usa)", () => {
     const raiz = new URL("../../../../", import.meta.url).pathname;
     const comLeitura = fontes.filter((p) =>
-      /staging\?\.branch/.test(readFileSync(`${raiz}${p}`, "utf8")),
+      /staging\?\.branch|stagingBranchOf\(/.test(readFileSync(`${raiz}${p}`, "utf8")),
     );
     expect(comLeitura.length, "ninguém lê `autorun.staging.branch` — a proibição seria decorativa").toBeGreaterThan(4);
   });

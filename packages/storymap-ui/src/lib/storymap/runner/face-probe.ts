@@ -42,7 +42,7 @@ import type { ExecFn } from "./worktree";
 // contornável escrevendo o payload no campo vizinho. A régua vive num módulo PURO e sem imports de
 // propósito: este arquivo NÃO pode importar `deploy.ts` (o import de `product-deploy` de lá lê um manifesto
 // em tempo de carga — a mina que forçou o split deste módulo), e foi por isso que o campo ficou de fora.
-import { authorizeDeployCommand, quoteArgv } from "./deploy-command-guard";
+import { authorizeDeployCommand, deployPolicyFromSettings, quoteArgv } from "./deploy-command-guard";
 
 /**
  * O comando de canário APROVADO para execução — uma string que já passou pela régua (board-data) ou que
@@ -108,15 +108,17 @@ export function resolveCanaryVerdict(
 ): CanaryCommandVerdict {
   const boardCmd = board?.deploy?.canaryCommand?.trim();
   if (boardCmd) {
-    const { argv, refusal } = authorizeDeployCommand(boardCmd);
+    // A allow-list é a que o ALVO declarou (settings.yaml → deploy.launchers/recipes/recipeRunners) ∪ o env do serviço: a
+    // ferramenta não traz lançador nem receita de fábrica.
+    const { argv, refusal } = authorizeDeployCommand(boardCmd, deployPolicyFromSettings(settings?.deploy));
     if (!argv) {
       return {
         command: null,
         source: "board",
         refusal:
           `deploy.canaryCommand do board recusado — ${refusal}. O canário roda como root a partir de uma ` +
-          `linha de board-data: declare-o como receita versionada (just <receita>) ou no canal do operador ` +
-          `(settings.yaml deploy.canaryCommand / AGILEHARNESS_DEPLOY_CANARY_COMMAND)`,
+          `linha de board-data: declare o lançador e a receita em settings.yaml → deploy.launchers / deploy.recipes, ` +
+          `ou declare o canário no canal do operador (settings.yaml deploy.canaryCommand / AGILEHARNESS_DEPLOY_CANARY_COMMAND)`,
       };
     }
     return { command: quoteArgv(argv) as AuthorizedCanaryCommand, source: "board", refusal: null };

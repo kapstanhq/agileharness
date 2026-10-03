@@ -5,7 +5,7 @@ exports[`board resolved config — golden snapshot (byte-identical across the _b
   "autonomy": {
     "ownerClasses": [
       {
-        "description": "Qualquer compromisso de gasto: contratar fornecedor, assinar plano pago, comprar créditos, definir ou mudar preço, mexer no código de cobrança, ultrapassar os tetos mensais de custo, ou trocar o modelo de IA usado nas respostas ao usuário (muda o custo por chamada e a qualidade).",
+        "description": "Qualquer compromisso de gasto: contratar fornecedor, assinar plano pago, comprar créditos, definir ou mudar preço, mexer no código de cobrança, ultrapassar os tetos de custo declarados, ou trocar um serviço pago de que o produto depende, ou o modelo ou o fornecedor de IA que atende o usuário do produto (muda custo e qualidade).",
         "id": "money",
         "label": "Dinheiro e preço",
       },
@@ -684,14 +684,14 @@ exports[`board resolved config — golden snapshot (byte-identical across the _b
       "match": "^mcp__chrome-devtools__",
       "mcp": "storymap/qa-mcp.json",
       "outsideRunSandbox": true,
-      "probe": "node scripts/capability-probe/browser-mcp.mjs",
+      "probe": "node "\${AGILEHARNESS_TOOL_ROOT:+$AGILEHARNESS_TOOL_ROOT/../../}scripts/capability-probe/browser-mcp.mjs"",
       "probeTimeoutMs": 120000,
       "provides": "browser",
     },
     "browser-script": {
-      "cli": "node scripts/visual-sweep.mjs",
-      "description": "varredura visual por script Playwright (\`node scripts/visual-sweep.mjs --url … --label …\`): captura PNGs por breakpoint na pasta de artefatos do alvo e você JULGA lendo os PNGs com o tool Read",
-      "probe": "node scripts/visual-sweep.mjs --probe",
+      "cli": "node "\${AGILEHARNESS_TOOL_ROOT:-packages/storymap-ui}/../../scripts/visual-sweep.mjs"",
+      "description": "varredura visual por script Playwright (\`node "\${AGILEHARNESS_TOOL_ROOT:-packages/storymap-ui}/../../scripts/visual-sweep.mjs" --url … --label …\`): captura PNGs por breakpoint na pasta de artefatos do alvo e você JULGA lendo os PNGs com o tool Read",
+      "probe": "node "\${AGILEHARNESS_TOOL_ROOT:+$AGILEHARNESS_TOOL_ROOT/../../}scripts/visual-sweep.mjs" --probe",
       "probeTimeoutMs": 60000,
       "provides": "browser",
     },
@@ -709,7 +709,7 @@ exports[`board resolved config — golden snapshot (byte-identical across the _b
   "autonomy": {
     "ownerClasses": [
       {
-        "description": "Qualquer compromisso de gasto: contratar fornecedor, assinar plano pago, comprar créditos, definir ou mudar preço, mexer no código de cobrança, ultrapassar os tetos mensais de custo, ou trocar o modelo de IA usado nas respostas ao usuário (muda o custo por chamada e a qualidade).",
+        "description": "Qualquer compromisso de gasto: contratar fornecedor, assinar plano pago, comprar créditos, definir ou mudar preço, mexer no código de cobrança, ultrapassar os tetos de custo declarados, ou trocar um serviço pago de que o produto depende, ou o modelo ou o fornecedor de IA que atende o usuário do produto (muda custo e qualidade).",
         "id": "money",
         "label": "Dinheiro e preço",
       },
@@ -1030,14 +1030,14 @@ exports[`board resolved config — golden snapshot (byte-identical across the _b
       "match": "^mcp__chrome-devtools__",
       "mcp": "storymap/qa-mcp.json",
       "outsideRunSandbox": true,
-      "probe": "node scripts/capability-probe/browser-mcp.mjs",
+      "probe": "node "\${AGILEHARNESS_TOOL_ROOT:+$AGILEHARNESS_TOOL_ROOT/../../}scripts/capability-probe/browser-mcp.mjs"",
       "probeTimeoutMs": 120000,
       "provides": "browser",
     },
     "browser-script": {
-      "cli": "node scripts/visual-sweep.mjs",
-      "description": "varredura visual por script Playwright (\`node scripts/visual-sweep.mjs --url … --label …\`): captura PNGs por breakpoint na pasta de artefatos do alvo e você JULGA lendo os PNGs com o tool Read",
-      "probe": "node scripts/visual-sweep.mjs --probe",
+      "cli": "node "\${AGILEHARNESS_TOOL_ROOT:-packages/storymap-ui}/../../scripts/visual-sweep.mjs"",
+      "description": "varredura visual por script Playwright (\`node "\${AGILEHARNESS_TOOL_ROOT:-packages/storymap-ui}/../../scripts/visual-sweep.mjs" --url … --label …\`): captura PNGs por breakpoint na pasta de artefatos do alvo e você JULGA lendo os PNGs com o tool Read",
+      "probe": "node "\${AGILEHARNESS_TOOL_ROOT:+$AGILEHARNESS_TOOL_ROOT/../../}scripts/visual-sweep.mjs" --probe",
       "probeTimeoutMs": 60000,
       "provides": "browser",
     },

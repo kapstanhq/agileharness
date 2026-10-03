@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import yaml from "js-yaml";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { findRepoRoot, resetRepoRootCache } from "@/lib/storymap/paths";
+import { loadRunnerConfig } from "./config";
 import {
   ProductDeployRegistry,
   composedFaceManifestRel,
@@ -20,11 +21,15 @@ import {
   composedFaceRecipe,
   touchesComposedFace,
   deployCommandFor,
+  resolveDeclaredProgram,
   type DeployDoneEvent,
   type DeployLauncher,
   type DeployLaunchSpec,
 } from "./product-deploy";
 import { checkDeployFreshness, type DeployClearance } from "./deploy-freshness";
+import { deployPolicyFromSettings } from "./deploy-command-guard";
+import { deployPolicyOf } from "@/lib/storymap/deploy-policy";
+import { describePosix } from "./test-platform";
 
 // ── ESTE ALVO DECLARA UMA SUPERFÍCIE COMPOSTA? ──────────────────────────────────────────────────────
 //
@@ -51,6 +56,8 @@ const manifestDoDono = (() => {
   return JSON.parse(readFileSync(p, "utf8")) as { apps: { webDir: string }[]; sharedGlobs: string[] };
 })();
 
+const declaredFaceHasCommand = (): boolean => !!loadRunnerConfig().deploy?.composedFace?.command;
+
 // A launcher that never spawns a real process: records the launched pkg and exposes a manual `finish`
 // to drive the close event (so the running→done/failed transition is testable without child_process).
 /**
@@ -60,7 +67,7 @@ const manifestDoDono = (() => {
  */
 async function ok(target: string): Promise<DeployClearance> {
   const v = await checkDeployFreshness(
-    { target, repoRoot: "/repo", scope: [], label: "teste do registry" },
+    { target, repoRoot: "/repo", scope: [], policy: deployPolicyFromSettings(undefined, {}), label: "teste do registry" },
     {
       exec: async () => {
         throw new Error("o escape não mede git");
@@ -89,39 +96,75 @@ function fakeLauncher() {
 const ALVOS = ["alfa", "beta-app", "gama_svc"] as const;
 
 describe("deployPkgForPackage — agnostic package→target resolution", () => {
-  it("maps a declared package to its basename", () => {
-    expect(deployPkgForPackage("packages/alfa", ALVOS)).toBe("alfa");
-    expect(deployPkgForPackage("packages/beta-app", ALVOS)).toBe("beta-app");
-    expect(deployPkgForPackage("packages/gama_svc/", ALVOS)).toBe("gama_svc"); // barra final tolerada
+  it("maps a declared package to its basename — with the packageRoot the TARGET declares", () => {
+    expect(deployPkgForPackage("packages/alfa", ALVOS, "packages/")).toBe("alfa");
+    expect(deployPkgForPackage("packages/beta-app", ALVOS, "packages/")).toBe("beta-app");
+    expect(deployPkgForPackage("packages/gama_svc/", ALVOS, "packages/")).toBe("gama_svc"); // barra final tolerada
+    // outra pasta de pacotes, declarada: a ferramenta não supõe `packages/`
+    expect(deployPkgForPackage("apps/alfa", ALVOS, "apps/")).toBe("alfa");
+    expect(deployPkgForPackage("packages/alfa", ALVOS, "apps/")).toBeNull();
+  });
+
+  it("SEM packageRoot declarado o `package` inteiro é comparado com os alvos (neutro: nenhuma pasta é suposta)", () => {
+    expect(deployPkgForPackage("packages/alfa", ALVOS, null)).toBeNull();
+    expect(deployPkgForPackage("alfa", ALVOS, null)).toBe("alfa");
+    expect(deployPkgForPackage("alfa/", ALVOS, null)).toBe("alfa");
+    expect(deployPkgForPackage("gama_svc", ALVOS, "")).toBe("gama_svc");
   });
 
   it("returns null for an UNDECLARED package and an absent package", () => {
     // Este é o invariante que o self-deploy depende: o pacote do próprio harness não está entre os alvos,
     // então ele resolve null — e `instrumentation.ts` lê esse mesmo null como "seguro no boot". Uma
     // resolução que devolvesse não-null para todo board com `package` quebraria os dois de uma vez.
-    expect(deployPkgForPackage("packages/storymap-ui", ALVOS)).toBeNull();
-    expect(deployPkgForPackage("packages/some-internal-lib", ALVOS)).toBeNull();
+    expect(deployPkgForPackage("packages/storymap-ui", ALVOS, "packages/")).toBeNull();
+    expect(deployPkgForPackage("packages/some-internal-lib", ALVOS, "packages/")).toBeNull();
     expect(deployPkgForPackage(undefined, ALVOS)).toBeNull();
   });
 
   it("conjunto VAZIO ⇒ nada é deployável por esta via (o default de um alvo que não declara nada)", () => {
     for (const p of ["packages/alfa", "packages/qualquer", "packages/storymap-ui"]) {
-      expect(deployPkgForPackage(p, [])).toBeNull();
+      expect(deployPkgForPackage(p, [], "packages/")).toBeNull();
     }
   });
 
-  it("story-ex0071: o alvo reservado da face vai para a RECEITA declarada; todo o resto vai para `orch-deploy <alvo>`", () => {
-    const face = { target: "face-composta", recipe: "publica-face" };
-    expect(deployCommandFor("face-composta", face)).toEqual(["publica-face"]);
-    expect(deployCommandFor("alfa", face)).toEqual(["orch-deploy", "alfa"]);
+  it("story-ex0071: o alvo reservado da face vai para o COMANDO declarado dela; todo o resto, para o comando legado com {target}", () => {
+    const declarada = deployPolicyOf({
+      deploy: {
+        legacy: { command: ["ship-cli", "--yes", "publish", "{target}"] },
+        composedFace: { target: "face-composta", recipe: "rotulo-legado", manifest: "face.json", command: ["ship-cli", "--yes", "publish-face"] },
+      },
+    });
+    expect(deployCommandFor("face-composta", declarada)).toEqual({ ok: true, argv: ["ship-cli", "--yes", "publish-face"] });
+    expect(deployCommandFor("alfa", declarada)).toEqual({ ok: true, argv: ["ship-cli", "--yes", "publish", "alfa"] });
     // Sem face declarada, NADA é tratado como face — nem um alvo que por acaso tenha o mesmo nome.
-    expect(deployCommandFor("face-composta", { target: null, recipe: null })).toEqual(["orch-deploy", "face-composta"]);
-    // Declaração pela METADE não publica a face: sem receita não há o que rodar, e cair no `orch-deploy`
-    // de um alvo que não é app é melhor do que montar um `just` com `undefined` no argv.
-    expect(deployCommandFor("face-composta", { target: "face-composta", recipe: null })).toEqual([
-      "orch-deploy",
-      "face-composta",
-    ]);
+    const semFace = deployPolicyOf({ deploy: { legacy: { command: ["ship-cli", "--yes", "publish", "{target}"] } } });
+    expect(deployCommandFor("face-composta", semFace)).toEqual({ ok: true, argv: ["ship-cli", "--yes", "publish", "face-composta"] });
+  });
+
+  it("SEM declaração o comando é RECUSADO nomeando a chave a declarar — nada é suposto", () => {
+    // alvo sem `legacy.command`
+    const vazia = deployCommandFor("alfa", deployPolicyOf(undefined));
+    expect(vazia.ok).toBe(false);
+    if (!vazia.ok) expect(vazia.refusal).toMatch(/settings\.yaml → deploy\.legacy\.command/);
+    // face declarada só com o RÓTULO (`recipe`): sozinho ele não publica nada — a ferramenta não sabe de que executor é aquela «receita»
+    const soRotulo = deployPolicyOf({
+      deploy: {
+        legacy: { command: ["ship-cli", "publish", "{target}"] },
+        composedFace: { target: "face-composta", recipe: "rotulo-legado", manifest: "face.json" },
+      },
+    });
+    const face = deployCommandFor("face-composta", soRotulo);
+    expect(face.ok).toBe(false);
+    if (!face.ok) expect(face.refusal).toMatch(/settings\.yaml → deploy\.composedFace\.command/);
+    // e NÃO cai no comando legado com o nome da face (publicaria um app que não existe)
+    expect(deployCommandFor("alfa", soRotulo)).toEqual({ ok: true, argv: ["ship-cli", "publish", "alfa"] });
+  });
+
+  it("um id que não é slug nunca vira argumento do comando declarado", () => {
+    const declarada = deployPolicyOf({ deploy: { legacy: { command: ["ship-cli", "publish", "{target}"] } } });
+    for (const mau of ["../x", "a b", "a;b", "$(id)", "", "-f"]) {
+      expect(deployCommandFor(mau, declarada).ok, JSON.stringify(mau)).toBe(false);
+    }
   });
 
   it("PISO — a fiação settings→motor está viva, medida contra uma leitura INDEPENDENTE do arquivo", () => {
@@ -154,8 +197,9 @@ describe("deployPkgForPackage — agnostic package→target resolution", () => {
     ).toEqual(noArquivo.slice().sort());
 
     // E, para o lado que de fato declara algo, a propriedade que interessa: cada alvo resolve para si.
+    const raizDeclarada = (doc as { deploy?: { legacy?: { packageRoot?: string } } } | null)?.deploy?.legacy?.packageRoot ?? "";
     for (const p of doMotor) {
-      expect(deployPkgForPackage(`packages/${p}`)).toBe(p);
+      expect(deployPkgForPackage(`${raizDeclarada}${p}`)).toBe(p);
       // A forma é a mesma que o carregador impõe — a peneira que impede uma frase de chegar à recusa de
       // uma tool MCP (texto que o modelo do outro lado lê com autoridade de prompt).
       expect(p, `alvo fora da forma de slug: ${JSON.stringify(p)}`).toMatch(/^[A-Za-z][A-Za-z0-9_-]{0,40}$/);
@@ -175,7 +219,7 @@ describe("logFileFor", () => {
 });
 
 describe("ProductDeployRegistry — job lifecycle (injected launcher, no real spawn)", async () => {
-  it("start() launches orch-deploy for the pkg and tracks it as running", async () => {
+  it("start() launches the declared deploy command for the pkg and tracks it as running", async () => {
     const f = fakeLauncher();
     const reg = new ProductDeployRegistry(f.launcher);
     const job = reg.start("armazemweb", await ok("armazemweb"));
@@ -551,11 +595,16 @@ describe.runIf(manifestDoDono === null)("sem o manifesto do dono, o gate do rost
     // não há como uma face fantasma ser publicada por engano.
     const alvoDaFace = composedFaceTarget();
     if (alvoDaFace === null) {
-      expect(deployCommandFor("qualquer-alvo")).toEqual(["orch-deploy", "qualquer-alvo"]);
+      // sem face declarada nenhum nome é face: resolve pelo comando LEGADO que o alvo declarou (ou recusa, se não declarou)
+      const legado = deployPolicyOf(loadRunnerConfig());
+      const r = deployCommandFor("qualquer-alvo", legado);
+      expect(r.ok).toBe(legado.legacy.command !== undefined);
     } else {
-      // Este alvo DECLARA face: então o nome resolve para a receita declarada, e o `absent` acima veio da
+      // Este alvo DECLARA face: então o nome resolve para o comando declarado dela, e o `absent` acima veio da
       // ausência do ARQUIVO, não da declaração. Os dois casos são reais e a distinção é o que importa.
-      expect(deployCommandFor(alvoDaFace)).toEqual([composedFaceRecipe()]);
+      const r = deployCommandFor(alvoDaFace);
+      expect(r.ok).toBe(declaredFaceHasCommand());
+      expect(composedFaceRecipe(), "o rótulo legado da face continua legível").not.toBeNull();
     }
   });
 });
@@ -730,5 +779,173 @@ describe("ProductDeployRegistry — carona no deploy em curso (dois «Publicar»
     expect(events.map((e) => e.cardId)).toEqual(["s1", "s2"]);
     // terminado o job, a carona acabou: um attach agora é recusado
     expect(reg.attach("armazem", { board: "armazem", cardId: "s3" })).toBe(false);
+  });
+});
+
+// ── O EXECUTÁVEL DO COMANDO DECLARADO — declarado > PATH > recusa, para QUALQUER programa ───────────────
+describe("resolveDeclaredProgram — a mesma régua de resolveHostTool, estendida ao programa que o alvo declarou", () => {
+  const existe = (...ps: string[]) => (p: string) => ps.includes(p);
+
+  it("um programa que a ferramenta já conhece por nome usa a variável própria dele (AGILEHARNESS_JUST…)", () => {
+    const r = resolveDeclaredProgram("just", { env: { AGILEHARNESS_JUST: "/opt/x/just", PATH: "/usr/bin" }, exists: existe("/opt/x/just", "/usr/bin/just") });
+    expect(r).toEqual({ ok: true, path: "/opt/x/just" });
+  });
+
+  it("um programa QUALQUER aceita AGILEHARNESS_BIN_<NOME> (maiúsculo, não-alfanumérico → _), absoluto e existente", () => {
+    const env = { AGILEHARNESS_BIN_OFICINA_CLI: "/opt/oficina/cli", PATH: "/usr/bin" };
+    expect(resolveDeclaredProgram("oficina-cli", { env, exists: existe("/opt/oficina/cli") })).toEqual({ ok: true, path: "/opt/oficina/cli" });
+    // relativo é recusado (resolveria contra um cwd que o motor não escolhe)
+    const rel = resolveDeclaredProgram("oficina-cli", { env: { AGILEHARNESS_BIN_OFICINA_CLI: "bin/cli" }, exists: () => true });
+    expect(rel.ok).toBe(false);
+    // declarado mas inexistente NÃO cai para o PATH: um engano não se esconde atrás de outro binário
+    const inexistente = resolveDeclaredProgram("oficina-cli", { env: { ...env, PATH: "/usr/bin" }, exists: existe("/usr/bin/oficina-cli") });
+    expect(inexistente.ok).toBe(false);
+    if (!inexistente.ok) expect(inexistente.refusal).toMatch(/AGILEHARNESS_BIN_OFICINA_CLI/);
+  });
+
+  it("o prefixo é DEDICADO: AGILEHARNESS_<NOME> sem BIN_ (que colide com a configuração da ferramenta) NÃO declara programa nenhum", () => {
+    // `port`/`deploy` existem como chaves de CONFIGURAÇÃO da ferramenta; sem o espaço de nomes próprio um programa de
+    // mesmo nome leria a porta como se fosse o seu caminho.
+    const r = resolveDeclaredProgram("port", { env: { AGILEHARNESS_PORT: "3008", PATH: "/usr/bin" }, exists: existe("/usr/bin/port") });
+    expect(r).toEqual({ ok: true, path: "/usr/bin/port" });
+    const viaBin = resolveDeclaredProgram("port", { env: { AGILEHARNESS_BIN_PORT: "/opt/p/port", AGILEHARNESS_PORT: "3008" }, exists: existe("/opt/p/port") });
+    expect(viaBin).toEqual({ ok: true, path: "/opt/p/port" });
+  });
+
+  it("o NOME é validado antes de qualquer busca: espaço, metacaractere, '-' inicial, '.' e '..' nem chegam ao PATH", () => {
+    const tudoExiste = { env: { PATH: "/usr/bin" }, exists: () => true };
+    for (const ruim of ["", " ", "a b", "a;b", "-rf", ".", "..", ".oculto", "a/b", "a$(x)", "a\nb", "a`b`", "é"]) {
+      const r = resolveDeclaredProgram(ruim, tudoExiste);
+      expect(r.ok, JSON.stringify(ruim)).toBe(false);
+      if (!r.ok) expect(r.refusal).toMatch(/nome de programa válido/);
+    }
+    // nomes legítimos com ponto, mais e hífen passam da validação
+    for (const bom of ["oficina-cli", "tool.sh", "g++", "python3.12", "a_b"]) {
+      expect(resolveDeclaredProgram(bom, { env: { PATH: "/usr/bin" }, exists: (p) => p === `/usr/bin/${bom}` }), bom).toEqual({ ok: true, path: `/usr/bin/${bom}` });
+    }
+  });
+
+  it("sem declaração, resolve pelo PATH; sem PATH, RECUSA nomeando a variável que declara o caminho", () => {
+    expect(resolveDeclaredProgram("oficina-cli", { env: { PATH: "/opt/a:/opt/b" }, exists: existe("/opt/b/oficina-cli") })).toEqual({ ok: true, path: "/opt/b/oficina-cli" });
+    const nada = resolveDeclaredProgram("oficina-cli", { env: { PATH: "/opt/a" }, exists: () => false });
+    expect(nada.ok).toBe(false);
+    if (!nada.ok) {
+      expect(nada.refusal).toMatch(/oficina-cli/);
+      expect(nada.refusal).toMatch(/AGILEHARNESS_BIN_OFICINA_CLI=/);
+    }
+  });
+});
+
+// ── O LAUNCHER DEFAULT, COM SPAWN REAL, contra um alvo de FIXTURE que DECLARA (e outro que não) ──────────
+describePosix("o launcher default executa o argv DECLARADO pelo alvo — e SEM declaração recusa no log", () => {
+  const criarAlvo = (nome: string, deploy: string, mtime: number) => {
+    const raiz = mkdtempSync(path.join(tmpdir(), `ah-launcher-${nome}-`));
+    writeFileSync(path.join(raiz, "turbo.json"), "{}\n", "utf8");
+    mkdirSync(path.join(raiz, "storymap"), { recursive: true });
+    const settings = path.join(raiz, "storymap", "settings.yaml");
+    writeFileSync(settings, `version: 1\n${deploy}`, "utf8");
+    // o cache do carregador de settings é por mtime, e as raízes são escritas no mesmo milissegundo: mtimes distintos
+    utimesSync(settings, mtime, mtime);
+    return raiz;
+  };
+  const apontar = (raiz: string) => {
+    process.env.AGILEHARNESS_TARGET = raiz;
+    resetRepoRootCache();
+  };
+  const rodar = async (pkg: string) => {
+    const reg = new ProductDeployRegistry(); // o launcher DEFAULT (spawn real)
+    const fim = new Promise<DeployDoneEvent>((resolve) => reg.onDone(resolve));
+    reg.start(pkg, await ok(pkg));
+    const ev = await fim;
+    // o `onDone` dispara no `close` do processo, mas o fluxo do log só esvazia depois: espera a moldura de fim (ou a recusa)
+    let log = "";
+    await vi.waitFor(() => {
+      log = existsSync(logFileFor(pkg)) ? readFileSync(logFileFor(pkg), "utf8") : "";
+      expect(log).toMatch(/finished exit|RECUSADO|spawn error/);
+    });
+    return { ev, log };
+  };
+
+  let declara = "";
+  let omisso = "";
+  let programaInexistente = "";
+  let programa = "";
+  let alvoAnterior: string | undefined;
+  let programaAnterior: string | undefined;
+
+  beforeAll(() => {
+    alvoAnterior = process.env.AGILEHARNESS_TARGET;
+    programaAnterior = process.env.AGILEHARNESS_BIN_OFICINA_PUBLISH;
+    declara = criarAlvo(
+      "declara",
+      [
+        "deploy:",
+        "  targets: [bicicleta]",
+        "  legacy:",
+        "    packageRoot: oficinas/",
+        '    command: [oficina-publish, --rapido, "{target}"]',
+        "  composedFace:",
+        "    target: vitrine",
+        "    recipe: rotulo-da-vitrine",
+        "    manifest: publicacao/vitrine.json",
+        "    command: [oficina-publish, --vitrine]",
+        "",
+      ].join("\n"),
+      1_700_000_001,
+    );
+    omisso = criarAlvo("omisso", "deploy:\n  targets: [bicicleta]\n", 1_700_000_002);
+    programaInexistente = criarAlvo(
+      "inexistente",
+      'deploy:\n  targets: [bicicleta]\n  legacy:\n    command: [programa-que-nao-existe-na-oficina, "{target}"]\n',
+      1_700_000_003,
+    );
+    // o «programa» do alvo: ecoa o que recebeu (prova o argv, byte a byte) e termina em 0
+    programa = path.join(declara, "oficina-publish.sh");
+    writeFileSync(programa, '#!/bin/sh\necho "recebi: $*"\n', "utf8");
+    chmodSync(programa, 0o755);
+    process.env.AGILEHARNESS_BIN_OFICINA_PUBLISH = programa;
+  });
+
+  afterAll(() => {
+    if (alvoAnterior === undefined) delete process.env.AGILEHARNESS_TARGET;
+    else process.env.AGILEHARNESS_TARGET = alvoAnterior;
+    if (programaAnterior === undefined) delete process.env.AGILEHARNESS_BIN_OFICINA_PUBLISH;
+    else process.env.AGILEHARNESS_BIN_OFICINA_PUBLISH = programaAnterior;
+    resetRepoRootCache();
+    for (const r of [declara, omisso, programaInexistente]) rmSync(r, { recursive: true, force: true });
+  });
+
+  it("DECLARADO: executa EXATAMENTE o argv do settings com {target} expandido, e o log mostra a linha `[deploy alvo] <programa> <args>`", async () => {
+    apontar(declara);
+    const { ev, log } = await rodar("bicicleta");
+    expect(ev).toMatchObject({ pkg: "bicicleta", ok: true, exitCode: 0 });
+    expect(log).toContain(`[deploy bicicleta] ${programa} --rapido bicicleta\n`);
+    expect(log).toContain("recebi: --rapido bicicleta");
+    expect(log).toContain("[deploy bicicleta] finished exit 0");
+  });
+
+  it("DECLARADO: o alvo reservado da face executa o comando DECLARADO da face (e não o legado com o nome dela)", async () => {
+    apontar(declara);
+    const { ev, log } = await rodar("vitrine");
+    expect(ev.ok).toBe(true);
+    expect(log).toContain(`[deploy vitrine] ${programa} --vitrine\n`);
+    expect(log).toContain("recebi: --vitrine");
+    expect(log).not.toContain("--rapido");
+  });
+
+  it("NÃO DECLARADO: termina com exit -1 e RECUSADO no log nomeando a chave — nenhum processo é lançado", async () => {
+    apontar(omisso);
+    const { ev, log } = await rodar("bicicleta");
+    expect(ev).toMatchObject({ ok: false, exitCode: -1 });
+    expect(log).toMatch(/^\[deploy bicicleta\] RECUSADO: .*settings\.yaml → deploy\.legacy\.command/);
+    expect(log).not.toContain("recebi:");
+  });
+
+  it("DECLARADO com um programa que não existe nesta máquina: RECUSADO nomeando a variável que declara o caminho", async () => {
+    apontar(programaInexistente);
+    const { ev, log } = await rodar("bicicleta");
+    expect(ev).toMatchObject({ ok: false, exitCode: -1 });
+    expect(log).toMatch(/RECUSADO: .*programa-que-nao-existe-na-oficina/);
+    expect(log).toMatch(/AGILEHARNESS_BIN_PROGRAMA_QUE_NAO_EXISTE_NA_OFICINA=/);
   });
 });

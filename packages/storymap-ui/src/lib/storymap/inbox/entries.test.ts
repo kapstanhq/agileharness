@@ -6,7 +6,10 @@ import { describe, expect, it } from "vitest";
 import type { Card, DeployCause } from "../types";
 import type { CockpitItem } from "../demands";
 import { emptyFacts } from "./contract";
-import { foldByCause, inboxSections, inboxSummary, settleItems } from "./entries";
+import { foldByCause, inboxSections, inboxSummary, lensNamesOf, settleItems } from "./entries";
+import { coerceTargetProfileDetailed } from "../target-profile";
+import { boardEntries } from "./collect";
+import { readFileSync } from "node:fs";
 import { FIXTURES, HUMAN, NOW, mkCard } from "./items.fixture";
 
 const FRESH: DeployCause = { pkg: "app", phase: "freshness", units: [], rules: [], ownerClass: null, decider: "system", causeKey: "app:freshness" };
@@ -49,5 +52,41 @@ describe("foldByCause", () => {
     const sd = { key: "b1/sd:1", boardId: "b1", boardName: "B", itemId: "sd:1", cardId: "c1", cardTitle: "", kind: "system-decision", causeKey: "sd:1", facets: [], decision: { bucket: "acompanhar" } } as never;
     const sd2 = { ...(sd as object), key: "b1/sd:2", itemId: "sd:2", causeKey: "sd:2" } as never;
     expect(foldByCause([sd, sd2])).toHaveLength(2);
+  });
+});
+
+describe("o nome das lentes de revisão chega ao item do Inbox (settleItems → decideItem)", () => {
+  // Um alvo INVENTADO (oficina de bicicletas): declara a lente de domínio `freios` e renomeia uma embutida.
+  const target = coerceTargetProfileDetailed({
+    reviewLenses: { freios: { name: "Freios e pinças", description: "folga de cabo e desgaste de pastilha" }, security: { name: "Segurança da oficina" } },
+  }).profile;
+  const item = { ...FIXTURES.blocker.item, lens: "freios" } as CockpitItem;
+  const areaOf = (lensNames?: Record<string, string>) => {
+    const { entries } = settleItems([item], { boardId: "b1", boardName: "B", config: HUMAN, cardsById: new Map([["c1", FIXTURES.blocker.card]]), now: NOW, ...(lensNames ? { lensNames } : {}) });
+    return entries[0].decision.details.find((d) => d.label === "Área")?.value;
+  };
+
+  it("lensNamesOf devolve as embutidas (com a sobrescrita do alvo) e as declaradas; sem perfil, só as embutidas", () => {
+    expect(lensNamesOf(target)).toMatchObject({ freios: "Freios e pinças", security: "Segurança da oficina" });
+    expect(Object.keys(lensNamesOf(undefined)).sort()).toEqual(["design", "general", "perf", "security", "testing"]);
+    expect(lensNamesOf(undefined)).not.toHaveProperty("freios");
+  });
+
+  it("com o mapa do servidor o detalhe «Área» mostra o NOME declarado; sem mapa, o id (como sempre)", () => {
+    expect(areaOf(lensNamesOf(target))).toBe("Freios e pinças");
+    expect(areaOf()).toBe("freios");
+  });
+
+  it("o coletor (boardEntries) repassa o mapa: a entrada que o Inbox mostra traz o nome da lente", () => {
+    const base = { boardId: "b1", config: HUMAN, cards: [FIXTURES.blocker.card], items: [item], decisions: [], now: NOW };
+    const area = (lensNames?: Record<string, string>) =>
+      boardEntries({ ...base, ...(lensNames ? { lensNames } : {}) }).entries[0].decision.details.find((d) => d.label === "Área")?.value;
+    expect(area(lensNamesOf(target))).toBe("Freios e pinças");
+    expect(area()).toBe("freios");
+  });
+
+  it("o coletor lê o perfil do alvo no SERVIDOR e o entrega (nunca fica sem o mapa)", () => {
+    const src = readFileSync(new URL("./collect.ts", import.meta.url), "utf8");
+    expect(src).toMatch(/lensNames:\s*lensNamesOf\(loadRunnerConfig\(\)\.target\)/);
   });
 });

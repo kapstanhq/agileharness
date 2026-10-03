@@ -13,6 +13,7 @@ import {
 } from "./frontmatter";
 import { baseBoardConfigPath, boardConfigPath, boardsDir, cardPath, cardsDir, runnerStateDir } from "./paths";
 import { parseBoardConfig, parseCard } from "./contracts";
+import { isCurrencyCode, isReviewLensId } from "./target-profile";
 import { coerceCanvas as coerceCanvasKernel, coerceCanvasTags as coerceCanvasTagsKernel } from "./canvas";
 import { coerceStyleGuidePointer } from "./style-guide";
 import { coerceWsjf } from "./wsjf";
@@ -118,7 +119,6 @@ import {
   SESSION_MODELS,
   ORCHESTRATOR_MODES,
   QUESTION_STATUSES,
-  REVIEW_LENSES,
   RISK_CLASSES,
   RISK_DISPOSITIONS,
   TRIAGE_VERDICTS,
@@ -237,7 +237,9 @@ function coerceFindings(raw: unknown): Finding[] {
       const o = f as Record<string, unknown>;
       const finding: Finding = {
         id: o.id != null && String(o.id) ? String(o.id) : `f${i + 1}`,
-        lens: REVIEW_LENSES.includes(o.lens as Finding["lens"]) ? (o.lens as Finding["lens"]) : "general",
+        // LEITURA SEM PERDA: qualquer slug bem-formado sobrevive (uma lente que o alvo declarou, removeu ou nunca declarou
+        // não vira «general» em silêncio — foi assim que `design` nunca persistiu). Só o malformado cai em «general».
+        lens: isReviewLensId(o.lens) ? o.lens : "general",
         severity: FINDING_SEVERITIES.includes(o.severity as Finding["severity"])
           ? (o.severity as Finding["severity"])
           : "medium",
@@ -1079,19 +1081,46 @@ function coerceTriageDecision(raw: unknown): TriageDecision | undefined {
   };
 }
 
-/** A projeção de custo de uma entrega (Card.costImpact) — número não-negativo, escopo e premissas, senão cai. */
+/** Avisa UMA vez por processo (o coerce roda a cada leitura; repetir o aviso a cada card afogaria o log). */
+const warnedOnce = new Set<string>();
+function warnOnce(key: string, line: string): void {
+  if (warnedOnce.has(key)) return;
+  warnedOnce.add(key);
+  console.warn(line);
+}
+
+/**
+ * A projeção de custo de uma entrega (Card.costImpact) — número não-negativo, escopo e premissas, senão cai.
+ * Lê as DUAS grafias (neutra: `monthlyAmount`+`currency`; legada: `monthlyBRL`) e GUARDA a que leu: o card legado volta
+ * ao disco com as mesmas chaves (nenhuma escrita migra a grafia sozinha). Neutra e legada juntas ⇒ a neutra vence.
+ */
 function coerceCostImpact(raw: unknown): CostImpact | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const r = raw as Record<string, unknown>;
-  const n = Number(r.monthlyBRL);
   const assumptions = typeof r.assumptions === "string" ? r.assumptions.trim() : "";
-  if (!Number.isFinite(n) || n < 0 || (r.scope !== "infra" && r.scope !== "cash") || !assumptions) return undefined;
-  const base = Number(r.baselineMonthlyBRL);
+  if ((r.scope !== "infra" && r.scope !== "cash") || !assumptions) return undefined;
+  // A mesma tolerância de sempre (`Number(...)` finito e não-negativo); a linha de base só entra se a chave existir.
+  const nonNeg = (v: unknown): number | undefined => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? n : undefined;
+  };
+  const baselineOf = (v: unknown): number | undefined => (v != null ? nonNeg(v) : undefined);
+  let figures: Pick<CostImpact, "monthlyAmount" | "baselineMonthlyAmount" | "currency" | "monthlyBRL" | "baselineMonthlyBRL">;
+  const amount = r.monthlyAmount != null ? nonNeg(r.monthlyAmount) : undefined;
+  if (amount != null && isCurrencyCode(r.currency)) {
+    const baseline = baselineOf(r.baselineMonthlyAmount);
+    figures = { monthlyAmount: amount, ...(baseline != null ? { baselineMonthlyAmount: baseline } : {}), currency: r.currency };
+    if (r.monthlyBRL != null) warnOnce("costImpact-both", "[storymap] costImpact com as duas grafias (monthlyAmount e monthlyBRL): vale a neutra (monthlyAmount).");
+  } else {
+    const legacy = nonNeg(r.monthlyBRL);
+    if (legacy == null) return undefined;
+    const baseline = baselineOf(r.baselineMonthlyBRL);
+    figures = { monthlyBRL: legacy, ...(baseline != null ? { baselineMonthlyBRL: baseline } : {}) };
+  }
   return {
-    monthlyBRL: n,
+    ...figures,
     scope: r.scope,
     assumptions,
-    ...(r.baselineMonthlyBRL != null && Number.isFinite(base) && base >= 0 ? { baselineMonthlyBRL: base } : {}),
     ...(typeof r.newVendor === "string" && r.newVendor.trim() ? { newVendor: r.newVendor.trim() } : {}),
     ...(r.paidPlan === true ? { paidPlan: true } : {}),
     ...(r.paidApi === true ? { paidApi: true } : {}),
@@ -1101,14 +1130,35 @@ function coerceCostImpact(raw: unknown): CostImpact | undefined {
   };
 }
 
-/** Os tetos mensais do dono (autonomy.budget) — só número não-negativo sobrevive. */
+/** Os pares neutro → legado do teto: o coerce aceita as duas grafias e GUARDA a que leu (nunca renomeia uma chave). */
+const BUDGET_KEY_PAIRS = [
+  ["cashMonthly", "cashMonthlyBRL"],
+  ["infraMonthly", "infraMonthlyBRL"],
+  ["baselineCashMonthly", "baselineCashMonthlyBRL"],
+  ["baselineInfraMonthly", "baselineInfraMonthlyBRL"],
+] as const;
+
+/**
+ * Os tetos mensais do dono (autonomy.budget) — só número não-negativo sobrevive, mais a `currency` (ISO 4217 válido). As
+ * chaves legadas `*BRL` seguem lidas para sempre e voltam como lidas: um save de vocab/canvas não reescreve o board.yaml
+ * do alvo. A mesma figura nas duas grafias ⇒ a neutra vence (com aviso).
+ */
 function coerceAutonomyBudget(raw: unknown): AutonomyBudget | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const r = raw as Record<string, unknown>;
   const out: AutonomyBudget = {};
-  for (const k of ["cashMonthlyBRL", "infraMonthlyBRL", "baselineCashMonthlyBRL", "baselineInfraMonthlyBRL"] as const) {
+  const read = (k: string): number | undefined => {
     const n = Number(r[k]);
-    if (r[k] != null && r[k] !== "" && Number.isFinite(n) && n >= 0) out[k] = n;
+    return r[k] != null && r[k] !== "" && Number.isFinite(n) && n >= 0 ? n : undefined;
+  };
+  if (isCurrencyCode(r.currency)) out.currency = r.currency;
+  for (const [neutral, legacy] of BUDGET_KEY_PAIRS) {
+    const n = read(neutral);
+    const l = read(legacy);
+    if (n != null) {
+      out[neutral] = n;
+      if (l != null) warnOnce(`budget-${neutral}`, `[storymap] autonomy.budget com ${neutral} e ${legacy}: vale a neutra (${neutral}).`);
+    } else if (l != null) out[legacy] = l;
   }
   return Object.keys(out).length ? out : undefined;
 }
@@ -1513,14 +1563,24 @@ function coerceColumns(raw: unknown): ColumnDef[] | undefined {
   return cols.length ? cols : undefined;
 }
 
-function coerceHeadroom(raw: unknown): BoardConfig["headroom"] {
+/** Avisou do `headroom.enabled` sem URL? Uma vez por processo — o board é relido a cada leitura de config. */
+let warnedHeadroomWithoutUrl = false;
+
+/**
+ * `headroom:` do board. A URL é DECLARADA, nunca suposta: `enabled: true` sem `proxyUrl` NÃO inventa a porta de nenhum
+ * sidecar (um endereço de loopback não identifica quem atende nele — ver runner/headroom.ts), fica com `proxyUrl: ""`
+ * (⇒ `resolveHeadroomUrl` devolve null, tráfego direto) e avisa UMA vez no log o que declarar. A declaração do
+ * operador (`enabled`, `proxyUrl`) é preservada como veio.
+ */
+export function coerceHeadroom(raw: unknown, warn: (m: string) => void = (m) => console.warn(m)): BoardConfig["headroom"] {
   if (!raw || typeof raw !== "object") return undefined;
   const r = raw as Record<string, unknown>;
   const proxyUrl = typeof r.proxyUrl === "string" ? r.proxyUrl.trim() : "";
-  return {
-    enabled: r.enabled === true,
-    proxyUrl: proxyUrl || "http://127.0.0.1:8787",
-  };
+  if (r.enabled === true && !proxyUrl && !warnedHeadroomWithoutUrl) {
+    warnedHeadroomWithoutUrl = true;
+    warn("[storymap] board.yaml headroom.enabled: true SEM proxyUrl — o roteamento fica desligado (tráfego direto). Declare headroom.proxyUrl (ex.: http://127.0.0.1:<porta> do seu proxy) ou remova o bloco.");
+  }
+  return { enabled: r.enabled === true, proxyUrl };
 }
 
 /**

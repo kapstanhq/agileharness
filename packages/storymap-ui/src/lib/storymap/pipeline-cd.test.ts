@@ -33,7 +33,8 @@ describe("coerceCard — Fase C/D pointers + findings", () => {
     const c = card({
       findings: [
         { id: "f1", lens: "security", severity: "blocker", title: "Regra aberta", status: "open" },
-        { lens: "bogus", severity: "nope", title: "sem id", status: "weird", file: "a.ts", line: 9 },
+        // A lente é lida SEM PERDA (qualquer slug sobrevive — o vocabulário de domínio é do alvo); só a MALFORMADA cai em general.
+        { lens: "Bogus lens!", severity: "nope", title: "sem id", status: "weird", file: "a.ts", line: 9 },
         { severity: "low", status: "open" }, // no title → dropped
       ],
     });

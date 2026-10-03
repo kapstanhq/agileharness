@@ -57,6 +57,8 @@ describe("worktree node_modules provisioning (real git + fs) — story-ex0142", 
     // provisioner creates, so a run's `git add -A` never commits a link (see the gitignore guard test).
     await fsp.writeFile(path.join(mainRepo, ".gitignore"), "node_modules\n.worktrees/\n");
     await fsp.writeFile(path.join(mainRepo, "README.md"), "# synthetic repo\n");
+    // O alvo declara onde moram seus workspaces (a fonte de onde sai quais node_modules ligar) — sem isto só a raiz é ligada.
+    await fsp.writeFile(path.join(mainRepo, "package.json"), JSON.stringify({ name: "synthetic", private: true, workspaces: ["packages/*"] }));
     // Tracked package (checked out into the worktree) whose dep lives ONLY per-package.
     await fsp.mkdir(path.join(mainRepo, "packages", "foo"), { recursive: true });
     await fsp.writeFile(

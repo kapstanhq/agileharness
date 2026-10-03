@@ -36,7 +36,7 @@ import { terminalStatusIds } from "@/lib/storymap/views";
 import type { BoardConfig, Card, DeployCause, DeployFailurePhase, Finding } from "@/lib/storymap/types";
 import { ownerApprovalRequestsOf, parsePlanOutput, type DeployExit3Report, type OwnerApprovalRequest, type PlanBlockEntry } from "./deploy-proof";
 // a régua dos comandos declarados em board-data (o `deploy.planCommand` vira execução) — o módulo dela não importa nada
-import { authorizeDeployCommand, quoteArgv } from "./deploy-command-guard";
+import { authorizeDeployCommand, deployPolicyFromSettings, quoteArgv, type DeployCommandPolicy } from "./deploy-command-guard";
 import type { ExecFn } from "./worktree";
 
 type AutonomyOf = Pick<BoardConfig, "autonomy"> | null | undefined;
@@ -733,18 +733,25 @@ export async function remeasureBoardCauses(
   board: string,
   config: BoardConfig,
   rows: readonly DeployBlockRow[],
-  io: { exec: ExecFn; repoRoot: string; now: number },
+  io: {
+    exec: ExecFn;
+    repoRoot: string;
+    now: number;
+    /** A POLÍTICA do passo privilegiado que o alvo declarou (lançadores/receitas). Ausente ⇒ a do settings do alvo ∪ o env. */
+    policy?: DeployCommandPolicy;
+  },
 ): Promise<RemeasureVerdict> {
   const verdict: RemeasureVerdict = { dead: [], present: [] };
   const fresh = rows.filter((r) => r.phase === "freshness");
   const plan = rows.filter(isPlanCause);
   if ((!fresh.length && !plan.length) || !claimRemeasure(board, io.now)) return verdict;
   try {
+    const { loadRunnerConfig } = await import("./config");
+    const policy = io.policy ?? deployPolicyFromSettings(loadRunnerConfig().deploy);
     if (fresh.length) {
-      const [{ checkDeployFreshness }, { releaseCodePrefixes }, { loadRunnerConfig }] = await Promise.all([
+      const [{ checkDeployFreshness }, { releaseCodePrefixes }] = await Promise.all([
         import("./deploy-freshness"),
         import("./release-scope"),
-        import("./config"),
       ]);
       const v = await checkDeployFreshness(
         {
@@ -752,6 +759,7 @@ export async function remeasureBoardCauses(
           repoRoot: io.repoRoot,
           scope: releaseCodePrefixes(config, loadRunnerConfig().autorun.staging?.codePrefixes ?? []),
           liveShaCommands: [config.deploy?.liveShaCommand],
+          policy,
           label: `causa de frescor ${board}`,
         },
         { exec: io.exec },
@@ -760,7 +768,7 @@ export async function remeasureBoardCauses(
     }
     const declared = config.deploy?.planCommand?.trim();
     if (plan.length && declared) {
-      const auth = authorizeDeployCommand(declared);
+      const auth = authorizeDeployCommand(declared, policy);
       if (!auth.argv) {
         console.error(`[deploy-blocks ${board}] deploy.planCommand recusado pela régua dos comandos declarados — ${auth.refusal}`);
       } else {
@@ -1031,8 +1039,8 @@ export function systemTextOf(cause: DeployCause, today: string): Pick<Finding, "
       `O que segurou não é decisão de negócio` +
       (units ? ` — unidade(s): ${units}` : "") +
       (rules ? ` (regra(s) do deploy: ${rules})` : "") +
-      `. É trabalho do sistema: publicar essas unidades pelo orquestrador, por unidade, ou corrigir a tabela de classes ` +
-      `do deploy; se não destravar, abre um card de conserto. Quando o plano não listar mais esta causa, o card volta a ` +
+      `. É trabalho do sistema: publicar essas unidades pelo comando de deploy do alvo, por unidade, ou corrigir a configuração de classes ` +
+      `de publicação; se não destravar, abre um card de conserto. Quando o plano não listar mais esta causa, o card volta a ` +
       `publicar sozinho. Nada a fazer da sua parte (${today}).`,
   };
 }

@@ -2,7 +2,13 @@
 // STRUCTURED questions ask_question now carries. Pure rules; the actions own the IO.
 
 import { describe, expect, it } from "vitest";
-import { addOrRefreshFinding, normalizeTasks, tasksError } from "./card-evidence";
+import { addOrRefreshFinding, normalizeTasks, tasksError, undeclaredLensError } from "./card-evidence";
+import { findingBatchItemSchemaFor, FindingBatchItemSchema } from "./contracts";
+import { coerceCard } from "./repo";
+import { CORE_REVIEW_LENSES } from "./target-profile";
+import { CORE_LENS_IDS } from "./types";
+import matter from "gray-matter";
+import { serializeCard } from "./write";
 import { addQuestions, addStructuredQuestions, structuredQuestionError } from "./questions";
 import type { CardQuestion, Finding } from "./types";
 
@@ -38,6 +44,76 @@ describe("addOrRefreshFinding — add_finding", () => {
     expect(addOrRefreshFinding([], { severity: "critical" as never, title: "x" }).ok).toBe(false);
     expect(addOrRefreshFinding([], { severity: "high", title: "x", lens: "ux" as never }).ok).toBe(false);
     expect(addOrRefreshFinding([], { severity: "high", title: "x", id: "../../x y" }).ok).toBe(false);
+  });
+});
+
+// ── as LENTES de revisão: as embutidas são da ferramenta; as de domínio são DECLARADAS pelo alvo (lote D) ─────────────────
+// Fixtures inventadas (oficina de bicicletas): `freios` e `cambio` são lentes de um alvo imaginário.
+describe("add_finding — a lente precisa existir no vocabulário do alvo", () => {
+  const base = { severity: "high" as const, title: "pinça sem teste de carga" };
+  const declared = new Set<string>([...CORE_LENS_IDS, "freios"]);
+
+  it("a lista embutida da ferramenta é a MESMA de target-profile (nenhuma das duas deriva sozinha)", () => {
+    expect([...CORE_LENS_IDS]).toEqual(CORE_REVIEW_LENSES.map((l) => l.id));
+  });
+
+  it("SEM declaração: só as embutidas — general (padrão) e design passam; uma lente de domínio é recusada dizendo onde declarar", () => {
+    expect(addOrRefreshFinding([], base)).toMatchObject({ ok: true, id: "general-1" });
+    expect(addOrRefreshFinding([], { ...base, lens: "design" })).toMatchObject({ ok: true, id: "design-1" });
+    for (const lens of ["freios", "firestore", "nextjs", "ux"]) {
+      const r = addOrRefreshFinding([], { ...base, lens });
+      expect(r.ok, lens).toBe(false);
+      if (!r.ok) {
+        expect(r.error).toContain(`lente "${lens}" não declarada`);
+        expect(r.error).toContain("security, testing, perf, general, design");
+        expect(r.error).toContain("storymap/settings.yaml → target.reviewLenses");
+      }
+    }
+  });
+
+  it("COM declaração: a lente do alvo é aceita e o id gerado leva o nome dela; as embutidas continuam válidas", () => {
+    expect(addOrRefreshFinding([], { ...base, lens: "freios", lenses: declared })).toMatchObject({ ok: true, id: "freios-1" });
+    expect(addOrRefreshFinding([{ id: "freios-1", lens: "freios", severity: "low", title: "a", status: "open" }], { ...base, lens: "freios", lenses: declared })).toMatchObject({ ok: true, id: "freios-2" });
+    expect(addOrRefreshFinding([], { ...base, lens: "security", lenses: declared }).ok).toBe(true);
+    expect(addOrRefreshFinding([], { ...base, lens: "cambio", lenses: declared }).ok).toBe(false);
+  });
+
+  it("o conjunto não vaza para o finding gravado; um id malformado vira a dica '<id>'", () => {
+    const r = addOrRefreshFinding([], { ...base, lens: "freios", lenses: declared });
+    expect(r.ok && r.findings[0]).toEqual({ id: "freios-1", lens: "freios", severity: "high", title: base.title, status: "open" });
+    expect(undeclaredLensError("Foo Bar!", ["general"])).toContain("target.reviewLenses.<id>");
+  });
+});
+
+describe("a lente de um finding é lida SEM PERDA (só o malformado cai em «general»)", () => {
+  const findings = (...lens: unknown[]) => lens.map((l, i) => ({ id: `f${i}`, lens: l, severity: "low", title: "t", status: "open" }));
+
+  it("lente embutida, de domínio já removida do settings e antiga (ux) sobrevivem ao ler → escrever → ler", () => {
+    const c = coerceCard("story-ex9980", { type: "story", title: "x", findings: findings("design", "freios", "ux", "security") }, "");
+    expect(c.findings?.map((f) => f.lens)).toEqual(["design", "freios", "ux", "security"]);
+    const back = matter(serializeCard(c));
+    expect(coerceCard("story-ex9980", back.data, back.content).findings?.map((f) => f.lens)).toEqual(["design", "freios", "ux", "security"]);
+  });
+
+  it("lente malformada ou ausente cai em general", () => {
+    const c = coerceCard("story-ex9980", { type: "story", title: "x", findings: findings("Foo Bar!", "", undefined, 7, "x".repeat(40)) }, "");
+    expect(c.findings?.map((f) => f.lens)).toEqual(["general", "general", "general", "general", "general"]);
+  });
+});
+
+describe("finding-batch — o gate estrito conhece o conjunto de lentes", () => {
+  const item = (lens: string) => ({ lens, severity: "low", title: "x" });
+
+  it("o padrão (sem alvo na mão) aceita só as embutidas; com o conjunto do alvo aceita as dele; continua .strict()", () => {
+    expect(FindingBatchItemSchema.safeParse(item("design")).success).toBe(true);
+    expect(FindingBatchItemSchema.safeParse(item("freios")).success).toBe(false);
+    const withFreios = findingBatchItemSchemaFor(new Set([...CORE_LENS_IDS, "freios"]));
+    expect(withFreios.safeParse(item("freios")).success).toBe(true);
+    expect(withFreios.safeParse(item("cambio")).success).toBe(false);
+    expect(withFreios.safeParse({ ...item("freios"), extra: 1 }).success).toBe(false);
+    const refused = FindingBatchItemSchema.safeParse(item("freios"));
+    expect(refused.success).toBe(false);
+    if (!refused.success) expect(refused.error.issues[0].message).toContain("target.reviewLenses");
   });
 });
 

@@ -26,7 +26,7 @@
 // num board humano continuam do dono. `environment` segue a régua normal do modo.
 
 import type { FailureClass } from "@/lib/storymap/types";
-import { classifyFailure } from "./findings";
+import { classifyFailure, type FailureRules } from "./findings";
 
 /**
  * `tool` = um defeito conhecido do host/da ferramenta (assinatura); `environment` = o ambiente do run falhou sem
@@ -115,11 +115,16 @@ export function toolSignature(text: string | null | undefined): FailureOriginVer
   return null;
 }
 
-/** A origem de uma falha. PURA. Só uma assinatura dá `tool` (ver o cabeçalho). */
-export function failureOrigin(e: FailureEvidence): FailureOriginVerdict {
+/**
+ * A origem de uma falha. PURA. Só uma assinatura dá `tool` (ver o cabeçalho). `rules` = o que o alvo declarou do
+ * ambiente de teste dele (`target.qa`); sem elas vale só o baseline universal. O leitor do Inbox, que roda no
+ * cliente e não lê o settings.yaml, chama SEM regras: lá o carimbo que o servidor gravou (`failureClass`, vindo do
+ * run-death com as regras do alvo) vence a releitura do texto.
+ */
+export function failureOrigin(e: FailureEvidence, rules?: FailureRules): FailureOriginVerdict {
   const sig = toolSignature(e.text);
   if (sig) return sig;
-  const cls = e.failureClass !== undefined ? e.failureClass : classifyFailure({ message: e.text ?? "", criterionUnmet: e.criterionUnmet });
+  const cls = e.failureClass !== undefined ? e.failureClass : classifyFailure({ message: e.text ?? "", criterionUnmet: e.criterionUnmet }, rules);
   if (cls === "infra") return verdict("environment", null, "o ambiente do run falhou (recurso, rede, API) — não é o código do card", null);
   if (cls === "app" || cls === "test") return verdict("product", null, null, null);
   return verdict("unknown", null, null, null);

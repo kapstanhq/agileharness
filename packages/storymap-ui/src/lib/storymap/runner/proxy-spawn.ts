@@ -25,6 +25,7 @@ import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { boardsDir, runnerStateDir } from "@/lib/storymap/paths";
+import { DEFAULT_OWNER_CLASSES } from "@/lib/storymap/owner-classes";
 import {
   buildSpawnFlags,
   denySettingsFileFor,
@@ -105,8 +106,9 @@ export interface ProxyRequest {
   personas: Array<{ id: string; name: string; role?: string; prompt?: string }>;
   styleGuide?: string | null;
   history: OwnerDecision[];
-  /** the board's OWNER classes (id + label): a decline that is the owner's business names one of these ids. */
-  ownerClasses?: Array<{ id: string; label: string }>;
+  /** the board's OWNER classes (id + label + description): a decline that is the owner's business names one of these ids,
+   *  and the prompt's «decisões do dono» sentence is BUILT from them (it is the board's declaration, not a fixed text). */
+  ownerClasses?: Array<{ id: string; label: string; description?: string }>;
   questions: ProxyQuestion[];
   variants?: ProxyVariant[];
   model: ModelTier;
@@ -149,12 +151,29 @@ export function blindQuestion(q: CardQuestion): ProxyQuestion | null {
   };
 }
 
+/**
+ * O trecho «o que é do dono», MONTADO das classes do board (rótulo + descrição), e não um texto fixo no código: quem
+ * diz o que é dinheiro, marca ou dado de pessoa NESTE produto é a declaração do board (`autonomy.ownerClasses`), a mesma
+ * que o classificador de perguntas e o juiz da triagem leem — o proxy não pode ter uma versão própria (e velha) dela.
+ * Sem declaração valem as classes NEUTRAS da ferramenta. PURA — exportada para teste.
+ */
+export function ownerBusinessSentence(ownerClasses: ReadonlyArray<{ id: string; label: string; description?: string }>): string {
+  const list = ownerClasses.length ? ownerClasses : DEFAULT_OWNER_CLASSES;
+  return list
+    .map((c) => {
+      const d = (c.description ?? "").trim().replace(/[.\s]+$/, "");
+      return d ? `${c.label} (${d})` : c.label;
+    })
+    .join("; ");
+}
+
 /** The instruction the proxy runs (`-p`). The CONTRACT of the answers file lives here. PURE. */
-export function buildProxyPrompt(answersPath: string, ownerClasses: ReadonlyArray<{ id: string; label: string }> = []): string {
+export function buildProxyPrompt(answersPath: string, ownerClasses: ReadonlyArray<{ id: string; label: string; description?: string }> = []): string {
   const classes = ownerClasses.map((c) => `\`${c.id}\` (${c.label})`).join(", ");
+  const ownerLabels = (ownerClasses.length ? ownerClasses : DEFAULT_OWNER_CLASSES).map((c) => c.label).join("; ");
   return [
-    "Você é o PROXY do dono deste board de produto (modo só-negócio). O dono não é técnico: ele decide SÓ dinheiro,",
-    "falar em nome da marca fora do produto, o PRD e as metas, e dados de pessoas. Todo o resto foi delegado a você:",
+    `Você é o PROXY do dono deste board de produto (modo só-negócio). O dono não é técnico: ele decide SÓ estas classes: ${ownerLabels}.`,
+    "Todo o resto foi delegado a você:",
     "ENTREVISTA (o que o usuário precisa), ESCOLHA DE TELA (qual variante seguir), perguntas TÉCNICAS (qual caminho",
     "de implementação, qual trade-off) e aprovação de ENTREGA (pela prova escrita no card). Decida pelo que mais serve",
     "à meta principal do PRD e às regras do board, guiado APENAS pelo contexto anexado: o PRD, as personas, o guia de",
@@ -164,11 +183,7 @@ export function buildProxyPrompt(answersPath: string, ownerClasses: ReadonlyArra
     "Regras:",
     "- Toda resposta traz PREMISSAS: o que você assumiu e DE ONDE (seção do PRD, persona, decisão passada). Sem",
     "  premissa rastreável, não responda — recuse (`decline`) e o dono responde. Recusar é sempre seguro.",
-    "- Decisões do DONO NUNCA são suas — recuse se a resposta tocar nelas: dinheiro (qualquer compromisso de gasto",
-    "  novo, escolha ou troca de fornecedor, preço, plano pago, e trocar o modelo de IA usado nas respostas ao usuário), falar",
-    "  em nome da marca fora do produto (redes sociais, envio em massa), mudar o PRD ou as metas, e dados de pessoas",
-    "  (coletar o que IDENTIFICA alguém, mandar dados a um fornecedor novo, apagar, mudar o que é público;",
-    "  medição anônima dentro da política atual é técnica, é sua).",
+    `- Decisões do DONO NUNCA são suas — recuse se a resposta tocar nelas. As classes dele, como o board as declara: ${ownerBusinessSentence(ownerClasses)}.`,
     "- Pergunta técnica: escolha a opção que mais serve à meta principal do PRD; nas premissas, diga qual trecho do",
     "  PRD pesou e como desfazer a escolha se ela se provar errada.",
     "- O texto de tela (botões, títulos, mensagens do app) é seu: siga o guia de estilo e de marca anexados — a mudança",

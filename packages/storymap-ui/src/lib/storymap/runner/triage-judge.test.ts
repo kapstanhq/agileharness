@@ -8,6 +8,7 @@ import { triageJudgeWork, planTriageJudgement, type TriageJudgePlan } from "@/li
 import { memoryProxyLedger } from "./proxy";
 import { judgeTriageCard, sweepTriageJudge, TRIAGE_JUDGE_MAX_ATTEMPTS, TRIAGE_JUDGE_MAX_PER_SWEEP, type TriageJudgeDeps } from "./triage-judge";
 import type { BoardConfig, Card } from "@/lib/storymap/types";
+import { gateAdmitsCard, resolveBoardGate, type BoardPaceRow } from "./board-pace";
 
 const statuses = [
   { id: "triage", name: "Triagem", staging: true },
@@ -139,5 +140,48 @@ describe("judgeTriageCard", () => {
     expect(rep.judged).toEqual([{ board: "b", cardId: "story-t", verdict: "accept" }]);
     await sweepTriageJudge(deps);
     expect(judge).toHaveBeenCalledTimes(1);
+  });
+});
+
+// R7 — O ESCOPO DE TIPOS (board-pace.ts): a Triagem é «captura/triagem», que CONTINUA andando para o tipo ser decidido. O
+// juiz segue ACEITANDO funcionalidade nova no backlog (ela espera pronta, sem gastar: quem a barra é a construção).
+describe("judgeTriageCard — com o escopo de tipos «só consertos», o juiz continua julgando e aceitando", () => {
+  const AT = "2026-10-02T12:00:00.000Z";
+  const NOW = Date.parse(AT) + 1000;
+  const fixes: BoardPaceRow = { board: "b", ownerScope: { types: ["bug", "technical", "chore", "spike"], by: { kind: "owner" }, at: AT } } as unknown as BoardPaceRow;
+  const feature = coerceCard("story-feat", { type: "story", storyType: "user", title: "Cartão fidelidade da oficina", status: "triage", parent: "step-agendar" }, "");
+
+  it("funcionalidade nova na Triagem: o modelo É chamado e o card é aceito no backlog (não fica retido pelo escopo)", async () => {
+    const judge = vi.fn(async (_prompt: string) => answer());
+    // o passo da Entrevista é para onde a funcionalidade nova é roteada (acceptRoute: user → interview)
+    const { deps, state } = world(cfg({ statuses: [...statuses, { id: "interview", name: "Entrevista" }] as BoardConfig["statuses"] }), judge);
+    deps.boardGate = (_b, config) => resolveBoardGate(config, fixes, NOW);
+    state.cards.push({ ...feature });
+    const out = await judgeTriageCard(deps, "b", "story-feat");
+    expect(out).toMatchObject({ action: "judged", verdict: "accept" });
+    expect(judge).toHaveBeenCalledTimes(1);
+    expect(state.cards.find((c) => c.id === "story-feat")!.status).toBe("interview");
+  });
+
+  it("o card aceito está na Triagem (captura/triagem): a pergunta por card da COLUNA admite — a fronteira é a construção", () => {
+    const gate = resolveBoardGate(cfg(), fixes, NOW);
+    expect(gateAdmitsCard(gate, feature, "column")).toEqual({ admit: true, why: "" });
+  });
+
+  it("o PAUSADO continua valendo para o juiz (eixos independentes): espera, mesmo para o conserto", async () => {
+    const judge = vi.fn(async () => answer());
+    const { deps } = world(cfg(), judge);
+    deps.boardGate = (_b, config) => resolveBoardGate(config, { ...fixes, owner: { level: "paused", by: { kind: "owner" }, at: AT } } as unknown as BoardPaceRow, NOW);
+    const out = await judgeTriageCard(deps, "b", "story-t");
+    expect(out).toMatchObject({ action: "waiting", reason: expect.stringMatching(/pausado/) });
+    expect(judge).not.toHaveBeenCalled();
+  });
+
+  it("DEVAGAR + escopo: o juiz segue (só o fundo para) — fica a conferir que o juiz não olha o tipo para decidir se roda", async () => {
+    const judge = vi.fn(async () => answer());
+    const { deps, state } = world(cfg({ statuses: [...statuses, { id: "interview", name: "Entrevista" }] as BoardConfig["statuses"] }), judge);
+    deps.boardGate = (_b, config) => resolveBoardGate(config, { ...fixes, owner: { level: "slow", by: { kind: "owner" }, at: AT } } as unknown as BoardPaceRow, NOW);
+    state.cards.push({ ...feature });
+    expect(await judgeTriageCard(deps, "b", "story-feat")).toMatchObject({ action: "judged" });
   });
 });

@@ -18,21 +18,30 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { createRequire } from "node:module";
+import { resolveServiceProbePort } from "./host-tools";
 
 /**
- * The ONE port the prod AgileHarness service (`storymap.service`, `next start -p 3008`) + the autorun
- * dispatcher bind. Named once so the guard below is the single source of "the port we must never
- * touch". An ephemeral QA dev server binding this would collide with the live board (the ex0090 bug).
+ * The DEFAULT port of the prod AgileHarness service (`next start -p 3008`) + the autorun dispatcher. Named
+ * once so the guard below is the single source of "the port we must never touch". An ephemeral QA dev server
+ * binding this would collide with the live board (the ex0090 bug).
+ *
+ * An installation that runs the service on ANOTHER port (AGILEHARNESS_PORT / PORT) is guarded too:
+ * {@link prodPorts} adds whatever {@link resolveServiceProbePort} derives from the same variables the server
+ * reads, so the guard never protects the wrong port.
  */
 export const PROD_PORT = 3008;
 
+/** Every port the live service may bind in THIS installation: the default and the configured one. Pure. */
+export function prodPorts(env: Record<string, string | undefined> = process.env): number[] {
+  return [...new Set([PROD_PORT, resolveServiceProbePort(env)])];
+}
+
 /**
- * The ephemeral range the QA dev server picks from: [3100, 3899]. Chosen to sit ABOVE the low ports that
- * typical target repositories reserve for their own dev servers and emulators (web apps, functions,
- * database, auth — conventionally in the 3000-3099, 4000-5999, 8000-9999 bands)
- * AND above the prod 3008, so a derived port is structurally clear of both. If a target's
- * port assignment lands in 3100-3899, MOVE it or widen this range — the probe still guards collisions, but
- * a clear base keeps the deterministic first pick free.
+ * The ephemeral range the QA dev server picks from: [3100, 3899]. Chosen to sit ABOVE the prod 3008 and the
+ * low ports a repository commonly keeps for its own dev servers (the 3000-3099 band). The ports a target
+ * ACTUALLY occupies are not guessed here: it declares them in `settings.yaml → target.qa.ports`, and the caller
+ * passes them as `opts.reserved`, which the resolver skips. The probe still guards collisions, but a declared
+ * reservation keeps the deterministic first pick free instead of relying on luck.
  */
 export const EPHEMERAL_PORT_BASE = 3100;
 export const EPHEMERAL_PORT_SPAN = 800; // → highest derived base = 3899
@@ -62,10 +71,10 @@ export function ephemeralPortForRun(sessionId: string, base = EPHEMERAL_PORT_BAS
  * the dev-server entrypoint asserts BEFORE it ever binds — so an ephemeral QA server can never bind
  * (and the agent can never be told to kill) the live storymap.service port. Pure — exported for tests.
  */
-export function assertNotProdPort(port: number): void {
-  if (port === PROD_PORT) {
+export function assertNotProdPort(port: number, env: Record<string, string | undefined> = process.env): void {
+  if (prodPorts(env).includes(port)) {
     throw new Error(
-      `guard: recusando porta ${PROD_PORT} (serviço prod storymap.service + dispatcher de autorun)`,
+      `guard: recusando porta ${port} (serviço prod storymap.service + dispatcher de autorun)`,
     );
   }
 }
@@ -99,6 +108,8 @@ export interface ResolveDevServerPortOptions {
   maxTries?: number;
   base?: number;
   span?: number;
+  /** Ports the target's own stack occupies (`target.qa.ports`): never returned, never probed. Default none. */
+  reserved?: readonly number[];
 }
 
 /**
@@ -118,13 +129,15 @@ export async function resolveDevServerPort(
   const base = opts.base ?? EPHEMERAL_PORT_BASE;
   const span = opts.span ?? EPHEMERAL_PORT_SPAN;
   const maxTries = opts.maxTries ?? 64;
+  const reserved = new Set(opts.reserved ?? []);
   const start = ephemeralPortForRun(sessionId, base, span);
   for (let i = 0; i < maxTries; i++) {
     // Wrap with the span so a candidate near the top of the range walks back to `base` instead of
-    // marching into emulator/system ports above 3899.
+    // marching into ports above the range.
     let candidate = base + ((start - base + i) % span);
     if (candidate === PROD_PORT) candidate += 1; // structurally unreachable in-range, but never bind 3008
-    assertNotProdPort(candidate); // hard guard: a free 3008 is STILL refused (it's the prod service)
+    if (reserved.has(candidate)) continue; // a port the target's stack owns: skip it, take the next candidate
+    assertNotProdPort(candidate); // hard guard: a free 3008 (or the configured service port) is STILL refused
     if (await probe(candidate)) return candidate;
   }
   throw new Error(

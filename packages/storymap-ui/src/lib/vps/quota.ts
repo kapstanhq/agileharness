@@ -5,9 +5,9 @@
 // THE HEADLINE IS THE SUBSCRIPTION WINDOW (`VpsMetrics.usage`, source "subscription"): what the
 // headroom proxy polls straight from Anthropic, i.e. the same numbers Claude's `/usage` screen
 // shows. ccusage (`VpsMetrics.tokens`) is a FALLBACK and is ALWAYS flagged `approximate: true`,
-// because its percentage is a ratio against a GUESSED budget (`DEFAULT_WEEKLY_TOKEN_LIMIT`,
-// metrics.ts) — in a real case ccusage reported 100% consumed while the real subscription week
-// still had most of its budget. Promoting that to the headline tells the operator to stop working with
+// because its percentage is a ratio against a budget the OPERATOR declared (`vps.weeklyTokenLimit`,
+// metrics.ts; with none declared there is no percentage and no fallback bucket at all). In a real case ccusage
+// reported 100% consumed while the real subscription week still had most of its budget. Promoting that to the headline tells the operator to stop working with
 // much of the week still in hand; that is the exact lie this module exists to refuse.
 //
 // `stale` is ALWAYS recomputed here from `polledAt` against the caller's `now`. `parseHeadroomStats`

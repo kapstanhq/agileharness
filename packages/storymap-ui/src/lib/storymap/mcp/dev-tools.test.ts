@@ -1,4 +1,4 @@
-import { afterAll, describe, it, expect, vi } from "vitest";
+import { afterAll, afterEach, describe, it, expect, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import {
@@ -18,13 +18,20 @@ import { promises as fs } from "node:fs";
 // A matriz de risco de ESCOPO REPO (settings.yaml) que o guard consulta — controlável por teste. `undefined`
 // (o default) = não declarada, que é o estado real do repo hoje.
 let repoRiskMatrix: Record<string, string> | undefined;
+// O perfil do alvo (`target:` do settings.yaml) que as tools `target_profile`/`run_check` leem — controlável por teste.
+// "unset" = não mexe no que o repositório real declara.
+let repoTarget: unknown = "unset";
 vi.mock("@/lib/storymap/runner/config", async (orig) => {
   const actual = (await orig()) as Record<string, unknown>;
   return {
     ...actual,
     loadRunnerConfig: () => {
       const real = (actual.loadRunnerConfig as () => Record<string, unknown>)();
-      return { ...real, orchestrator: { ...(real.orchestrator as object), riskMatrix: repoRiskMatrix } };
+      return {
+        ...real,
+        orchestrator: { ...(real.orchestrator as object), riskMatrix: repoRiskMatrix },
+        ...(repoTarget === "unset" ? {} : { target: repoTarget }),
+      };
     },
   };
 });
@@ -689,5 +696,90 @@ describe("tools do host — recusa declarada em vez de endereço cravado (story-
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+// ─── lote D: target_profile e run_check — o alvo declara, a ferramenta não supõe ────────────────────────────────
+// Fixture INVENTADA (uma oficina de bicicletas); o board `demo` da ferramenta não mapeia pacote.
+describe("target_profile / run_check — comandos declarados pelo alvo (lote D)", () => {
+  function tool(nome: string) {
+    let found: { cfg: { description?: string }; fn: (a: Record<string, unknown>) => Promise<CallToolResult> } | null = null;
+    const server = new Proxy(
+      {},
+      {
+        get: (_t, prop) =>
+          prop === "registerTool"
+            ? (name: string, cfg: { description?: string }, fn: (a: Record<string, unknown>) => Promise<CallToolResult>) => {
+                if (name === nome) found = { cfg, fn };
+              }
+            : () => {},
+      },
+    ) as unknown as McpServer;
+    setServerLevel(server, "full");
+    registerDevTools(server);
+    if (!found) throw new Error(`${nome} não foi registrada`);
+    return found as { cfg: { description?: string }; fn: (a: Record<string, unknown>) => Promise<CallToolResult> };
+  }
+  const body = (r: CallToolResult) => String((r.content as { text: string }[])[0].text);
+  const asJson = (r: CallToolResult) => JSON.parse(body(r)) as Record<string, any>;
+  const CORE = ["security", "testing", "perf", "general", "design"];
+
+  afterEach(() => {
+    repoTarget = "unset";
+  });
+
+  it("SEM declaração: target_profile diz «descubra o comando nas instruções do repositório» e ainda serve as lentes embutidas", async () => {
+    repoTarget = undefined;
+    const out = asJson(await tool("target_profile").fn({}));
+    expect(out.declared).toBe(false);
+    expect(out.note).toContain("descubra o comando nas instruções do repositório");
+    expect((out.reviewLenses as { id: string }[]).map((l) => l.id)).toEqual(CORE);
+  });
+
+  it("SEM declaração: run_check({check}) RECUSA nomeando settings.yaml → target.checks e a frase de descoberta (nunca cai em `just`)", async () => {
+    repoTarget = undefined;
+    const r = await tool("run_check").fn({ check: "test", board: "demo" });
+    expect(r.isError).toBe(true);
+    expect(body(r)).toContain("storymap/settings.yaml → target.checks");
+    expect(body(r)).toContain("descubra o comando nas instruções do repositório");
+    expect(body(r)).not.toMatch(/\bjust\b/);
+  });
+
+  it("COM declaração: target_profile preenche os comandos do board e devolve as lentes que o alvo acrescentou", async () => {
+    repoTarget = {
+      checks: { test: "make test-bikes", typecheck: "make types" },
+      dev: { up: "make dev" },
+      docs: { conventions: "CONTRIBUTING.md", testing: "docs/testing.md" },
+      reviewLenses: { brakes: { name: "Freios", description: "folga de cabo, desgaste de pastilha", agent: "brake-reviewer" } },
+    };
+    const out = asJson(await tool("target_profile").fn({ board: "demo" }));
+    expect(out.declared).toBe(true);
+    expect(out.checks).toEqual({ test: "make test-bikes", typecheck: "make types" });
+    expect(out.docs.conventions).toBe("CONTRIBUTING.md");
+    const ids = (out.reviewLenses as { id: string }[]).map((l) => l.id);
+    expect(ids).toEqual([...CORE, "brakes"]);
+    expect((out.reviewLenses as { id: string; agent?: string }[]).find((l) => l.id === "brakes")?.agent).toBe("brake-reviewer");
+  });
+
+  it("COM declaração: run_check({check}) executa o argv declarado, sem shell, e devolve o exitCode", async () => {
+    repoTarget = { checks: { test: "node --version" }, dev: {}, docs: {} };
+    const out = asJson(await tool("run_check").fn({ check: "test", board: "demo" }));
+    expect(out.ok).toBe(true);
+    expect(out.exitCode).toBe(0);
+    expect(out.output).toMatch(/^v\d+/m);
+  });
+
+  it("COM declaração que usa {pkg}: um board sem pacote RECUSA («não mapeia um pacote»), sem rodar nada pela metade", async () => {
+    repoTarget = { checks: { test: "make test-{pkg}" }, dev: {}, docs: {} };
+    const r = await tool("run_check").fn({ check: "test", board: "demo" });
+    expect(r.isError).toBe(true);
+    expect(body(r)).toMatch(/não mapeia um pacote/);
+  });
+
+  it("as descrições avisam o que cada tool é: run_check roda no checkout de RUNTIME, target_profile entrega as lentes", () => {
+    expect(tool("run_check").cfg.description).toMatch(/checkout de RUNTIME/);
+    expect(tool("run_check").cfg.description).toMatch(/NUNCA no worktree/);
+    expect(tool("target_profile").cfg.description).toContain("descubra o comando nas instruções");
+    expect(tool("target_profile").cfg.description).toMatch(/reviewLenses/);
   });
 });

@@ -11,7 +11,7 @@
 // hold the card's live claim: the task list is build EVIDENCE, and "mark it done" without owning the work is
 // the trust-me stamp `mark_tasks_done` was retired for).
 
-import { FINDING_SEVERITIES, REVIEW_LENSES } from "./types";
+import { CORE_LENS_IDS, FINDING_SEVERITIES } from "./types";
 import type { Finding, FindingSeverity, ReviewLens, Task } from "./types";
 
 export interface AddFindingInput {
@@ -19,6 +19,12 @@ export interface AddFindingInput {
   title: string;
   detail?: string;
   lens?: ReviewLens;
+  /**
+   * As lentes que ESTE alvo aceita para escrever um finding (as embutidas + as de `target.reviewLenses`), resolvidas pela
+   * porta que conhece o alvo (a tool `add_finding`). Ausente ⇒ só as embutidas: o alvo que não declara nada nunca
+   * recebe uma lente de domínio que a ferramenta inventou. Não é gravado no finding.
+   */
+  lenses?: ReadonlySet<string>;
   /** a STABLE id makes the call idempotent (`conductor-budget`); absent ⇒ a fresh `<lens>-<n>` is minted. */
   id?: string;
   file?: string;
@@ -27,6 +33,11 @@ export interface AddFindingInput {
 }
 
 const ID_RE = /^[a-z0-9][a-z0-9._:-]{0,79}$/i;
+
+/** A recusa de uma lente fora do conjunto: lista as válidas e diz exatamente onde declarar uma nova. */
+export function undeclaredLensError(lens: string, declared: readonly string[]): string {
+  return `lente "${lens}" não declarada — as válidas: ${declared.join(", ")}. Para uma lente nova, declare em storymap/settings.yaml → target.reviewLenses.${/^[a-z][a-z0-9-]{0,31}$/.test(lens) ? lens : "<id>"} (name e description), ou use "general".`;
+}
 
 /**
  * The card's findings with `input` added — or, when `input.id` names an existing finding, that finding's
@@ -44,7 +55,8 @@ export function addOrRefreshFinding(
     return { ok: false, error: `severity inválida "${input.severity}" — use ${FINDING_SEVERITIES.join(" | ")}` };
   }
   const lens: ReviewLens = input.lens ?? "general";
-  if (!(REVIEW_LENSES as readonly string[]).includes(lens)) return { ok: false, error: `lens inválida "${lens}" — use ${REVIEW_LENSES.join(" | ")}` };
+  const allowed = input.lenses ?? new Set<string>(CORE_LENS_IDS);
+  if (!allowed.has(lens)) return { ok: false, error: undeclaredLensError(lens, [...allowed]) };
   if (input.id != null && !ID_RE.test(input.id)) return { ok: false, error: `id inválido "${input.id}" (letras, dígitos, . _ : -; até 80)` };
 
   const content = {

@@ -15,11 +15,13 @@ import type { RunnerJournalPort } from "@/lib/storymap/runner/journal";
 
 // Spies referenced inside the (hoisted) vi.mock factories — vi.hoisted guarantees they're
 // initialized before the factories run, sidestepping the ESM import-hoist TDZ.
-const { mockRunSkill, mockUpdateCardOnDisk, mockLastRun, mockListByCard, mockRecentlyCancelledAgeMs, mockDispatchConductor, mockRunEntryEffect, mockPaceRow, mockHoldBoardEntry } = vi.hoisted(() => ({
+const { mockRunSkill, mockUpdateCardOnDisk, mockLastRun, mockListByCard, mockRecentlyCancelledAgeMs, mockDispatchConductor, mockRunEntryEffect, mockPaceRow, mockHoldBoardEntry, mockHoldBoardScopeEntry } = vi.hoisted(() => ({
   // O RITMO DO BOARD (runner/board-pace.ts): a linha de ritmo que o portão lê (null = normal) e a anotação do disparo
   // retido — nunca o arquivo de verdade.
   mockPaceRow: { value: null as unknown },
   mockHoldBoardEntry: vi.fn(async (..._a: unknown[]) => {}),
+  // A anotação do que o ESCOPO DE TIPOS segurou (a mesma rede da pausa, para o escopo alargar devolver).
+  mockHoldBoardScopeEntry: vi.fn(async (..._a: unknown[]) => {}),
   // O efeito de entrada de um passo (promote-and-deploy…) — NUNCA o real: seria um deploy de verdade.
   mockRunEntryEffect: vi.fn(async (..._a: unknown[]) => {}),
   // conductor-core: the conductor dispatch's ENTRY half (fleet-deps) — spied so a board with `conductor` can be
@@ -83,6 +85,7 @@ vi.mock("@/lib/storymap/runner/board-pace-store", async () => {
   return {
     boardGateNow: (_board: string, config: { autorunDisabled?: boolean } | null) => pace.resolveBoardGate(config, mockPaceRow.value as never, Date.now()),
     holdBoardEntry: mockHoldBoardEntry,
+    holdBoardScopeEntry: mockHoldBoardScopeEntry,
   };
 });
 
@@ -140,6 +143,7 @@ const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 beforeEach(() => {
   mockPaceRow.value = null; // ritmo normal, salvo o teste que pausa
   mockHoldBoardEntry.mockClear();
+  mockHoldBoardScopeEntry.mockClear();
   mockDispatchConductor.mockClear();
   mockRunSkill.mockClear();
   mockUpdateCardOnDisk.mockClear();
@@ -191,6 +195,8 @@ describe("evaluateAutorunOnEntry — the shared autorun kernel", () => {
       headroomUrl: null,
       column: "desenvolver",
       noProgressRuns: 0,
+      // o card que a cascata dispara, para o pump do engine segurar o job se o escopo de tipos estreitar na fila
+      scopeCard: { id: "c", type: "story", storyType: "bug", mode: undefined, status: "desenvolver" },
     });
   });
 
@@ -873,5 +879,194 @@ describe("evaluateAutorunOnEntry — o disjuntor da publicação (release autom�
     vi.spyOn(breaker, "holdReason").mockRejectedValue(new Error("disco"));
     await evaluateAutorunOnEntry("b", "c");
     expect(mockRunEntryEffect).toHaveBeenCalledTimes(1);
+  });
+});
+
+// O ESCOPO DE TIPOS (runner/board-pace.ts, segundo eixo do ritmo): a entrada de coluna é o ponto único por onde passa o
+// despacho do condutor e a cascata de colunas — aqui se prova a pergunta por card e a fronteira da construção.
+describe("evaluateAutorunOnEntry — o escopo de tipos do board (só consertos e manutenção)", () => {
+  const FIXES = ["bug", "technical", "chore", "spike"];
+  const scopeRow = (types: string[] = FIXES) => ({ board: "b", ownerScope: { types, by: { kind: "owner" }, at: new Date().toISOString() } });
+  const build = [{ id: "desenvolver", name: "Dev", trigger: "harness-do", autorun: true } as StatusDef];
+  const driven = { skips: [], decidedBy: "rules", decidedAt: "2026-09-25", driver: "conductor" };
+  const withConductor = (statuses: StatusDef[], fromStatus: string | string[]): BoardConfig => ({ ...cfg(statuses), conductor: { enabled: true, fromStatus } });
+
+  it("funcionalidade nova (user) na COLUNA DE CONSTRUÇÃO: nenhuma skill, o disparo fica anotado para o escopo alargar devolver", async () => {
+    mockPaceRow.value = scopeRow();
+    vi.mocked(readBoardConfig).mockResolvedValue(cfg(build));
+    vi.mocked(readCards).mockResolvedValue([card({ status: "desenvolver", storyType: "user" })]);
+
+    await evaluateAutorunOnEntry("b", "c");
+
+    expect(mockRunSkill).not.toHaveBeenCalled();
+    expect(mockHoldBoardScopeEntry).toHaveBeenCalledWith("b", "c");
+    expect(mockHoldBoardEntry).not.toHaveBeenCalled(); // a anotação do ESCOPO, não a da pausa
+  });
+
+  it("card sem storyType vale `user` (o padrão de quem ainda não foi classificado): barrado na construção", async () => {
+    mockPaceRow.value = scopeRow();
+    vi.mocked(readBoardConfig).mockResolvedValue(cfg(build));
+    vi.mocked(readCards).mockResolvedValue([card({ status: "desenvolver" })]);
+    await evaluateAutorunOnEntry("b", "c");
+    expect(mockRunSkill).not.toHaveBeenCalled();
+  });
+
+  it.each(["bug", "technical", "chore", "spike"])("%s na construção: segue normalmente, sem anotação", async (storyType) => {
+    mockPaceRow.value = scopeRow();
+    vi.mocked(readBoardConfig).mockResolvedValue(cfg(build));
+    vi.mocked(readCards).mockResolvedValue([card({ status: "desenvolver", storyType })]);
+    await evaluateAutorunOnEntry("b", "c");
+    expect(mockRunSkill).toHaveBeenCalledTimes(1);
+    expect(mockHoldBoardScopeEntry).not.toHaveBeenCalled();
+  });
+
+  it("um `user` em modo `fix` conta como erro: segue na construção", async () => {
+    mockPaceRow.value = scopeRow();
+    vi.mocked(readBoardConfig).mockResolvedValue(cfg(build));
+    vi.mocked(readCards).mockResolvedValue([card({ status: "desenvolver", storyType: "user", mode: "fix" })]);
+    await evaluateAutorunOnEntry("b", "c");
+    expect(mockRunSkill).toHaveBeenCalledTimes(1);
+  });
+
+  it("o card que a cascata dispara vai no run (scopeCard) — é o que o pump do engine consulta", async () => {
+    mockPaceRow.value = scopeRow();
+    vi.mocked(readBoardConfig).mockResolvedValue(cfg(build));
+    vi.mocked(readCards).mockResolvedValue([card({ status: "desenvolver", storyType: "chore" })]);
+    await evaluateAutorunOnEntry("b", "c");
+    const opts = mockRunSkill.mock.calls[0][4] as { scopeCard?: unknown };
+    expect(opts.scopeCard).toEqual({ id: "c", type: "story", storyType: "chore", mode: undefined, status: "desenvolver" });
+  });
+
+  it.each(["capturando", "triage", "grill", "enriquecer", "interview", "priorizar", "pronta"])(
+    "FORA da construção (%s): a funcionalidade nova continua andando para o tipo ser decidido",
+    async (id) => {
+      mockPaceRow.value = scopeRow();
+      vi.mocked(readBoardConfig).mockResolvedValue(cfg([{ id, name: id, trigger: "harness-enrich", autorun: true } as StatusDef]));
+      vi.mocked(readCards).mockResolvedValue([card({ status: id, storyType: "user" })]);
+      await evaluateAutorunOnEntry("b", "c");
+      expect(mockRunSkill).toHaveBeenCalledTimes(1);
+      expect(mockHoldBoardScopeEntry).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["plano-tecnico", "quebrar-tasks", "desenvolver"])(
+    "o COMEÇO da construção (%s) é barrado para a funcionalidade nova",
+    async (id) => {
+      mockPaceRow.value = scopeRow();
+      vi.mocked(readBoardConfig).mockResolvedValue(cfg([{ id, name: id, trigger: "harness-do", autorun: true } as StatusDef]));
+      vi.mocked(readCards).mockResolvedValue([card({ status: id, storyType: "user" })]);
+      await evaluateAutorunOnEntry("b", "c");
+      expect(mockRunSkill).not.toHaveBeenCalled();
+      expect(mockHoldBoardScopeEntry).toHaveBeenCalledWith("b", "c");
+    },
+  );
+
+  // C4 («deixa terminar», decisão do dono): uma funcionalidade cujo desenvolver terminou depois de o escopo estreitar chega à revisão
+  // de código e à QA — que fecham o que já foi escrito. Barrá-las a deixava PARADA e anotada, com código escrito e sem revisão.
+  it.each(["revisar-codigo", "qa-automatizado"])("o FECHAMENTO da construção (%s) NÃO é barrado: o que já começou termina até a entrega", async (id) => {
+    mockPaceRow.value = scopeRow();
+    vi.mocked(readBoardConfig).mockResolvedValue(cfg([{ id, name: id, trigger: "harness-review", autorun: true } as StatusDef]));
+    vi.mocked(readCards).mockResolvedValue([card({ status: id, storyType: "user" })]);
+    await evaluateAutorunOnEntry("b", "c");
+    expect(mockRunSkill).toHaveBeenCalledTimes(1);
+    expect(mockHoldBoardScopeEntry).not.toHaveBeenCalled();
+  });
+
+  it("a ENTREGA não é barrada (R8): revisão da funcionalidade já construída segue", async () => {
+    mockPaceRow.value = scopeRow();
+    vi.mocked(readBoardConfig).mockResolvedValue(cfg([{ id: "revisao", name: "Revisão", trigger: "harness-review", autorun: true } as StatusDef]));
+    vi.mocked(readCards).mockResolvedValue([card({ status: "revisao", storyType: "user" })]);
+    await evaluateAutorunOnEntry("b", "c");
+    expect(mockRunSkill).toHaveBeenCalledTimes(1);
+  });
+
+  it("só STORY entra na regra: uma ideia (ou atividade) na coluna de construção segue como sempre", async () => {
+    mockPaceRow.value = scopeRow();
+    vi.mocked(readBoardConfig).mockResolvedValue(cfg(build));
+    vi.mocked(readCards).mockResolvedValue([card({ type: "idea", status: "desenvolver" })]);
+    await evaluateAutorunOnEntry("b", "c");
+    expect(mockHoldBoardScopeEntry).not.toHaveBeenCalled();
+  });
+
+  it("a interseção das camadas vale na entrada: o dono admite tudo e o agente só consertos ⇒ user barrado", async () => {
+    mockPaceRow.value = { board: "b", agentScope: { types: FIXES, by: { kind: "agent" }, at: new Date().toISOString() } };
+    vi.mocked(readBoardConfig).mockResolvedValue(cfg(build));
+    vi.mocked(readCards).mockResolvedValue([card({ status: "desenvolver", storyType: "user" })]);
+    await evaluateAutorunOnEntry("b", "c");
+    expect(mockRunSkill).not.toHaveBeenCalled();
+  });
+
+  it("escopo com PRAZO vencido não segura nada (o portão já o trata como saído)", async () => {
+    mockPaceRow.value = { board: "b", ownerScope: { types: FIXES, by: { kind: "owner" }, at: "2026-01-01T00:00:00.000Z", until: "2026-01-02T00:00:00.000Z" } };
+    vi.mocked(readBoardConfig).mockResolvedValue(cfg(build));
+    vi.mocked(readCards).mockResolvedValue([card({ status: "desenvolver", storyType: "user" })]);
+    await evaluateAutorunOnEntry("b", "c");
+    expect(mockRunSkill).toHaveBeenCalledTimes(1);
+  });
+
+  it("ritmo e escopo são eixos independentes: PAUSADO ganha (anota a PAUSA, não o escopo) e DEVAGAR + escopo ainda barra o tipo", async () => {
+    vi.mocked(readBoardConfig).mockResolvedValue(cfg(build));
+    vi.mocked(readCards).mockResolvedValue([card({ status: "desenvolver", storyType: "user" })]);
+
+    mockPaceRow.value = { ...scopeRow(), owner: { level: "paused", by: { kind: "owner" }, at: new Date().toISOString() } };
+    await evaluateAutorunOnEntry("b", "c");
+    expect(mockHoldBoardEntry).toHaveBeenCalledWith("b", "c", "entry");
+    expect(mockHoldBoardScopeEntry).not.toHaveBeenCalled();
+
+    mockHoldBoardEntry.mockClear();
+    mockPaceRow.value = { ...scopeRow(), owner: { level: "slow", by: { kind: "owner" }, at: new Date().toISOString() } };
+    await evaluateAutorunOnEntry("b", "c");
+    expect(mockRunSkill).not.toHaveBeenCalled();
+    expect(mockHoldBoardScopeEntry).toHaveBeenCalledWith("b", "c");
+  });
+
+  describe("o despacho do condutor", () => {
+    it("funcionalidade nova entrando em fromStatus: NÃO despacha o condutor e fica anotada (espera o escopo alargar)", async () => {
+      mockPaceRow.value = scopeRow();
+      vi.mocked(readBoardConfig).mockResolvedValue(withConductor([{ id: "pronta", name: "Pronta", trigger: "harness-prioritize", autorun: true }], "pronta"));
+      vi.mocked(readCards).mockResolvedValue([card({ status: "pronta", storyType: "user" })]);
+      await evaluateAutorunOnEntry("b", "c");
+      expect(mockDispatchConductor).not.toHaveBeenCalled();
+      expect(mockRunSkill).not.toHaveBeenCalled();
+      expect(mockHoldBoardScopeEntry).toHaveBeenCalledWith("b", "c");
+    });
+
+    it("conserto entrando em fromStatus: o condutor é despachado normalmente", async () => {
+      mockPaceRow.value = scopeRow();
+      vi.mocked(readBoardConfig).mockResolvedValue(withConductor([{ id: "pronta", name: "Pronta", trigger: "harness-prioritize", autorun: true }], "pronta"));
+      vi.mocked(readCards).mockResolvedValue([card({ status: "pronta", storyType: "bug" })]);
+      await evaluateAutorunOnEntry("b", "c");
+      expect(mockDispatchConductor).toHaveBeenCalledWith("b", "c");
+      expect(mockHoldBoardScopeEntry).not.toHaveBeenCalled();
+    });
+
+    it("fromStatus que é coluna de CLASSIFICAÇÃO (enriquecer): o condutor espera, mas a skill da coluna roda para o tipo ser decidido", async () => {
+      mockPaceRow.value = scopeRow();
+      vi.mocked(readBoardConfig).mockResolvedValue(withConductor([{ id: "enriquecer", name: "Especificar", trigger: "harness-enrich", autorun: true }], "enriquecer"));
+      vi.mocked(readCards).mockResolvedValue([card({ status: "enriquecer", storyType: "user" })]);
+      await evaluateAutorunOnEntry("b", "c");
+      expect(mockDispatchConductor).not.toHaveBeenCalled();
+      expect(mockRunSkill).toHaveBeenCalledTimes(1);
+      expect(mockRunSkill.mock.calls[0][2]).toBe("harness-enrich");
+      expect(mockHoldBoardScopeEntry).not.toHaveBeenCalled();
+    });
+
+    it("card JÁ conduzido (começou antes de o escopo estreitar) não é barrado nem anotado: o que executa termina", async () => {
+      mockPaceRow.value = scopeRow();
+      vi.mocked(readBoardConfig).mockResolvedValue(withConductor(build, "pronta"));
+      vi.mocked(readCards).mockResolvedValue([card({ status: "desenvolver", storyType: "user", routing: driven })]);
+      await evaluateAutorunOnEntry("b", "c");
+      expect(mockHoldBoardScopeEntry).not.toHaveBeenCalled();
+      expect(mockRunSkill).not.toHaveBeenCalled(); // a cascata segue calada para quem tem condutor
+      expect(mockDispatchConductor).not.toHaveBeenCalled();
+    });
+
+    it("escopo alargado de volta (sem limite): a mesma funcionalidade nova é despachada", async () => {
+      mockPaceRow.value = null;
+      vi.mocked(readBoardConfig).mockResolvedValue(withConductor([{ id: "pronta", name: "Pronta", trigger: "harness-prioritize", autorun: true }], "pronta"));
+      vi.mocked(readCards).mockResolvedValue([card({ status: "pronta", storyType: "user" })]);
+      await evaluateAutorunOnEntry("b", "c");
+      expect(mockDispatchConductor).toHaveBeenCalledWith("b", "c");
+    });
   });
 });

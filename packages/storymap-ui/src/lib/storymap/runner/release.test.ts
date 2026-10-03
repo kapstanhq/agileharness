@@ -11,6 +11,7 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { describePosix } from "./test-platform";
 import {
   ORIGIN_TRUST_ENV,
+  classifyDeltaPath,
   classifyIncoming,
   declaredOriginTrust,
   judgeIncoming,
@@ -1339,6 +1340,19 @@ describePosix("promoteStageToMain — fronteira de contribuição (story-ex0014)
       return { calls: h.calls };
     });
     expect(calls.some((c) => c.includes("merge --no-edit FETCH_HEAD"))).toBe(false);
+  });
+
+  it("codePrefixes INDECLARADO: a classe fica `code` para tudo fora de board-data/controle — e o VEREDITO não muda", () => {
+    // `code` e `unclassified` exigem a mesma decisão (verificar); indeclarado só não inventa uma pasta de código.
+    expect(classifyDeltaPath("src/bicicleta/quadro.ts", undefined)).toBe("code");
+    expect(classifyDeltaPath("storymap/boards/oficina/cards/story-ex9962.md", undefined)).toBe("board-data");
+    expect(classifyDeltaPath("justfile", undefined)).toBe("control");
+    // declarado: o de sempre (fora do prefixo = unclassified); [] declarado = nada é código
+    expect(classifyDeltaPath("src/bicicleta/quadro.ts", ["packages/"])).toBe("unclassified");
+    expect(classifyDeltaPath("src/bicicleta/quadro.ts", [])).toBe("unclassified");
+    expect(classifyIncoming(["src/bicicleta/quadro.ts"], undefined)).toBe("outside-code");
+    expect(classifyIncoming(["storymap/boards/oficina/cards/story-ex9962.md"], undefined)).toBe("outside-data");
+    expect(judgeIncoming(["src/bicicleta/quadro.ts"], undefined, { trust: "public" }).absorb).toBe(false);
   });
 
   it("a régua de proveniência: CÓDIGO de fora ≠ dado de fora ≠ nada de fora", () => {

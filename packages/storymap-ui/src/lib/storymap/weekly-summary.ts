@@ -9,6 +9,8 @@
 // o do host). O push sai toda segunda às 09:00 nesse fuso, apontando para a semana que acabou — o único push que não
 // é crítico (notifications/push-policy `weekly-summary`), uma vez por semana.
 
+import { costImpactFigures } from "./cost-impact";
+import { formatMoney } from "./currency";
 import { deliveredStatusIds } from "./delivered";
 import { healthDelta, recordAsReading, summarizeSignals, worstLevel, type HealthLevel, type HealthRecord, type HealthSignalId } from "./health/ah-health";
 import type { OwnerWaiting } from "./owner-waiting";
@@ -193,8 +195,11 @@ export interface WeeklySummary {
      *  cobrança com o uso extra ligado). */
     automationUSD: number;
     runs: number;
-    /** o custo MENSAL a mais que o que foi ao ar esta semana projetou (R$), com as projeções. */
-    projectedMonthlyBRL: number;
+    /**
+     * o custo MENSAL a mais que o que foi ao ar esta semana projetou, SOMADO POR MOEDA (boards de moedas diferentes
+     * nunca se somam — não existe câmbio), na ordem em que cada moeda apareceu; com as projeções abaixo.
+     */
+    projectedMonthly: Array<{ currency: string; amount: number }>;
     projections: Array<WeeklyItem & { impact: CostImpact }>;
   };
   /** as decisões do dono que seguem esperando — o lembrete semanal (nunca vencem). */
@@ -245,6 +250,27 @@ export function weeklyHealthTrend(records: readonly HealthRecord[], week: WeekWi
     now: summarizeSignals(levels),
     trend: inside.length > 1 ? healthDelta(recordAsReading(first), recordAsReading(last)).line : null,
   };
+}
+
+/** A soma do custo mensal projetado, por moeda (2 casas). Um impacto sem moeda não tem unidade e fica fora da soma. PURA. */
+function projectedByCurrency(impacts: readonly CostImpact[]): Array<{ currency: string; amount: number }> {
+  const sums = new Map<string, number>();
+  for (const impact of impacts) {
+    const f = costImpactFigures(impact);
+    if (f.currency) sums.set(f.currency, (sums.get(f.currency) ?? 0) + f.amount);
+  }
+  return [...sums.entries()].map(([currency, amount]) => ({ currency, amount: Math.round(amount * 100) / 100 }));
+}
+
+/** O dinheiro do produto na moeda do PRÓPRIO impacto (formato completo da tela); sem moeda, só o número. PURA. */
+export function formatImpactMoney(amount: number, currency: string | null): string {
+  return currency ? formatMoney(amount, { code: currency }) : String(amount);
+}
+
+/** A frase «+12,00 por mês», com o símbolo da moeda (uma parte por moeda, nunca somadas entre si) ou «nenhum custo a mais por mês». PURA. */
+export function projectedMonthlyText(projected: WeeklySummary["cost"]["projectedMonthly"]): string {
+  const parts = projected.filter((p) => p.amount > 0).map((p) => `+${formatImpactMoney(p.amount, p.currency)}`);
+  return parts.length ? `${parts.join(" e ")} por mês` : "nenhum custo a mais por mês";
 }
 
 /** Monta o resumo. PURA. */
@@ -300,7 +326,7 @@ export function buildWeeklySummary(input: WeeklySummaryInput): WeeklySummary {
     cost: {
       automationUSD: Math.round(weekRuns.reduce((s, r) => s + (r.costUSD ?? 0), 0) * 100) / 100,
       runs: weekRuns.length,
-      projectedMonthlyBRL: Math.round(projections.reduce((s, p) => s + p.impact.monthlyBRL, 0) * 100) / 100,
+      projectedMonthly: projectedByCurrency(projections.map((p) => p.impact)),
       projections,
     },
     waiting: input.waiting.map((w) => ({ ...w, boardName: nameOf(w.boardId) })),

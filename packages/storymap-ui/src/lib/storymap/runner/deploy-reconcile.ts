@@ -4,14 +4,15 @@
 // O BURACO QUE ISTO FECHA (visto em produção):
 // o único caminho que fechava o finding era `resolveDeployFailureFindingOnSuccess`, chamado SÓ pelo settle do
 // deploy que o PRÓPRIO board disparou, para AQUELE cardId. Quando o deploy do board falhou e o operador
-// republicou à mão (`just orch-deploy acmeapp` no shell — que não passa pelo registry, logo não tem onDone), o
+// republicou à mão (o comando de deploy do alvo, no shell — que não passa pelo registry, logo não tem onDone), o
 // código FOI para produção e o finding ficou `open` PARA SEMPRE. A UI, deliberadamente, não oferece "Resolver"
 // nesse item (marcar resolvido sem republicar deixaria o card mentindo) — então os cards ficaram travados num
 // deadlock: a única saída oferecida era re-deployar algo que já estava no ar.
 //
 // A saída não é um botão a mais: é parar de inferir o estado do mundo a partir de QUEM disparou o deploy e
 // passar a LER o mundo. O orquestrador de deploy grava, para cada alvo, o commit em que rodou
-// (`scripts/deploy/state/<alvo>.json` → `lastDeploySha`) — INDEPENDENTE de quem o invocou (board, MCP ou shell).
+// (o arquivo que o alvo declara em `deploy.legacy.state`, com `{target}` → `lastDeploySha`) — INDEPENDENTE de quem o
+// invocou (board, MCP ou shell). Sem declaração não há evidência (null) e nada é lido por suposição de caminho.
 // Se esse commit é DESCENDENTE do sha de main onde o código do card pousou (`card.releasedSha`), então aquele
 // deploy necessariamente carregou o código do card: ele está no ar, e o alarme é resíduo.
 //
@@ -40,6 +41,8 @@ import { isLiveCardFile } from "./staging";
 import { appendTransition } from "./transitions";
 import { tryGetPublishBreaker } from "./publish-breaker";
 import { defaultDeployBlocksSweepDeps, sweepDeployBlocks } from "./deploy-blocks";
+import { loadRunnerConfig } from "./config";
+import { expandPathTemplate } from "@/lib/storymap/deploy-policy";
 import { defaultExec, type ExecFn } from "./worktree";
 import type { BoardConfig, Card, DeployProof, Finding } from "@/lib/storymap/types";
 
@@ -217,15 +220,38 @@ export async function reconcileVerdict(
 
 // ── IO (best-effort, fail-CLOSED no veredito: qualquer erro vira "não sei" ⇒ não resolve) ─────────────────
 
-/** Caminho do estado que `scripts/deploy/orchestrator.js` grava — a MESMA fonte para deploy de board, MCP ou shell. */
-export function deployStatePath(repoRoot: string, target: string): string {
-  return path.join(repoRoot, "scripts", "deploy", "state", `${target.replace(/[^a-z0-9_-]/gi, "")}.json`);
+/** O molde do arquivo de estado que o alvo declarou (`deploy.legacy.state`, com `{target}`), ou null quando não declarou. */
+function declaredStateTemplate(): string | null {
+  return loadRunnerConfig().deploy?.legacy?.state ?? null;
 }
 
-/** O commit em que o último deploy de `target` rodou, ou null (arquivo ausente/corrompido/sem o campo). */
-export async function readLastDeploySha(repoRoot: string, target: string): Promise<string | null> {
+let stateUndeclaredWarned = false;
+
+/**
+ * O caminho do estado que o orquestrador de deploy DO ALVO grava — a MESMA fonte para deploy de board, MCP ou shell. Vem
+ * da declaração (`template` = `deploy.legacy.state`; ausente ⇒ lê a do alvo). SEM declaração devolve null: sem evidência
+ * ⇒ nunca «no ar» por acidente (a semântica conservadora deste módulo inteiro) — e avisa UMA vez qual chave declarar,
+ * porque «não resolve» em silêncio parece defeito do deploy e não falta de configuração. O id do alvo é peneirado
+ * (só `[a-z0-9_-]`), então `../` nunca escapa do molde.
+ */
+export function deployStatePath(repoRoot: string, target: string, template: string | null = declaredStateTemplate()): string | null {
+  if (!template) {
+    if (!stateUndeclaredWarned) {
+      stateUndeclaredWarned = true;
+      console.warn("[deploy-reconcile] o alvo não declarou onde o orquestrador de deploy grava o estado — declare settings.yaml → deploy.legacy.state (caminho com {target}). Sem isso nenhuma publicação é provada por ancestralidade.");
+    }
+    return null;
+  }
+  const rel = expandPathTemplate(template, target.replace(/[^a-z0-9_-]/gi, ""));
+  return rel ? path.join(repoRoot, rel) : null;
+}
+
+/** O commit em que o último deploy de `target` rodou, ou null (arquivo ausente/corrompido/sem o campo/estado não declarado). */
+export async function readLastDeploySha(repoRoot: string, target: string, template?: string | null): Promise<string | null> {
   try {
-    const raw = JSON.parse(await fs.readFile(deployStatePath(repoRoot, target), "utf8")) as DeployStateFile;
+    const file = deployStatePath(repoRoot, target, template);
+    if (!file) return null;
+    const raw = JSON.parse(await fs.readFile(file, "utf8")) as DeployStateFile;
     const sha = raw?.lastDeploySha?.trim();
     return sha && /^[0-9a-f]{7,40}$/i.test(sha) ? sha : null;
   } catch {
@@ -237,9 +263,11 @@ export async function readLastDeploySha(repoRoot: string, target: string): Promi
  * O commit no ar de cada UNIDADE do alvo (`units` como mapa unidade → sha), ou null quando o alvo não o grava (o formato
  * antigo é uma lista de nomes, sem sha) ou o arquivo falta. Só shas com cara de sha — o resto é descartado.
  */
-export async function readDeployUnitShas(repoRoot: string, target: string): Promise<Record<string, string> | null> {
+export async function readDeployUnitShas(repoRoot: string, target: string, template?: string | null): Promise<Record<string, string> | null> {
   try {
-    const raw = JSON.parse(await fs.readFile(deployStatePath(repoRoot, target), "utf8")) as DeployStateFile;
+    const file = deployStatePath(repoRoot, target, template);
+    if (!file) return null;
+    const raw = JSON.parse(await fs.readFile(file, "utf8")) as DeployStateFile;
     const u = raw?.units;
     if (!u || typeof u !== "object" || Array.isArray(u)) return null;
     const out: Record<string, string> = {};
@@ -267,7 +295,7 @@ export function makeGitContains(exec: ExecFn, repoRoot: string) {
 // hasDeployProof exige prova ⇒ mas ele NUNCA terá `releasedSha` (nada foi staged/promovido): sem esta
 // medição o card ficaria PRESO em Publicando para sempre — o watchdog escala, sem caminho feliz. A saída é
 // a régua do TRAIN, não uma régua nova: particionar o delta do commitRange com a MESMA
-// partitionPaths/STAGING_CODE_PREFIXES que roteiam a integração (`rangeLandedBySplit`, convergence.ts).
+// partitionPaths/os `staging.codePrefixes` declarados que roteiam a integração (`rangeLandedBySplit`, convergence.ts).
 // Metade de código VAZIA ⇒ o card é data-only, e a "produção" de board-data É a main do runtime: provar que
 // a metade de dados aterrissou em main é provar a publicação. O gate NÃO muda — ele continua exigindo o
 // carimbo; o que muda é que o settle passa a saber carimbar ESTE caso.
@@ -298,7 +326,7 @@ async function resolveRefShaDefault(exec: ExecFn, repoRoot: string, ref: string)
  *     para este card (landings.jsonl). Vale quando (a) main ainda contém aquele commit e (b) ali o entregável do
  *     card estava em main EXATAMENTE como o card o produziu. Commits posteriores de outros cards nos mesmos
  *     arquivos não desfazem uma entrega — sem a testemunha, um card cujos arquivos foram tocados depois nunca mais
- *     provava e ficava em «Publicando» para sempre (scripts/deploy mexido várias vezes
+ *     provava e ficava em «Publicando» para sempre (os scripts de deploy do alvo mexidos várias vezes
  *     depois da integração). Sem recibo, ou com recibo que não confere ⇒ `board-data-nao-aterrissou` (segue preso).
  * DI para os testes; a régua real é SEMPRE a de convergence.ts — nunca uma cópia local.
  */
@@ -401,11 +429,16 @@ export async function monorepoDeltaCount(exec: ExecFn, repoRoot: string, baseSha
 /** The honest, LABELED deploy risk summary for a package: BOTH numbers (monorepo-wide vs what
  *  actually enters this deploy) + the scoped commit list. `deploy_plan` includes it so the operator decides
  *  informed (what enters this package vs. what the whole repo moved). Reads the package's last-deploy sha from the deploy
- *  orchestrator's state (READ-only). Never throws. */
+ *  orchestrator's state (READ-only). Never throws.
+ *
+ *  `declared` é o que o ALVO declarou (`deploy.legacy.scope` / `deploy.legacy.state`, ainda com `{target}`); ausente ⇒ lê a
+ *  declaração do alvo. SEM escopo declarado o escopo é vazio — nenhum delta escopado é contado — e a nota diz qual chave declarar;
+ *  sem estado declarado não há base (readLastDeploySha devolve null). */
 export async function deployRiskSummary(
   exec: ExecFn,
   repoRoot: string,
   pkg: string,
+  declared?: { scope?: readonly string[]; state?: string | null },
 ): Promise<{
   pkg: string;
   baseSha: string | null;
@@ -413,19 +446,20 @@ export async function deployRiskSummary(
   scoped: { count: number; commits: { sha: string; subject: string }[] };
   note: string;
 }> {
-  const baseSha = await readLastDeploySha(repoRoot, pkg);
-  // Scope = the package's OWN build path, DERIVED from the pkg id (no hardcoded per-app map — that
-  // would name product boards in this agnostic file, which agnostic-lint forbids). Commits that touched ONLY a
-  // shared workspace dep aren't in this count (the note flags it); the package's own commits are the primary
-  // signal that turns the monorepo-wide count into an informed number.
-  const scopePaths = [`packages/${pkg}/`];
+  const baseSha = await readLastDeploySha(repoRoot, pkg, declared?.state);
+  // Scope = the package's OWN build path, DECLARED by the target (`deploy.legacy.scope`, expanded with the pkg id) — no
+  // hardcoded layout and no per-app map (that would name product boards in this agnostic file, which agnostic-lint forbids).
+  // Commits that touched ONLY a shared workspace dep aren't in this count (the note flags it); the package's own commits
+  // are the primary signal that turns the monorepo-wide count into an informed number.
+  const scopeTemplates = declared?.scope ?? loadRunnerConfig().deploy?.legacy?.scope ?? [];
+  const scopePaths = scopeTemplates.map((t) => expandPathTemplate(t, pkg)).filter((p): p is string => !!p);
   const [monorepoSinceBase, scoped] = await Promise.all([
     monorepoDeltaCount(exec, repoRoot, baseSha ?? ""),
     scopedDeployDelta(exec, repoRoot, baseSha ?? "", scopePaths),
   ]);
   const note = baseSha
     ? `monorepo desde a base do último deploy: ${monorepoSinceBase}; entram NESTE deploy de ${pkg} (escopo: ` +
-      `packages/${pkg}/, deps compartilhadas à parte): ${scoped.count}` +
+      `${scopePaths.join(", ") || "NÃO declarado — declare settings.yaml → deploy.legacy.scope"}, deps compartilhadas à parte): ${scoped.count}` +
       `${scoped.commits.length ? ` (${scoped.commits.map((c) => c.sha).join(", ")})` : ""}. A granularidade de ` +
       `publicação é a UNIDADE (imagem) — publicar leva TODOS os commits que tocaram os paths da unidade desde a ` +
       `base, não por card.`

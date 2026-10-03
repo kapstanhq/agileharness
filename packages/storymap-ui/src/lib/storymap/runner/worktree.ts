@@ -15,9 +15,10 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { runnerStateDir } from "@/lib/storymap/paths";
-import { BOARD_DATA_PATHSPEC, STAGING_CODE_PREFIXES, loadRunnerConfig } from "./config";
+import { BOARD_DATA_PATHSPEC, loadRunnerConfig } from "./config";
 import { type GitExec, makeGit, pushHeadToOrigin, quote } from "./git";
-import { pathsTouchCode } from "./staging";
+import { declaredCodePrefixes, isCodePath, pathsTouchCode, stagingBranchOf } from "./staging";
+import { layoutOf } from "@/lib/storymap/target-profile";
 // run-base only type-imports `ExecFn` from here (erased at runtime), so this value import is acyclic.
 import { isExactBase, resolveRunBase, runOwnWork } from "./run-base";
 import { branchWorkLandedInMainOrStage, type Landedness } from "./convergence";
@@ -165,6 +166,12 @@ export interface WorktreeFs {
   /** True iff `p` exists and is (or resolves to) a regular FILE (probing `tsconfig.json` per gate unit). */
   isFile(p: string): Promise<boolean>;
   /**
+   * O texto de um arquivo, ou `null` se não existe / não dá para ler. OPCIONAL (DI preservada): um fake que não o
+   * implementa descreve um alvo SEM `package.json` legível — e então só o `node_modules` da raiz é ligado, que é o
+   * neutro seguro (ver {@link resolveWorkspaceGlobs}).
+   */
+  readText?(p: string): Promise<string | null>;
+  /**
    * Create a directory symlink/junction at `linkPath` pointing to `target` (idempotent: a NO-OP
    * if `linkPath` already exists). Uses the `"junction"` type so it works on Windows WITHOUT admin
    * rights (a plain symlink there needs elevation); POSIX ignores the type and makes a real symlink.
@@ -203,6 +210,13 @@ export const defaultWorktreeFs: WorktreeFs = {
       return false;
     }
   },
+  async readText(p) {
+    try {
+      return await fsp.readFile(p, "utf8");
+    } catch {
+      return null; // ausente/ilegível: quem pergunta trata como «sem package.json»
+    }
+  },
   async linkDir(target, linkPath) {
     // Idempotent: if anything already sits at linkPath (a stale link, a prior run's dir), leave it.
     try {
@@ -231,57 +245,157 @@ export const defaultWorktreeFs: WorktreeFs = {
   },
 };
 
-/**
- * The NESTED workspace tiers under each `packages/<pkg>/` that are their OWN workspace packages with
- * their OWN non-hoisted `node_modules` — mirrors the root `package.json` `workspaces` globs
- * (`packages/*` plus the nested `packages/<pkg>/web`, `/api`, `/functions` tiers). A worktree that runs a
- * build/test IN one of these (e.g. `packages/app-a/web` for a QA E2E, or `harness-do` building the web
- * app) needs its node_modules linked too — otherwise dep/@types resolution fails and every run wastes
- * turns hand-`ln -s`-ing it (the exact degraded-worktree churn a QA run otherwise hits). Keep in sync
- * with the root `workspaces` globs.
- */
-const NESTED_WORKSPACE_TIERS = ["web", "api", "functions"] as const;
+// ── os WORKSPACES do alvo: de onde vêm os `node_modules` que um worktree precisa ligar ──────────────────────────────
+//
+// Antes: «`packages/*` e, dentro de cada, `web`/`api`/`functions`» — um espelho FIXO dos globs `workspaces` do
+// package.json de UM repositório (o comentário antigo pedia «keep in sync»). Num alvo com outro layout (`apps/*`,
+// `libs/*`, ou um repo plano) o worktree nascia sem as dependências e cada run gastava turnos no `ln -s` à mão.
+//
+// Agora a FONTE é a do alvo, nesta ordem: (1) `target.layout.workspaces` declarado em storymap/settings.yaml;
+// (2) o `workspaces` do package.json da raiz do próprio alvo (array, ou objeto `{ packages: [...] }`); (3) nada ⇒
+// SÓ o `node_modules` da raiz (sem package.json não há como saber onde moram os outros — não se adivinha pasta).
+// Glob suportado: segmentos literais e `*` (inclusive parcial, `app-*`). `**` e negações (`!x`) não: `**` é IGNORADO
+// com um aviso no log (ligar menos que o necessário reproduz o sintoma «worktree degradado», e silêncio o esconderia);
+// uma negação só subtrai, e ignorá-la liga mais — inofensivo.
+
+/** Avisos já dados neste processo — o plano é recalculado a cada provision/deprovision e não deve repetir a linha. */
+const warnedWorkspaceGlobs = new Set<string>();
+
+function warnOnce(key: string, line: string): void {
+  if (warnedWorkspaceGlobs.has(key)) return;
+  warnedWorkspaceGlobs.add(key);
+  console.warn(line);
+}
 
 /**
- * Compute the node_modules links a worktree needs from the MAIN checkout: the ROOT `node_modules`
- * (hoisted deps), every `packages/<pkg>/node_modules` (per-package deps that do NOT hoist — e.g.
- * gray-matter under `packages/storymap-ui/node_modules`), AND every NESTED workspace tier's
- * `packages/<pkg>/{web,api,functions}/node_modules` ({@link NESTED_WORKSPACE_TIERS} — the deps of the
- * nested app/api/functions workspaces, which likewise do NOT hoist and were previously MISSED). Pure
- * over the injected fs (a query): returns `{ target, linkPath }` pairs, only for node_modules that
- * actually exist in the main repo. Root-first so a hoisted dep resolves to the worktree's own root link.
+ * Normaliza uma lista de globs de workspace: sem `./` nem `/` final, só relativos, sem `..`; descarta (com aviso quando
+ * a perda importa) `**`, caminhos fora da raiz e negações. Preserva a ordem e tira duplicatas. PURA salvo o aviso.
+ */
+export function sanitizeWorkspaceGlobs(raw: readonly unknown[]): string[] {
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") continue;
+    let g = item.trim();
+    if (!g || g.startsWith("!")) continue; // negação: só subtrai — ignorar liga mais, nunca menos
+    g = g.replace(/^\.\//, "").replace(/\/+$/, "");
+    if (!g || g === "." || g.startsWith("/") || g.includes("\\") || g.split("/").includes("..")) continue;
+    if (g.includes("**")) {
+      warnOnce(`**:${g}`, `[harness-worktree] workspace "${g}" usa \`**\` — não suportado para ligar node_modules; ignorado. Declare globs de segmento literal ou \`*\` em target.layout.workspaces.`);
+      continue;
+    }
+    if (!out.includes(g)) out.push(g);
+  }
+  return out;
+}
+
+/** O `workspaces` de um package.json (texto) — array ou `{ packages: [...] }` — já peneirado. Texto ilegível ⇒ `[]`. PURA. */
+export function workspaceGlobsFromPackageJson(text: string | null | undefined): string[] {
+  if (!text) return [];
+  try {
+    const ws = (JSON.parse(text) as { workspaces?: unknown } | null)?.workspaces;
+    const list = Array.isArray(ws) ? ws : Array.isArray((ws as { packages?: unknown } | undefined)?.packages) ? (ws as { packages: unknown[] }).packages : [];
+    return sanitizeWorkspaceGlobs(list);
+  } catch {
+    return [];
+  }
+}
+
+/** `target.layout.workspaces` do settings vivo, ou `undefined` (não declarado / settings ilegível ⇒ não bloqueia o worktree). */
+function declaredWorkspacesFromSettings(): readonly string[] | undefined {
+  try {
+    return layoutOf(loadRunnerConfig()).workspaces;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Os globs de workspace EFETIVOS de um repositório. `declared`: `undefined` ⇒ lê do settings (o caminho de produção, em
+ * que os chamadores — train, gate, sessões — não passam nada); `null` ⇒ «nada declarado» sem consultar o settings
+ * (testes herméticos); lista ⇒ essa lista. Sem declaração: o package.json do alvo. Sem nada: `[]` (só a raiz). */
+export async function resolveWorkspaceGlobs(
+  fs: WorktreeFs,
+  repoRoot: string,
+  declared?: readonly string[] | null,
+): Promise<string[]> {
+  const fromSettings = declared === undefined ? declaredWorkspacesFromSettings() : (declared ?? undefined);
+  if (fromSettings) return sanitizeWorkspaceGlobs(fromSettings);
+  return workspaceGlobsFromPackageJson(await fs.readText?.(path.join(repoRoot, "package.json")));
+}
+
+/** Um segmento de glob com `*` → regex ancorada (`app-*` casa `app-web`; `*` casa qualquer nome). */
+function segmentRegex(seg: string): RegExp {
+  const escaped = seg.split("*").map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp("^" + escaped.join("[^/]*") + "$");
+}
+
+/**
+ * Expande UM glob (segmentos literais e `*`) nos diretórios que existem sob `root`, devolvendo caminhos relativos
+ * POSIX. Um segmento `*` não casa `node_modules` nem pasta oculta (o `workspaces` do bun também não). Só consulta o
+ * fs injetado (`listDirs`/`isDir`). PURA sobre ele.
+ */
+export async function expandWorkspaceGlob(fs: WorktreeFs, root: string, glob: string): Promise<string[]> {
+  let current: string[] = [""];
+  for (const seg of glob.split("/")) {
+    const next: string[] = [];
+    for (const base of current) {
+      if (seg.includes("*")) {
+        const re = segmentRegex(seg);
+        for (const name of await fs.listDirs(path.join(root, base))) {
+          if (name === "node_modules" || (name.startsWith(".") && !seg.startsWith("."))) continue;
+          if (re.test(name)) next.push(base ? `${base}/${name}` : name);
+        }
+      } else if (await fs.isDir(path.join(root, base, seg))) {
+        next.push(base ? `${base}/${seg}` : seg);
+      }
+    }
+    current = next;
+    if (current.length === 0) break;
+  }
+  return current;
+}
+
+/**
+ * Compute the node_modules links a worktree needs from the MAIN checkout: the ROOT `node_modules` (hoisted deps)
+ * plus the `node_modules` of EVERY workspace the target declares ({@link resolveWorkspaceGlobs} — per-package deps
+ * that do NOT hoist, e.g. gray-matter under `packages/storymap-ui/node_modules`, and nested app/api/functions
+ * workspaces, previously MISSED: the degraded-worktree test-env, story-ex0109). Pure over the injected fs (a
+ * query): returns `{ target, linkPath }` pairs, only for node_modules that actually exist in the main repo.
+ * Root-first so a hoisted dep resolves to the worktree's own root link.
+ *
+ * `declaredWorkspaces`: ver {@link resolveWorkspaceGlobs} (omitido ⇒ o settings vivo).
  */
 export async function planNodeModulesLinks(
   fs: WorktreeFs,
   repoRoot: string,
   worktreePath: string,
+  declaredWorkspaces?: readonly string[] | null,
 ): Promise<Array<{ target: string; linkPath: string }>> {
   const links: Array<{ target: string; linkPath: string }> = [];
   const rootNm = path.join(repoRoot, "node_modules");
   if (await fs.isDir(rootNm)) {
     links.push({ target: rootNm, linkPath: path.join(worktreePath, "node_modules") });
   }
-  const packagesDir = path.join(repoRoot, "packages");
-  for (const name of await fs.listDirs(packagesDir)) {
-    // depth-1: packages/<pkg>/node_modules
-    const pkgNm = path.join(packagesDir, name, "node_modules");
-    if (await fs.isDir(pkgNm)) {
-      links.push({ target: pkgNm, linkPath: path.join(worktreePath, "packages", name, "node_modules") });
-    }
-    // nested workspace tiers: packages/<pkg>/{web,api,functions}/node_modules — do NOT hoist, MISSED
-    // by the depth-1 pass above (the root cause of the degraded-worktree test-env, story-ex0109).
-    for (const tier of NESTED_WORKSPACE_TIERS) {
-      const nestedNm = path.join(packagesDir, name, tier, "node_modules");
-      if (await fs.isDir(nestedNm)) {
-        links.push({
-          target: nestedNm,
-          linkPath: path.join(worktreePath, "packages", name, tier, "node_modules"),
-        });
-      }
+  const seen = new Set<string>();
+  for (const glob of await resolveWorkspaceGlobs(fs, repoRoot, declaredWorkspaces)) {
+    for (const rel of await expandWorkspaceGlob(fs, repoRoot, glob)) {
+      if (seen.has(rel)) continue;
+      seen.add(rel);
+      const nm = path.join(repoRoot, rel, "node_modules");
+      if (await fs.isDir(nm)) links.push({ target: nm, linkPath: path.join(worktreePath, rel, "node_modules") });
     }
   }
   return links;
 }
+
+/**
+ * O plano de CADA worktree provisionado, guardado até o teardown: `deprovision` replaneja a partir do package.json
+ * ATUAL, e se ele mudou entre as duas pontas a lista difere — um link ficaria para trás. Desfaz-se a UNIÃO dos dois
+ * planos (o guardado e o recalculado). `unlinkDir` só remove symlink, então o pior caso de um resíduo é um link
+ * pendente, nunca perda de dado; ainda assim não custa nada fechar a janela.
+ */
+const provisionedPlans = new Map<string, Array<{ target: string; linkPath: string }>>();
+const PROVISIONED_PLANS_CAP = 256;
 
 /**
  * Provision a fresh worktree's deps by LINKING (not installing) the main checkout's node_modules
@@ -297,6 +411,11 @@ export async function provisionNodeModules(
   for (const { target, linkPath } of links) {
     await fs.linkDir(target, linkPath);
   }
+  provisionedPlans.set(worktreePath, links);
+  if (provisionedPlans.size > PROVISIONED_PLANS_CAP) {
+    const oldest = provisionedPlans.keys().next().value;
+    if (oldest !== undefined) provisionedPlans.delete(oldest);
+  }
   return links;
 }
 
@@ -310,8 +429,10 @@ export async function deprovisionNodeModules(
   repoRoot: string,
   worktreePath: string,
 ): Promise<void> {
-  const links = await planNodeModulesLinks(fs, repoRoot, worktreePath);
-  for (const { linkPath } of links) {
+  const linkPaths = new Set((await planNodeModulesLinks(fs, repoRoot, worktreePath)).map((l) => l.linkPath));
+  for (const l of provisionedPlans.get(worktreePath) ?? []) linkPaths.add(l.linkPath);
+  provisionedPlans.delete(worktreePath);
+  for (const linkPath of linkPaths) {
     await fs.unlinkDir(linkPath);
   }
 }
@@ -492,7 +613,7 @@ export async function commitBoardDataScoped(
    * ficava inerte. Ela não errava: ela desaparecia, e desaparecia exatamente onde o dono do
    * repositório achava que tinha configurado.
    */
-  codePrefixes: readonly string[] = loadRunnerConfig().autorun.staging?.codePrefixes ?? STAGING_CODE_PREFIXES,
+  codePrefixes: readonly string[] | undefined = declaredCodePrefixes(loadRunnerConfig().autorun.staging),
 ): Promise<BoardDataCommit> {
   const { result, quarantined } = await commitWithQuarantine({
     commit: (exclude) => commitBoardDataOnce(exec, repoRoot, message, codePrefixes, exclude),
@@ -515,7 +636,7 @@ async function commitBoardDataOnce(
   exec: ExecFn,
   repoRoot: string,
   message: string,
-  codePrefixes: readonly string[],
+  codePrefixes: readonly string[] | undefined,
   exclude: readonly string[],
 ): Promise<{ committed: boolean }> {
   // Quarentena primeiro: a tentativa anterior (a que o scan recusou) deixou esses caminhos STAGED — só o índice
@@ -541,7 +662,7 @@ async function commitBoardDataOnce(
   // tree is untouched, the files stay visible for the operator/next code run), then commit the board
   // delta alone. Only if code REMAINS staged after the reset do we abort (fail-closed as before).
   if (pathsTouchCode(stagedPaths, codePrefixes)) {
-    const codePaths = stagedPaths.filter((p) => codePrefixes.some((c) => p.startsWith(c)));
+    const codePaths = stagedPaths.filter((p) => isCodePath(p, codePrefixes));
     console.warn(
       `[harness-worktree] board-data commit: desestagiando ${codePaths.length} path(s) de código alheios ao board (${codePaths.join(", ").slice(0, 200)}) — código nunca viaja num commit de board`,
     );
@@ -551,7 +672,7 @@ async function commitBoardDataOnce(
     if (pathsTouchCode(recheckPaths, codePrefixes)) {
       await exec(`git reset -- ${quote(BOARD_DATA_PATHSPEC)}`, { cwd: repoRoot, timeout: EXEC_TIMEOUT_MS }).catch(() => {});
       throw new Error(
-        `board-data commit ABORTADO: o diff staged toca código mesmo após desestagiar (${recheckPaths.filter((p) => codePrefixes.some((c) => p.startsWith(c))).join(", ").slice(0, 200)}) — um run de board-data nunca escreve código em main`,
+        `board-data commit ABORTADO: o diff staged toca código mesmo após desestagiar (${recheckPaths.filter((p) => isCodePath(p, codePrefixes)).join(", ").slice(0, 200)}) — um run de board-data nunca escreve código em main`,
       );
     }
     if (recheckPaths.length === 0) return { committed: false }; // só havia o lixo de código — nada de board a versionar
@@ -611,7 +732,7 @@ async function hasOwnCommits(exec: ExecFn, repoRoot: string, branch: string): Pr
   const { base, provenance } = await resolveRunBase(exec, repoRoot, branch, {
     // o branch de integração é DECLARADO (`autorun.staging.branch`); fixar o literal aqui
   // sobrescrevia a declaração do repositório — o train já lia o declarado, as réguas de ciclo de vida não
-    stageBranch: loadRunnerConfig().autorun.staging?.branch ?? "stage",
+    stageBranch: stagingBranchOf(loadRunnerConfig().autorun.staging),
   });
   // Only an EXACT base may authorise a delete. WS-1: a session branch's exact base is `base-ref`, NOT the
   // reflog (the refresh rebase invalidates the reflog) — testing `=== "reflog"` here would make EVERY agent

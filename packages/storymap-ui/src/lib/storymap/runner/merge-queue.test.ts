@@ -16,10 +16,14 @@ vi.mock("./config", async (importOriginal) => {
 import { loadRunnerConfig } from "./config";
 import type { JudgePort, JudgeRequest } from "./semantic-resolution";
 import {
-  makeDefaultGateRunner,
+  makeDefaultGateRunner as makeDefaultGateRunnerSemFallback,
+  type GateCommandRunner,
   makeMergeQueue,
   orphanSplitPatches,
+  packageDirOf,
   parseVitestFailures,
+  stageWorktreePath,
+  regenSnapshotsInTree,
   stuckEntries,
   verificationDemand,
   type IntegrationGateRunner,
@@ -43,6 +47,19 @@ import type { ExecFn, WorktreeFs } from "./worktree";
 import type { CommitSerializer } from "./commit-serializer";
 import type { MergeQueueEntry } from "./types";
 import type { DiffSnapshot, Finding } from "@/lib/storymap/types";
+
+// Lote D (layout) — a suíte padrão do gate (`mergeGate.scope.fallback`) é DECLARADA pelo alvo; a ferramenta não supõe mais
+// um pacote por omissão. As fixtures deste arquivo modelam um alvo que declarou o seu (`packages/storymap-ui`), então o
+// wrapper abaixo injeta a declaração em toda chamada que não traga a própria. Os testes da RECUSA sem declaração
+// usam `makeDefaultGateRunnerSemFallback` direto (ver o bloco «fallback indeclarado»).
+const makeDefaultGateRunner: typeof makeDefaultGateRunnerSemFallback = (...args) => {
+  const runner = makeDefaultGateRunnerSemFallback(...args);
+  return (opts) => runner({ scope: { fallback: { cwd: "packages/storymap-ui" } }, ...opts });
+};
+
+// O alvo das fixtures de regen de snapshot tem um package.json com `workspaces` (a fonte de onde sai «em que pacote
+// regenerar»): `packages/*`. Um fake de fs sem `readText` descreve um alvo SEM package.json — caso coberto à parte.
+const readTextDoAlvo = async (p: string): Promise<string | null> => (p.endsWith("package.json") ? JSON.stringify({ workspaces: ["packages/*"] }) : null);
 
 // story-ex0104 — a recording per-cwd commit serializer (DI). It records every cwd it's asked to
 // serialize a commit on and passes the fn straight through, so a test can assert the boundary-2
@@ -1535,6 +1552,7 @@ describe("makeDefaultGateRunner — staging worktree lifecycle", () => {
     isDir: async (p: string) => p.includes("packages/storymap-ui"),
     // tsconfig.json existe em toda unidade — o typecheck só roda quando o teste o INJETA.
     isFile: async (p: string) => p.endsWith("tsconfig.json"),
+    readText: readTextDoAlvo,
     linkDir: async () => {},
     unlinkDir: async () => false,
   };
@@ -1625,6 +1643,36 @@ describe("makeDefaultGateRunner — staging worktree lifecycle", () => {
     expect(res.log ?? "").toMatch(/RECUSADO \(não reprovado\)/);
     expect(res.log ?? "").toContain("packages/storymap-ui");
     expect(res.log ?? "").toMatch(/mergeGate\.scope\.packages/);
+  });
+
+  // ── SEM fallback declarado: a ferramenta NÃO supõe um pacote (Lote D, layout) ────────────────────────
+  it("fallback INDECLARADO + delta que precisa da suíte padrão ⇒ RECUSA nomeada (INCONCLUSIVO) que diz o que declarar; nada roda", async () => {
+    const { exec, calls } = makeGateExec({ mergedFailures: [] });
+    const res = await makeDefaultGateRunnerSemFallback(noopFs)({ exec, repoRoot: "/repo", branch: "run/x", runId: "x", checkCommand: "vitest run", timeoutMs: 1000 });
+
+    expect(res.passed).toBe(false);
+    expect(res.inconclusive).toBe(true); // infra/configuração — nunca «seus testes quebraram»
+    expect(res.log ?? "").toMatch(/RECUSADO \(não reprovado\)/);
+    expect(res.log ?? "").toContain("autorun.mergeGate.scope.fallback");
+    expect(res.log ?? "").not.toContain("packages/storymap-ui"); // não supõe o pacote da própria ferramenta
+    expect(calls.some((c) => c.cmd.includes("vitest run"))).toBe(false); // a suíte NÃO rodou
+    expect(calls.some((c) => c.cmd.includes("git worktree remove"))).toBe(true); // e a árvore foi limpa
+  });
+
+  it("fallback indeclarado MAS o delta inteiro coberto por `scope.packages` ⇒ roda a unidade declarada, sem recusa", async () => {
+    const { exec, calls } = makeGateExec({ mergedFailures: [] });
+    const fs: WorktreeFs = { ...noopFs, isDir: async (p: string) => p.includes("packages/loja") };
+    const base = exec;
+    const comDelta: ExecFn = async (cmd, o) => {
+      if (cmd.includes("diff --name-only") && cmd.includes("..HEAD")) return { stdout: "packages/loja/src/carrinho.ts\n", stderr: "" };
+      return base(cmd, o);
+    };
+    const res = await makeDefaultGateRunnerSemFallback(fs)({
+      exec: comDelta, repoRoot: "/repo", branch: "run/x", runId: "x", checkCommand: "vitest run", timeoutMs: 1000,
+      scope: { packages: { "packages/loja": "vitest run" } },
+    });
+    expect(res.passed).toBe(true);
+    expect(calls.some((c) => c.cmd.includes("vitest run") && (c.cwd ?? "").endsWith("packages/loja"))).toBe(true);
   });
 
   // ── O FALLBACK DECLARADO PELO ALVO (`mergeGate.scope.fallback`) ─────────────────────────────────
@@ -2118,6 +2166,7 @@ describe("makeDefaultGateRunner — SNAP-AWARE staging merge (story-ex0159 CRITI
     // existe no staging, o resto não.
     isDir: async (p: string) => p.includes("packages/storymap-ui"),
     isFile: async () => false,
+    readText: readTextDoAlvo,
     linkDir: async () => {},
     unlinkDir: async () => false,
   };
@@ -3439,6 +3488,7 @@ function recordingFs() {
     listDirs: async () => [],
     isDir: async (p) => p.endsWith("node_modules"),
     isFile: async () => false,
+    readText: readTextDoAlvo,
     linkDir: async (_t, linkPath) => {
       linked.push(linkPath);
     },
@@ -4626,5 +4676,158 @@ describe("merge train — fronteira de contribuição no reconcile do `main` (st
       calls.some((c) => c.includes("merge --no-edit FETCH_HEAD")),
       "diff ILEGÍVEL virou 'origin não trouxe nada' e o merge-back absorveu o inclassificável",
     ).toBe(false);
+  });
+});
+
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+// LOTE D (layout) — o train não supõe `packages/`: o alvo DECLARA onde moram pacotes e código.
+// Os nomes aqui são INVENTADOS (oficina de bicicletas, livraria); nenhum é de um produto real.
+// ═════════════════════════════════════════════════════════════════════════════════════════════════
+describe("packageDirOf — o pacote vem do LAYOUT do alvo (globs), nunca de uma pasta fixa", () => {
+  it("globs de `packages/*`: devolve o diretório do pacote que CONTÉM o arquivo", () => {
+    expect(packageDirOf("packages/vendas/src/__snapshots__/carrinho.snap", ["packages/*"])).toBe("packages/vendas");
+    expect(packageDirOf("packages/vendas", ["packages/*"])).toBeNull(); // o próprio diretório não está «dentro»
+    expect(packageDirOf("README.md", ["packages/*"])).toBeNull();
+  });
+
+  it("o diretório MAIS RASO que casa vence (workspace aninhado não vira «o pacote»)", () => {
+    const globs = ["packages/*", "packages/*/web"];
+    expect(packageDirOf("packages/vendas/web/src/x.snap", globs)).toBe("packages/vendas");
+    // ordem dos globs não importa
+    expect(packageDirOf("packages/vendas/web/src/x.snap", [...globs].reverse())).toBe("packages/vendas");
+  });
+
+  it("outro layout (`apps/*`, `libs/*`) e segmento parcial (`app-*`)", () => {
+    expect(packageDirOf("apps/balcao/src/a.snap", ["apps/*", "libs/*"])).toBe("apps/balcao");
+    expect(packageDirOf("libs/precos/x.snap", ["apps/*", "libs/*"])).toBe("libs/precos");
+    expect(packageDirOf("app-web/x.snap", ["app-*"])).toBe("app-web");
+    expect(packageDirOf("lib-web/x.snap", ["app-*"])).toBeNull();
+  });
+
+  it("sem globs (alvo sem layout resolvível) ⇒ null — nunca se adivinha uma pasta", () => {
+    expect(packageDirOf("packages/vendas/x.snap", [])).toBeNull();
+  });
+});
+
+describe("regen de snapshot — o pacote vem do package.json/layout do ALVO; sem nenhum, RECUSA dizendo o que declarar", () => {
+  const SNAP = "packages/vendas/src/__snapshots__/carrinho.snap";
+  const runInTree = (cmds: Array<{ cmd: string; cwd: string }>): GateCommandRunner =>
+    (async (cmd: string, cwd: string) => {
+      cmds.push({ cmd, cwd });
+      return { ok: true };
+    }) as unknown as GateCommandRunner;
+  const fsComPackageJson = (json: string | null): WorktreeFs => ({
+    listDirs: async () => [],
+    isDir: async () => false,
+    isFile: async () => false,
+    readText: async (p) => (json !== null && p.endsWith("package.json") ? json : null),
+    linkDir: async () => {},
+    unlinkDir: async () => false,
+  });
+
+  it("COM workspaces no package.json do alvo: roda o `vitest -u` no pacote do snap", async () => {
+    const cmds: Array<{ cmd: string; cwd: string }> = [];
+    const r = await regenSnapshotsInTree(runInTree(cmds), fsComPackageJson(JSON.stringify({ workspaces: ["packages/*"] })), "/arvore", [SNAP], 1000);
+    expect(r.status).toBe("regenerated");
+    expect(cmds).toHaveLength(1);
+    expect(cmds[0].cwd).toBe(path.join("/arvore", "packages/vendas"));
+  });
+
+  it("SEM layout resolvível (sem package.json): `failed` com a frase que diz o que declarar — antes era noop SILENCIOSO", async () => {
+    const cmds: Array<{ cmd: string; cwd: string }> = [];
+    const r = await regenSnapshotsInTree(runInTree(cmds), fsComPackageJson(null), "/arvore", [SNAP], 1000);
+    expect(r.status).toBe("failed");
+    expect(r.detail).toContain("target.layout.packages");
+    expect(r.detail).toContain(SNAP);
+    expect(cmds).toHaveLength(0); // nada rodou no pacote errado
+  });
+
+  it("nenhum snap ⇒ noop; layout resolvível mas o snap fora de todo pacote ⇒ noop (como antes)", async () => {
+    const cmds: Array<{ cmd: string; cwd: string }> = [];
+    const fs = fsComPackageJson(JSON.stringify({ workspaces: ["packages/*"] }));
+    expect((await regenSnapshotsInTree(runInTree(cmds), fsComPackageJson(null), "/arvore", [], 1000)).status).toBe("noop");
+    expect((await regenSnapshotsInTree(runInTree(cmds), fs, "/arvore", ["tools/web/x.snap"], 1000)).status).toBe("noop");
+    expect(cmds).toHaveLength(0);
+  });
+});
+
+describe("codePrefixes INDECLARADO no train — o neutro é o lado seguro (preserva/verifica MAIS, nunca descarta código)", () => {
+  it("verificationDemand: undefined ⇒ um arquivo em src/ exige verificação; board-data continua dispensado", () => {
+    expect(verificationDemand(["src/quadro.ts"], undefined).needsVerification).toBe(true);
+    expect(verificationDemand(["storymap/boards/oficina/cards/story-ex9966.md"], undefined).needsVerification).toBe(false);
+  });
+
+  it("`aborted` sobre um branch cujo delta está em src/ e o alvo NÃO declarou codePrefixes ⇒ PRESERVA (conflicted/), nunca `-D`", async () => {
+    // Antes: o default `packages/` fazia `src/**` virar «só dado» e o branch com código era DELETADO.
+    const { exec, calls } = makeRealisticExec({ conflict: (br) => br === "run/a", changed: "src/quadro.ts" });
+    const { mq } = makeQueue({ exec }); // sem `staging` ⇒ codePrefixes indeclarado
+    await mq.enqueueMerge({ ...input({ runId: "a", branch: "run/a" }), baseCommit: "b0" });
+    await mq.whenIdle();
+    await mq.resolveMergeConflict("a", "aborted");
+    await mq.whenIdle();
+    expect(mq.getSnapshot().entries[0].branch).toBe("conflicted/run/a");
+    expect(calls.some((c) => c.includes('branch -D "run/a"'))).toBe(false);
+  });
+
+  it("…`codePrefixes: []` DECLARADO (nada é código) mantém o comportamento de hoje: o mesmo delta é «só dado» ⇒ deletado", async () => {
+    const { exec, calls } = makeRealisticExec({ conflict: (br) => br === "run/a", changed: "src/quadro.ts" });
+    const { mq } = makeQueue({ exec, staging: { enabled: false, branch: "integracao", codePrefixes: [] } });
+    await mq.enqueueMerge({ ...input({ runId: "a", branch: "run/a" }), baseCommit: "b0" });
+    await mq.whenIdle();
+    await mq.resolveMergeConflict("a", "aborted");
+    await mq.whenIdle();
+    expect(calls.some((c) => c.includes('branch -D "run/a"'))).toBe(true);
+  });
+
+  it("…e declarado `[src/]` (layout plano): o delta em src/ é código ⇒ preservado", async () => {
+    const { exec, calls } = makeRealisticExec({ conflict: (br) => br === "run/a", changed: "src/quadro.ts" });
+    const { mq } = makeQueue({ exec, staging: { enabled: false, branch: "integracao", codePrefixes: ["src/"] } });
+    await mq.enqueueMerge({ ...input({ runId: "a", branch: "run/a" }), baseCommit: "b0" });
+    await mq.whenIdle();
+    await mq.resolveMergeConflict("a", "aborted");
+    await mq.whenIdle();
+    expect(mq.getSnapshot().entries[0].branch).toBe("conflicted/run/a");
+    expect(calls.some((c) => c.includes('branch -D "run/a"'))).toBe(false);
+  });
+});
+
+describe("conflito no merge do staging tree do gate — a régua de CÓDIGO é a declarada (inclui prefixo além de packages/)", () => {
+  const fs: WorktreeFs = { listDirs: async () => [], isDir: async (p) => p.includes("packages/storymap-ui"), isFile: async () => false, linkDir: async () => {}, unlinkDir: async () => false };
+  const exec = (unmerged: string[]): { exec: ExecFn; calls: string[] } => {
+    const calls: string[] = [];
+    const fn: ExecFn = async (cmd) => {
+      calls.push(cmd);
+      if (cmd.includes("git rev-parse HEAD")) return { stdout: "basesha0000\n", stderr: "" };
+      if (cmd.includes("git merge --no-ff --no-commit")) throw Object.assign(new Error("CONFLICT"), { stderr: "CONFLICT" });
+      if (cmd.includes("diff --name-only --diff-filter=U")) return { stdout: unmerged.join("\n") + "\n", stderr: "" };
+      return { stdout: "", stderr: "" };
+    };
+    return { exec: fn, calls };
+  };
+
+  it("o prefixo declarado (`tools/oficina/`) conta como CÓDIGO: o conflito ali é REAL ⇒ abort, nunca «pega o lado do run»", async () => {
+    const real = await vi.importActual<typeof import("./config")>("./config");
+    vi.mocked(loadRunnerConfig).mockImplementation(() => {
+      const c = real.loadRunnerConfig();
+      return { ...c, autorun: { ...c.autorun, staging: { ...c.autorun.staging!, codePrefixes: ["packages/", "tools/oficina/"], declared: { branch: true, codePrefixes: true } } } };
+    });
+    try {
+      const { exec: e, calls } = exec(["tools/oficina/regua.ts"]);
+      const res = await makeDefaultGateRunner(fs)({ exec: e, repoRoot: "/repo", branch: "run/x", runId: "x", checkCommand: "vitest run", timeoutMs: 1000 });
+      expect(res.passed).toBe(false);
+      expect(calls.some((c) => c.includes("git merge --abort"))).toBe(true);
+      expect(calls.some((c) => c.includes("checkout --theirs"))).toBe(false); // não resolveu «pelo lado do run»
+    } finally {
+      vi.mocked(loadRunnerConfig).mockImplementation(real.loadRunnerConfig);
+    }
+  });
+});
+
+describe("stageWorktreePath — irmão do repositório, derivado do branch DECLARADO", () => {
+  it("`stage` mantém o caminho de sempre; um branch com `/` não vira diretório aninhado", () => {
+    expect(stageWorktreePath("/srv/oficina", "stage")).toBe(path.join("/srv", "oficina-stage"));
+    expect(stageWorktreePath("/srv/oficina", "release/2026-q4")).toBe(path.join("/srv", "oficina-release-2026-q4"));
+    expect(path.dirname(stageWorktreePath("/srv/oficina", "release/x"))).toBe("/srv"); // continua irmão
   });
 });

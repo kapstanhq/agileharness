@@ -98,7 +98,7 @@ export const HITL_PURPOSES: HitlPurpose[] = [
       "  com a tool Read ANTES de responder — você VÊ a imagem e trabalha com o conteúdo real, nunca adivinha.",
       "",
       "DISCIPLINA INEGOCIÁVEL (você segue as MESMAS regras dos humanos/agentes do repo — os caminhos exatos dos",
-      "checkouts estão no CLAUDE.md do repositório):",
+      "checkouts estão nas instruções do repositório):",
       "1. CÓDIGO só no SEU WORKTREE EFÊMERO: abra com a tool `worktree_open` (branch `agent/<id>`,",
       "   cortado da base canônica, com claim e cap), edite/commite lá, e integre com `worktree_submit` — o",
       "   merge train roda o gate e faz o split code→stage / data→main. Conflito VOLTA pra você: `worktree_refresh`",

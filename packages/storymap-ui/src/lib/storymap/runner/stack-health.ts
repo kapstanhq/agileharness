@@ -2,14 +2,17 @@
 //
 // Generalises the `service_health` MCP tool (mcp/dev-tools.ts): `systemctl
 // is-active <unit>` + a node `fetch` GET (NEVER curl — curl trips the
-// Cloudflare WAF). Kept side-effect-free so it can be shared by two callers:
-//   1. the harness-qa fail-fast pre-boot gate (verify the stack is up before a run),
-//   2. a future persistent-stack service (item 1b).
+// Cloudflare WAF). Kept side-effect-free: `fetch` and `isActive` are injected.
+//
+// NÃO há alvo de stack embutido aqui. As URLs que provam «a stack do alvo está de pé» são DECLARADAS por ele em
+// `storymap/settings.yaml → target.qa.health` (e `target.qa.seeded` para a sonda «dados semeados») — ver
+// target-profile.ts. {@link probeQaHealth} as sonda; sem declaração responde dizendo o que declarar, nunca supõe
+// uma porta. ⚠️ A sonda roda no namespace de rede do SERVIÇO: uma stack que o agente sobe dentro da jaula do run
+// não é visível dali (use as mesmas URLs no loop de prontidão da própria chamada de Bash).
 //
 // Contract: NEVER throws. Every failure (systemd down, http error, rejected
 // fetch, seeded endpoint missing) resolves to a StackHealth with healthy:false
-// and a short `detail`. Zero real IO lives in this module — `fetch` and
-// `isActive` are injected.
+// and a short `detail`. Zero real IO lives in this module.
 
 export interface StackHealth {
   /** systemd unit is active (true when no unit is targeted). */
@@ -39,30 +42,6 @@ export interface StackHealthDeps {
   /** `systemctl is-active <unit>` → true/false, injected (never spawns here). */
   isActive: (unit: string) => Promise<boolean>;
 }
-
-/**
- * The persistent QA stack's default StackTarget (Fase 1b) — a placeholder
- * for the target's own stable ports/seed contract (a target that keeps a persistent
- * stack overrides it by env). The unit is expected to be health-GATED at start
- * (it blocks "started" until hub+auth+store+seed are up), so for the
- * harness-qa fail-fast pre-boot gate `probeStackHealth(QA_STACK_TARGET, …)` being
- * healthy means: CONNECT to the running stack — do NOT cold-boot one.
- *  - url: the emulator hub's /emulators endpoint (200 + suite listing);
- *  - seededProbeUrl: a deterministic seed document —
- *    the store's REST API answers 200 when seeded, 404 when not (a bare collection
- *    GET answers 200 even when EMPTY, useless as a seed signal).
- */
-export const QA_STACK_TARGET: StackTarget = {
-  unit: "qa-stack.service",
-  url: "http://127.0.0.1:4500/emulators",
-  // O id do projeto e o doc-sentinela são do ALVO, não da ferramenta: um alvo que mantém um stack
-  // persistente declara a sua sonda por env (AGILEHARNESS_QA_SEED_PROBE_URL). Sem declaração a sonda
-  // aponta para um projeto que não existe e responde "não seedado" — e o pré-boot do harness-qa sobe
-  // o próprio stack, que é o caminho seguro. (Antes o id de um projeto real estava aqui, literal.)
-  seededProbeUrl:
-    process.env.AGILEHARNESS_QA_SEED_PROBE_URL ??
-    "http://127.0.0.1:8080/v1/projects/demo-project/databases/(default)/documents/profiles/sample-user-01",
-};
 
 const HTTP_TIMEOUT_MS = 5_000;
 
@@ -118,4 +97,46 @@ export async function probeStackHealth(
         .join("; ");
 
   return { systemd, http, seeded, healthy, ...(detail ? { detail } : {}) };
+}
+
+/** O que {@link probeQaHealth} devolve. */
+export interface QaHealth {
+  /** o alvo declarou ao menos uma sonda (`target.qa.health` ou `target.qa.seeded`)? */
+  declared: boolean;
+  /** cada sonda de `health`, pelo NOME declarado. */
+  components: { name: string; ok: boolean }[];
+  /** a sonda «seedado» respondeu 2xx (true quando o alvo não declarou nenhuma). */
+  seeded: boolean;
+  /** declared && todas as sondas ok. */
+  healthy: boolean;
+  /** por que não está saudável: só os componentes que FALHARAM, ou a instrução do que declarar. */
+  detail?: string;
+}
+
+/**
+ * Sonda a stack que o alvo declarou (`target.qa.health` + `target.qa.seeded`, já validadas como loopback com porta
+ * pelo coerce). As URLs são buscadas em paralelo; só as que falharam entram no `detail`. NUNCA lança. Sem sonda
+ * declarada devolve `declared:false` com a instrução — não há porta «convencional» a tentar.
+ */
+export async function probeQaHealth(
+  qa: { health?: readonly { name: string; url: string }[]; seeded?: { url: string } },
+  deps: Pick<StackHealthDeps, "fetch">,
+): Promise<QaHealth> {
+  const health = qa.health ?? [];
+  if (!health.length && !qa.seeded) {
+    return {
+      declared: false,
+      components: [],
+      seeded: true,
+      healthy: false,
+      detail: "o alvo não declarou sondas de saúde — declare target.qa.health em storymap/settings.yaml (name + url de loopback com porta)",
+    };
+  }
+  const [components, seeded] = await Promise.all([
+    Promise.all(health.map(async (h) => ({ name: h.name, ok: await probeGet(h.url, deps.fetch) }))),
+    qa.seeded ? probeGet(qa.seeded.url, deps.fetch) : Promise.resolve(true),
+  ]);
+  const failed = [...components.filter((c) => !c.ok).map((c) => `"${c.name}" não respondeu`), ...(seeded ? [] : ["sonda de dados semeados (seeded) falhou"])];
+  const healthy = failed.length === 0;
+  return { declared: true, components, seeded, healthy, ...(healthy ? {} : { detail: failed.join("; ") }) };
 }

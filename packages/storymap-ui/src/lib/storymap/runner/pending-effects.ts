@@ -10,6 +10,11 @@
 // re-fire any unresolved one ONCE on boot (recoverPendingEffects). The effects are idempotent + best-effort
 // (entry-effects.ts), so a re-fire of an already-promoted stage is a no-op and a re-fire is always safe.
 //
+// O ESCOPO DE TIPOS do board (board-pace.ts) NÃO barra este livro, de propósito: um efeito de entrada é PUBLICAR (promover a
+// stage, publicar) — entrega de trabalho já construído, que o escopo não toca (só controla o INÍCIO do trabalho). O único
+// `onEnter` do board base mora em «Publicar»; pending-effects.test.ts confere que nenhum passo de CONSTRUÇÃO declara um (se
+// um board declarar, esta premissa cai e o refazer no boot passa a precisar da pergunta por card).
+//
 // Mirrors journal.ts: atomic tmp+rename persist, versioned + per-entry safeParse on load, an in-memory map
 // fronting the disk, a serialized write chain. SERVER-ONLY (node:fs). Process-global singleton.
 
@@ -215,9 +220,9 @@ export async function recoverPendingEffects(deps: PendingEffectRecoveryDeps): Pr
     } else if (deps.isBootSafe && !(await deps.isBootSafe(e.effect, e.board).catch(() => true))) {
       // NOT boot-safe (a product production deploy). Never auto-ship prod after a restart — surface it for
       // the operator and clear it one-shot (so it doesn't re-log every boot). The card already advanced;
-      // the operator re-deploys via harness-ship / `just orch-deploy <pkg>` or by re-dragging the card.
+      // the operator re-deploys via harness-ship / the target's declared deploy command or by re-dragging the card.
       console.warn(
-        `[harness-pending-effects] DEFERIDO no boot: efeito "${e.effect}" do board "${e.board}" (card ${e.cardId}) NÃO foi re-disparado — um deploy de produção não auto-dispara no boot. Rode o deploy manualmente (harness-ship / just orch-deploy) ou rearraste o card.`,
+        `[harness-pending-effects] DEFERIDO no boot: efeito "${e.effect}" do board "${e.board}" (card ${e.cardId}) NÃO foi re-disparado — um deploy de produção não auto-dispara no boot. Rode o deploy manualmente (o comando de deploy do alvo) ou rearraste o card.`,
       );
       summary.deferred += 1;
     } else {

@@ -82,6 +82,8 @@ function harness(opts: { changed: string[]; units: Record<string, UnitBeh>; juni
     listDirs: async () => [],
     isDir: async (p: string) => Object.keys(opts.units).some((k) => p.endsWith(k)) || p.includes("packages/storymap-ui"),
     isFile: async () => false,
+    // o alvo declara seus workspaces no package.json da raiz — de onde sai «em que pacote regenerar o snapshot»
+    readText: async (p: string) => (p.endsWith("package.json") ? JSON.stringify({ workspaces: ["packages/*"] }) : null),
     linkDir: async () => {},
     unlinkDir: async () => false,
   };

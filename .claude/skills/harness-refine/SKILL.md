@@ -93,7 +93,7 @@ The card must be `status: refinar` with `mode: refine` and a non-empty
 
 2. **Diagnose the LIVE implementation (read-only).** Run the canonical diagnosis —
    **`@.claude/skills/harness-triage-shared/DIAGNOSIS.md`** (Grep/Read/`git log` over
-   `packages/<pkg>/` to pin the routes/pages/components/server actions/flow to real
+   the board package (`package:` in `board.yaml`) to pin the routes/pages/components/server actions/flow to real
    files; "presença de código ≠ shipped"; ANTÍDOTO a recriar do zero).
    **Oriente via graphify ANTES de grep/read.** Este step roda com o **MCP graphify**
    (knowledge graph do código do pacote-alvo, carregado pela `mcpConfig` da coluna).

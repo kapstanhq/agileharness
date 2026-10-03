@@ -21,6 +21,7 @@ import {
   getCardRunHistoryAction,
   getCardTransitionsAction,
   getPlanAction,
+  getReviewLensNamesAction,
   getWireframeAction,
   submitDesignFeedbackAction,
   updateFindingStatusAction,
@@ -31,6 +32,7 @@ import {
   splitFindingsBySeverity,
   type CardDocContext,
 } from "@/lib/storymap/card-document";
+import { lensLabel } from "@/lib/storymap/copilot/dejargon";
 import { computeStepRollups } from "@/lib/storymap/step-rollup";
 import { terminalStatusIds } from "@/lib/storymap/views";
 import { IDEA_STATUS_BY_ID } from "@/lib/storymap/frameworks";
@@ -66,6 +68,8 @@ export function CardDocument({
   const [wireframe, setWireframe] = useState<WireframeDoc | null>(null);
   const [history, setHistory] = useState<TelemetryRecord[]>([]);
   const [transitions, setTransitions] = useState<Transition[]>([]);
+  // `id → nome` das lentes de revisão do alvo (do servidor). Vazio ⇒ o rótulo cai no das embutidas / Capitalize seguro.
+  const [lensNames, setLensNames] = useState<Record<string, string>>({});
   const [loaded, setLoaded] = useState(false);
   const { running } = useRunnerSnapshot();
 
@@ -77,12 +81,14 @@ export function CardDocument({
       getWireframeAction({ boardId, cardId: card.id }),
       getCardRunHistoryAction({ boardId, cardId: card.id, limit: 8 }),
       getCardTransitionsAction({ boardId, cardId: card.id }),
-    ]).then(([p, w, h, t]) => {
+      getReviewLensNamesAction(),
+    ]).then(([p, w, h, t, l]) => {
       if (!alive) return;
       if (p.ok && p.data) setPlan(p.data.markdown);
       if (w.ok && w.data) setWireframe(w.data.doc);
       if (h.ok && h.data) setHistory(h.data.runs);
       if (t.ok && t.data) setTransitions(t.data.transitions);
+      if (l.ok && l.data) setLensNames(l.data.lensNames);
       setLoaded(true);
     });
     return () => {
@@ -158,7 +164,7 @@ export function CardDocument({
                 </Markdown>
               );
             if (b.kind === "wireframe") return <InlineWireframes key="wireframe" boardId={boardId} cardId={card.id} doc={b.doc} />;
-            if (b.kind === "blockers") return <InlineBlockers key="blockers" boardId={boardId} cardId={card.id} findings={b.findings} terminal={terminalStatusIds(config).has(card.status ?? "")} />;
+            if (b.kind === "blockers") return <InlineBlockers key="blockers" boardId={boardId} cardId={card.id} findings={b.findings} lensNames={lensNames} terminal={terminalStatusIds(config).has(card.status ?? "")} />;
             if (b.kind === "stage-history") return <CardStageHistory key="stage-history" density="full" rollups={b.rollups} />;
             return null;
           })}
@@ -300,7 +306,19 @@ const SEV_DOT: Record<string, string> = {
  * until expanded — replacing the 6-field card-with-borders widget. The gate (hasNoBlockers)
  * still keys off the well-formed open blockers in card.findings; this only changes how they READ.
  */
-function InlineBlockers({ boardId, cardId, findings, terminal }: { boardId: string; cardId: string; findings: Finding[]; terminal?: boolean }) {
+function InlineBlockers({
+  boardId,
+  cardId,
+  findings,
+  lensNames,
+  terminal,
+}: {
+  boardId: string;
+  cardId: string;
+  findings: Finding[];
+  lensNames?: Readonly<Record<string, string>>;
+  terminal?: boolean;
+}) {
   const router = useRouter();
   const toast = useToast();
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -341,7 +359,7 @@ function InlineBlockers({ boardId, cardId, findings, terminal }: { boardId: stri
           </h2>
           <ul className="space-y-1">
             {blockers.map((f) => (
-              <BlockerRow key={f.id} finding={f} pending={pendingId === f.id} onResolve={setStatus} />
+              <BlockerRow key={f.id} finding={f} pending={pendingId === f.id} onResolve={setStatus} lensNames={lensNames} />
             ))}
           </ul>
         </section>
@@ -353,7 +371,7 @@ function InlineBlockers({ boardId, cardId, findings, terminal }: { boardId: stri
           </h2>
           <ul className="space-y-1">
             {advisories.map((f) => (
-              <BlockerRow key={f.id} finding={f} pending={pendingId === f.id} onResolve={setStatus} />
+              <BlockerRow key={f.id} finding={f} pending={pendingId === f.id} onResolve={setStatus} lensNames={lensNames} />
             ))}
           </ul>
         </section>
@@ -369,7 +387,7 @@ function InlineBlockers({ boardId, cardId, findings, terminal }: { boardId: stri
           </h2>
           <ul className="space-y-1 opacity-60">
             {triaged.map((f) => (
-              <BlockerRow key={f.id} finding={f} pending={false} onResolve={setStatus} />
+              <BlockerRow key={f.id} finding={f} pending={false} onResolve={setStatus} lensNames={lensNames} />
             ))}
           </ul>
         </section>
@@ -412,10 +430,12 @@ function BlockerRow({
   finding,
   pending,
   onResolve,
+  lensNames,
 }: {
   finding: Finding;
   pending: boolean;
   onResolve: (id: string, status: FindingStatus, label: string) => void;
+  lensNames?: Readonly<Record<string, string>>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const hasDetail = !!(finding.detail || finding.file || finding.suggestion);
@@ -487,7 +507,7 @@ function BlockerRow({
             <p className="font-mono text-[11px] text-fg-subtle">
               {finding.file}
               {finding.line != null ? `:${finding.line}` : ""}
-              <span className="ml-1.5 font-sans not-italic">· {finding.lens}</span>
+              <span className="ml-1.5 font-sans not-italic">· {lensLabel(finding.lens, lensNames) ?? finding.lens}</span>
             </p>
           )}
           {finding.detail && <p>{finding.detail}</p>}

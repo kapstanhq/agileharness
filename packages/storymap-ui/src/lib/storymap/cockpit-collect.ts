@@ -32,6 +32,8 @@ import { getRunnerRegistry } from "@/lib/storymap/runner/registry";
 import { getProductDeploy } from "@/lib/storymap/runner/product-deploy";
 import { readTransitions } from "@/lib/storymap/runner/transitions";
 import { PER_ITEM_NOOP_MAX, readOrchestratorState, type NoopStreak } from "@/lib/storymap/runner/orchestrator-state";
+import { gateAdmitsCard, SCOPE_WAITING_STATUSES, type BoardGate } from "@/lib/storymap/runner/board-pace";
+import { boardGateNow } from "@/lib/storymap/runner/board-pace-store";
 
 // collectBoardCockpitItems — the SINGLE source of truth for "what needs you" on ONE board.
 // Folds typed CockpitItems from five sources and re-sorts by lane urgency then age, EXACTLY as the
@@ -312,6 +314,25 @@ async function readMeterStall(): Promise<MeterStall | null> {
 }
 
 /**
+ * Tira os itens de um card que o escopo de tipos do board não deixa COMEÇAR. PURA. Só vale para o card que ainda ESPERA para
+ * ser construído (`SCOPE_WAITING_STATUSES`: go/no-go, design e construção): um card que já foi construído e está na entrega
+ * (`revisao`/`merge`/`stage`/`release`) ou depois dela segue acionável — bloqueio de merge, falha de deploy e prova pendente
+ * de uma funcionalidade PRONTA precisam do copiloto, e a publicação do board (que leva a stage inteira) não pode ficar parada
+ * por um card que ninguém automático mexe (o escopo não gateia a entrega). Item sem card (governança, medidor, aprovação do
+ * board) fica; card que não está na lista (órfão) fica (a guarda de órfãos é de quem monta os itens).
+ */
+export function actionableForScope<T extends { cardId: string }>(items: readonly T[], cards: readonly Card[], gate: Pick<BoardGate, "scope"> | null | undefined): T[] {
+  if (!gate?.scope) return [...items];
+  const byId = new Map(cards.map((c) => [c.id, c]));
+  return items.filter((i) => {
+    const card = i.cardId ? byId.get(i.cardId) : undefined;
+    if (!card) return true;
+    if (!card.status || !SCOPE_WAITING_STATUSES.includes(card.status)) return true;
+    return gateAdmitsCard(gate, card, "conductor").admit;
+  });
+}
+
+/**
  * 6.4 — the ACTIONABLE-by-the-copiloto subset of a board's cockpit + a stable signature, for the disciplined
  * autonomous tick. Reuses collectBoardCockpitItems (so the tick sees EXACTLY what the cockpit shows), then keeps
  * only the kinds the copiloto can act on AT THIS BOARD'S TIER ({@link isCopilotActionable}) — a pending human
@@ -331,6 +352,11 @@ async function readMeterStall(): Promise<MeterStall | null> {
  * the CARD it belongs to, so the tick can skip items whose card another actor already holds (a claim): the item
  * id alone (`apr:<id>`, etc.) does not carry the card. Empty cardId (a board-level item like a governance draft)
  * is preserved as-is — it is claimable by nobody. Server-only.
+ *
+ * O ESCOPO DE TIPOS do board (board-pace.ts, segundo eixo do ritmo): o copiloto NÃO enfileira nem move card de tipo que o
+ * board não pode começar — os itens de um card de funcionalidade fora do escopo saem do conjunto acionável (continuam no
+ * Inbox para o humano, que é quem decide) — mas SÓ enquanto o card espera para ser construído; o que já está na entrega
+ * (ou depois) segue acionável. {@link actionableForScope} é a régua pura.
  */
 export async function collectActionableCockpit(
   boardId: string,
@@ -347,7 +373,20 @@ export async function collectActionableCockpit(
   // at the one source of the tick's work set, so `hasWork`, the per-item noop attribution and the steward's item
   // map all agree that these items are not work. They stay on the Inbox for the human (collectBoardCockpitItems).
   const conducted = conductedCardIds(cards);
-  const items = all.filter((i) => isCopilotActionable(i, tier, { businessOnly }) && !(i.cardId && conducted.has(i.cardId)));
+  // O portão é lido aqui, na fonte do conjunto de trabalho do tick (como o filtro dos conduzidos): o `hasWork`, a atribuição
+  // do noop por item e o mapa do steward concordam. Leitura que falha ⇒ sem escopo (a mesma direção do resto do ritmo: o
+  // escopo é um freio a mais, nunca derruba o tick).
+  let gate: Pick<BoardGate, "scope"> | null = null;
+  try {
+    gate = boardGateNow(boardId, config);
+  } catch {
+    gate = null;
+  }
+  const items = actionableForScope(
+    all.filter((i) => isCopilotActionable(i, tier, { businessOnly }) && !(i.cardId && conducted.has(i.cardId))),
+    cards,
+    gate,
+  );
   const ids = items.map((i) => i.id).sort();
   return { count: items.length, sig: ids.join("|"), ids, itemCards: items.map((i) => ({ id: i.id, cardId: i.cardId, kind: i.kind })), businessOnly };
 }

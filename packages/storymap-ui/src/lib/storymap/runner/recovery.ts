@@ -30,6 +30,8 @@ import { worktreeTouchedWithin } from "./session-activity";
 import { SESSION_HEARTBEAT_TTL_MS } from "./session-liveness";
 import type { MergeQueuePort, MergeQueueRecovery } from "./merge-queue";
 import type { BoardConfig, Card, StatusDef, TriggerId } from "@/lib/storymap/types";
+import { gateAdmitsCard, gateOf, scopeCardOf, type BoardGate, type BoardGatePort, type ScopeCard } from "./board-pace";
+import { boardGateNow, holdBoardScopeEntry } from "./board-pace-store";
 
 export type RecoveryDecision =
   | { action: "respawn"; trigger: TriggerId }
@@ -48,14 +50,24 @@ export function findResumable(entries: JournalEntry[]): JournalEntry[] {
   return entries.filter((e) => e.resumable === true);
 }
 
+/** O motivo do `drop` de um run interrompido cujo card está fora do que o board pode começar (escopo de tipos). */
+export const RECOVERY_SCOPE_DROP_REASON = "tipo-nao-admitido";
+
 /**
  * Decide what to do with one interrupted run given the card's CURRENT disk state.
  * PURE — assumes the master switch was already checked by the caller.
+ *
+ * `gate` (opcional): o portão do board com o ESCOPO DE TIPOS (board-pace.ts). Retomar um run que o crash interrompeu é
+ * COMEÇAR trabalho de novo: se o card é de um tipo que o board não pode começar (o escopo estreitou enquanto o serviço
+ * estava fora, ou depois de o run nascer), o run não renasce — `drop` com {@link RECOVERY_SCOPE_DROP_REASON}, e o card fica
+ * onde está (o chamador o anota para o escopo alargar devolver). Um run MANUAL nunca chega aqui (já é `manual-oneshot`) e o
+ * re-drive do merge train não é de coluna de construção. Sem `gate`, a decisão é a de sempre.
  */
 export function decideRecovery(
   entry: JournalEntry,
   card: Card | undefined,
   config: BoardConfig,
+  gate?: Pick<BoardGate, "scope"> | null,
 ): RecoveryDecision {
   // A manual "Rodar agora" is a one-shot the user fired by hand — never auto-re-fire it, even if
   // the card sits in an autorun column (whose trigger would otherwise match). The engine already
@@ -64,6 +76,9 @@ export function decideRecovery(
   if (!card) return { action: "drop", reason: "card-removed" };
   const decision = decideCascade(card, config);
   if (decision.action === "run" && decision.trigger === entry.trigger) {
+    if (gate && entry.origin !== "conflict-redrive" && !gateAdmitsCard(gate, card, "column").admit) {
+      return { action: "drop", reason: RECOVERY_SCOPE_DROP_REASON };
+    }
     return { action: "respawn", trigger: entry.trigger };
   }
   // The card advanced (the skill finished and moved it), now forwards, or stopped.
@@ -85,6 +100,13 @@ export interface RecoverySummary {
 export interface RecoveryDeps {
   /** True only when autorun.enabled AND autorun.resumeOnBoot are both on. */
   enabled: boolean;
+  /**
+   * O portão do board (board-pace.ts), de onde a decisão lê o ESCOPO DE TIPOS. Ausente ⇒ a produção (`boardGateNow`);
+   * os testes passam um dublê (ou `() => ({ ...gate, scope: null })` para «sem limite»).
+   */
+  boardGate?: BoardGatePort;
+  /** Anota que o escopo segurou o card (`why: "scope"`), para alargar o escopo devolvê-lo. Ausente ⇒ a produção. Nunca lança. */
+  holdScope?(board: string, cardId: string): Promise<void>;
   journal: Pick<
     import("./journal").RunnerJournal,
     "loadInterrupted" | "resolveInterrupted"
@@ -121,6 +143,8 @@ export interface RecoveryDeps {
       // would reset to 0 every boot and could churn forever). Carried UNCHANGED — the shell owns increments.
       column?: string;
       noProgressRuns?: number;
+      // O card que a recuperação já leu (e já perguntou ao portão do board): sem ele o engine segura o job até reler o card.
+      scopeCard?: ScopeCard;
     },
   ): RunAttempt;
   /** Best-effort kill of the orphaned child the previous process left running (same boot session only). */
@@ -248,7 +272,12 @@ export async function recoverInterruptedRuns(deps: RecoveryDeps): Promise<Recove
       continue;
     }
     const card = cards.find((c) => c.id === entry.cardId);
-    const decision = decideRecovery(entry, card, config);
+    const decision = decideRecovery(entry, card, config, gateOf(deps.boardGate ?? boardGateNow, entry.board, config));
+    // O escopo de tipos segurou o card: ele fica onde está, anotado para voltar quando o escopo alargar (a anotação é a rede —
+    // alargar também re-varre os cards, e o vigia de card parado pega o resto).
+    if (decision.action === "drop" && decision.reason === RECOVERY_SCOPE_DROP_REASON) {
+      await (deps.holdScope ?? holdBoardScopeEntry)(entry.board, entry.cardId).catch(() => {});
+    }
 
     if (decision.action === "respawn" && card) {
       // un-strand fail-safe: NEVER resume into a session a live orphan still owns. If the scope outlived
@@ -315,6 +344,7 @@ export async function recoverInterruptedRuns(deps: RecoveryDeps): Promise<Recove
         // Count) — a resumed run stamps them back via recordStart, keeping the counter monotonic across boots.
         column: entry.column,
         noProgressRuns: entry.noProgressRuns,
+        scopeCard: scopeCardOf(card),
       });
       if (res.ok) {
         // runSkill's recordStart overwrote the journal entry with a FRESH running run —

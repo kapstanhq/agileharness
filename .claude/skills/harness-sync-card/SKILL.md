@@ -59,7 +59,7 @@ For a whole-board reconciliation with confirmation, use `/harness-sync <board>` 
 
 2. **Diagnose the LIVE implementation (read-only).** Run the canonical diagnosis —
    **`@.claude/skills/harness-triage-shared/DIAGNOSIS.md`** (Grep/Read/`git log` over
-   `packages/<pkg>/` — routes/pages, components, server actions, Cloud Functions, flow;
+   the board package (`package:` in `board.yaml`) — routes/pages, components, server actions, Cloud Functions, flow;
    never run builds/tests just to scan; the load-bearing rule **"presença de código ≠
    shipped"** — does this exist today, fully/partially/not at all, and is there evidence
    it's live, not just present in code?). Capture the key files you found — it pins the
@@ -126,7 +126,7 @@ For a whole-board reconciliation with confirmation, use `/harness-sync <board>` 
 ## Guardrails
 
 - **Autonomous — never ask.** No AskUserQuestion; this runs headless from a button.
-- **Read-only on product code.** Diagnose only; never edit `packages/<pkg>/`. The only
+- **Read-only on product code.** Diagnose only; never edit the board package (`package:` in `board.yaml`). The only
   file you write is the card `.md`. Never touch `packages/storymap-ui/`.
 - **Ground every field in evidence.** Position by FACTS, not optimism. When unsure,
   under-claim (lower status, narrower acceptance) and record the uncertainty in

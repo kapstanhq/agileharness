@@ -14,6 +14,7 @@
 import { AlertTriangle, Lock, Zap } from "lucide-react";
 import { CapacityPanel } from "@/components/CapacityPanel";
 import { cn } from "@/lib/cn";
+import { latchSealWords, quotaUsageWords } from "@/lib/storymap/board-pace-words";
 import { useVpsMetrics } from "@/components/RunnerStatusProvider";
 import {
   NavChip,
@@ -130,39 +131,49 @@ export function HealthPill() {
 
   const { pct, estimate, stale } = headline(metrics);
   const { usage } = metrics;
-  // A TRAVA do governador de capacidade muda o chip: é o único estado da cota que PARA a frota, e ele não pode
-  // depender de o operador abrir o painel para ser visto.
-  const latched = !!metrics.governor?.latch;
+  // A TRAVA do governador de capacidade é o único estado da cota que PARA a frota, e não pode depender de o operador
+  // abrir o painel para ser vista — mas é OUTRA coisa que o uso: ganha selo próprio, ao lado do medidor, e o medidor de
+  // uso fica na régua de uso (vermelho só se o USO for alto). Antes o chip dizia «Cota 7d 4%» em vermelho com cadeado, e
+  // o 4% parecia cota crítica quando era a trava.
+  const seal = latchSealWords(metrics.governor, usage?.week?.usedPct ?? null);
+  const words = quotaUsageWords({ pct, estimate, stale, ageWords: formatAge(usage?.polledAt ?? null) });
 
   return (
-    <div ref={ref} className="relative shrink-0" onMouseEnter={openNow} onMouseLeave={closeSoon}>
+    <div ref={ref} className="relative inline-flex shrink-0 items-center gap-1" onMouseEnter={openNow} onMouseLeave={closeSoon}>
       {/* O chip é ícone + número, como o Inbox e os runs — aqui o "ícone" é o anel de cota.
-          O TOM sai de `meterTone` (nav/NavShell): a cota e a RAM são a mesma pergunta e agora se
-          leem pela mesma régua também na barra — havia uma cópia local dos limiares aqui, e duas
-          cópias é exatamente o que a seção "UMA régua" daquele arquivo existe para evitar. */}
+          O TOM sai de `meterTone` (nav/NavShell) e SÓ do uso: a cota e a RAM são a mesma pergunta e se leem pela mesma
+          régua também na barra — havia uma cópia local dos limiares aqui, e duas cópias é exatamente o que a seção
+          "UMA régua" daquele arquivo existe para evitar. A trava NUNCA pinta o uso. */}
       <NavChip
         onClick={() => setOpen((o) => !o)}
         open={open}
-        tone={latched ? "danger" : meterTone(pct)}
+        tone={meterTone(pct)}
         leading={
           <span className="relative inline-flex">
             <UsageRing pct={pct ?? 0} />
             {stale && (
               <AlertTriangle className="absolute -right-1 -top-1 h-2.5 w-2.5 text-fg-subtle" aria-label="defasado" />
             )}
-            {latched && <Lock className="absolute -bottom-1 -right-1 h-2.5 w-2.5 text-danger" aria-label="trava de capacidade" />}
           </span>
         }
-        value={`Cota 7d ${pct != null ? `${Math.round(pct)}%${estimate ? "≈" : ""}` : "—"}`}
-        title={
-          latched
-            ? "Trava de capacidade engatada — nenhum trabalho automático começa"
-            : stale
-              ? `Uso Claude — número defasado (proxy atualizou ${formatAge(usage?.polledAt ?? null)})`
-              : "Uso Claude — sessão · semana · Sonnet"
-        }
-        ariaLabel={`Uso Claude${pct != null ? ` — ${Math.round(pct)}% da semana` : ""}`}
+        value={words.value}
+        title={words.title}
+        ariaLabel={words.ariaLabel}
       />
+      {seal && (
+        // O selo da trava: rótulo curto na barra, a frase inteira (e, se o uso já baixou, o porquê de ela seguir) na dica
+        // e no painel. Abre o mesmo painel que o medidor.
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          title={seal.title}
+          aria-label={seal.title}
+          className="inline-flex h-6 shrink-0 items-center gap-1 rounded-md bg-danger/10 px-1.5 text-[11px] font-semibold text-danger transition hover:bg-danger/15"
+        >
+          <Lock className="h-3 w-3" aria-hidden />
+          {seal.label}
+        </button>
+      )}
 
       {open && (
         // `pinned`: no celular o painel ancora no canto da tela, não no gatilho. Era por precisar

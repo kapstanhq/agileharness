@@ -20,12 +20,12 @@ import { isAutonomousDelivery } from "@/lib/storymap/delivery-audit";
 import { isConducted } from "@/lib/storymap/driver";
 import { OWNER_DECISION_STOP_REASON } from "@/lib/storymap/owner-waiting";
 import { decideCascade } from "@/lib/notifications/server/channels/cascade-decision";
-import type { Card } from "@/lib/storymap/types";
+import type { BoardConfig, Card } from "@/lib/storymap/types";
 import { updateCardOnDisk, withCreateLock, writeCard } from "@/lib/storymap/write";
 import { capturePane } from "@/lib/terminal/tmux";
 import { getCardClaims } from "./claims";
 import { conductorQuiet, paneHasLiveChildren, type ConductorQuiet, type PaneProc, type QuietIo } from "./conductor-quiet";
-import { diskConductorQueueStore, isLiveConductor, isSlotWait } from "./conductor";
+import { diskConductorQueueStore, isConductorOrphan, isLiveConductor, isSlotWait } from "./conductor";
 import { ladderGraceMs } from "./conductor-pause";
 import { conductorTreeGone } from "./fleet-deps";
 import { loadRunnerConfig } from "./config";
@@ -46,6 +46,7 @@ import { allSessions } from "./session-worktree";
 import { readTransitions } from "./transitions";
 import { isPassageStep, sweepStalledCards, type StallBoard, type StallFacts, type StallRow, type StallWatchDeps } from "./stall-watch";
 import { boardGateNow } from "./board-pace-store";
+import { gateAdmitsCard, SCOPE_CLASSIFYING_STATUSES, type BoardGate } from "./board-pace";
 
 export function stallLedgerPath(): string {
   return path.join(runnerStateDir(), "stall-watch.json");
@@ -230,6 +231,24 @@ async function factsOf(wide: BoardWide, board: StallBoard, card: Card): Promise<
   return { inFlight, deployRunning, publishOpen, proofPending: mine(wide.proofs), breakerHeld: mine(wide.breaker), ownerHeld, conductor };
 }
 
+/**
+ * Os cards que o ESCOPO DE TIPOS segura de propósito (T2): os que seriam órfãos do condutor — parados num passo de
+ * condutor, sem driver — e que o escopo não deixa começar (fora as colunas de classificação, onde a skill de especificação roda). É a única parada que o escopo cria: a construção em coluna de
+ * skill é fila (o vigia nem a conta) e a entrega não é barrada. Um card JÁ conduzido não entra (o que começou antes do
+ * escopo estreitar continua sob vigia: um condutor morto é aviso de verdade). PURA.
+ */
+export function scopeHeldCards(cards: readonly Card[], config: BoardConfig, gate: Pick<BoardGate, "scope">): Set<string> {
+  const out = new Set<string>();
+  if (!gate.scope) return out;
+  for (const card of cards) {
+    // Em coluna de CLASSIFICAÇÃO (ex.: `enriquecer`) a skill de especificação RODA — só o despacho do condutor espera —, então o
+    // vigia segue valendo ali: se a skill falha ou trava, é parada de verdade e não espera de propósito.
+    if (card.status && SCOPE_CLASSIFYING_STATUSES.includes(card.status)) continue;
+    if (isConductorOrphan(card, config) && !gateAdmitsCard(gate, card, "conductor").admit) out.add(card.id);
+  }
+  return out;
+}
+
 export function defaultStallWatchDeps(): StallWatchDeps {
   let wide: Promise<BoardWide> | null = null;
   const settings = () => loadRunnerConfig();
@@ -243,9 +262,10 @@ export function defaultStallWatchDeps(): StallWatchDeps {
       for (const b of await listBoards()) {
         // Um board ilegível, desarmado ou pausado fica de fora (as linhas dele no ledger são preservadas).
         const config = await readBoardConfig(b.id).catch(() => null);
-        if (!config || boardGateNow(b.id, config).held) continue;
+        const gate = config ? boardGateNow(b.id, config) : null;
+        if (!config || !gate || gate.held) continue;
         const cards = await readCards(b.id).catch(() => null);
-        if (cards) out.push({ id: b.id, config, cards });
+        if (cards) out.push({ id: b.id, config, cards, scopeHeld: scopeHeldCards(cards, config, gate) });
       }
       return out;
     },

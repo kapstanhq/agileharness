@@ -8,21 +8,27 @@
 // Princípio de segurança (superfície de DECISÃO): só transformamos padrões CONHECIDOS e NÃO-AMBÍGUOS. Nunca
 // "adivinhamos" uma tradução — um rótulo errado numa tela onde o operador decide é pior que o jargão original.
 
-/** LENS de review → rótulo de produto (a "área" do problema). REVIEW_LENSES = firestore/nextjs/perf/security/testing/general. */
-const LENS_LABEL: Record<string, string> = {
-  firestore: "Regras de acesso (Firestore)",
-  nextjs: "Frontend (Next.js)",
-  perf: "Performance",
+/**
+ * As lentes EMBUTIDAS da ferramenta (types.ts `CoreLens`) → rótulo de produto (a «área» do problema). Neutras de
+ * propósito: as lentes de DOMÍNIO (acesso a dados, frontend…) são do alvo, que declara o nome delas em
+ * `target.reviewLenses` e o entrega a quem chama aqui (`declared`) — este módulo é client-safe e não lê o settings.
+ */
+const CORE_LENS_LABEL: Record<string, string> = {
   security: "Segurança",
   testing: "Testes",
+  perf: "Performance",
   general: "Revisão geral",
+  design: "Design",
 };
 
-/** O rótulo humano de uma lens (null quando ausente). Lens desconhecida cai num Capitalize seguro — nunca um id cru. */
-export function lensLabel(lens?: string | null): string | null {
+/**
+ * O rótulo humano de uma lens (null quando ausente). A ordem: o nome que o ALVO declarou (`declared: id → name`), o
+ * rótulo da embutida, e por fim um Capitalize seguro — nunca um id cru.
+ */
+export function lensLabel(lens?: string | null, declared?: Readonly<Record<string, string>>): string | null {
   const l = lens?.trim();
   if (!l) return null;
-  return LENS_LABEL[l] ?? l.charAt(0).toUpperCase() + l.slice(1);
+  return declared?.[l] ?? CORE_LENS_LABEL[l] ?? l.charAt(0).toUpperCase() + l.slice(1);
 }
 
 /** Rotas internas de skill (/harness-*) que vazam para os resumos → frase de produto. Só as conhecidas; qualquer

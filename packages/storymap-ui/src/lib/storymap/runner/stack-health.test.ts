@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { probeStackHealth, QA_STACK_TARGET, type StackHealthDeps } from "./stack-health";
-import { createRequire } from "node:module";
-import path from "node:path";
+import { probeQaHealth, probeStackHealth, type StackHealthDeps } from "./stack-health";
 
 /** fetch fake that returns a Response with the given status. */
 function fetchOk(status = 200): typeof fetch {
@@ -120,21 +118,46 @@ describe("probeStackHealth", () => {
   });
 });
 
-describe("QA_STACK_TARGET (Fase 1b contract mirror)", () => {
-  // O espelho com `scripts/ops/qa-stack/contract.json` saiu com a segunda árvore (issue #1): esse
-  // contrato é operação do repositório de origem; aqui o preset é a única fonte, coberta pelos parses.
+// A stack do alvo vem DECLARADA (`target.qa.health`/`seeded`), nunca de uma constante da ferramenta. Os nomes,
+// portas e caminhos abaixo são INVENTADOS (uma oficina de bicicletas com um «barramento» fictício).
+describe("probeQaHealth — as sondas que o alvo declarou", () => {
+  const health = [
+    { name: "entrada", url: "http://127.0.0.1:7101/" },
+    { name: "estoque", url: "http://127.0.0.1:7102/" },
+  ];
+  const byUrl = (down: string[]): typeof fetch =>
+    (async (url: RequestInfo | URL) => new Response("x", { status: down.some((d) => String(url).includes(d)) ? 503 : 200 })) as unknown as typeof fetch;
 
-  it("probes healthy against a live-shaped stack (unit active, hub 200, seed doc 200)", async () => {
-    const r = await probeStackHealth(QA_STACK_TARGET, deps());
-    expect(r.healthy).toBe(true);
+  it("sem nenhuma sonda declarada: não supõe porta e diz o que declarar", async () => {
+    const r = await probeQaHealth({}, { fetch: fetchOk() });
+    expect(r.declared).toBe(false);
+    expect(r.healthy).toBe(false);
+    expect(r.detail).toMatch(/target\.qa\.health/);
+    expect(r.detail).toMatch(/settings\.yaml/);
   });
 
-  it("reports seeded:false when the seed doc 404s (stack up, unseeded)", async () => {
-    const fetchImpl = (async (url: RequestInfo | URL) =>
-      new Response("x", { status: String(url).includes("/documents/profiles/") ? 404 : 200 })) as unknown as typeof fetch;
-    const r = await probeStackHealth(QA_STACK_TARGET, deps({ fetch: fetchImpl }));
-    expect(r.http).toBe(true);
+  it("saudável quando todas as URLs declaradas respondem 2xx (e seeded ausente conta como ok)", async () => {
+    const r = await probeQaHealth({ health }, { fetch: fetchOk() });
+    expect(r).toMatchObject({ declared: true, healthy: true, seeded: true });
+    expect(r.components).toEqual([{ name: "entrada", ok: true }, { name: "estoque", ok: true }]);
+    expect(r.detail).toBeUndefined();
+  });
+
+  it("o detalhe lista SÓ os componentes que falharam, pelo nome declarado", async () => {
+    const r = await probeQaHealth({ health }, { fetch: byUrl([":7102"]) });
+    expect(r.healthy).toBe(false);
+    expect(r.detail).toBe('"estoque" não respondeu');
+  });
+
+  it("a sonda seeded: 404 = stack de pé mas sem dados; rejeição de fetch nunca lança", async () => {
+    const seeded = { url: "http://127.0.0.1:7102/pedidos/amostra-01" };
+    const semDados = (async (url: RequestInfo | URL) => new Response("x", { status: String(url).includes("/pedidos/") ? 404 : 200 })) as unknown as typeof fetch;
+    const r = await probeQaHealth({ health, seeded }, { fetch: semDados });
     expect(r.seeded).toBe(false);
     expect(r.healthy).toBe(false);
+    expect(r.detail).toMatch(/seeded/);
+    const caiu = await probeQaHealth({ health, seeded }, { fetch: fetchReject() });
+    expect(caiu.healthy).toBe(false);
+    expect(caiu.components.every((c) => !c.ok)).toBe(true);
   });
 });

@@ -36,7 +36,7 @@ human asked for, with the one irreversible step (a production-data wipe) human-g
 
 > Read `storymap/README.md` first (schema + the retire flow). This skill edits storymap
 > data (the card `.md` + the sidecar `storymap/boards/<board>/retire/<id>/`) AND product
-> code — it DELETES the feature in `packages/<pkg>/`. Permission mode:
+> code — it DELETES the feature in the board package (`package:` in `board.yaml`). Permission mode:
 > dangerously-skip-permissions (it runs Bash, writes code, commits). Whereas `harness-refine`
 > improves and `harness-fix` restores, `harness-retire` DESTROYS — so it diagnoses + plans BEFORE
 > cutting, and never wipes data without the explicit approval flag.
@@ -79,7 +79,7 @@ guarantees this — postergado/abandoned cards with no level skip straight to
 
 2. **Diagnose the LIVE feature (read-only).** Run the canonical diagnosis —
    **`@.claude/skills/harness-triage-shared/DIAGNOSIS.md`** (Grep/Read/`git log` over
-   `packages/<pkg>/`; "presença de código ≠ shipped"; pins the work to real files).
+   the board package (`package:` in `board.yaml`); "presença de código ≠ shipped"; pins the work to real files).
    **Oriente via graphify ANTES de grep/read.** Este step roda com o **MCP graphify**
    (knowledge graph do código do pacote-alvo, carregado pela `mcpConfig` da coluna). Para
    MAPEAR o que a feature POSSUI — rotas/páginas, componentes, server actions, Cloud
@@ -91,7 +91,7 @@ guarantees this — postergado/abandoned cards with no level skip straight to
    dão o raio de impacto exato que limita o corte. SÓ ENTÃO abra os arquivos exatos que o
    grafo apontou. Mantenha ESTE diagnóstico READ-ONLY — graphify é orientação; a remoção em
    si vem no passo 4. **Overlay de remoção:** map everything the feature OWNS — routes/pages, components,
-   server actions, Cloud Functions, feature flags, Firestore collections/fields, nav
+   server actions, backend functions, feature flags, data-store collections/fields, nav
    entries — AND, critically, the **inbound references from OTHER features** (grep for
    imports/links: a removal must not leave dangling references). For retire the diagnosis
    is the ANTIDOTE to over- AND under-cutting: it bounds exactly what comes out and

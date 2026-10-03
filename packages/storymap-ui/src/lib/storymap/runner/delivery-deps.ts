@@ -9,6 +9,7 @@ import { collectFleet } from "./fleet-view";
 import { defaultFleetDeps } from "./fleet-deps";
 import { listPublishRequests } from "./publish-queue";
 import { releaseCodePrefixes } from "./release-scope";
+import { declaredCodePrefixes } from "./staging";
 import {
   activityIsFresh,
   belongsToBoard,
@@ -107,7 +108,9 @@ export async function frontierOf(board: string, exec: ExecFn): Promise<BoardFron
   if (!base) base = (await git(exec, `merge-base HEAD ${q(stageBranch)}`)) || "";
   if (!base) return { ...empty, liveSha, liveAt, stageSha };
 
-  const prefixes = releaseCodePrefixes(boardConfig, cfg.staging.codePrefixes);
+  // Indeclarado (`codePrefixes` ausente) ⇒ sem escopo global: um board COM `package` ainda tem o seu; um board sem
+  // pacote não tem o que medir (a promoção também recusaria — `no-prefix` — e diz o que declarar).
+  const prefixes = releaseCodePrefixes(boardConfig, declaredCodePrefixes(cfg.staging) ?? []);
   const pathspec = prefixes.length ? ` -- ${prefixes.map(q).join(" ")}` : "";
   // "ainda não no ar" tem de ser medido contra o que ESTÁ no ar, e a fronteira do board sozinha não
   // mede isso: `base..stage` é "alcançável do stage e não da fronteira", o que inclui o que voltou de

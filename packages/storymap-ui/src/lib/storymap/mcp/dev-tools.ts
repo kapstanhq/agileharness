@@ -63,8 +63,9 @@ import { assessKillLive } from "@/lib/vps/kill-guard";
 import { readTranscriptTurns, suggestRecycle } from "@/lib/vps/claude-transcript";
 import { readSessionContext } from "@/lib/vps/transcript-usage";
 import { loadRunnerConfig } from "@/lib/storymap/runner/config";
-import { parseDeclaredArgv } from "@/lib/storymap/runner/deploy-command-guard";
-import { checkArgv, resolveTargetProfile } from "@/lib/storymap/target-profile";
+import { deployPolicyFromSettings, parseDeclaredArgv } from "@/lib/storymap/runner/deploy-command-guard";
+import { expandArgvTemplate, expandPathTemplate } from "@/lib/storymap/deploy-policy";
+import { checkArgv, DISCOVER_COMMAND_HINT, resolveTargetProfile, reviewLensesOf } from "@/lib/storymap/target-profile";
 import { ensureDetachedSession } from "@/lib/vps/tmux";
 import { stageWorktreePath, getMergeQueue } from "@/lib/storymap/runner/merge-queue";
 import { isLiveMergeStatus } from "@/lib/storymap/runner/merge-status";
@@ -107,7 +108,13 @@ import { getCardClaims, isClaimLive } from "@/lib/storymap/runner/claims";
 import { listBoards, readBoardConfig, readCard, readCards } from "@/lib/storymap/repo";
 // Deploy of a product app: the SINGLE source lives in the runner (also used by the onEnter deploy-board
 // effect). The MCP `deploy`/`deploy_status` tools reuse the SAME registry — no parallel implementation.
-import { productDeployTargets, getProductDeploy } from "@/lib/storymap/runner/product-deploy";
+import {
+  declaredDeployPolicy,
+  deployCommandFor,
+  getProductDeploy,
+  productDeployTargets,
+  resolveDeclaredProgram,
+} from "@/lib/storymap/runner/product-deploy";
 // O PREFLIGHT DE FRESCOR — a tool crua publica do MESMO checkout de runtime que o pipeline, então passa pela
 // MESMA pré-condição (e o registry não lançaria sem a autorização que só ele cunha).
 import { checkDeployFreshness, legacyTargetFreshnessInputs } from "@/lib/storymap/runner/deploy-freshness";
@@ -1491,6 +1498,8 @@ export function registerDevTools(server: McpServer): void {
         "repositório, para alvos que usam esse executor (ALLOWLIST: nomes que começam com test/validate/lint/" +
         "typecheck/build/ci-test). Deploy/dev e shell arbitrário são BLOQUEADOS nas duas. " +
         "Retorna exit code + as últimas linhas. (typecheck/build podem competir com o dev server.) " +
+        "ATENÇÃO: roda no checkout de RUNTIME do alvo (o que o serviço enxerga), NUNCA no worktree de um run — " +
+        "quem está construindo uma story roda o comando declarado pelo próprio Bash, dentro do worktree dele. " +
         "Uma suíte de verdade leva MINUTOS: passe background:true para receber um `jobId` na hora e depois " +
         "consultar com run_check({jobId}) — é o único caminho que funciona pelo conector remoto, onde o " +
         "intermediário corta a conexão bem antes do fim do teste.",
@@ -1585,17 +1594,20 @@ export function registerDevTools(server: McpServer): void {
         "testUnit, e2e, typecheck, validate, smoke…), como subir/derrubar o ambiente de desenvolvimento e onde ficam " +
         "os documentos de regras (convenções, testes, segurança, ambiente, operação). Com `board`, os comandos vêm " +
         "preenchidos com o pacote daquele board. Use ANTES de rodar teste ou procurar regra: nunca suponha um " +
-        "executor (just, npm, make) nem uma pasta de regras. Sem perfil declarado, descubra o comando nas instruções " +
-        "do próprio repositório (README, CLAUDE.md, manifesto do pacote).",
+        "executor (just, npm, make) nem uma pasta de regras. Devolve também as lentes de revisão válidas " +
+        "(`reviewLenses`: as embutidas mais as que o alvo declarou). Sem perfil declarado, descubra o comando nas " +
+        "instruções do repositório (README, CLAUDE.md/AGENTS.md, manifesto do pacote).",
       inputSchema: { board: z.string().optional().describe("id do board cujo pacote preenche {pkg}/{package}; omita para ver os moldes") },
     },
     async ({ board }) => {
       const profile = loadRunnerConfig().target ?? null;
-      if (!profile) return json({ declared: false, note: "este repositório não declarou perfil (storymap/settings.yaml → target). Descubra os comandos nas instruções do repositório." });
-      if (!board) return json({ declared: true, templates: profile });
+      // As lentes valem MESMO sem perfil: as embutidas existem sempre, e o agente precisa dos ids para autorar um finding.
+      const reviewLenses = reviewLensesOf(profile);
+      if (!profile) return json({ declared: false, note: `este repositório não declarou perfil (storymap/settings.yaml → target): ${DISCOVER_COMMAND_HINT}.`, reviewLenses });
+      if (!board) return json({ declared: true, templates: profile, reviewLenses });
       const config = await readBoardConfig(board).catch(() => null);
       if (!config) return fail(`board "${board}" não existe — confira o id com list_boards.`);
-      return json({ declared: true, board, package: config.package ?? null, ...resolveTargetProfile(profile, { board, package: config.package ?? null }) });
+      return json({ declared: true, board, package: config.package ?? null, ...resolveTargetProfile(profile, { board, package: config.package ?? null }), reviewLenses });
     },
   );
 
@@ -1744,15 +1756,24 @@ export function registerDevTools(server: McpServer): void {
     async ({ pkg }) => {
       const recusa = recusaDeAlvoDeDeploy(pkg);
       if (recusa) return recusa;
-      const just = resolveHostTool("just");
-      if (!just.ok) return fail(`não dá para montar o plano: ${just.refusal}`);
-      const r = await run(just.path, ["orch-plan", pkg], { timeoutMs: 120_000, maxBuffer: 8_000_000 });
+      // O plano é o comando DECLARADO pelo alvo (settings.yaml → deploy.legacy.plan, um argv com {target}): a ferramenta não
+      // supõe qual executor nem qual verbo mostra «o que um deploy faria». Sem declaração, recusa dizendo a chave.
+      const policy = declaredDeployPolicy();
+      const planTemplate = policy.legacy.plan;
+      if (!planTemplate) {
+        return fail("não dá para montar o plano: o alvo não declarou COMO — declare em settings.yaml → deploy.legacy.plan (um argv, sem shell, com {target} onde vai o id do alvo).");
+      }
+      const planArgv = expandArgvTemplate(planTemplate, { target: pkg });
+      if (!planArgv) return fail(`não dá para montar o plano: o id ${JSON.stringify(pkg)} não vira argumento de deploy.legacy.plan.`);
+      const planProgram = resolveDeclaredProgram(planArgv[0]);
+      if (!planProgram.ok) return fail(`não dá para montar o plano: ${planProgram.refusal}`);
+      const r = await run(planProgram.path, planArgv.slice(1), { timeoutMs: 120_000, maxBuffer: 8_000_000 });
       // WS-11.1: attach the SCOPED risk (what ACTUALLY enters this deploy) so the operator reads how many commits
       // actually enter, not a misleading monorepo-wide backlog total.
       // Best-effort — a git hiccup just omits the summary; never blocks the plan.
       let risk: Awaited<ReturnType<typeof deployRiskSummary>> | null = null;
       try {
-        risk = await deployRiskSummary(defaultExec, findRepoRoot(), pkg);
+        risk = await deployRiskSummary(defaultExec, findRepoRoot(), pkg, { scope: policy.legacy.scope ?? [], state: policy.legacy.state ?? null });
       } catch {
         /* best-effort */
       }
@@ -1783,10 +1804,15 @@ export function registerDevTools(server: McpServer): void {
       if (confirm !== pkg) {
         return fail(`Confirmação obrigatória: passe confirm exatamente igual a "${pkg}" para deployar em PRODUÇÃO.`);
       }
+      // O COMANDO é o que o alvo DECLARA (settings.yaml → deploy.legacy.command): sem ele a tool recusa AQUI — antes do
+      // preflight (que custa um fetch) e sem iniciar job —, dizendo a chave a declarar. Nada roda por suposição.
+      const policy = declaredDeployPolicy();
+      const command = deployCommandFor(pkg, policy);
+      if (!command.ok) return fail(`Deploy de ${pkg} NÃO disparado — ${command.refusal}`);
       const reg = getProductDeploy();
       if (reg.isRunning(pkg)) return fail(`Já há um deploy de ${pkg} em andamento — veja deploy_status.`);
       // O PREFLIGHT DE FRESCOR. Sem card, então sem revert: a recusa volta a quem chamou, com o remédio. O
-      // escopo é o de promoção dos boards que publicam este alvo (ou `packages/<alvo>/` sem board), e o
+      // escopo é o de promoção dos boards que publicam este alvo (ou o `deploy.legacy.scope` declarado, sem board), e o
       // `liveShaCommand` é o que ESSES boards declaram — a tool crua não inventa o seu.
       const staging = loadRunnerConfig().autorun.staging?.codePrefixes ?? [];
       const boards = await Promise.all(
@@ -1798,9 +1824,13 @@ export function registerDevTools(server: McpServer): void {
       const { scope, liveShaCommands } = legacyTargetFreshnessInputs(
         pkg,
         boards.filter((b): b is NonNullable<typeof b> => b !== null),
+        {
+          packageRoot: policy.legacy.packageRoot,
+          scope: (policy.legacy.scope ?? []).map((t) => expandPathTemplate(t, pkg)).filter((p): p is string => !!p),
+        },
       );
       const fresh = await checkDeployFreshness(
-        { target: pkg, repoRoot: findRepoRoot(), scope, liveShaCommands, label: `mcp deploy ${pkg}` },
+        { target: pkg, repoRoot: findRepoRoot(), scope, liveShaCommands, policy: deployPolicyFromSettings(policy), label: `mcp deploy ${pkg}` },
         { exec: defaultExec },
       );
       if (!fresh.ok) {
@@ -1818,7 +1848,7 @@ export function registerDevTools(server: McpServer): void {
         hint: "Acompanhe com deploy_status (o deploy roda em background, leva minutos).",
         // o que o preflight MEDIU (ou, no escape humano, o aviso de que nada foi medido)
         freshness: fresh.summary,
-        // WS-10.3: torna o footgun VISÍVEL no ponto de uso. Esta tool crua roda `orch-deploy` SEM
+        // WS-10.3: torna o footgun VISÍVEL no ponto de uso. Esta tool crua roda o comando de deploy legado do alvo SEM
         // `promoteStageToMain` e SEM o face-chain (example.com/...). Para PUBLICAR UM CARD do AgileHarness, o
         // caminho correto é o pipeline (move_card → step `deploy` = promote-and-deploy + face-chain); use
         // esta tool crua SÓ para deploy de infra fora de card.

@@ -121,6 +121,6 @@ describe("o que o proxy vê e o que ele é instruído a fazer", () => {
     const p = buildProxyPrompt(".harness-proxy-answers.json");
     expect(p).toMatch(/T[ÉE]CNICA/);
     expect(p).toMatch(/meta principal do PRD/);
-    expect(p).toMatch(/dados de pessoas/);
+    expect(p).toMatch(/dados de pessoas/i);
   });
 });

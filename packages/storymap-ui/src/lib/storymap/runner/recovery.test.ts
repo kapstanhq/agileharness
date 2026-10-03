@@ -12,6 +12,7 @@ import {
 import { AUTORUN_DEDUPE_MS, type RunAttempt } from "./engine";
 import type { JournalEntry } from "./journal";
 import type { BoardConfig, Card } from "@/lib/storymap/types";
+import { resolveBoardGate, type BoardGate, type BoardPaceRow } from "./board-pace";
 
 // Minimal board: a trigger column (desenvolver→harness-do) and a manual one (revisar-codigo).
 const cfg = (): BoardConfig =>
@@ -85,6 +86,9 @@ describe("sameBootSession — orphan-kill boot-session guard", () => {
   });
 });
 
+const SCOPE_AT = "2026-10-02T12:00:00.000Z";
+const SCOPE_NOW = Date.parse(SCOPE_AT) + 1000;
+
 function build(opts: {
   interrupted: JournalEntry[];
   cards?: Card[];
@@ -97,6 +101,8 @@ function build(opts: {
   // un-strand: is the orphan SCOPE still active after stopScope? Default false (it died → resume
   // proceeds); true drives the D-state DEFER path (resume held, marker kept 'running').
   scopeActive?: boolean;
+  // O ESCOPO DE TIPOS (board-pace.ts): a linha de ritmo que o portão lê. Default = sem limite (hermético: nunca o arquivo do host).
+  paceRow?: BoardPaceRow | null;
 }) {
   const runs: Array<{
     board: string;
@@ -118,8 +124,13 @@ function build(opts: {
   const reconciled: Array<Set<string>> = [];
   const checkedWorktrees: string[] = [];
   const stoppedScopes: string[] = [];
+  const heldByScope: string[] = [];
   const deps: RecoveryDeps = {
     enabled: opts.enabled ?? true,
+    boardGate: (_board, config) => resolveBoardGate(config, opts.paceRow ?? null, SCOPE_NOW),
+    holdScope: async (board, cardId) => {
+      heldByScope.push(`${board}/${cardId}`);
+    },
     journal: {
       loadInterrupted: async () => opts.interrupted,
       resolveInterrupted: async (b, c) => {
@@ -149,7 +160,7 @@ function build(opts: {
     },
     isScopeActive: async () => opts.scopeActive ?? false,
   };
-  return { deps, runs, resolved, killed, cleaned, reconciled, checkedWorktrees, stoppedScopes };
+  return { deps, runs, resolved, killed, cleaned, reconciled, checkedWorktrees, stoppedScopes, heldByScope };
 }
 
 describe("recoverInterruptedRuns — boot-time crash recovery", () => {
@@ -595,5 +606,81 @@ describe("recoverMergeQueue — boot recovery of the merge train (SM-2)", () => 
       },
     };
     expect(await recoverMergeQueue(mq)).toEqual({ loaded: 0, resetToConflict: 0, resumed: 0, pruned: 0, resetGateFailed: 0, waiting: 0 });
+  });
+});
+
+// ── O ESCOPO DE TIPOS (board-pace.ts): retomar um run interrompido é COMEÇAR trabalho de novo ──────────────────────
+describe("escopo de tipos — decideRecovery não respawna card fora do que o board pode começar", () => {
+  const FIXES = ["bug", "technical", "chore", "spike"] as const;
+  const row = (types: readonly string[] = FIXES, layer: "ownerScope" | "agentScope" = "ownerScope") =>
+    ({ board: "acme", [layer]: { types, by: { kind: layer === "ownerScope" ? "owner" : "agent" }, at: SCOPE_AT } }) as unknown as BoardPaceRow;
+  const gateOf = (r: BoardPaceRow | null): BoardGate => resolveBoardGate({}, r, SCOPE_NOW);
+
+  it("funcionalidade nova (user) na construção: drop com a razão estável; erro, técnico, manutenção e investigação respawnam", () => {
+    expect(decideRecovery(interruptedEntry(), card({ storyType: "user" }), cfg(), gateOf(row()))).toEqual({ action: "drop", reason: "tipo-nao-admitido" });
+    for (const storyType of ["bug", "technical", "chore", "spike"] as const) {
+      expect(decideRecovery(interruptedEntry(), card({ storyType }), cfg(), gateOf(row()))).toEqual({ action: "respawn", trigger: "harness-do" });
+    }
+  });
+
+  it("card sem storyType vale user (o padrão do coerceCard): drop", () => {
+    expect(decideRecovery(interruptedEntry(), card(), cfg(), gateOf(row()))).toEqual({ action: "drop", reason: "tipo-nao-admitido" });
+  });
+
+  it("um `user` em modo `fix` conta como erro e respawna", () => {
+    expect(decideRecovery(interruptedEntry(), card({ storyType: "user", mode: "fix" }), cfg(), gateOf(row())).action).toBe("respawn");
+  });
+
+  it("FORA da construção (especificação) a funcionalidade respawna: o escopo só barra a construção", () => {
+    const e = interruptedEntry({ trigger: "harness-enrich" });
+    expect(decideRecovery(e, card({ storyType: "user", status: "enriquecer" }), cfg(), gateOf(row())).action).toBe("respawn");
+  });
+
+  it("sem escopo (portão sem limite, ausente ou nulo) a decisão é a de sempre", () => {
+    expect(decideRecovery(interruptedEntry(), card({ storyType: "user" }), cfg(), gateOf(null)).action).toBe("respawn");
+    expect(decideRecovery(interruptedEntry(), card({ storyType: "user" }), cfg(), null).action).toBe("respawn");
+    expect(decideRecovery(interruptedEntry(), card({ storyType: "user" }), cfg()).action).toBe("respawn");
+  });
+
+  it("interseção das camadas: o agente só consertos, o dono tudo ⇒ barra; prazo vencido ⇒ não barra", () => {
+    expect(decideRecovery(interruptedEntry(), card({ storyType: "user" }), cfg(), gateOf(row(FIXES, "agentScope"))).action).toBe("drop");
+    const expired = { board: "acme", ownerScope: { types: ["bug"], by: { kind: "owner" }, at: SCOPE_AT, until: "2026-10-02T12:00:00.500Z" } } as unknown as BoardPaceRow;
+    expect(decideRecovery(interruptedEntry(), card({ storyType: "user" }), cfg(), gateOf(expired)).action).toBe("respawn");
+  });
+
+  it("o re-drive do merge train (conflict-redrive) integra trabalho feito: não é barrado", () => {
+    expect(decideRecovery(interruptedEntry({ origin: "conflict-redrive" }), card({ storyType: "user" }), cfg(), gateOf(row())).action).toBe("respawn");
+  });
+
+  it("o run MANUAL continua sendo drop `manual-oneshot` (a razão de sempre vem antes)", () => {
+    expect(decideRecovery(interruptedEntry({ origin: "manual" }), card({ storyType: "user" }), cfg(), gateOf(row()))).toEqual({ action: "drop", reason: "manual-oneshot" });
+  });
+
+  it("no boot: o run da funcionalidade NÃO renasce, o diário é resolvido, o órfão é morto e o card fica ANOTADO para o escopo alargar devolver", async () => {
+    const { deps, runs, resolved, killed, heldByScope } = build({
+      interrupted: [interruptedEntry({ pid: 555 })],
+      cards: [card({ storyType: "user" })],
+      paceRow: row(),
+    });
+    const summary = await recoverInterruptedRuns(deps);
+    expect(summary).toMatchObject({ interrupted: 1, respawned: 0, dropped: 1 });
+    expect(runs).toHaveLength(0);
+    expect(resolved).toEqual(["acme/story-1"]);
+    expect(killed).toContain(555);
+    expect(heldByScope).toEqual(["acme/story-1"]);
+  });
+
+  it("no boot: o conserto interrompido renasce normalmente e nada é anotado", async () => {
+    const { deps, runs, heldByScope } = build({ interrupted: [interruptedEntry()], cards: [card({ storyType: "bug" })], paceRow: row() });
+    const summary = await recoverInterruptedRuns(deps);
+    expect(summary).toMatchObject({ respawned: 1, dropped: 0 });
+    expect(runs).toHaveLength(1);
+    expect(heldByScope).toEqual([]);
+  });
+
+  it("no boot: um drop por OUTRA razão (card avançou) não anota nada", async () => {
+    const { deps, heldByScope } = build({ interrupted: [interruptedEntry()], cards: [card({ storyType: "user", status: "revisar-codigo" })], paceRow: row() });
+    await recoverInterruptedRuns(deps);
+    expect(heldByScope).toEqual([]);
   });
 });

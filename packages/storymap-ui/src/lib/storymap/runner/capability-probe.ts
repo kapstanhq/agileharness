@@ -3,7 +3,7 @@
 // WHY THIS EXISTS. The engine used to existence-filter a step's MCP mount FILE and treat "the JSON is on
 // disk" as "the capability works". The `chrome-devtools` incident is what that costs: the mount existed,
 // the server handshook fine, and EVERY tool call failed for want of a Chrome binary the host never had.
-// Two `harness-qa` runs burned dozens of turns and several dollars — booting a dev stack and seeding an emulator —
+// Two `harness-qa` runs burned dozens of turns and several dollars — booting a dev stack and seeding its data —
 // to discover it, then left the card wedged behind a `blocker` finding that no card-level fix could
 // clear. A file existing is not evidence. A probe is.
 //

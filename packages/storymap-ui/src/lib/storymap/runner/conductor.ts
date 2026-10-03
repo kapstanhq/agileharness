@@ -46,7 +46,7 @@ import path from "node:path";
 import { runnerStateDir } from "@/lib/storymap/paths";
 import { withKeyedLock } from "@/lib/storymap/serialize";
 import { atomicWriteFile } from "@/lib/storymap/atomic-write";
-import { conductorCommand, conductorEntryVerdict, conductorModelFor, conductorTask, CONDUCTOR_SKILL, isConducted, resolveConductorPolicy } from "@/lib/storymap/driver";
+import { conductorCommand, conductorEntryVerdict, conductorModelFor, conductorTask, CONDUCTOR_SCOPE_WAIT_KIND, CONDUCTOR_SKILL, isConducted, resolveConductorPolicy } from "@/lib/storymap/driver";
 import { cardWsjf } from "@/lib/storymap/wsjf";
 import type { BugSeverity } from "@/lib/storymap/frameworks";
 import type { BoardConfig, Card } from "@/lib/storymap/types";
@@ -54,7 +54,7 @@ import type { SystemDecision } from "@/lib/storymap/system-decisions";
 import type { AgentSession, SessionWorkVerdict } from "./session-worktree";
 import type { SpawnSessionInput, SpawnSessionResult } from "./session-spawn";
 import type { GateVerdict } from "./capacity-governor";
-import { gateOf, paceCap, type BoardGate, type BoardGatePort } from "./board-pace";
+import { gateAdmitsCard, gateOf, paceCap, type BoardGate, type BoardGatePort } from "./board-pace";
 
 // ── PURE policy (lives in ../driver.ts — isomorphic, so the move risk class can ask it too) ──────────────
 export {
@@ -62,6 +62,7 @@ export {
   conductorModelFor,
   conductorTask,
   CONDUCTOR_DEFAULT_MODEL,
+  CONDUCTOR_SCOPE_WAIT_KIND,
   resolveConductorPolicy,
   type ConductorEntryVerdict,
   type ResolvedConductorPolicy,
@@ -561,11 +562,15 @@ export interface ConductorPumpReport {
  * sempre — nem condutor (nunca admitido), nem skill de coluna (a entrada daquele status é do condutor). Num caso real,
  * vários cards em «Moldando» ficaram assim (um que tinha driver não entra — ver abaixo).
  *
+ * Com o `gate` do board (o ESCOPO DE TIPOS, board-pace.ts), um card de tipo que o board não pode começar NÃO é órfão: ninguém
+ * o adota enquanto o escopo o recusar (ele não perdeu o dono — está esperando de propósito) e a primeira varredura depois de o
+ * escopo alargar o adota. Sem `gate`, a régua é a de sempre.
+ *
  * Card COM driver e sem sessão nem fila NÃO é órfão aqui: é o condutor que morreu, e reabrir em laço quem morre é o
  * que o cabeçalho deste módulo proíbe — o vigia de card parado o mostra ao operador (`conductor-dead`).
  */
-export function isConductorOrphan(card: Card, config: BoardConfig): boolean {
-  return !isConducted(card) && conductorEntryVerdict(card, config).dispatch;
+export function isConductorOrphan(card: Card, config: BoardConfig, gate?: Pick<BoardGate, "scope"> | null): boolean {
+  return !isConducted(card) && conductorEntryVerdict(card, config, gate).dispatch;
 }
 
 /**
@@ -611,9 +616,15 @@ async function adoptOrphans(deps: ConductorDeps, entries: ConductorQueueEntry[],
   if (!deps.orphanCandidates || !deps.masterEnabled()) return;
   const boards = await deps.orphanCandidates().catch(() => []);
   const queued = new Set(entries.map((e) => `${e.board}/${e.cardId}`));
-  const candidates = boards.flatMap(({ board, config, cards }) =>
-    gateOf(deps.boardGate, board, config).held ? [] : cards.filter((card) => !queued.has(`${board}/${card.id}`) && isConductorOrphan(card, config)).map((card) => ({ board, card })),
-  );
+  const candidates = boards.flatMap(({ board, config, cards }) => {
+    const gate = gateOf(deps.boardGate, board, config);
+    if (gate.held) return [];
+    // O ESCOPO DE TIPOS (board-pace.ts): a adoção é «começar» — um card de tipo fora do escopo espera sem driver e sem fila
+    // (nada a desfazer quando o escopo alargar: a próxima varredura o adota).
+    return cards
+      .filter((card) => !queued.has(`${board}/${card.id}`) && isConductorOrphan(card, config) && gateAdmitsCard(gate, card, "conductor").admit)
+      .map((card) => ({ board, card }));
+  });
   if (!candidates.length) return; // o registro e as reservas só são lidos quando há órfão a adotar
   let sessions: AgentSession[];
   try {
@@ -768,6 +779,15 @@ async function pumpUnlocked(deps: ConductorDeps): Promise<ConductorPumpReport> {
     const maxSessions = paceCap(policy.maxSessions, boardGate);
     if (liveConductors.some((s) => s.board === e.board && s.cardId === e.cardId)) {
       drop(e, "já tem um condutor vivo");
+      continue;
+    }
+    // O ESCOPO DE TIPOS (board-pace.ts, segundo eixo do ritmo): o condutor leva a story de ponta a ponta, então um card de
+    // tipo que o board não pode começar ESPERA na fila (com o motivo à vista) em vez de abrir uma sessão — e NÃO é
+    // descartado: a entrada guarda o driver e a vez, e a primeira passada depois de o escopo alargar a despacha. Não gasta
+    // vaga (a pergunta vem antes da conta das vagas).
+    const scope = gateAdmitsCard(boardGate, card, "conductor");
+    if (!scope.admit) {
+      wait(e, `${scope.why} — a fila espera`, CONDUCTOR_SCOPE_WAIT_KIND);
       continue;
     }
     const liveNow = liveCount.get(e.board) ?? 0;

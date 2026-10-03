@@ -20,6 +20,7 @@ import { secretScanCommand, type ExecFn } from "./worktree";
 // de config.ts (fonte única do pathspec que o engine também commita), nunca re-digitado aqui: um literal
 // duplicado é o começo de duas verdades sobre "o que é dado".
 import { BOARD_DATA_PATHSPEC } from "./config";
+import { isCodePath } from "./staging";
 
 const GIT_TIMEOUT_MS = 60_000;
 
@@ -186,10 +187,13 @@ const CONTROL_PATH_FILES: readonly string[] = [
 ];
 
 /** {@link DeltaClass} de UM caminho repo-relativo. PURA. */
-export function classifyDeltaPath(p: string, codePrefixes: readonly string[]): DeltaClass {
+export function classifyDeltaPath(p: string, codePrefixes: readonly string[] | undefined): DeltaClass {
   if (p.startsWith(BOARD_DATA_PATHSPEC)) return "board-data";
   if (CONTROL_PATH_PREFIXES.some((c) => p.startsWith(c)) || CONTROL_PATH_FILES.includes(p)) return "control";
-  if (codePrefixes.some((c) => c.length > 0 && p.startsWith(c))) return "code";
+  // `codePrefixes` INDECLARADO (undefined) ⇒ tudo fora de board-data e de controle é código (isCodePath). `code` e
+  // `unclassified` exigem a MESMA decisão (verificar), então esta fronteira não muda o veredito — só o rótulo.
+  // Um prefixo vazio nunca casa (`"".startsWith` seria «tudo é código» por acidente de configuração).
+  if (codePrefixes === undefined ? isCodePath(p, undefined) : codePrefixes.some((c) => c.length > 0 && p.startsWith(c))) return "code";
   return "unclassified";
 }
 
@@ -273,7 +277,7 @@ export type IncomingProvenance =
  * Classifica o delta que `origin` traz. `incomingFiles` são os arquivos que FETCH_HEAD mudou desde o
  * ancestral comum (`git diff --name-only HEAD...FETCH_HEAD`, que é diff(merge-base, FETCH_HEAD)) — ou
  * seja, exatamente o que é de fora, sem o nosso lado. `codeRoots` são as raízes GLOBAIS de código
- * (`packages/`), não o escopo de um board: código é código venha de onde vier.
+ * (`staging.codePrefixes`, p.ex. `packages/`; `undefined` = indeclarado), não o escopo de um board: código é código venha de onde vier.
  *
  * Julga pela MESMA régua do gate do train — {@link classifyDeltaPath}, a deny-list acima —, e é essa
  * unificação que fecha o buraco: só `board-data` é dado, então `docs/**`, `scripts/**` e as configs de
@@ -294,7 +298,7 @@ export type IncomingProvenance =
  */
 export function classifyIncoming(
   incomingFiles: readonly string[],
-  codeRoots: readonly string[],
+  codeRoots: readonly string[] | undefined,
   opts: { readable?: boolean } = {},
 ): IncomingProvenance {
   if (opts.readable === false) return "unknown";
@@ -340,7 +344,7 @@ export interface IncomingVerdict {
  */
 export function judgeIncoming(
   incomingFiles: readonly string[],
-  codeRoots: readonly string[],
+  codeRoots: readonly string[] | undefined,
   opts: { readable?: boolean; trust?: OriginTrust } = {},
 ): IncomingVerdict {
   const provenance = classifyIncoming(incomingFiles, codeRoots, { readable: opts.readable });
@@ -369,7 +373,7 @@ export function judgeIncoming(
 }
 
 /**
- * Promote the staged `packages/**` code from `stageBranch` onto the currently checked-out (released)
+ * Promote the staged code (the paths under `codePrefixes`) from `stageBranch` onto the currently checked-out (released)
  * branch of `repoRoot`. Idempotent: once promoted, the diff is empty → a second call is a clean no-op
  * (`promoted:false`, reason "nada staged"). SM-08 fail-closed: the release commit is re-scanned for
  * secrets before the push; a hit undoes the commit (`reset --hard HEAD^1`) and reports `blocked`.
@@ -434,7 +438,7 @@ export async function promoteStageToMain(opts: {
 
   const branch = (await git(`rev-parse --abbrev-ref HEAD`)).stdout.trim() || "main";
   if (codePrefixes.length === 0) {
-    return { promoted: false, outcome: "no-prefix", branch, pushed: false, reason: "nenhum prefixo de código configurado" };
+    return { promoted: false, outcome: "no-prefix", branch, pushed: false, reason: "nenhum prefixo de código configurado — declare `autorun.staging.codePrefixes` em storymap/settings.yaml" };
   }
   const pathspec = codePrefixes.map(q).join(" ");
   const stageHead = (await git(`rev-parse ${q(stageBranch)}`)).stdout.trim();

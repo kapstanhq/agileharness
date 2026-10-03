@@ -102,7 +102,7 @@ The card must be `status: corrigir` with `mode: fix` and a non-empty `bugReport.
 
 2. **Diagnose + REPRODUCE the regression (read-only).** Run the canonical diagnosis —
    **`@.claude/skills/harness-triage-shared/DIAGNOSIS.md`** (Grep/Read/`git log` over
-   `packages/<pkg>/`; "presença de código ≠ shipped"; ANTÍDOTO a recriar do zero) to pin
+   the board package (`package:` in `board.yaml`); "presença de código ≠ shipped"; ANTÍDOTO a recriar do zero) to pin
    the DEFECT to real files: what exactly is broken vs `expected`, and — where you can —
    the likely root cause + the offending change (`git blame`/`git log` on the suspect
    lines). **Oriente via graphify ANTES de grep/read.** Este step roda com o **MCP graphify**

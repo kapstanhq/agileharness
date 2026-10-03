@@ -525,6 +525,8 @@ describePosix("staging-OFF merge (real git) — story-ex0159: a divergent binary
     // `.gitattributes` marks *.snap binary — so git refuses to textually merge it (the root cause).
     await fsp.writeFile(path.join(mainRepo, ".gitattributes"), "* text=auto eol=lf\n*.snap binary\n");
     await fsp.writeFile(path.join(mainRepo, ".gitignore"), "node_modules\n.worktrees/\n");
+    // O alvo declara onde moram seus pacotes (workspaces) — de onde sai «em que pacote regenerar o snapshot».
+    await fsp.writeFile(path.join(mainRepo, "package.json"), JSON.stringify({ name: "alvo", private: true, workspaces: ["packages/*"] }));
     const snapFile = path.join(snapDir, "board-base-pipeline.test.ts.snap");
     await fsp.writeFile(snapFile, "exports[`pipeline 1`] = `BASE`;\n");
 
@@ -578,7 +580,15 @@ describePosix("staging-OFF merge (real git) — story-ex0159: a divergent binary
       // staging UNDEFINED → the staging-OFF whole-branch merge path (the storymap board's real config).
       persistDiffSnapshot: async () => {},
       // No node_modules in the temp repo → a no-op fs so provisioning links nothing.
-      snapFs: { listDirs: async () => [], isDir: async () => false, isFile: async () => false, linkDir: async () => {}, unlinkDir: async () => false },
+      snapFs: {
+        listDirs: async () => [],
+        isDir: async () => false,
+        isFile: async () => false,
+        // lê o package.json REAL do repo temporário (o alvo declara seus workspaces ali)
+        readText: async (p: string) => fsp.readFile(p, "utf8").catch(() => null),
+        linkDir: async () => {},
+        unlinkDir: async () => false,
+      },
     });
 
     await mq.enqueueMerge({ runId: "snap", board: "storymap", cardId: "story-z", branch: "run/snap" });

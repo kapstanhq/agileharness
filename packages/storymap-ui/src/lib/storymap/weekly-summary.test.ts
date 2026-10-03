@@ -12,6 +12,8 @@ import {
   isMonday,
   localClock,
   mondayOf,
+  formatImpactMoney,
+  projectedMonthlyText,
   weekWindow,
   weeklyHealthTrend,
   weeklyPushDue,
@@ -67,55 +69,67 @@ const decision = (over: Partial<SystemDecision>): SystemDecision => ({ v: 1, id:
 
 describe("buildWeeklySummary", () => {
   const week = weekWindow("2026-06-08", SP);
-  const armazem = board("armazem", "Armazem", [
-    card("story-a", "Busca por autor", { costImpact: { monthlyBRL: 12, scope: "infra", assumptions: "uma consulta a mais por busca", by: "harness-conductor", at: "2026-06-09" } }),
-    card("story-b", "Capa interativa", { status: "arquivados" }),
-    card("story-c", "Antiga"),
+  const entreposto = board("entreposto", "Entreposto", [
+    card("story-e1", "Etiqueta de prateleira", {
+      costImpact: { monthlyAmount: 7, currency: "EUR", scope: "infra", assumptions: "uma impressão térmica por lote", by: "agente-de-teste", at: "2026-06-10" },
+    }),
+    card("story-e2", "Contagem cíclica"),
+    card("story-e3", "Mapa de corredores", { status: "arquivados" }),
+    card("story-e4", "Rascunho de inventário"),
   ]);
-  const spot = board("balcao", "Balcao", [card("story-d", "Ideia repetida", { status: "arquivados" })]);
-  const waiting: OwnerWaiting[] = [{ boardId: "armazem", cardId: "story-q", cardTitle: "Push", kind: "question", what: "Mandamos push para todos?", ownerClass: "Falar em nome da marca", since: "2026-06--3", days: 18 }];
+  const oficina = board("oficina", "Oficina", [card("story-o1", "Pedido em dobro", { status: "arquivados" })]);
+  const waiting: OwnerWaiting[] = [
+    { boardId: "oficina", cardId: "story-w1", cardTitle: "Aviso aos clientes", kind: "question", what: "Avisamos os clientes antigos por e-mail?", ownerClass: "Falar em nome da marca", since: "2026-05-30", days: 9 },
+    { boardId: "entreposto", cardId: "story-w2", cardTitle: "Plano de etiquetas", kind: "question", what: "Assinamos o plano anual da impressora?", ownerClass: "Dinheiro e preço", since: "2026-06-12", days: 2 },
+  ];
   const s = buildWeeklySummary({
     week,
-    boards: [armazem, spot],
+    boards: [entreposto, oficina],
     transitions: [
-      { at: "2026-06-11T18:00:00Z", board: "armazem", cardId: "story-a", to: "concluida" },
-      { at: "2026-06-12T10:00:00Z", board: "armazem", cardId: "story-b", to: "arquivados" },
-      { at: "2026-06-05T10:00:00Z", board: "armazem", cardId: "story-c", to: "concluida" }, // semana anterior
-      { at: "2026-06-13T10:00:00Z", board: "armazem", cardId: "story-a", to: "desenvolver" }, // não terminal
+      { at: "2026-06-09T14:00:00Z", board: "entreposto", cardId: "story-e1", to: "concluida" },
+      { at: "2026-06-12T21:00:00Z", board: "entreposto", cardId: "story-e2", to: "concluida" },
+      { at: "2026-06-11T09:30:00Z", board: "entreposto", cardId: "story-e3", to: "arquivados" },
+      { at: "2026-06-02T16:00:00Z", board: "entreposto", cardId: "story-e4", to: "concluida" }, // semana anterior
+      { at: "2026-06-13T08:00:00Z", board: "entreposto", cardId: "story-e2", to: "desenvolver" }, // não terminal
     ],
     decisions: [
-      decision({ id: "1", kind: "triage-discard", board: "balcao", cardId: "story-d", what: "Descartou" }),
-      decision({ id: "2", kind: "dilemma", cardId: "story-a", what: "Entregar sem o filtro por editora", why: "a meta é o primeiro uso" }),
+      decision({ id: "1", kind: "triage-discard", board: "oficina", cardId: "story-o1", what: "Descartou" }),
+      decision({ id: "2", kind: "dilemma", board: "entreposto", cardId: "story-e2", what: "Publicar sem a contagem por turno", why: "a primeira versão só precisa do total" }),
       decision({ id: "3", kind: "proxy-answer" }),
       decision({ id: "4", kind: "proxy-answer" }),
-      decision({ id: "5", kind: "proxy-answer", at: "2026-06-16T15:00:00Z" }), // semana seguinte
+      decision({ id: "5", kind: "proxy-answer" }),
+      decision({ id: "6", kind: "proxy-answer", at: "2026-06-15T18:00:00Z" }), // semana seguinte
     ],
     runs: [
-      { startedAt: at("2026-06-09T12:00:00Z"), costUSD: 1.25 },
-      { startedAt: at("2026-06-10T12:00:00Z"), costUSD: null },
-      { startedAt: at("2026-06-07T12:00:00Z"), costUSD: 9 }, // fora
+      { startedAt: at("2026-06-08T13:00:00Z"), costUSD: 0.8 },
+      { startedAt: at("2026-06-11T13:00:00Z"), costUSD: 2.1 },
+      { startedAt: at("2026-06-12T13:00:00Z"), costUSD: null },
+      { startedAt: at("2026-06-01T13:00:00Z"), costUSD: 5 }, // fora
     ],
     waiting,
   });
 
   it("no ar e descartado: pelas chegadas a terminal na semana (entrega × não-entrega) e pelo descarte da triagem", () => {
-    expect(s.live.map((i) => [i.boardName, i.title])).toEqual([["Armazem", "Busca por autor"]]);
-    expect(s.discarded.map((i) => [i.boardName, i.title])).toEqual([
-      ["Balcao", "Ideia repetida"],
-      ["Armazem", "Capa interativa"],
+    expect(s.live.map((i) => [i.boardName, i.title])).toEqual([
+      ["Entreposto", "Etiqueta de prateleira"],
+      ["Entreposto", "Contagem cíclica"],
+    ]);
+    expect(s.discarded.map((i) => [i.boardName, i.title]).sort()).toEqual([
+      ["Entreposto", "Mapa de corredores"],
+      ["Oficina", "Pedido em dobro"],
     ]);
   });
 
   it("dilemas, as decisões do sistema por tipo (com nome em português) e só as da semana", () => {
-    expect(s.dilemmas).toEqual([expect.objectContaining({ what: "Entregar sem o filtro por editora", boardName: "Armazem" })]);
-    expect(s.systemDecisions.total).toBe(4);
-    expect(s.systemDecisions.byKind[0]).toEqual({ kind: "proxy-answer", label: "Respondeu perguntas técnicas", count: 2 });
+    expect(s.dilemmas).toEqual([expect.objectContaining({ what: "Publicar sem a contagem por turno", boardName: "Entreposto" })]);
+    expect(s.systemDecisions.total).toBe(5);
+    expect(s.systemDecisions.byKind[0]).toEqual({ kind: "proxy-answer", label: "Respondeu perguntas técnicas", count: 3 });
   });
 
   it("o que o vigia de cards parados fez entra no resumo com nome em português, nunca o id do tipo", () => {
     const stalls = buildWeeklySummary({
       week,
-      boards: [armazem],
+      boards: [entreposto],
       transitions: [],
       decisions: [decision({ id: "r", kind: "stall-retry" }), decision({ id: "f", kind: "stall-fix-card" })],
       runs: [],
@@ -127,14 +141,18 @@ describe("buildWeeklySummary", () => {
     ]);
   });
 
-  it("custo: a automação da semana e o que o que foi ao ar projetou por mês", () => {
-    expect(s.cost).toMatchObject({ automationUSD: 1.25, runs: 2, projectedMonthlyBRL: 12 });
-    expect(s.cost.projections).toEqual([expect.objectContaining({ title: "Busca por autor", impact: expect.objectContaining({ monthlyBRL: 12 }) })]);
+  it("custo: a automação da semana e o que o que foi ao ar projetou por mês, na moeda do próprio impacto", () => {
+    expect(s.cost).toMatchObject({ runs: 3, projectedMonthly: [{ currency: "EUR", amount: 7 }] });
+    expect(s.cost.automationUSD).toBeCloseTo(2.9);
+    expect(s.cost.projections).toEqual([expect.objectContaining({ title: "Etiqueta de prateleira", impact: expect.objectContaining({ monthlyAmount: 7, currency: "EUR" }) })]);
   });
 
   it("o que espera o dono vem junto — o lembrete semanal — e o push diz os números sem jargão", () => {
-    expect(s.waiting).toEqual([expect.objectContaining({ what: "Mandamos push para todos?", boardName: "Armazem", days: 18 })]);
-    expect(weeklyPushText(s)).toEqual({ title: "Resumo da semana", body: "1 entrega no ar · 4 decisões do sistema · 1 decisão sua esperando." });
+    expect(s.waiting).toEqual([
+      expect.objectContaining({ what: "Avisamos os clientes antigos por e-mail?", boardName: "Oficina", days: 9 }),
+      expect.objectContaining({ what: "Assinamos o plano anual da impressora?", boardName: "Entreposto", days: 2 }),
+    ]);
+    expect(weeklyPushText(s)).toEqual({ title: "Resumo da semana", body: "2 entregas no ar · 5 decisões do sistema · 2 decisões suas esperando." });
   });
 });
 
@@ -145,19 +163,19 @@ describe("a linha de tendência da saúde da ferramenta", () => {
     at: iso,
     signals: Object.fromEntries(Object.entries(levels).map(([id, [level, value]]) => [id, { level, value }])),
   });
-  // uma semana típica: S6 vermelho (8 h) no começo, sem nada no ar; no fim, entregue; S11 segue não medível
-  const first = rec("2026-06-17T12:00:00Z", { S1: ["red", 11], S6: ["red", 8], S3: ["ok", 0], S11: ["unknown", null] });
-  const last = rec("2026-06-19T12:00:00Z", { S1: ["amber", 2], S6: ["ok", 0.4], S3: ["ok", 0], S11: ["unknown", null] });
+  // uma semana com um sinal que sai do vermelho, outro que entra nele, dois parados e um que não se mede
+  const first = rec("2026-06-16T08:30:00Z", { S2: ["amber", 4], S5: ["red", 26], S7: ["ok", 1], S9: ["ok", 0], S12: ["unknown", null] });
+  const last = rec("2026-06-20T18:00:00Z", { S2: ["red", 9], S5: ["ok", 3], S7: ["ok", 1], S9: ["ok", 0], S12: ["unknown", null] });
 
   it("compara a PRIMEIRA com a ÚLTIMA leitura da semana e diz o estado de agora", () => {
     const h = weeklyHealthTrend([last, first], week); // fora de ordem de propósito
-    expect(h).toMatchObject({ readings: 2, from: first.at, to: last.at, worst: "amber", red: [] });
-    expect(h!.trend).toBe("melhorou: S1 (11→2), S6 (8→0.4); piorou: nenhum");
-    expect(h!.now).toBe("1 em atenção (S1) · 2 ok · 1 não medível (S11)");
+    expect(h).toMatchObject({ readings: 2, from: first.at, to: last.at, worst: "red", red: ["S2"] });
+    expect(h!.trend).toBe("melhorou: S5 (26→3); piorou: S2 (4→9)");
+    expect(h!.now).toBe("1 vermelho (S2) · 3 ok · 1 não medível (S12)");
   });
 
   it("uma leitura só: o estado, sem tendência inventada", () => {
-    expect(weeklyHealthTrend([first], week)).toMatchObject({ readings: 1, worst: "red", red: ["S1", "S6"], trend: null });
+    expect(weeklyHealthTrend([first], week)).toMatchObject({ readings: 1, worst: "red", red: ["S5"], trend: null });
   });
 
   it("leitura fora da semana não entra; sem nenhuma na semana, null (a seção some — nada de «tudo bem» sem medir)", () => {
@@ -169,7 +187,7 @@ describe("a linha de tendência da saúde da ferramenta", () => {
 
   it("entra no resumo da semana quando o tick gravou leitura; fica fora quando não gravou", () => {
     const base = { week, boards: [], transitions: [], decisions: [], runs: [], waiting: [] };
-    expect(buildWeeklySummary({ ...base, health: [first, last] }).health).toMatchObject({ readings: 2, worst: "amber" });
+    expect(buildWeeklySummary({ ...base, health: [first, last] }).health).toMatchObject({ readings: 2, worst: "red" });
     expect(buildWeeklySummary(base).health).toBeUndefined();
     expect(buildWeeklySummary({ ...base, health: [] }).health).toBeUndefined();
   });
@@ -201,5 +219,45 @@ describe("o push de segunda (o único não-crítico)", () => {
     const { d, state } = deps(null);
     expect(await sendWeeklySummaryIfDue(d, at("2026-06-14T12:00:00Z"))).toBeNull();
     expect(state.sent).toEqual([]);
+  });
+});
+
+describe("o custo projetado da semana — por MOEDA, nunca somado entre moedas", () => {
+  const week2 = weekWindow("2026-06-08", SP);
+  const legacy = (id: string, monthlyBRL: number) => card(id, id, { costImpact: { monthlyBRL, scope: "infra", assumptions: "um job noturno a mais", by: "x", at: "2026-06-09" } });
+  const neutral = (id: string, monthlyAmount: number, currency: string) =>
+    card(id, id, { costImpact: { monthlyAmount, currency, scope: "cash", assumptions: "um plano a mais", by: "x", at: "2026-06-09" } });
+  const arrive = (boardId: string, ids: string[]) => ids.map((cardId) => ({ at: "2026-06-11T18:00:00Z", board: boardId, cardId, to: "concluida" }));
+  const build = (boards: ReturnType<typeof board>[]) =>
+    buildWeeklySummary({
+      week: week2,
+      boards,
+      transitions: boards.flatMap((b) => arrive(b.id, b.cards.map((c) => c.id))),
+      decisions: [],
+      runs: [],
+      waiting: [],
+    });
+
+  it("dois boards, BRL (grafia legada) e USD (neutra): duas entradas, nada de soma entre moedas", () => {
+    const s2 = build([board("oficina", "Oficina", [legacy("story-ex9970", 12), legacy("story-ex9971", 8.5)]), board("livraria", "Livraria", [neutral("story-ex9972", 30, "USD")])]);
+    expect(s2.cost.projectedMonthly).toEqual([
+      { currency: "BRL", amount: 20.5 },
+      { currency: "USD", amount: 30 },
+    ]);
+    expect(s2.cost.projections).toHaveLength(3);
+  });
+
+  it("um card legado segue BRL mesmo que o alvo declare outra moeda hoje (o dado carrega a dele); arredondamento a 2 casas", () => {
+    const s2 = build([board("oficina", "Oficina", [legacy("story-ex9973", 0.1), legacy("story-ex9974", 0.2)])]);
+    expect(s2.cost.projectedMonthly).toEqual([{ currency: "BRL", amount: 0.3 }]);
+  });
+
+  it("a frase: BRL/pt-BR sai igual à de sempre; USD não vira R$; sem projeção mantém «nenhum custo a mais por mês»", () => {
+    expect(formatImpactMoney(15, "BRL")).toBe((15).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }));
+    expect(projectedMonthlyText([{ currency: "BRL", amount: 15 }])).toBe(`+${(15).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })} por mês`);
+    expect(projectedMonthlyText([{ currency: "USD", amount: 12 }])).not.toContain("R$");
+    expect(projectedMonthlyText([{ currency: "BRL", amount: 5 }, { currency: "USD", amount: 7 }])).toMatch(/^\+.*5.* e \+.*7.* por mês$/);
+    expect(projectedMonthlyText([])).toBe("nenhum custo a mais por mês");
+    expect(projectedMonthlyText([{ currency: "BRL", amount: 0 }])).toBe("nenhum custo a mais por mês");
   });
 });

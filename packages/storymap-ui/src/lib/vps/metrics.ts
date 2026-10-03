@@ -9,15 +9,16 @@
 // SERVER-ONLY (node:*). Singleton via globalThis Symbol (survives Next HMR), mirroring
 // getRunnerRegistry / getBroadcaster.
 
-import { readFileSync, promises as fsp } from "node:fs";
+import { promises as fsp } from "node:fs";
 import os from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import yaml from "js-yaml";
-import { findRepoRoot, settingsPath } from "@/lib/storymap/paths";
-import { parseWeeklyTokenWindow } from "./ccusage";
+import { findRepoRoot } from "@/lib/storymap/paths";
+import { loadRunnerConfig } from "@/lib/storymap/runner/config";
+import { vpsOf } from "@/lib/storymap/vps-settings";
+import { parseWeeklyTokenWindow, resolveWeeklyTokenLimit } from "./ccusage";
 import { isUsageStale } from "./subscription";
-import { headroomStatsUrl, readHeadroomStats } from "./subscription-reader";
+import { meterStatsUrl, readHeadroomStats } from "./subscription-reader";
 import { getCapacityGovernor } from "@/lib/storymap/runner/capacity-service";
 import type { GovernorSnapshot } from "@/lib/storymap/runner/capacity-governor";
 import type { DiskMetric, HeadroomSavings, LoadMetric, RamMetric, TokenWindow, UsageWindow, VpsMetrics } from "./types";
@@ -88,23 +89,19 @@ function readLoad(): LoadMetric | null {
   }
 }
 
-// The plan's WEEKLY token budget (denominator for "% usado"). AGILEHARNESS_WEEKLY_TOKEN_LIMIT env
-// wins, else settings.yaml `vps.weeklyTokenLimit`, else the per-plan default below, which is
-// calibrated so a half-used week reads about 50% (matching Claude's /usage). ccusage can't read the real plan limit — tune via the env on the systemd unit if it
-// drifts. (settings.yaml is fragile here — the Config panel rewrite drops unknown keys — so the
-// env/default is the durable knob.)
-const DEFAULT_WEEKLY_TOKEN_LIMIT = 760_000_000;
-function configuredWeeklyTokenLimit(): number {
-  const env = Number(process.env.AGILEHARNESS_WEEKLY_TOKEN_LIMIT);
-  if (Number.isFinite(env) && env > 0) return Math.floor(env);
+// The plan's WEEKLY token budget (denominator for "% usado"): AGILEHARNESS_WEEKLY_TOKEN_LIMIT env wins, else
+// settings.yaml `vps.weeklyTokenLimit`, else NONE — the usage bar then shows tokens and cost without a percentage
+// ("sem limite"). ccusage can't read the real plan limit and the tool can't guess the operator's plan, so the number
+// is DECLARED (resolveWeeklyTokenLimit, ccusage.ts). The `vps:` block is part of the typed RunnerSettings, so the
+// Config panel's rewrite preserves it.
+function configuredWeeklyTokenLimit(): number | null {
+  let declared: number | undefined;
   try {
-    const raw = yaml.load(readFileSync(settingsPath(), "utf8")) as any;
-    const v = raw?.vps?.weeklyTokenLimit;
-    if (typeof v === "number" && v > 0) return Math.floor(v);
+    declared = vpsOf(loadRunnerConfig()).weeklyTokenLimit;
   } catch {
-    /* no settings file */
+    /* settings ilegível: sem limite declarado */
   }
-  return DEFAULT_WEEKLY_TOKEN_LIMIT;
+  return resolveWeeklyTokenLimit(process.env.AGILEHARNESS_WEEKLY_TOKEN_LIMIT, declared);
 }
 
 async function readTokens(now: number): Promise<{ window: TokenWindow | null; error?: string }> {
@@ -133,8 +130,8 @@ async function readTokens(now: number): Promise<{ window: TokenWindow | null; er
 }
 
 // The REAL Claude usage windows + headroom effectiveness come from the local headroom proxy's
-// `/stats` (it polls Anthropic's subscription endpoint). AGILEHARNESS_HEADROOM_URL overrides / kills
-// it (`off`/`0`/`false`), else the per-board default port. Returns null when headroom is off.
+// `/stats` (it polls Anthropic's subscription endpoint). The proxy base is DECLARED: AGILEHARNESS_HEADROOM_URL
+// (also kills it: `off`/`0`/`false`) > settings.yaml `vps.headroomUrl` > none (no meter). Returns null when there is none.
 // How old the proxy's subscription poll may be before the UI stops trusting it. The proxy
 // normally re-polls every few minutes; AGILEHARNESS_USAGE_MAX_AGE_MIN (default 20) is the budget
 // beyond which a frozen poll (the poller stalled while the process stayed up) is flagged stale
@@ -149,7 +146,7 @@ function configuredUsageMaxAgeMs(): number {
 // The proxy read itself lives in subscription-reader.ts — shared with the capacity governor, which needs the
 // window WITHOUT paying this hub's ccusage spawn on every admission decision.
 async function readUsage(): Promise<{ usage: UsageWindow | null; headroom: HeadroomSavings | null }> {
-  const url = headroomStatsUrl();
+  const url = meterStatsUrl();
   if (!url) return { usage: null, headroom: null };
   return readHeadroomStats(url);
 }

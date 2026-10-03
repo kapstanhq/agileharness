@@ -14,6 +14,7 @@ import { cn } from "@/lib/cn";
 import { NavPopoverMeter } from "@/components/nav/NavShell";
 import { clearCapacityLatchAction } from "@/app/actions";
 import { capacityView, type CapacityRow } from "@/lib/vps/capacity-view";
+import { latchSealWords } from "@/lib/storymap/board-pace-words";
 import type { GovernorSnapshot } from "@/lib/storymap/runner/capacity-governor";
 
 const TONE_INK = {
@@ -56,6 +57,8 @@ export function CapacityPanel({
     setReason("");
   };
 
+  // a frase da trava (e, se o uso já baixou, o porquê de ela seguir) — o mesmo texto do selo da barra
+  const seal = latchSealWords(current);
   const Icon = view.latch ? Lock : view.tone === "idle" ? ShieldCheck : ShieldAlert;
   return (
     <div className={cn("flex flex-col gap-2", className)}>
@@ -89,6 +92,7 @@ export function CapacityPanel({
             Trava {view.latch.level === "hard" ? "dura" : "mole"} por <code>{view.latch.by}</code> {view.latch.since}. Nenhum
             trabalho automático começa; o que você inicia segue normal.
           </p>
+          {seal?.note && <p className="mt-1 font-medium">{seal.note[0].toUpperCase() + seal.note.slice(1)}.</p>}
           {view.latch.halt ? (
             <p className="mt-1">É o arquivo HALT do host: ela sai apagando o arquivo lá, não por aqui.</p>
           ) : asking ? (

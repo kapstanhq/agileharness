@@ -19,6 +19,7 @@
 import type { BoardConfig, Card } from "../types";
 import type { CockpitItem, CockpitItemKind } from "../demands";
 import { copilotTier } from "../copilot/tier";
+import { reviewLensesOf, type TargetProfile } from "../target-profile";
 import { REOPEN_KINDS } from "../reopen";
 import { decideItem, promote, type ItemDecision } from "./decision";
 import { foldsIntoPublishHold, isInboxItem, itemCauseKey, itemLiveness, type InboxFacts, type Liveness } from "./contract";
@@ -145,6 +146,20 @@ export interface BoardEntriesCtx {
   now: number;
   /** os fatos pré-computados do board (contract.ts) — o coletor os dá; o sinal de um card sozinho, não. */
   facts?: InboxFacts;
+  /**
+   * O nome humano de cada lente de revisão (`id → name`, de {@link lensNamesOf}). Vem do SERVIDOR: o settings não
+   * atravessa para o cliente, então quem monta o Inbox a partir do disco o preenche e quem decide só pelo card (a pílula
+   * do Kanban) não — e então o item mostra o id da lente, como sempre.
+   */
+  lensNames?: Readonly<Record<string, string>>;
+}
+
+/**
+ * O mapa `id → nome` das lentes de revisão EFETIVAS do alvo (as embutidas, com a sobrescrita dele, e as que ele declarou).
+ * Sem perfil, só as embutidas. É o que o Inbox e o documento do card passam ao rótulo da lente. PURA.
+ */
+export function lensNamesOf(target: TargetProfile | null | undefined): Record<string, string> {
+  return Object.fromEntries(reviewLensesOf(target).map((l) => [l.id, l.name]));
 }
 
 /** Um item que saiu do Inbox porque a causa dele deixou de ser verdade — o recibo que «Resolvido hoje» mostra. */
@@ -169,7 +184,7 @@ export function settleItems(items: readonly CockpitItem[], ctx: BoardEntriesCtx)
       continue;
     }
     const card = item.cardId ? ctx.cardsById.get(item.cardId) : undefined;
-    const decision = promote(decideItem(item, { config: ctx.config, card, now: ctx.now, tier, ...(ctx.facts ? { facts: ctx.facts } : {}) }), ctx.now);
+    const decision = promote(decideItem(item, { config: ctx.config, card, now: ctx.now, tier, ...(ctx.facts ? { facts: ctx.facts } : {}), ...(ctx.lensNames ? { lensNames: ctx.lensNames } : {}) }), ctx.now);
     if (!isInboxItem(item, decision.verdict)) continue;
     const days = decision.banner ? null : staleDays(item.since, ctx.now);
     entries.push({

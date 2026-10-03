@@ -4,6 +4,7 @@
 import { currentTerminalAttention } from "@/lib/terminal/attention-watch";
 import { capturePane } from "@/lib/terminal/tmux";
 import { deliverToSession, pressOptionKey, sessionRunsClaude } from "@/lib/vps/tmux";
+import type { PurgeFilter } from "./board-pace-actions";
 import { admitConductorCard, isSlotWait } from "./conductor";
 import {
   parkBoardConductors,
@@ -59,18 +60,28 @@ export async function resumeConductorNow(board: string, cardId: string): Promise
 
 const PARK_STATE_KEY = Symbol.for("agileharness.conductor.parkState");
 
-/** O board foi pausado com «parar agora» (board-pace.ts): pede a cada condutor vivo dele que estacione. */
-export async function parkBoardConductorsNow(board: string): Promise<Array<{ cardId: string; tmuxSession: string }>> {
+/**
+ * O board foi pausado com «parar agora» (board-pace.ts): pede a cada condutor vivo dele que estacione. Com `only`, pede só
+ * aos condutores cujo card o predicado aponta (um recorte por card). O ESCOPO DE TIPOS NÃO usa isto: estreitar o escopo
+ * deixa o que já executa TERMINAR (condutores vivos nunca são estacionados por ele); a assinatura fica coerente com a purga
+ * da fila do engine (`PurgeFilter`) para o dia em que um modo «parar» do escopo existir.
+ */
+export async function parkBoardConductorsNow(board: string, only?: PurgeFilter): Promise<Array<{ cardId: string; tmuxSession: string }>> {
   const store = globalThis as unknown as { [PARK_STATE_KEY]?: ConductorParkState };
   const { pane } = paneDeps();
   const attention = new Map(currentTerminalAttention().map((t) => [t.session, t]));
   const now = Date.now();
   const asking = new Set<string>();
+  // Os condutores do recorte: o predicado é lido UMA vez por sessão, aqui, e o passe de estacionar enxerga só eles.
+  const mine = new Set<string>();
   for (const s of await pane.sessions().catch(() => [])) {
     if (s.driver !== "conductor" || s.board !== board || !s.tmuxSession) continue;
+    if (only && !(s.cardId && (await Promise.resolve(only(s.cardId)).catch(() => false)))) continue;
+    mine.add(s.sessionId);
     if ((await conductorQuiet(s, attention.get(s.tmuxSession), now, QUIET_IO)).asking) asking.add(s.tmuxSession);
   }
-  return parkBoardConductors({ ...pane, asking: (tmux) => asking.has(tmux), state: (store[PARK_STATE_KEY] ??= new Map()) }, board);
+  const scoped = only ? { ...pane, sessions: async () => (await pane.sessions()).filter((s) => mine.has(s.sessionId)) } : pane;
+  return parkBoardConductors({ ...scoped, asking: (tmux) => asking.has(tmux), state: (store[PARK_STATE_KEY] ??= new Map()) }, board);
 }
 
 /** O passe da escada (lembrar, retomar, estacionar) do tick da frota. */

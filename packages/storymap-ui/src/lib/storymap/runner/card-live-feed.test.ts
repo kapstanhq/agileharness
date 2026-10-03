@@ -283,3 +283,47 @@ describe("CardLiveHub.collect — um retrato, com o diff medido no máximo uma v
     expect(f.sessions.find((s) => s.sessionId === "z")).toMatchObject({ zombie: true });
   });
 });
+
+describe("CardLiveHub.collect — o escopo de tipos dos boards limitados", () => {
+  const base = (over: Partial<CardLiveSources> = {}): CardLiveSources => ({
+    loadSessions: async () => [],
+    loadConductorQueue: async () => [],
+    readActions: async () => [],
+    liveTmux: async () => new Set(),
+    judging: () => [],
+    measureDiff: async () => null,
+    attention: () => [],
+    evidenceIo: { exists: async () => true, mtimeMs: async () => null, capture: async () => null },
+    now: () => NOW,
+    ...over,
+  });
+  const scope = {
+    types: ["bug", "technical", "chore", "spike"],
+    by: { kind: "owner" },
+    at: iso(NOW - min(5)),
+    ownerTypes: ["bug", "technical", "chore", "spike"],
+    agentTypes: null,
+  } as import("@/lib/storymap/runner/board-pace").EffectiveScope;
+
+  it("leva o escopo de cada board limitado no quadro", async () => {
+    const f = await new CardLiveHub(async () => base({ loadScopes: () => [{ board: "oficina", scope }] })).collect();
+    expect(f.scopes).toEqual([{ board: "oficina", scope }]);
+  });
+
+  it("sem nenhum board limitado (ou sem a fonte) o quadro NÃO ganha o campo: idêntico ao de antes", async () => {
+    expect(await new CardLiveHub(async () => base({ loadScopes: () => [] })).collect()).not.toHaveProperty("scopes");
+    expect(await new CardLiveHub(async () => base()).collect()).not.toHaveProperty("scopes");
+  });
+
+  it("a fonte do escopo que falha não derruba o quadro: ninguém é limitado", async () => {
+    const f = await new CardLiveHub(
+      async () =>
+        base({
+          loadScopes: () => {
+            throw new Error("arquivo de ritmo ilegível");
+          },
+        }),
+    ).collect();
+    expect(f).not.toHaveProperty("scopes");
+  });
+});

@@ -1,12 +1,18 @@
 // Item 9 — a saída 3 do deploy declarado, DIVIDIDA: `needs-proof` (falta uma prova — trabalho do SISTEMA) × `needs-human`
 // (dinheiro — do dono, como hoje). As fixtures têm a FORMA do `--json` do deploy-auto de um alvo (pacote inventado
 // `loja`, caminhos, shas e hashes sorteados): a linha de needs-proof usa as mesmas chaves de
-// `evaluateRequirement`/`missingProofs` que o alvo escreve, e o `edge-config-proof-status --json` traz o mesmo
-// assunto de conteúdo da revisão pedida. São `.txt` de propósito: `*.log` é ignorado pelo git — a guarda
+// `evaluateRequirement`/`missingProofs` que o alvo escreve, e `edge-config-proof-status.json` guarda SÓ o assunto de
+// conteúdo (`request.subject`) que a revisão pedida tem de repetir. São `.txt` de propósito: `*.log` é ignorado pelo git — a guarda
 // `lib/fixtures-committable.test.ts` impede que uma fixture `.log` volte.
 
-import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { resetRepoRootCache } from "@/lib/storymap/paths";
+import { describePosix } from "./test-platform";
+import { defaultDeployProofDeps } from "./deploy-proof-deps";
+import { defaultOwnerApprovalDeps } from "./owner-approval";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { coerceCard } from "@/lib/storymap/repo";
 import { cardDemands, cardCockpitItems, isCopilotActionable } from "@/lib/storymap/demands";
@@ -20,12 +26,15 @@ import { agentRoleBody, buildSecurityReviewArgs, buildSecurityReviewContext, bui
 import {
   parsePlanOutput,
   recordRefusedAsStale,
+  declaredRecordArgv,
+  declaredStaleMarkers,
   applyDeployNeedsProofHold,
   composeSecurityVerdict,
   isVerdictApproval,
   parseDeployExit3Report,
   parseReviewerOutput,
-  recordCommandFor,
+  runDeclaredRecord,
+  type DeclaredRecordIo,
   resolveNeedsProofFinding,
   securityReopen,
 } from "./deploy-proof";
@@ -191,12 +200,58 @@ describe("o veredito do revisor independente", () => {
     expect(isVerdictApproval({ ...v, verdict: "reject" })).toBe(false);
   });
 
-  it("o comando de gravar vem do pedido, com o arquivo no lugar do marcador — e só se for um comando simples", () => {
-    expect(recordCommandFor("node tools/ship/proof.mjs record-verdict <verdict.json>", "/tmp/x/v.json")).toEqual(["node", "tools/ship/proof.mjs", "record-verdict", "/tmp/x/v.json"]);
-    expect(recordCommandFor("bun run ship-proof record-verdict <verdict.json>", "/tmp/v.json")).toEqual(["bun", "run", "ship-proof", "record-verdict", "/tmp/v.json"]);
-    expect(recordCommandFor("rm -rf / ; <verdict.json>", "/tmp/v.json")).toBeNull();
-    expect(recordCommandFor("node x.js $(curl evil) <verdict.json>", "/tmp/v.json")).toBeNull();
-    expect(recordCommandFor("node x.js record-verdict", "/tmp/v.json")).toBeNull();
+  // ── COMO a prova é gravada: o argv que o ALVO declarou, NUNCA o texto que o log do deploy imprimiu ──────────────
+  const DECLARADO = {
+    securityReview: ["proof-cli", "record-verdict", "{file}"],
+    ownerApproval: ["proof-cli", "record-approval", "{file}"],
+  };
+  const io = (over: Partial<DeclaredRecordIo> = {}): DeclaredRecordIo & { ran: Array<[string, string[]]> } => {
+    const ran: Array<[string, string[]]> = [];
+    return {
+      ran,
+      resolveProgram: (name) => ({ ok: true, path: `/opt/bin/${name}` }),
+      exec: async (program, args) => {
+        ran.push([program, args]);
+      },
+      ...over,
+    };
+  };
+
+  it("EQUIVALÊNCIA: no alvo que declara o que o seu log imprime, o argv executado é IDÊNTICO ao do texto do pedido", async () => {
+    const textoDoLog = "proof-cli record-verdict <verdict.json>"; // o `record` que o deploy imprime (a forma de hoje)
+    const doTexto = textoDoLog.split(" ").map((w) => (w === "<verdict.json>" ? "/tmp/x/v.json" : w));
+    const fake = io();
+    await expect(runDeclaredRecord("securityReview", "/tmp/x/v.json", fake, { record: DECLARADO })).resolves.toEqual({ ok: true });
+    expect(fake.ran).toEqual([["/opt/bin/proof-cli", doTexto.slice(1)]]);
+    const own = io();
+    await runDeclaredRecord("ownerApproval", "/tmp/x/a.json", own, { record: DECLARADO });
+    expect(own.ran).toEqual([["/opt/bin/proof-cli", ["record-approval", "/tmp/x/a.json"]]]);
+  });
+
+  it("SEM declaração: recusa nomeando deploy.proof.record.<kind> e NADA é executado", async () => {
+    for (const kind of ["securityReview", "ownerApproval"] as const) {
+      const fake = io();
+      const r = await runDeclaredRecord(kind, "/tmp/x/v.json", fake, { record: {} });
+      expect(r).toMatchObject({ ok: false, stale: false });
+      expect(r.ok ? "" : r.error).toContain(`deploy.proof.record.${kind}`);
+      expect(fake.ran).toEqual([]);
+    }
+  });
+
+  it("o programa declarado que não resolve recusa com o porquê (e nada roda); a saída não-zero só é «stale» pela marca DECLARADA", async () => {
+    const semPrograma = io({ resolveProgram: () => ({ ok: false, refusal: "proof-cli não encontrado" }) });
+    await expect(runDeclaredRecord("securityReview", "/tmp/x/v.json", semPrograma, { record: DECLARADO })).resolves.toEqual({ ok: false, stale: false, error: "proof-cli não encontrado" });
+    expect(semPrograma.ran).toEqual([]);
+
+    const recusa = (stderr: string) => io({ exec: async () => { throw Object.assign(new Error("exit 1"), { stderr }); } });
+    const velho = await runDeclaredRecord("securityReview", "/tmp/x/v.json", recusa("✗ veredito de OUTRO assunto"), { record: DECLARADO, markers: ["outro assunto"] });
+    expect(velho).toMatchObject({ ok: false, stale: true });
+    const semMarcas = await runDeclaredRecord("securityReview", "/tmp/x/v.json", recusa("✗ veredito de OUTRO assunto"), { record: DECLARADO, markers: [] });
+    expect(semMarcas).toMatchObject({ ok: false, stale: false, error: "✗ veredito de OUTRO assunto" });
+    // o erro é a CAUDA do stderr (300 caracteres), não o texto inteiro
+    const longo = await runDeclaredRecord("securityReview", "/tmp/x/v.json", recusa(`${"x".repeat(900)}FIM`), { record: DECLARADO, markers: [] });
+    expect(longo.ok ? "" : longo.error).toHaveLength(300);
+    expect(longo.ok ? "" : longo.error.endsWith("FIM")).toBe(true);
   });
 
   it("um veredito NEGATIVO reabre o card por correção, com os achados do revisor — nunca pergunta ao dono", () => {
@@ -252,8 +307,127 @@ describe("o revisor independente — o que ele recebe e como é chamado", () => 
     expect(args.join(" ")).toMatch(/--strict-mcp-config/);
   });
 
-  it("a recusa por assunto velho é reconhecida pela mensagem da receita do alvo", () => {
-    expect(recordRefusedAsStale("rejected: the verdict is for another subject (it names sha256:aaaa)")).toBe(true);
-    expect(recordRefusedAsStale("✗ veredito malformado")).toBe(false);
+  it("a recusa por assunto velho é reconhecida pela frase que o ALVO declarou (deploy.proof.staleMarkers)", () => {
+    const marcas = ["another subject", "OUTRO assunto"];
+    expect(recordRefusedAsStale("rejected: the verdict is for another subject (it names sha256:aaaa)", marcas)).toBe(true);
+    expect(recordRefusedAsStale("✗ veredito de outro assunto", marcas)).toBe(true); // sem diferenciar caixa
+    expect(recordRefusedAsStale("✗ veredito malformado", marcas)).toBe(false);
+    // texto LITERAL, não regex: um metacaractere na marca não casa «qualquer coisa»
+    expect(recordRefusedAsStale("rejected: subject changed", ["subject .* changed"])).toBe(false);
+    expect(recordRefusedAsStale("", marcas)).toBe(false);
+  });
+
+  it("SEM marcas declaradas NUNCA é «stale» (a falha cai no caminho contado ⇒ card de conserto, jamais o dono)", () => {
+    expect(recordRefusedAsStale("rejected: the verdict is for another subject", [])).toBe(false);
+    // o default lê a declaração do ALVO; um alvo que não declara nada não ganha uma frase de fábrica
+    expect(recordRefusedAsStale("rejected: the verdict is for another subject", declaredStaleMarkers())).toBe(declaredStaleMarkers().length > 0);
+  });
+
+  it("declaredRecordArgv: o comando que GRAVA a prova é o argv que o ALVO declarou, com {file} trocado — nunca o texto do log", () => {
+    const record = {
+      securityReview: ["proof-cli", "record-verdict", "{file}"],
+      ownerApproval: ["proof-cli", "record-approval", "{file}"],
+    };
+    expect(declaredRecordArgv("securityReview", "/tmp/v.json", record)).toEqual({ argv: ["proof-cli", "record-verdict", "/tmp/v.json"] });
+    expect(declaredRecordArgv("ownerApproval", "/tmp/a.json", record)).toEqual({ argv: ["proof-cli", "record-approval", "/tmp/a.json"] });
+    // arquivo que não é caminho seguro nunca vira argumento
+    expect(declaredRecordArgv("securityReview", "/tmp/../etc/passwd", record)).toMatchObject({ refusal: expect.stringContaining("caminho seguro") });
+    expect(declaredRecordArgv("securityReview", "/tmp/a b;rm", record)).toHaveProperty("refusal");
+    // sem declaração: recusa nomeando a chave
+    expect(declaredRecordArgv("securityReview", "/tmp/v.json", {})).toEqual({
+      refusal: expect.stringMatching(/settings\.yaml → deploy\.proof\.record\.securityReview/),
+    });
+    expect(declaredRecordArgv("ownerApproval", "/tmp/a.json", { securityReview: record.securityReview })).toEqual({
+      refusal: expect.stringMatching(/deploy\.proof\.record\.ownerApproval/),
+    });
+  });
+});
+
+
+// ── A FIAÇÃO DE PRODUÇÃO, com processo real: o log mente, o settings manda ────────────────────────────────────
+describePosix("gravar a prova executa o argv que o ALVO declarou — e o `record` impresso pelo log NÃO roda", () => {
+  const mtime = 1_700_000_100;
+  let raiz = "";
+  let semDeclaracao = "";
+  let alvoAnterior: string | undefined;
+  let binAnterior: string | undefined;
+  const apontar = (r: string) => {
+    process.env.AGILEHARNESS_TARGET = r;
+    resetRepoRootCache();
+  };
+  const criar = (nome: string, deploy: string, t: number) => {
+    const r = mkdtempSync(path.join(tmpdir(), `ah-proof-${nome}-`));
+    writeFileSync(path.join(r, "turbo.json"), "{}\n", "utf8");
+    mkdirSync(path.join(r, "storymap"), { recursive: true });
+    const settings = path.join(r, "storymap", "settings.yaml");
+    writeFileSync(settings, `version: 1\n${deploy}`, "utf8");
+    utimesSync(settings, t, t);
+    return r;
+  };
+
+  beforeAll(() => {
+    alvoAnterior = process.env.AGILEHARNESS_TARGET;
+    binAnterior = process.env.AGILEHARNESS_BIN_PROOF_CLI;
+    raiz = criar(
+      "declara",
+      [
+        "deploy:",
+        "  proof:",
+        "    record:",
+        '      securityReview: [proof-cli, record-verdict, "{file}"]',
+        '      ownerApproval: [proof-cli, record-approval, "{file}"]',
+        '    staleMarkers: ["outro assunto"]',
+        "",
+      ].join("\n"),
+      mtime,
+    );
+    semDeclaracao = criar("omisso", "deploy:\n  targets: [loja]\n", mtime + 1);
+    // o «proof-cli» do alvo: guarda o que recebeu (verbo + conteúdo do arquivo) e recusa o verbo `stale`
+    const cli = path.join(raiz, "proof-cli.sh");
+    writeFileSync(cli, ["#!/bin/sh", 'echo "$1" >> "$(dirname "$0")/gravado.txt"', 'cat "$2" >> "$(dirname "$0")/gravado.txt"', "exit 0", ""].join("\n"), "utf8");
+    chmodSync(cli, 0o755);
+    process.env.AGILEHARNESS_BIN_PROOF_CLI = cli;
+  });
+
+  afterAll(() => {
+    if (alvoAnterior === undefined) delete process.env.AGILEHARNESS_TARGET;
+    else process.env.AGILEHARNESS_TARGET = alvoAnterior;
+    if (binAnterior === undefined) delete process.env.AGILEHARNESS_BIN_PROOF_CLI;
+    else process.env.AGILEHARNESS_BIN_PROOF_CLI = binAnterior;
+    resetRepoRootCache();
+    for (const r of [raiz, semDeclaracao]) rmSync(r, { recursive: true, force: true });
+  });
+
+  const veredito = { schema: "x", verdict: "approve", findings: [], summary: "ok", reviewedAt: "2026-10-02T00:00:00.000Z" } as never;
+  // o pedido como o LOG o entregou — com um `record` hostil: se ele rodasse, criaria o sentinela
+  const pedidoHostil = (raizAlvo: string) => ({ ...parseDeployExit3Report(NEEDS_PROOF).security[0], record: `bash -c touch ${raizAlvo}/SENTINELA <verdict.json>` });
+
+  it("revisão de segurança: roda o programa declarado com o verbo declarado; o `bash -c` do log nunca roda", async () => {
+    apontar(raiz);
+    const r = await defaultDeployProofDeps().recordVerdict(veredito, pedidoHostil(raiz));
+    expect(r).toEqual({ ok: true });
+    expect(readFileSync(path.join(raiz, "gravado.txt"), "utf8")).toMatch(/^record-verdict\n\{/);
+    expect(existsSync(path.join(raiz, "SENTINELA"))).toBe(false);
+  });
+
+  it("autorização do dono: idem, com o verbo da autorização", async () => {
+    apontar(raiz);
+    const pedido = { subject: parseDeployExit3Report(NEEDS_PROOF).security[0].subject, record: `bash -c touch ${raiz}/SENTINELA <approval.json>`, units: ["api"], rules: ["r"] };
+    const aprovacao = { schema: "deploy-proof/owner-approval@1", subject: pedido.subject, approvedBy: "owner", via: "inbox", approvedAt: "2026-10-02T00:00:00.000Z" } as never;
+    const r = await defaultOwnerApprovalDeps().record(aprovacao, pedido as never);
+    expect(r).toEqual({ ok: true });
+    expect(readFileSync(path.join(raiz, "gravado.txt"), "utf8")).toContain("record-approval\n");
+    expect(existsSync(path.join(raiz, "SENTINELA"))).toBe(false);
+  });
+
+  it("alvo SEM declaração: as duas gravações RECUSAM nomeando a chave, e nada roda (nem o que o log pediu)", async () => {
+    apontar(semDeclaracao);
+    const a = await defaultDeployProofDeps().recordVerdict(veredito, pedidoHostil(semDeclaracao));
+    expect(a).toMatchObject({ ok: false, stale: false });
+    expect(a.ok ? "" : a.error).toContain("deploy.proof.record.securityReview");
+    const b = await defaultOwnerApprovalDeps().record({ schema: "x" } as never, { ...pedidoHostil(semDeclaracao), units: [], rules: [] } as never);
+    expect(b).toMatchObject({ ok: false, stale: false });
+    expect(b.ok ? "" : b.error).toContain("deploy.proof.record.ownerApproval");
+    expect(existsSync(path.join(semDeclaracao, "SENTINELA"))).toBe(false);
   });
 });

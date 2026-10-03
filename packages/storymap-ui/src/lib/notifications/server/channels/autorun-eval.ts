@@ -42,7 +42,8 @@ import { conductorEntryVerdict } from "@/lib/storymap/runner/conductor";
 import { dispatchConductorOnEntry } from "@/lib/storymap/runner/fleet-deps";
 import { isConducted } from "@/lib/storymap/driver";
 import { isAmbiguousRouting } from "@/lib/storymap/skip-routing";
-import { boardGateNow, holdBoardEntry } from "@/lib/storymap/runner/board-pace-store";
+import { boardGateNow, holdBoardEntry, holdBoardScopeEntry } from "@/lib/storymap/runner/board-pace-store";
+import { gateAdmitsCard, SCOPE_CLASSIFYING_STATUSES } from "@/lib/storymap/runner/board-pace";
 import type { BoardConfig, Card, StatusDef, TriggerId } from "@/lib/storymap/types";
 
 // O motivo do disjuntor da publicação é logado no máximo uma vez por janela por card: o texto carrega o tempo que falta
@@ -301,7 +302,27 @@ export async function evaluateAutorunOnEntry(
   // and the cascade below stays silent for it. Only a card NOT YET conducted is dispatched: the re-evaluations
   // a conducted card keeps receiving (its conductor's own submits landing, a run completion, the watcher echo)
   // must never re-open a conductor, least of all for a card whose conductor died (the operator decides that).
-  const conductorVerdict = conductorEntryVerdict(card, config);
+  const conductorVerdict = conductorEntryVerdict(card, config, gate);
+
+  // O ESCOPO DE TIPOS (board-pace.ts, segundo eixo do ritmo): o que o board pode COMEÇAR sozinho. Só barra a CONSTRUÇÃO — o
+  // despacho do condutor e as colunas de plano e desenvolvimento em diante; captura, triagem, dúvidas, especificação,
+  // entrevista e priorização seguem andando para o tipo ser decidido (um erro recém-capturado nasce `user`: barrar a
+  // especificação o deixaria sem nunca ser classificado). Um card JÁ conduzido não é barrado (o que já executa termina:
+  // condutores vivos não são estacionados). O card fica onde está e o disparo recusado é ANOTADO — alargar o escopo o devolve
+  // por este mesmo caminho. A recusa do condutor em coluna de CLASSIFICAÇÃO não para o card: a skill da coluna (enriquecer)
+  // é quem decide o tipo, e roda; só o despacho do condutor espera.
+  if (!isConducted(card)) {
+    const column = gateAdmitsCard(gate, card, "column");
+    const conductorBarred = !conductorVerdict.dispatch && conductorVerdict.scopeRefused === true;
+    const classifying = !!card.status && SCOPE_CLASSIFYING_STATUSES.includes(card.status);
+    if (!column.admit || (conductorBarred && !classifying)) {
+      const why = !column.admit ? column.why : !conductorVerdict.dispatch ? conductorVerdict.reason : "";
+      await holdBoardScopeEntry(boardId, cardId);
+      console.log(`[harness-autorun ${boardId}/${cardId}] ${why} — nenhuma skill nem condutor disparado (o disparo volta quando o escopo alargar)`);
+      return;
+    }
+  }
+
   if (conductorVerdict.dispatch && !isConducted(card)) {
     try {
       await dispatchConductorOnEntry(boardId, card.id);
@@ -446,6 +467,8 @@ export async function evaluateAutorunOnEntry(
       // them on the journal entry — the next fresh eval reads them back (durable, survives restart).
       column: status.id,
       noProgressRuns: nextNoProgress,
+      // o card que a cascata dispara, para o pump do engine segurar o job se o escopo de tipos estreitar enquanto ele espera
+      scopeCard: { id: card.id, type: card.type, storyType: card.storyType, mode: card.mode, status: card.status },
     });
   } else if (decision.action === "forward") {
     await forward(boardId, card, decision.to, config, opts.transitionActor);

@@ -80,7 +80,7 @@ slot and should not build an under-specified card.
    - **DB** — data schema/shape, access and security rules, indexes (the target's
      data-layer conventions).
    - **backend** — server actions, serverless functions, API routes, business logic.
-   - **frontend** — React/Next.js components, pages, UI, client state.
+   - **frontend** — components, pages, UI, client state (whatever framework the target uses).
    A card may involve 1, 2, or all 3. **Delegate only the concerns that are present.**
 
 5. **Delegate to specialists (TDD inside each), DB → backend → frontend.** For each
@@ -95,9 +95,16 @@ slot and should not build an under-specified card.
    of spawning a sub-agent.
 
 6. **Integrate + verify (orchestrator).** After the specialists finish, YOU reconcile
-   their work and run the FULL verification yourself — the package's tests
-   (`just test-<pkg>` / `-unit`) and a typecheck (`bunx tsc` / the relevant gate,
-   `just validate-all` when appropriate). Fix the app, never weaken assertions. "Done"
+   their work and run the FULL verification yourself — the package's tests and a
+   typecheck. Read the `target` block of `storymap/settings.yaml` (the run's context note
+   lists the declared check names) for the checks `test`, `typecheck` (and `validate` when
+   appropriate) — `target.checks.<name>`, with `{package}` / `{pkg}` / `{board}` filled from
+   `board.yaml` (`package:`, its last path segment, the board id) — and run each declared
+   command yourself with Bash IN YOUR WORKTREE (`run_check` runs in the runtime checkout, never in
+   your worktree, so it would test the wrong code). If the storymap MCP is mounted (a
+   conductor session), `target_profile({board})` returns the same already resolved. If the target declares none, discover
+   the command in the repository's own instructions (README, CLAUDE.md/AGENTS.md, the
+   package manifest) — never assume an executor. Fix the app, never weaken assertions. "Done"
    means a real run went green — not a checked box. If a cross-concern seam broke
    (e.g. the frontend calls a contract the backend named differently), reconcile it
    here, re-running the affected specialist if the fix isn't a small seam patch.
@@ -126,7 +133,7 @@ a descoberta que ele já fez:
   (não-cacheado) e foi o que inflou os runs antes desta disciplina.
 - **Teste afetado no loop, suíte completa só na integração.** Durante o TDD
   (red→green→refactor) rode SÓ os arquivos de teste afetados
-  (`bunx vitest run <arquivos>` / `just test-<pkg>-unit <pattern>`) — feedback rápido,
+  (o check `testUnit` do bloco `target` de `storymap/settings.yaml`, ou o runner do pacote, restrito aos arquivos afetados) — feedback rápido,
   contexto pequeno. A suíte COMPLETA do pacote roda **uma vez**, na integração
   (passo 6), como gate de regressão — nunca a cada task.
 - **Leia o necessário, não o exaustivo.** README/board.yaml/regras dão schema e
@@ -147,7 +154,7 @@ classification, the integration run, the task done-marking, and the advance).
 |------------|-----------------------------------------------------------------------|-------------|
 | `db`       | data schema/shape, access and security rules, indexes (the target's data-layer conventions) | **the target's data/domain specialist agent** — invokes the target's security skill and cites its security rules file, when it has one; access rules are the PRIMARY security layer |
 | `backend`  | server actions, serverless functions, API routes, business logic | **the target's backend specialist agent** — invokes the target's framework skill for server actions / route handlers |
-| `frontend` | React/Next.js components, pages, UI, client state                     | **the target's frontend specialist agent** — invokes the target's framework skill + the cascade: ① lê o guia de estilo do board (`storymap/boards/<board>/design/style-guide.md`, quando existir) ANTES de ② a skill `*-ui-aesthetics` do app do board (quando existir) → ③ deriva dos componentes existentes. Implementação referencia PAPÉIS (`bg-primary`/CSS var), nunca hex solto; conflito guia×skill → o guia vence. Follow the target's styling conventions for shared UI packages |
+| `frontend` | components, pages, UI, client state (the target's framework)          | **the target's frontend specialist agent** — invokes the target's framework skill + the cascade: ① lê o guia de estilo do board (`storymap/boards/<board>/design/style-guide.md`, quando existir) ANTES de ② a skill `*-ui-aesthetics` do app do board (quando existir) → ③ deriva dos componentes existentes. Implementação referencia PAPÉIS (`bg-primary`/CSS var), nunca hex solto; conflito guia×skill → o guia vence. Follow the target's styling conventions for shared UI packages |
 
 > The **bold** name in "Delegate to" is the Task `subagent_type` (a real agent type from the target's registry); the framework / security / `*-ui-aesthetics` entries are SKILLS the sub-agent invokes for domain knowledge — they are NOT agent types. If a named agent type isn't available at runtime, fall back to a general sub-agent given the same role + skills.
 
@@ -161,7 +168,7 @@ table.
   NOT create branches or git worktrees, and you never spawn separate runs.
 - Follows **TDD** (red → green → refactor; the `/harness-tests` plan already covers the
   pyramid) and **fixes the app, never weakens an assertion**. During the loop it runs
-  ONLY the affected test files (`bunx vitest run <files>`) for fast feedback — never the
+  ONLY the affected test files (the target's `testUnit` check, or the package's runner, narrowed to those files) for fast feedback — never the
   whole suite each cycle (the orchestrator runs the full suite once at integration, step 6).
 - Segue **YAGNI**: implementa só o que o card/aceite pede, sem abstração especulativa nem
   generalização "para o futuro", e prefere a **solução mais enxuta** (one-liner quando couber)

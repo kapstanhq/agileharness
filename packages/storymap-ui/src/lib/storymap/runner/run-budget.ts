@@ -7,8 +7,8 @@
 // turnos, então o estouro máximo é um turno) e o AgileHarness nunca passava a flag.
 //
 // NÃO é ritmo (pacing). O teto não distribui gasto ao longo do dia, não prioriza card, não desacelera
-// nada: ele só existe para cortar o caso patológico. Por isso os defaults são largos — max(2×p90, p99)
-// do custo nocional histórico de cada skill — e um run normal nunca encosta neles. Quem controla ritmo
+// nada: ele só existe para cortar o caso patológico. Por isso os defaults são largos — arredondados para
+// cima, por camadas de peso da skill — e um run normal nunca encosta neles. Quem controla ritmo
 // e gasto acumulado são outras peças: o orçamento diário do copiloto (`orchestrator.budget`), o
 // backstop vitalício por card (`autorun.cardBudgetUSD`, 4a) e o loop-guard (4b).
 //
@@ -21,25 +21,34 @@
 import { TRIGGER_IDS, type OrchestratorSettings, type RunnerSettings, type TriggerId } from "@/lib/storymap/types";
 
 /**
- * O teto default por skill, em USD. Valores de partida (a regra de calibração é max(2×p90, p99) do custo
- * nocional que cada instalação observa; ajuste em settings): largo o
- * bastante para não cortar um run legítimo lento, estreito o bastante para parar um loop antes de ele
- * virar dezenas de dólares. Skill ausente daqui cai em {@link FALLBACK_RUN_BUDGET_USD}.
+ * O teto default por skill, em USD — uma tabela NEUTRA por CAMADAS de peso da skill, arredondada PARA CIMA: larga o
+ * bastante para não cortar um run legítimo e lento de quem adota (o disjuntor é para o caso patológico, não para o
+ * ritmo), estreita o bastante para parar um loop antes de ele virar dezenas de dólares. Skill ausente daqui cai em
+ * {@link FALLBACK_RUN_BUDGET_USD}.
+ *
+ *   • 25 — a construção (`harness-do`): a única skill que escreve código e roda a suíte, e a de turnos mais longos;
+ *   • 15 — leitura profunda do diff ou do código: revisão, plano técnico, sincronização de card;
+ *   • 8  — conserto e QA: leem pouco, mas executam comandos e sobem o ambiente;
+ *   • 5  — as skills leves (grill, ui, ux, enrich, interview, prioritize, capture): leem o card e o board e escrevem.
+ *
+ * A regra de calibração de quem quiser apertar é max(2×p90, p99) do custo nocional que a SUA instalação observa — e o
+ * resultado se declara em `settings.yaml → autorun.maxBudgetUSD` (um mapa skill → teto, que vence esta tabela). Os
+ * números medidos de uma instalação específica moram nos dados dela, não aqui.
  */
 export const DEFAULT_RUN_BUDGET_USD: Readonly<Partial<Record<TriggerId, number>>> = {
-  "harness-do": 23.8,
-  "harness-review": 13.9,
-  "harness-plan": 11.1,
-  "harness-sync-card": 10.9,
-  "harness-fix": 7.8,
-  "harness-qa": 7.5,
-  "harness-grill": 4.7,
-  "harness-ui": 4.3,
-  "harness-enrich": 3.5,
-  "harness-ux": 3.5,
-  "harness-interview": 3.3,
-  "harness-prioritize": 2.8,
-  "harness-capture": 2.6,
+  "harness-do": 25,
+  "harness-review": 15,
+  "harness-plan": 15,
+  "harness-sync-card": 15,
+  "harness-fix": 8,
+  "harness-qa": 8,
+  "harness-grill": 5,
+  "harness-ui": 5,
+  "harness-enrich": 5,
+  "harness-ux": 5,
+  "harness-interview": 5,
+  "harness-prioritize": 5,
+  "harness-capture": 5,
 };
 
 /** O teto de qualquer skill sem linha própria na tabela acima (sem histórico para derivar um número). */

@@ -33,6 +33,21 @@ import { deployBoard, type DeployFreshnessGate } from "./deploy";
 import { ProductDeployRegistry, type DeployLauncher, type DeployLaunchSpec } from "./product-deploy";
 import { checkDeployFreshness, type DeployFreshnessRequest } from "./deploy-freshness";
 import type { ExecFn } from "./worktree";
+import { deployPolicyFromSettings } from "./deploy-command-guard";
+import { deployPolicyOf } from "@/lib/storymap/deploy-policy";
+// a política do passo privilegiado de um alvo que não declarou nada (estes casos medem o chokepoint, não a régua)
+const SEM_POLITICA = deployPolicyFromSettings(undefined, {});
+// A POLÍTICA de deploy do alvo destes casos (o que o settings.yaml dele declararia): um CLI de publicação para os comandos de board,
+// o task runner com a receita `live-sha`, e o comando diff-aware legado do alvo `app`. Injetada em cada `deployBoard`.
+const POLITICA_ALVO = deployPolicyOf({
+  deploy: {
+    targets: ["app"],
+    launchers: ["vercel", "just"],
+    recipeRunners: ["just"],
+    recipes: ["live-sha"],
+    legacy: { packageRoot: "packages/", command: ["ship-cli", "publish", "{target}"] },
+  },
+});
 
 // ── fixtures ────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -96,13 +111,13 @@ describe("ProductDeployRegistry.start — nenhum deploy de produto lança sem a 
     expect(() => reg.start("app", undefined as never)).toThrow(/sem autorização do preflight de frescor/);
     const forjada = { target: "app", repoRoot: "/r", head: "x", issuedAt: Date.now(), bypassed: false, summary: "" };
     expect(() => reg.start("app", forjada as never)).toThrow(/sem autorização/);
-    const deOutro = await liberar({ target: "outro", repoRoot: "/r", scope: [], label: "t" });
+    const deOutro = await liberar({ target: "outro", repoRoot: "/r", scope: [], policy: SEM_POLITICA, label: "t" });
     if (!deOutro.ok) throw new Error("escape deveria cunhar");
     expect(() => reg.start("app", deOutro.clearance)).toThrow(/emitida para "outro"/);
     expect(f.started).toEqual([]);
 
     // NÃO-VACUIDADE: a autorização certa lança — uma vez.
-    const v = await liberar({ target: "app", repoRoot: "/r", scope: [], label: "t" });
+    const v = await liberar({ target: "app", repoRoot: "/r", scope: [], policy: SEM_POLITICA, label: "t" });
     if (!v.ok) throw new Error("escape deveria cunhar");
     reg.start("app", v.clearance);
     expect(f.started.map((s) => s.target)).toEqual(["app"]);
@@ -114,7 +129,7 @@ describe("ProductDeployRegistry.start — nenhum deploy de produto lança sem a 
 
 // ── 2. cada caminho de deploy de produto ─────────────────────────────────────────────────────────────────
 describe("deployBoard — cada caminho de deploy de produto passa pelo preflight, e RECUSA quando ele recusa", () => {
-  const base = { repoRoot: "/repo", board: "armazem", cardId: "s1", deployScope: ESCOPO, deployTargets: ["app"] as const };
+  const base = { repoRoot: "/repo", board: "armazem", cardId: "s1", deployScope: ESCOPO, deployTargets: ["app"] as const, deployPolicy: POLITICA_ALVO };
 
   it("kind:command — recusado ⇒ nada lança, a recusa sai nomeada; o preflight recebeu alvo, escopo e liveShaCommand", async () => {
     const f = launcher();
@@ -135,7 +150,15 @@ describe("deployBoard — cada caminho de deploy de produto passa pelo preflight
     expect(f.started).toEqual([]);
     expect(calls).toEqual([]);
     expect(r.pedidos).toEqual([
-      { target: "armazem", repoRoot: "/repo", scope: ESCOPO, liveShaCommands: ["just live-sha"], label: "board armazem" },
+      {
+        target: "armazem",
+        repoRoot: "/repo",
+        scope: ESCOPO,
+        liveShaCommands: ["just live-sha"],
+        // a régua do liveShaCommand viaja COM o pedido: é a política DECLARADA pelo alvo (∪ env)
+        policy: expect.objectContaining({ launchers: ["vercel", "just"], recipes: ["live-sha"] }),
+        label: "board armazem",
+      },
     ]);
   });
 
@@ -172,7 +195,7 @@ describe("deployBoard — cada caminho de deploy de produto passa pelo preflight
     expect(settle).not.toHaveBeenCalled();
   });
 
-  it("orch-deploy LEGADO (alvo por package) — recusado ⇒ nada lança; liberado ⇒ lança", async () => {
+  it("deploy LEGADO declarado (alvo por package) — recusado ⇒ nada lança; liberado ⇒ lança", async () => {
     const f = launcher();
     const reg = new ProductDeployRegistry(f.launcher);
     const r = recusar();
@@ -244,6 +267,40 @@ describe("deployBoard — cada caminho de deploy de produto passa pelo preflight
     await vi.waitFor(() => expect(f.started.map((s) => s.target)).toEqual(["app", "face-x"]));
     expect(reg.get("face-x")).toMatchObject({ board: "armazem", cardId: "s1" });
     expect(revert).not.toHaveBeenCalled();
+  });
+
+  it("face declarada SEM comando (`deploy.composedFace.command`): o diff toca a face ⇒ recusa nomeando a chave, o backend NÃO sobe pela metade", async () => {
+    const semComando = deployPolicyOf({
+      deploy: {
+        targets: ["app"],
+        legacy: { packageRoot: "packages/", command: ["ship-cli", "publish", "{target}"] },
+        composedFace: { target: "face-x", recipe: "rotulo-legado", manifest: "face.json" },
+      },
+    });
+    const comComando = deployPolicyOf({
+      deploy: {
+        targets: ["app"],
+        legacy: { packageRoot: "packages/", command: ["ship-cli", "publish", "{target}"] },
+        composedFace: { target: "face-x", recipe: "rotulo-legado", manifest: "face.json", command: ["ship-cli", "publish-face"] },
+      },
+    });
+    const f = launcher();
+    const pedido = {
+      ...base,
+      exec: execGravador().exec,
+      boardPackage: "packages/app",
+      changedFiles: ["packages/app/web/page.tsx"],
+      productDeploy: new ProductDeployRegistry(f.launcher),
+      freshness: liberar,
+    };
+    const recusado = await deployBoard({ ...pedido, deployPolicy: semComando });
+    expect(recusado).toMatchObject({ fired: false, tool: "orch-deploy", pkg: "app" });
+    expect(recusado.refused).toMatch(/settings\.yaml → deploy\.composedFace\.command/);
+    expect(f.started, "nada foi lançado — nem o backend").toEqual([]);
+    // CONTRAPROVA: com o comando da face declarado, o MESMO disparo sobe
+    const ok = await deployBoard({ ...pedido, deployPolicy: comComando });
+    expect(ok).toMatchObject({ fired: true, chainedComposedFace: true });
+    expect(f.started.map((s) => s.target)).toEqual(["app"]);
   });
 
   it("backend FALHOU ⇒ a face nem chega a pedir o preflight", async () => {

@@ -7,24 +7,53 @@
 // desde quando, até quando e quantos cards esperam a retomada, e troca de ritmo com um clique. Pausar pergunta só o que
 // muda o resultado: o que fazer com o que já está rodando, e por quanto tempo.
 //
+// O ESCOPO é um SEGUNDO eixo, independente do ritmo: o ritmo diz QUANTO o board anda, o escopo diz O QUE ele pode começar
+// sozinho («Só consertos e manutenção» não começa funcionalidade nova). O painel os mostra em blocos separados e diz, em
+// palavras, que o escopo não poupa cota — sem isso o dono acharia que «só consertos» gasta menos.
+//
 // O painel ({@link BoardPacePanel}) é o mesmo no chip do computador e no menu «Mais» do celular.
 
 import { useCallback, useEffect, useState, useTransition } from "react";
-import { CirclePause, Play, Turtle } from "lucide-react";
+import { CircleDashed, CirclePause, Play, Turtle, Wrench } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { getBoardPaceAction, setBoardPaceAction } from "@/app/board-pace-actions";
+import { getBoardPaceAction, setBoardPaceAction, setBoardScopeAction } from "@/app/board-pace-actions";
 import { PACE_HELP, paceLabel, type BoardPaceView, type PaceLevel, type PauseMode } from "@/lib/storymap/runner/board-pace";
-import { PAUSE_DURATIONS, paceHistoryLine, paceStatusLine, pauseMinutes } from "@/lib/storymap/board-pace-words";
+import {
+  PACE_PANEL_LOADING,
+  PACE_PANEL_UNAVAILABLE,
+  PAUSE_DURATIONS,
+  SCOPE_AXIS_HELP,
+  SCOPE_BOUNDS_HELP,
+  SCOPE_PRESETS,
+  SCOPE_QUOTA_HELP,
+  featuresToShipWords,
+  paceChipFace,
+  paceChipValue,
+  paceHistoryLine,
+  paceStatusLine,
+  pauseMinutes,
+  scopeHistoryLine,
+  scopeWaitingWords,
+} from "@/lib/storymap/board-pace-words";
 import { NavChip, NavPopover, NavPopoverBlock, NavPopoverDivider, NavPopoverTitle, useHoverPopover, type NavTone } from "./NavShell";
 
 const POLL_MS = 60_000;
 
-/** O ritmo do board, lido ao montar, a cada minuto e sempre que o painel abre. */
+/**
+ * O ritmo do board, lido ao montar, a cada minuto e sempre que o painel abre. `failed` = a última tentativa não leu (e o
+ * chip só o usa se nunca houve leitura: com uma leitura boa na mão, ela vale mais que um erro novo — ver `paceReadState`).
+ */
 function useBoardPace(boardId: string, open: boolean) {
   const [view, setView] = useState<BoardPaceView | null>(null);
+  const [failed, setFailed] = useState(false);
   const load = useCallback(async () => {
     const r = await getBoardPaceAction(boardId).catch(() => null);
-    if (r?.ok) setView(r.data);
+    if (r?.ok) {
+      setView(r.data);
+      setFailed(false);
+    } else {
+      setFailed(true);
+    }
   }, [boardId]);
   useEffect(() => {
     void load();
@@ -34,7 +63,7 @@ function useBoardPace(boardId: string, open: boolean) {
   useEffect(() => {
     if (open) void load();
   }, [open, load]);
-  return { view, setView };
+  return { view, setView, failed };
 }
 
 function PaceIcon({ level, className }: { level: PaceLevel; className?: string }) {
@@ -54,12 +83,15 @@ const OPTION_ON = "border-accent bg-accent/10 text-accent-ink";
 const OPTION_OFF = "border-line text-fg-muted hover:bg-surface-hover hover:text-fg";
 
 /** O painel do ritmo: estado, as três posições, as opções da pausa, a sugestão pela cota e o histórico curto. */
-export function BoardPacePanel({ boardId, view, onChanged }: { boardId: string; view: BoardPaceView | null; onChanged: (v: BoardPaceView) => void }) {
+export function BoardPacePanel({ boardId, view, failed = false, onChanged }: { boardId: string; view: BoardPaceView | null; failed?: boolean; onChanged: (v: BoardPaceView) => void }) {
   const [pending, start] = useTransition();
   const [pausing, setPausing] = useState(false);
   const [mode, setMode] = useState<PauseMode>("drain");
   const [duration, setDuration] = useState<(typeof PAUSE_DURATIONS)[number]["id"]>("none");
   const [reason, setReason] = useState("");
+  // o escopo: «Só consertos» abre um passo para escolher o prazo; «Tudo» vale na hora (alargar não pede nada)
+  const [limiting, setLimiting] = useState(false);
+  const [scopeDuration, setScopeDuration] = useState<(typeof PAUSE_DURATIONS)[number]["id"]>("none");
   const [note, setNote] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -67,7 +99,7 @@ export function BoardPacePanel({ boardId, view, onChanged }: { boardId: string; 
     return () => clearInterval(t);
   }, []);
 
-  if (!view) return <NavPopoverBlock className="text-[12px] text-fg-subtle">Lendo o ritmo do board…</NavPopoverBlock>;
+  if (!view) return <NavPopoverBlock className="text-[12px] text-fg-subtle">{failed ? PACE_PANEL_UNAVAILABLE : PACE_PANEL_LOADING}</NavPopoverBlock>;
 
   const apply = (level: PaceLevel, extra: { mode?: PauseMode; forMinutes?: number; reason?: string; arm?: boolean } = {}) =>
     start(async () => {
@@ -80,8 +112,30 @@ export function BoardPacePanel({ boardId, view, onChanged }: { boardId: string; 
       setNote({ tone: "ok", text: r.data.message });
     });
 
+  const applyScope = (preset: "all" | "fixes", extra: { forMinutes?: number } = {}) =>
+    start(async () => {
+      setNote(null);
+      const r = await setBoardScopeAction({ boardId, preset, ...extra }).catch((e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }));
+      if (!r.ok) return setNote({ tone: "error", text: r.error });
+      onChanged(r.data.pace);
+      setLimiting(false);
+      setScopeDuration("none");
+      setNote({ tone: "ok", text: r.data.message });
+    });
+
+  const chooseScope = (preset: "all" | "fixes") => {
+    if (preset === "all") {
+      setLimiting(false);
+      return applyScope("all");
+    }
+    setLimiting((l) => !l);
+  };
+
   const choose = (level: PaceLevel) => {
-    if (level === "paused") return setPausing((p) => !p);
+    if (level === "paused") {
+      setLimiting(false);
+      return setPausing((p) => !p);
+    }
     setPausing(false);
     if (view.source === "disarmed") {
       const yes = window.confirm("Este board está desligado. Ligar faz os passos automáticos dele dispararem agentes sozinhos, o que gasta cota. Ligar agora?");
@@ -92,6 +146,12 @@ export function BoardPacePanel({ boardId, view, onChanged }: { boardId: string; 
   };
 
   const disarmed = view.source === "disarmed";
+  // desarmado e ilegível seguram tudo antes de olhar tipo: o escopo só tem o que dizer num board que anda
+  const showScope = view.source !== "disarmed" && view.source !== "unreadable";
+  const scopePreset = view.scope?.preset ?? "all";
+  const waitingWords = scopeWaitingWords(view);
+  const shipWords = featuresToShipWords(view.featuresToShip);
+  const earlierScope = view.scopeHistory.filter((r) => !view.scope || r.at !== view.scope.since).slice(0, 3);
   // A mudança que pôs o ritmo em vigor já está dita na linha de estado: o histórico mostra as ANTERIORES.
   const earlier = view.history.filter((c) => c.at !== view.since).slice(0, 3);
   return (
@@ -127,6 +187,53 @@ export function BoardPacePanel({ boardId, view, onChanged }: { boardId: string; 
         </div>
         {!pausing && <p className="text-[11px] leading-snug text-fg-subtle">{PACE_HELP[disarmed ? "paused" : view.level]}</p>}
       </NavPopoverBlock>
+
+      {showScope && !pausing && (
+        <>
+          <NavPopoverDivider />
+          <NavPopoverBlock>
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-fg-subtle">O que o board pode começar sozinho</p>
+            <div className="flex gap-1.5" role="group" aria-label="O que o board pode começar sozinho">
+              {SCOPE_PRESETS.map((p) => {
+                const on = limiting ? p.id === "fixes" : scopePreset === p.id;
+                return (
+                  <button key={p.id} type="button" disabled={pending} aria-pressed={on} title={p.help} onClick={() => chooseScope(p.id)} className={cn(OPTION, on ? OPTION_ON : OPTION_OFF, pending && "opacity-60")}>
+                    {p.id === "fixes" && <Wrench className="h-3.5 w-3.5" aria-hidden />}
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[11px] leading-snug text-fg-subtle">{SCOPE_PRESETS.find((p) => p.id === (limiting ? "fixes" : scopePreset))?.help ?? "O board pode começar este recorte de tipos."}</p>
+            {waitingWords && <p className="text-[12px] leading-snug text-fg-muted">{waitingWords}.</p>}
+            {shipWords && <p className="text-[12px] leading-snug text-fg-muted">{shipWords}</p>}
+            <p className="text-[11px] leading-snug text-fg-subtle">{SCOPE_AXIS_HELP} {SCOPE_QUOTA_HELP}</p>
+          </NavPopoverBlock>
+        </>
+      )}
+
+      {showScope && limiting && !pausing && (
+        <NavPopoverBlock>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-fg-subtle">Por quanto tempo</p>
+          <div className="flex gap-1.5">
+            {PAUSE_DURATIONS.map((d) => (
+              <button key={d.id} type="button" aria-pressed={scopeDuration === d.id} onClick={() => setScopeDuration(d.id)} className={cn(OPTION, scopeDuration === d.id ? OPTION_ON : OPTION_OFF)}>
+                {d.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-[11px] leading-snug text-fg-subtle">{SCOPE_BOUNDS_HELP}</p>
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => applyScope("fixes", { forMinutes: pauseMinutes(scopeDuration, new Date()) })}
+            className={cn("flex min-h-9 w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-2 text-[12px] font-semibold text-primary-fg transition hover:bg-primary-hover", pending && "opacity-60")}
+          >
+            <Wrench className="h-3.5 w-3.5" aria-hidden />
+            {pending ? "Limitando…" : "Só consertos e manutenção"}
+          </button>
+        </NavPopoverBlock>
+      )}
 
       {pausing && (
         <>
@@ -191,6 +298,20 @@ export function BoardPacePanel({ boardId, view, onChanged }: { boardId: string; 
         </NavPopoverBlock>
       )}
 
+      {earlierScope.length > 0 && !pausing && (
+        <>
+          <NavPopoverDivider />
+          <NavPopoverBlock className="gap-1">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-fg-subtle">Últimas mudanças do que o board começa</p>
+            {earlierScope.map((r) => (
+              <p key={`${r.at}-${r.types?.join("") ?? "all"}`} className="text-[11px] leading-snug text-fg-muted">
+                {scopeHistoryLine(r, now)}
+              </p>
+            ))}
+          </NavPopoverBlock>
+        </>
+      )}
+
       {earlier.length > 0 && !pausing && (
         <>
           <NavPopoverDivider />
@@ -213,26 +334,29 @@ export function BoardPaceChip({ boardId }: { boardId: string }) {
   // Abre no CLIQUE, não no hover: é um controle (com campo de texto), não um medidor — um painel que fecha quando o
   // mouse sai apagaria o que o dono estava escrevendo.
   const { open, setOpen, ref } = useHoverPopover();
-  const { view, setView } = useBoardPace(boardId, open);
+  const { view, setView, failed } = useBoardPace(boardId, open);
   const level = view?.level ?? "normal";
   const disarmed = view?.source === "disarmed";
   const tone: NavTone = level === "paused" && !disarmed ? "owner" : "idle";
-  const value = disarmed ? "Desligado" : paceLabel(level);
+  // Sem leitura o chip NÃO assume «Normal»: diz que está lendo (ou que não deu), sem nível e sem o ícone de «anda».
+  const face = paceChipFace(view, failed, Date.now());
+  const reading = face.state !== "ready";
   return (
     <div ref={ref} className="relative">
       <NavChip
-        leading={<PaceIcon level={level} className="h-4 w-4" />}
-        value={value}
+        leading={reading ? <CircleDashed className={cn("h-4 w-4", face.state === "loading" && "animate-spin text-fg-subtle")} aria-hidden /> : <PaceIcon level={level} className="h-4 w-4" />}
+        // largura mínima: «Ritmo…» → «Normal» não faz o cabeçalho pular (o texto final varia com o escopo, o piso não)
+        value={reading ? <span className={cn("inline-block min-w-[7ch]", face.state === "loading" && "text-fg-subtle")}>{face.value}</span> : face.value}
         tone={tone}
         open={open}
         onClick={() => setOpen((o) => !o)}
-        title={view ? paceStatusLine(view, Date.now()) : "Ritmo do board"}
-        ariaLabel={`Ritmo do board — ${value}`}
+        title={face.title}
+        ariaLabel={face.ariaLabel}
       />
       {open && (
         <NavPopover label="Ritmo do board" className="w-80">
-          <NavPopoverTitle meta={value}>Ritmo do board</NavPopoverTitle>
-          <BoardPacePanel boardId={boardId} view={view} onChanged={setView} />
+          <NavPopoverTitle meta={view ? face.value : undefined}>Ritmo do board</NavPopoverTitle>
+          <BoardPacePanel boardId={boardId} view={view} failed={failed} onChanged={setView} />
         </NavPopover>
       )}
     </div>
@@ -241,11 +365,11 @@ export function BoardPaceChip({ boardId }: { boardId: string }) {
 
 /** O mesmo painel dentro do menu «Mais» do celular (o chip do cabeçalho não monta ali). */
 export function BoardPaceSheetSection({ boardId, active }: { boardId: string; active: boolean }) {
-  const { view, setView } = useBoardPace(boardId, active);
+  const { view, setView, failed } = useBoardPace(boardId, active);
   return (
     <section aria-label="Ritmo do board" className="mb-2 rounded-lg border border-line px-1.5 py-2">
-      <NavPopoverTitle meta={view ? (view.source === "disarmed" ? "Desligado" : paceLabel(view.level)) : undefined}>Ritmo do board</NavPopoverTitle>
-      <BoardPacePanel boardId={boardId} view={view} onChanged={setView} />
+      <NavPopoverTitle meta={view ? paceChipValue(view) : undefined}>Ritmo do board</NavPopoverTitle>
+      <BoardPacePanel boardId={boardId} view={view} failed={failed} onChanged={setView} />
     </section>
   );
 }

@@ -73,7 +73,7 @@ process.stdin.on('end', () => {
   }
 
   const output = violations.map(v =>
-    `HARNESS CHECK FAILED: ${v.rule}\nFILE: ${v.file}\nVIOLATION: ${v.message}\nFIX: ${v.fix}\nRULE: See CLAUDE.md`
+    `HARNESS CHECK FAILED: ${v.rule}\nFILE: ${v.file}\nVIOLATION: ${v.message}\nFIX: ${v.fix}\nRULE: See the repository's agent instructions`
   ).join('\n\n');
 
   process.stderr.write(output + '\n');

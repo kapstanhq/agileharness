@@ -84,8 +84,22 @@ describe("failureOrigin — classe atribuída e o classificador de mensagens", (
 
   // CONTRATO MUDADO DE PROPÓSITO (mesma razão acima): o ambiente quebrado do RUN (a stack do produto) não é a ferramenta.
   it("ambiente quebrado reconhecido pelo classificador (MODULE_NOT_FOUND, porta ocupada) ⇒ ambiente, não ferramenta", () => {
-    expect(failureOrigin({ text: "Error: Cannot find module 'firebase-functions'" }).origin).toBe("environment");
+    expect(failureOrigin({ text: "Error: Cannot find module 'left-pad-lite'" }).origin).toBe("environment");
     expect(failureOrigin({ text: "listen EADDRINUSE: address already in use :::3008" }).origin).toBe("environment");
+  });
+
+  // O ambiente DECLARADO pelo alvo (target.qa) entra como o 2º argumento; sem ele só o baseline universal vale.
+  it("o ambiente declarado pelo alvo só conta com a declaração; assinatura da ferramenta vence as regras declaradas", () => {
+    const rules = { ports: [7101], failureClasses: [{ pattern: "fakebus[\\s\\S]{0,60}broker", class: "infra" as const }] };
+    const text = "could not start the fakebus broker";
+    expect(failureOrigin({ text }).origin).toBe("product"); // sem declaração: uma mensagem que ninguém reconhece é produto
+    expect(failureOrigin({ text }, rules).origin).toBe("environment");
+    expect(failureOrigin({ text: "bind failed on :7101" }, rules).origin).toBe("environment");
+    // `tool` é a ÚNICA porta para a ferramenta: uma regra declarada larga demais não a esconde
+    const sandbox = failureOrigin({ text: "fakebus broker: apply-seccomp: write /proc/self/setgroups: Permission denied" }, { failureClasses: [{ pattern: "fakebus", class: "app" }] });
+    expect(sandbox.origin).toBe("tool");
+    // a classe JÁ atribuída pelo servidor (com as regras do alvo) vence a releitura do texto — o cliente do Inbox não lê o settings
+    expect(failureOrigin({ text, failureClass: "infra" }).origin).toBe("environment");
   });
 
   it("classe já julgada como desconhecida (null) não é relida do texto; sem nada ⇒ desconhecida", () => {

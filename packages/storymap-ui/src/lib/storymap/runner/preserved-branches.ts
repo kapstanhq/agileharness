@@ -32,6 +32,7 @@ import { agentSessionIdFromBranch, resolveRunBase, runOwnWork, sessionIdFromBran
 import { liveSessionIds, type LiveSessionIdsResult } from "./session-worktree";
 import type { ExecFn } from "./worktree";
 import { loadRunnerConfig } from "./config";
+import { declaredCodePrefixes, isCodePath, stagingBranchOf } from "./staging";
 
 export type { BaseProvenance };
 
@@ -69,7 +70,7 @@ export interface PreservedBranch {
   ownCommits: number;
   /** files those commits touched */
   filesChanged: number;
-  /** any `packages/**` file among them → real product code at stake */
+  /** any file under the declared code prefixes among them → real product code at stake */
   touchesCode: boolean;
   verdict: PreservedVerdict;
   baseProvenance: BaseProvenance;
@@ -201,6 +202,12 @@ export interface PreservedBranchesDeps {
   ) => Promise<{ status: string | null; title: string | null; terminal: boolean } | null>;
   /** the integration branch runs are cut from (staged release); absent → the fork point falls back to HEAD. */
   stageBranch?: string;
+  /**
+   * Os prefixos de CÓDIGO declarados pelo repositório (`autorun.staging.codePrefixes`). Ausente (indeclarado) ⇒ tudo
+   * fora de `storymap/boards/` conta como código — o lado SEGURO: um branch cujo trabalho toca `src/` num repo de layout
+   * plano nunca vira «sem código» (e, daí, descartável). `[]` declarado ⇒ nada é código.
+   */
+  codePrefixes?: readonly string[];
 }
 
 /**
@@ -257,7 +264,9 @@ export async function classifyPreservedBranch(
   const ownCommits = work?.commits ?? null;
   const files = work?.files ?? [];
 
-  const codeFiles = files.filter((f) => f.startsWith("packages/"));
+  // A régua de «toca código» é a DECLARADA (injetada em `deps`), não o literal de uma pasta: o verdict abaixo decide
+  // se o branch de um run falho é preservado ou descartado, e errar «sem código» perde trabalho.
+  const codeFiles = files.filter((f) => isCodePath(f, deps.codePrefixes));
   const touchesCode = codeFiles.length > 0;
 
   // `git diff --quiet` exits 1 when the files DIFFER → a throw here is a real answer, not a failure.
@@ -370,14 +379,16 @@ export async function listPreservedRunBranches(deps: PreservedBranchesDeps): Pro
 
 /** Production wiring: real git + the merge-queue's live run ids + the card status from the boards. */
 export function defaultPreservedBranchesDeps(): PreservedBranchesDeps {
+  const staging = loadRunnerConfig().autorun.staging;
   return {
     exec: defaultExec,
     repoRoot: findRepoRoot(),
     liveRunIds: () => getMergeQueue().liveRunIds(),
     liveSessionIds: () => liveSessionIds(), // WS-1/G7: a live agent session's branch is never an orphan
-    // o branch de integração é DECLARADO (`autorun.staging.branch`); fixar o literal aqui
-  // sobrescrevia a declaração do repositório — o train já lia o declarado, as réguas de ciclo de vida não
-    stageBranch: loadRunnerConfig().autorun.staging?.branch ?? "stage",
+    // o branch de integração e a régua de código são DECLARADOS (`autorun.staging.*`); fixar o literal aqui
+    // sobrescrevia a declaração do repositório — o train já lia o declarado, as réguas de ciclo de vida não
+    stageBranch: stagingBranchOf(staging),
+    codePrefixes: declaredCodePrefixes(staging),
     cardStatus: async (board, cardId) => {
       const cards = await readCards(board).catch(() => []);
       const card = cards.find((c) => c.id === cardId);

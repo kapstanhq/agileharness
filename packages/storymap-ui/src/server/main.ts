@@ -539,6 +539,9 @@ async function sondasDoHost() {
     env: envMedido,
     gateSeal,
     skills,
+    // O pacote da ferramenta: onde os hooks do alvo procuram gate-core/ownership (check `hooks.lib`). Não carrega a
+    // config — `deploy` (host.just / deploy.declared-commands) fica de fora de propósito, ver a restrição 1 de preflight.ts.
+    toolPackageDir: toolPkg,
     // O env DESTE processo, ao lado do medido: e o que deixa o relatorio dizer QUANDO os dois
     // divergem. Uma instancia subindo AO LADO de um servico vivo lia a porta do vizinho sem
     // saber (medido: subiu numa porta, o relatorio disse a do vizinho).

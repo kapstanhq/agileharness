@@ -1,36 +1,5 @@
 {
-  "hash": "sha256:0d4fb0a2ef2f98a8c645f736b79d6fbcb34b2b805d8cc7d1255d4921600c1634",
-  "files": [
-    {
-      "path": "edge/routes.yaml",
-      "sha256": "097fd07c98fb33a064ad41f457085f3edfd2a14ed08ca1ee7b67783a669fa2fc"
-    },
-    {
-      "path": "edge/rate-limits.yaml",
-      "sha256": "390a465372fecef651b18ec10d217980e85ffce4e69fe24cee9150348fac533b"
-    },
-    {
-      "path": "tenants/orbit/quota.yaml",
-      "sha256": "9f86fced5194350a54fd8cae8e2362db93125b965dbcc896801fd3be0d86df59"
-    }
-  ],
-  "live": {
-    "status": "in-sync",
-    "drift": [],
-    "problems": []
-  },
-  "ok": false,
-  "tests": {
-    "ran": true,
-    "passed": 14,
-    "failed": 0
-  },
-  "securityReview": null,
-  "problems": [
-    "security-review: sem veredito para este conteúdo"
-  ],
   "request": {
-    "reviewer": "security-reviewer",
     "subject": {
       "kind": "content",
       "hash": "sha256:0d4fb0a2ef2f98a8c645f736b79d6fbcb34b2b805d8cc7d1255d4921600c1634",
@@ -39,7 +8,6 @@
         "edge/rate-limits.yaml",
         "tenants/orbit/quota.yaml"
       ]
-    },
-    "record": "node tools/ship/proof.mjs record-verdict <verdict.json>"
+    }
   }
 }

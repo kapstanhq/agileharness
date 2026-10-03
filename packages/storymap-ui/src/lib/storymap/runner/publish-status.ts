@@ -16,7 +16,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { DEPLOY_UNPROVEN_TEXT, makeGitContains, measureDeployAncestry, readLastDeploySha, type DeployProofMeasurement } from "./deploy-reconcile";
 import { resolveDeployKind, TOOL_PACKAGE_REL } from "./deploy";
-import { deployPkgForPackage, getProductDeploy, logFileFor, productDeployTargets } from "./product-deploy";
+import { declaredDeployPolicy, deployPkgForPackage, getProductDeploy, logFileFor, productDeployTargets } from "./product-deploy";
 import { defaultExec } from "./worktree";
 import { findRepoRoot, runnerStateDir } from "@/lib/storymap/paths";
 import { readBoardConfig, readCard } from "@/lib/storymap/repo";
@@ -29,17 +29,23 @@ export type PublishLogTargets = { kind: "registry"; targets: string[] } | { kind
  * DE ONDE vem o log do deploy deste card. PURE. Os alvos que o disparo carimbou no card vencem; sem eles, o deploy
  * que o board declara (chave do job = id do board), ou o pacote do board entre os alvos declarados. Só o board da
  * ferramenta (o self-deploy) lê o self-deploy.log; um board sem alvo não tem log de deploy.
+ *
+ * `packageRoot` é o prefixo que o ALVO declara (settings.yaml → deploy.legacy.packageRoot) e que `deployPkgForPackage`
+ * tira de `package` para achar o id do alvo. Entra por PARÂMETRO (sem default lido do settings da máquina) para que
+ * a função continue PURA e o teste não dependa de quem hospeda a suíte; `readPublishStatus` é quem lê a declaração.
+ * null/ausente ⇒ o `package` inteiro é comparado com os alvos (o neutro).
  */
 export function publishLogTargets(
   card: Pick<Card, "deployTargets">,
   config: Pick<BoardConfig, "id" | "package" | "deploy">,
   productTargets: readonly string[],
+  packageRoot: string | null = null,
 ): PublishLogTargets {
   const carimbados = card.deployTargets?.filter(Boolean) ?? [];
   if (carimbados.length > 0) return { kind: "registry", targets: carimbados };
   const declarado = resolveDeployKind(config.deploy);
   if (declarado === "command" || declarado === "agent") return { kind: "registry", targets: [config.id] };
-  const pkg = deployPkgForPackage(config.package, productTargets);
+  const pkg = deployPkgForPackage(config.package, productTargets, packageRoot);
   if (pkg) return { kind: "registry", targets: [pkg] };
   if (config.package?.replace(/\/+$/, "") === TOOL_PACKAGE_REL) return { kind: "self" };
   return { kind: "none" };
@@ -90,6 +96,8 @@ export interface PublishStatusDeps {
   readCard(board: string, cardId: string): Promise<Card | null>;
   readConfig(board: string): Promise<BoardConfig | null>;
   productTargets(): readonly string[];
+  /** deploy.legacy.packageRoot do alvo (o prefixo que sai de `package`); null quando não declarado. */
+  packageRoot(): string | null;
   jobOf(target: string): { logFile: string; status: "running" | "done" | "failed"; startedAt: number; finishedAt?: number; exitCode?: number } | undefined;
   logFileFor(target: string): string;
   selfDeployLog(): string;
@@ -103,6 +111,7 @@ const defaultDeps: PublishStatusDeps = {
   readCard: (b, c) => readCard(b, c),
   readConfig: (b) => readBoardConfig(b).catch(() => null),
   productTargets: () => productDeployTargets(),
+  packageRoot: () => declaredDeployPolicy().legacy.packageRoot ?? null,
   jobOf: (t) => getProductDeploy().get(t),
   logFileFor: (t) => logFileFor(t),
   // O self-deploy grava onde a ferramenta roda (deploy.ts: `<repo>/storymap/.runner/self-deploy.log`), que em
@@ -129,7 +138,7 @@ export async function readPublishStatus(boardId: string, cardId: string, deps: P
   const finding =
     (card.findings ?? []).find((f) => f.status === "open" && (f.id === DEPLOY_FAILURE_FINDING_ID || f.id === DEPLOY_UNPROVEN_FINDING_ID)) ?? null;
   const measurement = card.deployProof ? null : await deps.measure(card);
-  const where = config ? publishLogTargets(card, config, deps.productTargets()) : ({ kind: "none" } as const);
+  const where = config ? publishLogTargets(card, config, deps.productTargets(), deps.packageRoot()) : ({ kind: "none" } as const);
   const logs: PublishStatusLog[] = [];
   if (where.kind === "registry") {
     for (const target of where.targets) {

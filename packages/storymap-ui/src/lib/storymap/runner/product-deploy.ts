@@ -1,8 +1,9 @@
 // Product-app deploy registry — the SINGLE SOURCE of "deploy a product app from the board" (Fase 5).
 //
-// A product board ships via `just orch-deploy <target>` (the deployment's own diff-deploy
-// orchestrator, which publishes only the units that drifted). This registry spawns that command
-// DETACHED-ish (a child process of the storymap service — a product deploy does NOT restart storymap,
+// A product board ships via the LEGACY DIFF-AWARE COMMAND the target declares (settings.yaml →
+// deploy.legacy.command, an argv with `{target}` — the deployment's own diff-deploy orchestrator, which publishes
+// only the units that drifted). This engine assumes NO tool for it: without the declaration it REFUSES, naming the
+// key to declare. This registry spawns that command DETACHED-ish (a child process of the storymap service — a product deploy does NOT restart storymap,
 // so unlike the storymap self-deploy it needs no systemd-run / unit), streams its output to a log file,
 // and tracks the job status (running/done/failed). It is the SAME mechanism the MCP `deploy` tool has
 // always used (extracted here from mcp/dev-tools.ts) — now ALSO reused by the onEnter `deploy-board`
@@ -19,8 +20,9 @@ import path from "node:path";
 import { findRepoRoot } from "@/lib/storymap/paths";
 import { loadRunnerConfig } from "./config";
 import { sanitizeSpawnEnv } from "./spawn-env";
-// story-ex9514 — o `just` do lançador default passa pela régua declarado > PATH > recusa.
-import { resolveHostTool } from "./host-tools";
+// story-ex9514 — o executável do comando de deploy declarado passa pela régua declarado > PATH > recusa.
+import { HOST_TOOL_ENV, lookupOnPath, resolveHostTool, type HostTool } from "./host-tools";
+import { deployPolicyOf, expandArgvTemplate, type ResolvedDeployPolicy } from "@/lib/storymap/deploy-policy";
 import { launchDeployAgent, type DeployAgentSpec, type DeployAgentVerdict } from "./deploy-agent-spawn";
 // O PREFLIGHT DE FRESCOR é pré-condição de `start` — ver o doc do método. Este import é seguro: o módulo de
 // frescor não importa nada daqui (nem repo/config), então não há ciclo nem leitura em tempo de carga.
@@ -51,24 +53,39 @@ export function productDeployTargets(): readonly string[] {
 }
 
 /**
- * Resolve a BoardConfig.package (e.g. "packages/<app>") to its deployable target id ("<app>"), or null
- * when the package is absent / not a declared target of this deployment. PURE — `targets` is injected so
- * the resolution is testable without touching settings, and the board-aware deploy routing derives the
- * orch-deploy target from this, never from a hardcoded app name.
+ * A POLÍTICA DE DEPLOY que ESTE alvo declarou (settings.yaml → `deploy:`), resolvida na hora da chamada — o settings é lido
+ * por mtime, então declarar algo novo vale sem reiniciar. Vazia onde o alvo não declarou: NUNCA um default do repositório
+ * de origem. Quem precisa de teste sem o settings da máquina recebe a política por parâmetro.
+ */
+export function declaredDeployPolicy(): ResolvedDeployPolicy {
+  return deployPolicyOf(loadRunnerConfig());
+}
+
+/**
+ * Resolve a BoardConfig.package (e.g. "<root>/<app>") to its deployable target id ("<app>"), or null
+ * when the package is absent / not a declared target of this deployment. PURE — `targets` and `packageRoot` are
+ * injected so the resolution is testable without touching settings, and the board-aware deploy routing derives the
+ * deploy target from this, never from a hardcoded app name.
+ *
+ * `packageRoot` é o prefixo (settings.yaml → `deploy.legacy.packageRoot`) que sai de `package` para virar o id do
+ * alvo. AUSENTE (null/vazio) ⇒ o `package` inteiro é comparado com `targets` — neutro: a ferramenta não supõe a pasta
+ * em que o alvo guarda os pacotes. O default lê a declaração do alvo.
  *
  * ⚠️ SEMÂNTICA DE ALLOWLIST, NÃO DE DERIVAÇÃO — e o `null` é lido com DOIS sentidos diferentes:
  * `deploy.ts` entende "não é um alvo de produto" e `instrumentation.ts` entende "é seguro no boot". O
  * pacote do próprio harness não está entre os alvos, e é por isso que ele responde null nos dois — ele
- * publica por systemd-run, não por `orch-deploy`. Uma versão que derivasse "todo board com package é
+ * publica por systemd-run, não pelo comando legado declarado. Uma versão que derivasse "todo board com package é
  * deployável" quebraria os dois sentidos de uma vez: o harness tentaria se auto-deployar pelo caminho
  * errado E deixaria de ser boot-safe.
  */
 export function deployPkgForPackage(
   boardPackage: string | undefined,
   targets: readonly string[] = productDeployTargets(),
+  packageRoot: string | null = loadRunnerConfig().deploy?.legacy?.packageRoot ?? null,
 ): string | null {
   if (!boardPackage) return null;
-  const base = boardPackage.replace(/^packages\//, "").replace(/\/+$/, "");
+  const semRaiz = packageRoot && boardPackage.startsWith(packageRoot) ? boardPackage.slice(packageRoot.length) : boardPackage;
+  const base = semRaiz.replace(/\/+$/, "");
   return targets.includes(base) ? base : null;
 }
 
@@ -117,7 +134,7 @@ export function composedFaceManifestRel(): string | null {
 // never silently fall behind what the face actually publishes — no more hand-kept mirror + drift-guard.
 // Read via fs from the repo root at module load (server-only module — zero bundler coupling; findRepoRoot is
 // memoized and already used below). Semantics mirror the merge-build matchesAny (gitignore-glob → anchored
-// regex): a `**` glob is a directory PREFIX; a bare filename is an EXACT root file (so `packages/x/package.json`
+// regex): a `**` glob is a directory PREFIX; a bare filename is an EXACT root file (so `<root>/x/package.json`
 // is NOT a face change). Derivation guarded by product-deploy.test.ts; manifest shape by the deployment.
 interface ComposedFaceManifest {
   apps: { id: string; webDir: string; sub: string; turboPkg: string }[];
@@ -234,7 +251,7 @@ export function composedFacePrefixes(): string[] {
   const { manifest } = loadComposedFaceManifest();
   if (!manifest) return [];
   return [
-    ...manifest.apps.map((a) => `${a.webDir}/`), // packages/<app>/web/ → a sub-rota da face
+    ...manifest.apps.map((a) => `${a.webDir}/`), // <root>/<app>/web/ → a sub-rota da face
     ...manifest.sharedGlobs.filter((g) => g.endsWith("/**")).map((g) => g.slice(0, -"**".length)), // e.g. um SDK compartilhado
   ];
 }
@@ -248,7 +265,7 @@ export function composedFaceFiles(): string[] {
 /**
  * story-ex0071 — PURE: does this promoted diff require publishing the composed face? True when any changed
  * path is under an app's web tree / the shared SDK, or is a root workspace file that shifts dependency
- * resolution. `orch-deploy <pkg>` (backend/functions only) does NOT cover the face, so a true here means the
+ * resolution. The legacy deploy command of `<pkg>` (backend/functions only) does NOT cover the face, so a true here means the
  * board deploy must ALSO fire the declared face recipe before the card can truthfully claim "No ar".
  */
 export function touchesComposedFace(files: string[]): boolean {
@@ -310,17 +327,17 @@ export interface DeployDoneEvent {
   /** the board + card that triggered the deploy (present when fired from a card's onEnter effect). */
   board?: string;
   cardId?: string;
-  /** story-ex0034 (t5): wall-clock the deploy ran for (finishedAt − startedAt). A real orch-deploy is minutes;
+  /** story-ex0034 (t5): wall-clock the deploy ran for (finishedAt − startedAt). A real diff-aware deploy is minutes;
    *  a no-drift diff-aware deploy exits in ~0s. */
   durationMs: number;
   /** story-ex0034 (t5): the deploy was expected to do real work (new code was promoted). */
   expectWork?: boolean;
   /** D-AG2 — false when the job ran a board-DECLARED deploy (shell command / agent) instead of the legacy
-   *  diff-aware `just orch-deploy`. The instant-noop guard ({@link deploySettledWithoutWork}) only means
+   *  diff-aware legacy command (deploy.legacy.command). The instant-noop guard ({@link deploySettledWithoutWork}) only means
    *  something for a diff-aware deploy, so declared deploys are exempt. Absent (legacy) ⇒ diff-aware. */
   diffAware?: boolean;
   /** Which board-DECLARED mechanism ran (`command` = the owner's shell command, `agent` = the deploy agent).
-   *  Absent for the legacy orch-deploy / face recipe. The exit-code CONTRACT of a declared command (exit 3 =
+   *  Absent for the legacy command / composed face. The exit-code CONTRACT of a declared command (exit 3 =
    *  "needs a human, nothing published" — deploy-needs-human.ts) belongs to `command` only. */
   declaredKind?: "command" | "agent";
   /** D-AG4 — the deploy AGENT's claimed published sha (from its verdict). A CLAIM, not proof: the settle
@@ -333,18 +350,18 @@ export interface DeployDoneEvent {
   followUp?: true;
 }
 
-/** story-ex0034 (t5): below this, a settled deploy did NO real work. A real orch-deploy (build + upload +
+/** story-ex0034 (t5): below this, a settled deploy did NO real work. A real diff-aware deploy (build + upload +
  *  new service revision) takes MINUTES; a diff-aware deploy of un-drifted code exits near-instantly. */
 export const DEPLOY_INSTANT_NOOP_MS = 5_000;
 
 /**
- * story-ex0034 (t5) — PURE: did a deploy SETTLE successfully but do NO real work? A diff-aware orch-deploy of
+ * story-ex0034 (t5) — PURE: did a deploy SETTLE successfully but do NO real work? A diff-aware deploy of
  * code that never reached main sees no drift → exits exit-0 in ~0s. That is NOT confirmation the code is live,
  * so when the release EXPECTED work (it promoted new code) an instant no-drift settle must be treated as a
  * failed publish (revert), not a green "No Ar". Guarded by `expectWork` so a LEGIT idempotent re-deploy (code
  * already live, nothing to ship) is never falsely reverted. Exported for tests.
  *
- * D-AG2 — the guard applies ONLY to the legacy diff-aware orch-deploy path (`diffAware !== false`). The
+ * D-AG2 — the guard applies ONLY to the legacy diff-aware command path (`diffAware !== false`). The
  * "~0s means nothing shipped" inference is a property of THAT tool (a no-drift diff exit), not of deploys
  * in general: a board-declared shell command (`vercel deploy --prod` on a warm cache, a one-line rsync)
  * can legitimately finish in under 5s having genuinely published — reverting it would be a false failure
@@ -367,7 +384,7 @@ export interface DeployLaunch {
 
 /**
  * D-AG2/D-AG3 — HOW a start is launched when the board DECLARES its own deploy (BoardConfig.deploy).
- * Absent spec ⇒ the legacy `just --yes orch-deploy <target>` / declared-face-recipe path, byte-identical.
+ * Absent spec ⇒ the legacy path: the argv the target declares (deploy.legacy.command / deploy.composedFace.command).
  *   - "shell": the user's declared command, run `bash -lc` from the repo root (login shell, so the
  *     owner's PATH tooling — vercel, flyctl, gcloud — resolves as it would in their terminal);
  *   - "agent": one bounded headless claude following the board's declared recipe (deploy-agent-spawn).
@@ -378,7 +395,7 @@ export type DeployLaunchSpec = { kind: "shell"; command: string } | DeployAgentS
 export type DeployLauncher = (pkg: string, logFile: string, spec?: DeployLaunchSpec) => DeployLaunch;
 
 /**
- * The log file an orch-deploy of `pkg` streams to (re-read by `tail` / deploy_status).
+ * The log file a deploy of `pkg` streams to (re-read by `tail` / deploy_status).
  *
  * ⚠️ O `pkg` É SANITIZADO AQUI, e não só onde ele entra. Enquanto os alvos eram um `z.enum` de constante
  * de código, o enum era — por acidente — a única coisa impedindo um alvo com `../` de escapar do diretório
@@ -393,23 +410,100 @@ export function logFileFor(pkg: string, root: string = findRepoRoot()): string {
   return path.join(root, ".artifacts", "logs", `mcp-deploy-${seguro}.log`);
 }
 
+/** O comando de um alvo de deploy: o argv a executar, ou a recusa que diz a chave a declarar. */
+export type DeployCommandResolution = { ok: true; argv: string[] } | { ok: false; refusal: string };
+
 /**
- * story-ex0071 — the `just` recipe (args after `--yes`) a deploy TARGET maps to. The reserved composed-face
- * target publishes the merged web face with the deployment's DECLARED recipe; every other id is a diff-aware
- * `orch-deploy <target>`. Keeps the ONE registry/launcher able to drive both without a parallel mechanism.
+ * story-ex0071 — the ARGV a deploy TARGET maps to, as the TARGET declares it (nunca suposto). The reserved composed-face
+ * target publishes the merged web face with `deploy.composedFace.command`; every other id is the diff-aware legacy
+ * command `deploy.legacy.command` with `{target}` expanded. Keeps the ONE registry/launcher able to drive both without a
+ * parallel mechanism.
  *
- * `face` é injetável para manter a função PURA (era pura quando o alvo da face era uma constante de código;
- * continuar pura é o que deixa a tabela de casos testável sem tocar em settings).
+ * SEM DECLARAÇÃO ⇒ RECUSA nomeando a chave (nada roda por suposição). O `recipe` da face é só o rótulo/identidade
+ * legada dela: sozinho ele NÃO publica nada — a ferramenta não sabe de que executor é aquela «receita».
+ *
+ * `policy` é injetável para manter a função PURA (a tabela de casos fica testável sem tocar em settings); o default lê a
+ * declaração do alvo.
  */
 export function deployCommandFor(
   target: string,
-  face: { target: string | null; recipe: string | null } = { target: composedFaceTarget(), recipe: composedFaceRecipe() },
-): string[] {
-  return face.target && face.recipe && target === face.target ? [face.recipe] : ["orch-deploy", target];
+  policy: Pick<ResolvedDeployPolicy, "legacy" | "composedFace"> = declaredDeployPolicy(),
+): DeployCommandResolution {
+  const face = policy.composedFace;
+  if (face?.target && target === face.target) {
+    if (!face.command) {
+      return {
+        ok: false,
+        refusal: `o alvo ${target} é a superfície composta, mas o alvo não declarou COMO publicá-la — declare em settings.yaml → deploy.composedFace.command (um argv, sem shell). A receita (\`recipe\`) sozinha é só um rótulo.`,
+      };
+    }
+    return { ok: true, argv: [...face.command] };
+  }
+  const command = policy.legacy.command;
+  if (!command) {
+    return {
+      ok: false,
+      refusal: `o alvo não declarou COMO publicar o alvo ${target} — declare em settings.yaml → deploy.legacy.command (um argv, sem shell, com {target} onde vai o id do alvo).`,
+    };
+  }
+  const argv = expandArgvTemplate(command, { target });
+  if (!argv) {
+    return { ok: false, refusal: `o id de alvo ${JSON.stringify(target)} não tem forma de slug — não vira argumento de deploy.legacy.command.` };
+  }
+  return { ok: true, argv };
 }
 
-/** Default launcher: `just --yes <recipe>` as a child of this process, streaming to the log. The recipe is
- *  `orch-deploy <target>` for an app, or the declared recipe for the reserved composed-face target.
+/** A forma de um NOME de programa declarado: sem `/` (não é caminho), sem espaço nem metacaractere de shell, sem começar por `-` ou `.`. */
+export const DECLARED_PROGRAM_NAME = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
+
+/**
+ * O executável de um comando DECLARADO pelo alvo (`argv[0]`, um NOME sem `/`): o caminho absoluto ou a recusa que diz o que
+ * declarar. Mesma régua de `resolveHostTool` — declarado > PATH > recusa —, estendida a qualquer programa:
+ *   · os que a ferramenta já conhece por nome (`HOST_TOOL_ENV`) usam a variável própria deles;
+ *   · os demais aceitam `AGILEHARNESS_BIN_<NOME>` (maiúsculo, não-alfanumérico → `_`) com caminho ABSOLUTO existente.
+ *
+ * O PREFIXO «AGILEHARNESS_BIN_» É DEDICADO, de propósito: o prefixo genérico colidia com as variáveis de CONFIGURAÇÃO da
+ * própria ferramenta (um programa chamado «port» ou «deploy» leria a porta ou a chave de deploy como se fosse o seu
+ * caminho). Com o espaço de nomes próprio, nenhum nome de programa esbarra numa chave existente.
+ *
+ * O NOME é validado ANTES de qualquer busca ({@link DECLARED_PROGRAM_NAME}): a coerção do settings só rejeita `/`, e um
+ * nome com espaço, `;` ou começado por `-` não deve nem chegar ao PATH. Declarado-mas-inexistente NÃO cai para o PATH
+ * (um engano não se esconde atrás de outro binário).
+ */
+export function resolveDeclaredProgram(
+  name: string,
+  probe: { env?: Record<string, string | undefined>; exists?: (p: string) => boolean } = {},
+): { ok: true; path: string } | { ok: false; refusal: string } {
+  if (typeof name !== "string" || !DECLARED_PROGRAM_NAME.test(name)) {
+    return {
+      ok: false,
+      refusal: `${JSON.stringify(String(name).slice(0, 60))} não é um nome de programa válido — o comando declarado deve começar pelo NOME de um executável (letras, dígitos, ponto, hífen, sublinhado ou mais), sem caminho.`,
+    };
+  }
+  if (Object.hasOwn(HOST_TOOL_ENV, name)) {
+    const r = resolveHostTool(name as HostTool, probe);
+    return r.ok ? { ok: true, path: r.path } : { ok: false, refusal: r.refusal };
+  }
+  const env = probe.env ?? process.env;
+  const exists = probe.exists ?? existsSync;
+  const varName = `AGILEHARNESS_BIN_${name.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+  const declared = (env[varName] ?? "").trim();
+  if (declared) {
+    if (!path.isAbsolute(declared)) return { ok: false, refusal: `${varName}="${declared}" não é um caminho absoluto — declare o caminho completo do executável \`${name}\`.` };
+    if (!exists(declared)) return { ok: false, refusal: `${varName}="${declared}" foi declarado mas não existe nesta máquina — corrija a declaração (a busca pelo PATH NÃO é tentada quando há declaração).` };
+    return { ok: true, path: declared };
+  }
+  const found = lookupOnPath(name, env, exists);
+  if (found) return { ok: true, path: found };
+  return {
+    ok: false,
+    refusal: `\`${name}\` (o programa que o alvo declarou) não foi encontrado no PATH deste serviço e não há declaração — instale-o, ou declare o caminho no env do serviço: \`${varName}=/caminho/para/${name}\`.`,
+  };
+}
+
+/** Default launcher: the target's DECLARED command (see {@link deployCommandFor}) as a child of this process, streaming to
+ *  the log. The command is `deploy.legacy.command` for an app, or `deploy.composedFace.command` for the reserved
+ *  composed-face target; without the declaration the launch is REFUSED (written to the log, exit -1).
  *  D-AG2/D-AG3 — a `spec` reroutes the SAME launch shape to the board's DECLARED deploy: "shell" spawns
  *  the owner's command via `bash -lc`; "agent" delegates to deploy-agent-spawn (which owns its log
  *  stream + verdict). Everything downstream (tracking, onDone, revert, settle) is shared, by design. */
@@ -427,18 +521,22 @@ const defaultLauncher: DeployLauncher = (pkg, logFile, spec) => {
     out.write(`[deploy ${pkg}] $ ${spec.command}\n`);
     child = spawn("bash", ["-lc", spec.command], { cwd: findRepoRoot(), windowsHide: true, env: sanitizeSpawnEnv(process.env) });
   } else {
-    // story-ex9514 — `just` é ferramenta do HOST e o justfile do repositório de origem NÃO viaja na extração. Um
+    // story-ex9514 — o executável do deploy é ferramenta do HOST: ele pode nem existir nesta máquina. Um
     // ENOENT aqui aparecia como "deploy falhou exit -1" com o log vazio: o `spawn` erra ANTES de escrever
     // qualquer linha, então o operador via um veredito sem causa. A recusa é escrita NO LOG (a superfície
     // que o deploy_status mostra) e o job termina com código não-zero — falha honesta, com o porquê.
-    const just = resolveHostTool("just");
-    if (!just.ok) {
-      out.end(`[deploy ${pkg}] RECUSADO: ${just.refusal}\n`);
-      return { pid: null, whenDone: (cb) => { setImmediate(() => cb(-1)); } };
-    }
-    const args = ["--yes", ...deployCommandFor(pkg)];
-    out.write(`[deploy ${pkg}] ${just.path} ${args.join(" ")}\n`);
-    child = spawn(just.path, args, { cwd: findRepoRoot(), windowsHide: true, env: sanitizeSpawnEnv(process.env) });
+    // O MESMO vale para o alvo que NÃO declarou o comando: a recusa diz a chave a declarar e nada é executado.
+    const refused = (why: string) => {
+      out.end(`[deploy ${pkg}] RECUSADO: ${why}\n`);
+      return { pid: null, whenDone: (cb: (code: number | null) => void) => { setImmediate(() => cb(-1)); } };
+    };
+    const command = deployCommandFor(pkg);
+    if (!command.ok) return refused(command.refusal);
+    const program = resolveDeclaredProgram(command.argv[0]);
+    if (!program.ok) return refused(program.refusal);
+    const args = command.argv.slice(1);
+    out.write(`[deploy ${pkg}] ${program.path} ${args.join(" ")}\n`);
+    child = spawn(program.path, args, { cwd: findRepoRoot(), windowsHide: true, env: sanitizeSpawnEnv(process.env) });
   }
   child.stdout?.on("data", (d) => out.write(d));
   child.stderr?.on("data", (d) => out.write(d));
@@ -509,7 +607,7 @@ export class ProductDeployRegistry {
     return [...this.jobs.values()].sort((a, b) => b.startedAt - a.startedAt || b.startSeq - a.startSeq)[0];
   }
 
-  /** Spawn `just --yes orch-deploy <pkg>` (via the launcher), tracking the job. `ctx` threads the board +
+  /** Spawn the target's declared deploy command for `<pkg>` (via the launcher), tracking the job. `ctx` threads the board +
    *  card that triggered the deploy (an onEnter effect), so onDone subscribers can act on that card.
    *  story-ex0034 (t5): `ctx.expectWork` records that the release promoted NEW code, so an instant no-drift
    *  settle can be flagged as "nothing shipped" (deploySettledWithoutWork).

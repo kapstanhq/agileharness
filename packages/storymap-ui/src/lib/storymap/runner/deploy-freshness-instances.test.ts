@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { exec as nodeExec } from "node:child_process";
 import { promisify } from "node:util";
 import type { ExecFn } from "./worktree";
+import { deployPolicyFromSettings } from "./deploy-command-guard";
 
 // O Next instancia o MESMO módulo uma vez por camada do bundle. Em produção a ação do
 // botão «Aprovar & avançar → Publicar» cunhava a autorização numa cópia deste arquivo e o registro de
@@ -29,7 +30,7 @@ describe("autorização de frescor entre CÓPIAS do módulo", () => {
   it("cunhada por uma cópia, é resgatada pela outra — e continua de uso único entre elas", async () => {
     const { a, b } = await duasCopias();
     const v = await a.checkDeployFreshness(
-      { target: "app", repoRoot: "/r", scope: [], label: "t" },
+      { target: "app", repoRoot: "/r", scope: [], policy: deployPolicyFromSettings(undefined, {}), label: "t" },
       { exec: baseExec, env: OFF, log: () => {}, now: () => 1_000 },
     );
     if (!v.ok) throw new Error("o escape deveria cunhar");

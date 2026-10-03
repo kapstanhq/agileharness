@@ -55,6 +55,8 @@ describe("as classes do dono — declaradas, com um default no código", () => {
 
   it("o `_base` declara exatamente o default do código (uma lista, dois lugares que não podem divergir)", async () => {
     const base = await readBaseTemplateConfig();
+    // lote D: o default do código ficou NEUTRO e o `_base` ganhou a mesma redação — a igualdade volta a ser TOTAL
+    // (ids, rótulos, ordem e texto das quatro classes).
     expect(base.autonomy?.ownerClasses).toEqual(DEFAULT_OWNER_CLASSES);
     expect(base.autonomy?.mode).toBeUndefined(); // o _base NUNCA liga o modo — só declara as classes
   });

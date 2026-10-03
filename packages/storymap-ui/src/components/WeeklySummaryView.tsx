@@ -8,14 +8,16 @@
 import { CalendarDays } from "lucide-react";
 import { PageHeader } from "@/components/nav/PageTabs";
 import { cardHref, inboxHref } from "@/lib/storymap/deep-links";
-import { weeklySummaryHref, type WeeklyItem, type WeeklySummary } from "@/lib/storymap/weekly-summary";
+import { costImpactFigures } from "@/lib/storymap/cost-impact";
+import { formatImpactMoney, projectedMonthlyText, weeklySummaryHref, type WeeklyItem, type WeeklySummary } from "@/lib/storymap/weekly-summary";
 
 const fmtDay = (date: string) => {
   const [y, m, d] = date.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", timeZone: "UTC" });
 };
 const fmtWhen = (iso: string) => new Date(iso).toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "2-digit" });
-const brl = (n: number) => n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+// O dinheiro do PRODUTO sai na moeda do próprio impacto (formatImpactMoney: um card cujo dado se declara na moeda antiga segue nela mesmo que
+// o alvo mude de moeda). O US$ abaixo é outra coisa: a moeda do FORNECEDOR de IA (o Claude informa em dólar), fato dele, não do alvo.
 const usd = (n: number) => n.toLocaleString("pt-BR", { style: "currency", currency: "USD" });
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
@@ -118,12 +120,12 @@ export function WeeklySummaryView({ summary, current, previous, next }: { summar
             <span className="text-fg-muted"> — a estimativa que o Claude informa por execução; pela assinatura, só vira cobrança com o uso extra ligado.</span>
           </p>
           <p className="text-fg">
-            O que foi ao ar projeta {cost.projectedMonthlyBRL > 0 ? `+${brl(cost.projectedMonthlyBRL)} por mês` : "nenhum custo a mais por mês"}
+            O que foi ao ar projeta {projectedMonthlyText(cost.projectedMonthly)}
             {cost.projections.length ? "" : <span className="text-fg-muted"> (nenhuma entrega da semana trouxe projeção de custo)</span>}.
           </p>
           {cost.projections.map((p) => (
             <p key={`${p.boardId}/${p.cardId}`} className="text-[12.5px] text-fg-muted">
-              {p.title}: +{brl(p.impact.monthlyBRL)}/mês ({p.impact.scope === "cash" ? "caixa" : "infraestrutura"}) — {p.impact.assumptions}
+              {p.title}: +{formatImpactMoney(costImpactFigures(p.impact).amount, costImpactFigures(p.impact).currency)}/mês ({p.impact.scope === "cash" ? "caixa" : "infraestrutura"}) — {p.impact.assumptions}
             </p>
           ))}
         </div>

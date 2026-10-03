@@ -12,6 +12,8 @@ import {
   monorepoDeltaCount,
   deployUnitScope,
   readDeployUnitShas,
+  deployStatePath,
+  deployRiskSummary,
   type SettleDeploySuccessDeps,
 } from "./deploy-reconcile";
 import { DEPLOY_FAILURE_FINDING_ID, DEPLOY_UNPROVEN_FINDING_ID } from "@/lib/storymap/demands";
@@ -115,13 +117,82 @@ describe("deploy-reconcile — o deploy-failure é uma AFIRMAÇÃO re-verificáv
 });
 
 describe("deploy-reconcile — leitura da evidência (fail-closed em toda falha de IO)", () => {
+  // O molde do arquivo de estado é DECLARADO pelo alvo (`deploy.legacy.state`): estes casos o injetam, em vez de ler o settings da máquina.
+  const ESTADO = "estado-das-publicacoes/{target}.json";
+
   it("readLastDeploySha devolve null quando o arquivo não existe (sem evidência ⇒ não resolve)", async () => {
-    expect(await readLastDeploySha("/tmp/nao-existe-repo-xyz", "acmeapp")).toBeNull();
+    expect(await readLastDeploySha("/tmp/nao-existe-repo-xyz", "acmeapp", ESTADO)).toBeNull();
   });
 
-  it("readLastDeploySha rejeita um id de alvo com traversal (o caminho nunca escapa do state dir)", async () => {
-    // sanitização: "../../etc" vira "etc" → no máximo lê um arquivo inexistente, nunca sobe na árvore
-    expect(await readLastDeploySha("/tmp/nao-existe-repo-xyz", "../../etc/passwd")).toBeNull();
+  it("readLastDeploySha rejeita um id de alvo com traversal (o caminho nunca escapa do molde)", async () => {
+    // sanitização: "../../etc" vira "etcpasswd" → no máximo lê um arquivo inexistente DENTRO do molde, nunca sobe na árvore
+    expect(await readLastDeploySha("/tmp/nao-existe-repo-xyz", "../../etc/passwd", ESTADO)).toBeNull();
+    expect(deployStatePath("/repo", "../../etc/passwd", ESTADO)).toBe("/repo/estado-das-publicacoes/etcpasswd.json");
+    expect(deployStatePath("/repo", "../..", ESTADO)).toBeNull(); // nada sobrou do id ⇒ nenhum caminho
+  });
+
+  it("deployStatePath: o caminho é o do molde DECLARADO com {target} expandido (qualquer layout, nenhum suposto)", () => {
+    expect(deployStatePath("/repo", "acmeapp", "estado-das-publicacoes/{target}.json")).toBe("/repo/estado-das-publicacoes/acmeapp.json");
+    expect(deployStatePath("/repo", "acmeapp", "ops/{target}/ultimo.json")).toBe("/repo/ops/acmeapp/ultimo.json");
+  });
+
+  it("SEM molde declarado não há evidência: null (nunca «no ar» por acidente) e UM aviso diz a chave a declarar", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(deployStatePath("/repo", "acmeapp", null)).toBeNull();
+      expect(await readLastDeploySha("/repo", "acmeapp", null)).toBeNull();
+      expect(await readDeployUnitShas("/repo", "acmeapp", null)).toBeNull();
+      const avisos = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes("deploy.legacy.state"));
+      expect(avisos.length, "o aviso sai UMA vez por processo, não a cada leitura").toBeLessThanOrEqual(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("readLastDeploySha lê o `lastDeploySha` do arquivo DECLARADO", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const path = await import("node:path");
+    const root = mkdtempSync(path.join(tmpdir(), "last-sha-"));
+    try {
+      mkdirSync(path.join(root, "estado-das-publicacoes"), { recursive: true });
+      writeFileSync(path.join(root, "estado-das-publicacoes", "bicicleta.json"), JSON.stringify({ lastDeploySha: "abc1234" }));
+      writeFileSync(path.join(root, "estado-das-publicacoes", "ruim.json"), JSON.stringify({ lastDeploySha: "não-é-sha" }));
+      expect(await readLastDeploySha(root, "bicicleta", ESTADO)).toBe("abc1234");
+      expect(await readLastDeploySha(root, "ruim", ESTADO)).toBeNull();
+      // outro layout declarado ⇒ o arquivo do primeiro layout NÃO é lido
+      expect(await readLastDeploySha(root, "bicicleta", "outro-lugar/{target}.json")).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("deployRiskSummary usa o escopo e o estado DECLARADOS; sem escopo declarado diz qual chave declarar", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const path = await import("node:path");
+    const root = mkdtempSync(path.join(tmpdir(), "risk-"));
+    const calls: string[] = [];
+    const exec: ExecFn = async (cmd) => {
+      calls.push(cmd);
+      return cmd.includes("rev-list") ? { stdout: "7\n", stderr: "" } : { stdout: "aaa1111 mexe na bicicleta\n", stderr: "" };
+    };
+    try {
+      mkdirSync(path.join(root, "estado-das-publicacoes"), { recursive: true });
+      writeFileSync(path.join(root, "estado-das-publicacoes", "bicicleta.json"), JSON.stringify({ lastDeploySha: "abc1234" }));
+      const declarado = await deployRiskSummary(exec, root, "bicicleta", { scope: ["oficinas/{target}/"], state: ESTADO });
+      expect(declarado.baseSha).toBe("abc1234");
+      expect(declarado.monorepoSinceBase).toBe(7);
+      expect(declarado.scoped.count).toBe(1);
+      expect(calls.some((c) => c.includes('"oficinas/bicicleta/"'))).toBe(true);
+      expect(declarado.note).toContain("(escopo: oficinas/bicicleta/, deps compartilhadas à parte): 1");
+      // sem escopo declarado: nenhum delta escopado é contado e a nota diz o que declarar
+      const semEscopo = await deployRiskSummary(exec, root, "bicicleta", { scope: [], state: ESTADO });
+      expect(semEscopo.scoped.count).toBe(0);
+      expect(semEscopo.note).toMatch(/settings\.yaml → deploy\.legacy\.scope/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("makeGitContains: exit 0 = contém; exit≠0 (ou git ilegível) = NÃO contém — nunca 'no ar' por acidente", async () => {
@@ -703,12 +774,13 @@ describe("measureDeployAncestry POR UNIDADE — o card prova pelas unidades que 
     const path = await import("node:path");
     const root = mkdtempSync(path.join(tmpdir(), "unit-shas-"));
     try {
-      mkdirSync(path.join(root, "scripts", "deploy", "state"), { recursive: true });
-      writeFileSync(path.join(root, "scripts", "deploy", "state", "armazem.json"), JSON.stringify({ lastDeploySha: "abc1234", units: { "edge-api": "abcdef1", lixo: "não-sha" } }));
-      writeFileSync(path.join(root, "scripts", "deploy", "state", "velho.json"), JSON.stringify({ lastDeploySha: "abc1234", units: ["edge-api"] }));
-      expect(await readDeployUnitShas(root, "armazem")).toEqual({ "edge-api": "abcdef1" });
-      expect(await readDeployUnitShas(root, "velho")).toBeNull();
-      expect(await readDeployUnitShas(root, "ausente")).toBeNull();
+      const estado = "estado-das-publicacoes/{target}.json"; // o molde que o alvo declara (deploy.legacy.state)
+      mkdirSync(path.join(root, "estado-das-publicacoes"), { recursive: true });
+      writeFileSync(path.join(root, "estado-das-publicacoes", "armazem.json"), JSON.stringify({ lastDeploySha: "abc1234", units: { "edge-api": "abcdef1", lixo: "não-sha" } }));
+      writeFileSync(path.join(root, "estado-das-publicacoes", "velho.json"), JSON.stringify({ lastDeploySha: "abc1234", units: ["edge-api"] }));
+      expect(await readDeployUnitShas(root, "armazem", estado)).toEqual({ "edge-api": "abcdef1" });
+      expect(await readDeployUnitShas(root, "velho", estado)).toBeNull();
+      expect(await readDeployUnitShas(root, "ausente", estado)).toBeNull();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

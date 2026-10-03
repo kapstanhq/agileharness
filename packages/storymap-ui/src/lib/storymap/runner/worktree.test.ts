@@ -4,12 +4,18 @@ import { describe, expect, it } from "vitest";
 import { sessionsFilePath } from "./session-liveness";
 import {
   commitBoardDataScoped,
+  deprovisionNodeModules,
+  expandWorkspaceGlob,
   makeWorktreeOps,
   planNodeModulesLinks,
+  provisionNodeModules,
   repoRootOfWorktree,
   rescueCommitMessage,
+  resolveWorkspaceGlobs,
   runBranch,
   runWorktreePath,
+  sanitizeWorkspaceGlobs,
+  workspaceGlobsFromPackageJson,
   type ExecFn,
   type WorktreeFs,
 } from "./worktree";
@@ -743,6 +749,8 @@ describe("WorktreeOps — node_modules provisioning ↔ git ordering (story-ex01
       listDirs: async () => ["storymap-ui"],
       isDir: async () => true,
       isFile: async () => false,
+      // o alvo declara seus workspaces no package.json da raiz (a fonte de onde saem os links aninhados)
+      readText: async () => JSON.stringify({ workspaces: ["packages/*", "packages/*/web", "packages/*/api", "packages/*/functions"] }),
       linkDir: async () => {
         timeline.push("fs:link");
       },
@@ -779,11 +787,15 @@ describe("WorktreeOps — node_modules provisioning ↔ git ordering (story-ex01
   });
 });
 
+// A forma dos workspaces de um monorepo `packages/<pkg>` com três camadas aninhadas — INVENTADA (oficina de bicicletas),
+// da mesma forma que o alvo vivo declara.
+const WORKSPACES_DA_OFICINA = ["packages/*", "packages/*/web", "packages/*/api", "packages/*/functions"];
+
 describe("planNodeModulesLinks — links nested workspace tiers (story-ex0109 degraded-worktree fix)", () => {
   // A fake fs backed by an EXPLICIT set of existing dirs, so the plan is asserted precisely (not
   // "everything is a dir"). Proves the nested web/api/functions node_modules are linked and an
   // ABSENT tier is skipped — the gap that made every worktree test/build hand-`ln -s` its deps.
-  function fsFrom(existing: string[]): WorktreeFs {
+  function fsFrom(existing: string[], files: Record<string, string> = {}): WorktreeFs {
     const set = new Set(existing);
     return {
       listDirs: async (dir) =>
@@ -792,6 +804,7 @@ describe("planNodeModulesLinks — links nested workspace tiers (story-ex0109 de
           .map((p) => p.slice(dir.length + 1)),
       isDir: async (p) => set.has(p),
       isFile: async () => false,
+      readText: async (p) => files[p] ?? null,
       linkDir: async () => {},
       unlinkDir: async () => true,
     };
@@ -814,7 +827,8 @@ describe("planNodeModulesLinks — links nested workspace tiers (story-ex0109 de
       // storymap-ui has no nested tiers
     ]);
 
-    const links = await planNodeModulesLinks(fs, repo, "/wt");
+    // O alvo DECLARA seus workspaces (`target.layout.workspaces`); a ferramenta não supõe mais `web/api/functions`.
+    const links = await planNodeModulesLinks(fs, repo, "/wt", WORKSPACES_DA_OFICINA);
     const linkPaths = links.map((l) => l.linkPath);
 
     expect(linkPaths).toContain(path.join("/wt", "node_modules")); // root (hoisted)
@@ -827,6 +841,156 @@ describe("planNodeModulesLinks — links nested workspace tiers (story-ex0109 de
     // the nested link TARGET points at the MAIN checkout (the source of truth for deps)
     const webLink = links.find((l) => l.linkPath === path.join("/wt", "packages", "app-a", "web", "node_modules"));
     expect(webLink?.target).toBe(path.join(repo, "packages", "app-a", "web", "node_modules"));
+  });
+
+  // ── Lote D (layout): de onde vêm os workspaces ────────────────────────────────────────────────────────────────
+  // O mesmo repositório INVENTADO (oficina de bicicletas) nos testes abaixo.
+  const repo = "/oficina";
+  const dirsDaOficina = [
+    `${repo}/node_modules`,
+    `${repo}/packages`,
+    `${repo}/packages/vendas`,
+    `${repo}/packages/vendas/node_modules`,
+    `${repo}/packages/vendas/web`,
+    `${repo}/packages/vendas/web/node_modules`,
+    `${repo}/packages/vendas/api`,
+    `${repo}/packages/vendas/api/node_modules`,
+    `${repo}/packages/vendas/functions`,
+    `${repo}/packages/vendas/functions/node_modules`,
+    `${repo}/packages/estoque`,
+    `${repo}/packages/estoque/node_modules`,
+    `${repo}/packages/estoque/functions`,
+    `${repo}/packages/estoque/functions/node_modules`,
+    `${repo}/packages/estoque/docs`, // pasta que NÃO é workspace e não tem node_modules
+  ];
+  const linkPathsDe = (links: Array<{ linkPath: string }>) => links.map((l) => l.linkPath).sort();
+
+  /** A implementação ANTIGA (literais `packages/` + `web|api|functions`), como referência da equivalência. */
+  async function planoAntigo(fs: WorktreeFs, root: string, wt: string) {
+    const links: Array<{ target: string; linkPath: string }> = [];
+    if (await fs.isDir(path.join(root, "node_modules"))) links.push({ target: path.join(root, "node_modules"), linkPath: path.join(wt, "node_modules") });
+    const packagesDir = path.join(root, "packages");
+    for (const name of await fs.listDirs(packagesDir)) {
+      const pkgNm = path.join(packagesDir, name, "node_modules");
+      if (await fs.isDir(pkgNm)) links.push({ target: pkgNm, linkPath: path.join(wt, "packages", name, "node_modules") });
+      for (const tier of ["web", "api", "functions"]) {
+        const nested = path.join(packagesDir, name, tier, "node_modules");
+        if (await fs.isDir(nested)) links.push({ target: nested, linkPath: path.join(wt, "packages", name, tier, "node_modules") });
+      }
+    }
+    return links;
+  }
+
+  it("EQUIVALÊNCIA: declarado, lido do package.json (array e objeto) — o plano é IGUAL ao da implementação antiga", async () => {
+    const pkgJsonArray = JSON.stringify({ name: "oficina", workspaces: WORKSPACES_DA_OFICINA });
+    const pkgJsonObjeto = JSON.stringify({ name: "oficina", workspaces: { packages: WORKSPACES_DA_OFICINA, nohoist: ["**/x"] } });
+    const antigo = linkPathsDe(await planoAntigo(fsFrom(dirsDaOficina), repo, "/wt"));
+    expect(antigo).toHaveLength(7); // raiz + 2 pacotes + 3 camadas de vendas + 1 de estoque, sem a pasta docs
+
+    const declarado = linkPathsDe(await planNodeModulesLinks(fsFrom(dirsDaOficina), repo, "/wt", WORKSPACES_DA_OFICINA));
+    const doArray = linkPathsDe(await planNodeModulesLinks(fsFrom(dirsDaOficina, { [`${repo}/package.json`]: pkgJsonArray }), repo, "/wt", null));
+    const doObjeto = linkPathsDe(await planNodeModulesLinks(fsFrom(dirsDaOficina, { [`${repo}/package.json`]: pkgJsonObjeto }), repo, "/wt", null));
+    expect(declarado).toEqual(antigo);
+    expect(doArray).toEqual(antigo);
+    expect(doObjeto).toEqual(antigo);
+  });
+
+  it("SEM declaração e SEM package.json legível: só o node_modules da RAIZ (nunca se adivinha pasta)", async () => {
+    const links = await planNodeModulesLinks(fsFrom(dirsDaOficina), repo, "/wt", null);
+    expect(linkPathsDe(links)).toEqual([path.join("/wt", "node_modules")]);
+    // package.json sem `workspaces`, e JSON quebrado: o mesmo neutro
+    for (const texto of [JSON.stringify({ name: "x" }), "{ quebrado", ""]) {
+      const l = await planNodeModulesLinks(fsFrom(dirsDaOficina, { [`${repo}/package.json`]: texto }), repo, "/wt", null);
+      expect(linkPathsDe(l)).toEqual([path.join("/wt", "node_modules")]);
+    }
+  });
+
+  it("repo PLANO com outro layout (`apps/*`, `libs/*`): liga o que o alvo declara — e nenhum literal `packages`", async () => {
+    const plano = "/livraria";
+    const dirs = [
+      `${plano}/node_modules`,
+      `${plano}/apps`,
+      `${plano}/apps/balcao`,
+      `${plano}/apps/balcao/node_modules`,
+      `${plano}/libs`,
+      `${plano}/libs/precos`,
+      `${plano}/libs/precos/node_modules`,
+      `${plano}/packages`, // existe, mas o alvo NÃO o declara como workspace
+      `${plano}/packages/legado`,
+      `${plano}/packages/legado/node_modules`,
+    ];
+    const fs = fsFrom(dirs, { [`${plano}/package.json`]: JSON.stringify({ workspaces: ["apps/*", "libs/*"] }) });
+    const links = await planNodeModulesLinks(fs, plano, "/wt", null);
+    expect(linkPathsDe(links)).toEqual(
+      [path.join("/wt", "apps", "balcao", "node_modules"), path.join("/wt", "libs", "precos", "node_modules"), path.join("/wt", "node_modules")].sort(),
+    );
+    expect(links.some((l) => l.linkPath.includes(`${path.sep}packages${path.sep}`))).toBe(false);
+  });
+
+  it("a declaração em settings VENCE o package.json (e `null` ≠ `undefined`: null não consulta o settings)", async () => {
+    const fs = fsFrom(dirsDaOficina, { [`${repo}/package.json`]: JSON.stringify({ workspaces: ["packages/*"] }) });
+    // declarado só `packages/*/web` ⇒ só essa camada (+ raiz), mesmo com o package.json listando `packages/*`
+    const links = await planNodeModulesLinks(fs, repo, "/wt", ["packages/*/web"]);
+    expect(linkPathsDe(links)).toEqual([path.join("/wt", "node_modules"), path.join("/wt", "packages", "vendas", "web", "node_modules")].sort());
+    // lista declarada VAZIA = «nenhum workspace»: só a raiz (uma declaração deliberada, não «não declarei»)
+    expect(linkPathsDe(await planNodeModulesLinks(fs, repo, "/wt", []))).toEqual([path.join("/wt", "node_modules")]);
+  });
+
+  it("glob com `**` é IGNORADO com aviso no log e não gera link falso; negação e `..` também não", async () => {
+    const avisos: string[] = [];
+    const orig = console.warn;
+    console.warn = (...a: unknown[]) => void avisos.push(a.join(" "));
+    try {
+      const globs = sanitizeWorkspaceGlobs(["packages/**", "!packages/vendas", "../fora", "/abs", "./packages/*/", "packages/*"]);
+      expect(globs).toEqual(["packages/*"]); // `./` e `/` final normalizados; duplicata removida
+      const fs = fsFrom(dirsDaOficina, { [`${repo}/package.json`]: JSON.stringify({ workspaces: ["packages/**", "packages/*/web"] }) });
+      const links = await planNodeModulesLinks(fs, repo, "/wt", null);
+      expect(linkPathsDe(links)).toEqual([path.join("/wt", "node_modules"), path.join("/wt", "packages", "vendas", "web", "node_modules")].sort());
+    } finally {
+      console.warn = orig;
+    }
+    expect(avisos.some((l) => l.includes("packages/**") && l.includes("target.layout.workspaces"))).toBe(true);
+  });
+
+  it("segmento parcial (`app-*`) casa só o que começa assim; `*` não casa node_modules nem pasta oculta", async () => {
+    const r = "/ateliê";
+    const fs = fsFrom([`${r}/node_modules`, `${r}/app-web`, `${r}/app-web/node_modules`, `${r}/lib-x`, `${r}/lib-x/node_modules`, `${r}/.cache`, `${r}/.cache/node_modules`]);
+    expect(await expandWorkspaceGlob(fs, r, "app-*")).toEqual(["app-web"]);
+    expect(await expandWorkspaceGlob(fs, r, "*")).toEqual(["app-web", "lib-x"]); // sem node_modules, sem .cache
+  });
+
+  it("workspaceGlobsFromPackageJson / resolveWorkspaceGlobs: array, objeto e ausência", async () => {
+    expect(workspaceGlobsFromPackageJson(JSON.stringify({ workspaces: ["a/*", "b"] }))).toEqual(["a/*", "b"]);
+    expect(workspaceGlobsFromPackageJson(JSON.stringify({ workspaces: { packages: ["c/*"] } }))).toEqual(["c/*"]);
+    expect(workspaceGlobsFromPackageJson(null)).toEqual([]);
+    expect(await resolveWorkspaceGlobs(fsFrom([]), "/vazio", null)).toEqual([]); // fs sem readText ⇒ só a raiz depois
+  });
+
+  it("provision e deprovision planejam a MESMA lista — e o teardown desfaz também o que o plano guardado ligou", async () => {
+    const ligados: string[] = [];
+    const desligados: string[] = [];
+    const base = fsFrom(dirsDaOficina, { [`${repo}/package.json`]: JSON.stringify({ workspaces: WORKSPACES_DA_OFICINA }) });
+    const fs: WorktreeFs = {
+      ...base,
+      linkDir: async (_t, l) => void ligados.push(l),
+      unlinkDir: async (l) => {
+        desligados.push(l);
+        return true;
+      },
+    };
+    const wt = path.join(repo, ".worktrees", "run-bicicleta");
+    await provisionNodeModules(fs, repo, wt);
+    await deprovisionNodeModules(fs, repo, wt);
+    expect([...desligados].sort()).toEqual([...ligados].sort());
+    expect(ligados).toHaveLength(7);
+
+    // o package.json MUDA entre as duas pontas (agora só `packages/*`): o link que ficaria para trás é desfeito pelo plano guardado
+    ligados.length = 0;
+    desligados.length = 0;
+    await provisionNodeModules(fs, repo, wt);
+    const mudou: WorktreeFs = { ...fs, readText: async () => JSON.stringify({ workspaces: ["packages/*"] }) };
+    await deprovisionNodeModules(mudou, repo, wt);
+    expect([...desligados].sort()).toEqual([...ligados].sort());
   });
 });
 
@@ -910,6 +1074,6 @@ describe("commitBoardDataScoped — a régua de código é a DECLARADA (layout p
   it("o DEFAULT do parâmetro vem do settings — não de uma constante deste arquivo", () => {
     // A fonte é o que garante que o caminho de produção (que chama com 3 argumentos) use o declarado.
     const fonte = readFileSync(path.join(__dirname, "worktree.ts"), "utf8");
-    expect(fonte).toMatch(/codePrefixes: readonly string\[\] = loadRunnerConfig\(\)\.autorun\.staging\?\.codePrefixes/);
+    expect(fonte).toMatch(/codePrefixes: readonly string\[\] \| undefined = declaredCodePrefixes\(loadRunnerConfig\(\)\.autorun\.staging\)/);
   });
 });

@@ -85,22 +85,23 @@ lendo cada palavra.
 
 ## Contexto por app
 
-Antes de qualquer ação de **código ou copy** num card, leia o `CLAUDE.md` do pacote
-correspondente ao board — ele define as convenções técnicas (Firebase, rotas, ADRs,
-brandbook) que as skills `harness-*` devem respeitar. O `package:` de cada `board.yaml` aponta
-a pasta; carregue o contexto do app-alvo **antes** de tocar arquivos, mesmo rodando uma
-skill na mão (fora do autorun).
+Antes de qualquer ação de **código ou copy** num card, leia as convenções do pacote
+correspondente ao board — elas definem o que as skills `harness-*` devem respeitar. ONDE ficam é do
+**alvo**: ele declara em `storymap/settings.yaml` → `target.docs.conventions` (e o `target_profile` — a tool MCP,
+montada só na sessão de condutor — devolve o caminho já preenchido para o board; um run `harness-*` headless não
+tem o MCP e lê o bloco `target` desse arquivo direto, e a nota de contexto do run nomeia os checks declarados). Sem essa declaração, leia as instruções do repositório e do
+pacote (README, CLAUDE.md/AGENTS.md) — a ferramenta não supõe um arquivo. O `package:` de cada `board.yaml`
+aponta a pasta; carregue o contexto do app-alvo **antes** de tocar arquivos, mesmo rodando uma skill na mão
+(fora do autorun).
 
-| Board | Package | CLAUDE.md a ler | Brandbook |
-|-------|---------|-----------------|-----------|
-| board de produto | o `package:` do `board.yaml` | `<package>/.claude/CLAUDE.md` | `docs/business/brandbooks/` (quando existir) |
-| `storymap` | `packages/storymap-ui/` | `.claude/CLAUDE.md` (raiz) | — |
+| Board | Package | Convenções a ler | Brandbook |
+|-------|---------|------------------|-----------|
+| board de produto | o `package:` do `board.yaml` | `target.docs.conventions` (ou as instruções do repositório) | o `brandbook:` do `board.yaml`, quando existir |
 
 > Os boards existentes são as pastas de `storymap/boards/` — leia o `board.yaml` de cada um
 > para saber o `package:`. Um board sem `package:` (ex.: `demo`) não tem pacote de código
-> para carregar. Para apps sem board dedicado: leia `packages/<pkg>/.claude/CLAUDE.md` e o
-> respectivo brandbook em `docs/business/brandbooks/` quando existir. Mapa marca→pacote em
-> `.claude/CLAUDE.md` (raiz).
+> para carregar. Para apps sem board dedicado: leia as instruções do repositório e o respectivo
+> brandbook, quando existir.
 
 ## Modelo (3 níveis, canônico Patton)
 
@@ -188,7 +189,7 @@ que não têm o que desenhar, o caminho ramifica:
 - **`technical`/`chore`/`spike`/`bug`** → **pula o bloco de design** (`design-ux` + `com-design`):
   a cascata avança direto de `pronta`/`design-ux` para `plano-tecnico` (kernel
   `lib/storymap/pipeline-routing.ts` → `nextBuildStatus`/`skipsStatusForType`, consumido por
-  `cascade-decision.ts`). E no `qa-automatizado` o gate concreto é a **suíte** (`just test-<pkg>`)
+  `cascade-decision.ts`). E no `qa-automatizado` o gate concreto é a **suíte** (o check `test` do perfil do alvo — `target.checks.test` em `storymap/settings.yaml`)
   verde + as lentes do `harness-review`, NÃO seed+E2E+visual. O gate `hasQaPassed` não exige prova
   VISUAL de um card sem tela — mas um card que CARREGA CÓDIGO (`stagedAt`/`commitRange`) só entra em
   `revisao` com `qaPassed: true` + `qaEvidence.suite: true` (a suíte rodou), tenha tela ou não. Só o card
@@ -255,7 +256,7 @@ retorna `null` quando permitido ou a mensagem PT-BR de bloqueio).
 | `funnelStage` | `awareness`\|`acquisition`\|`activation`\|`retention`\|`referral`\|`revenue`\|`null` | estágio do funil AAARRR (objetivo). Parte do gate de `pronta`. Ver `frameworks.md`. |
 | `techPlanReady` | `true` (omitido se não) | ponteiro leve: o `harness-plan` escreveu `plans/<id>.md`. Gate `hasTechPlan` (entrada em `quebrar-tasks`). |
 | `wireframeChosen` | id do artefato/opção \| omitido | ponteiro leve: o artefato de tela PRIMÁRIO do canvas (ou a opção legada escolhida) em `wireframes/<id>.json`. Gate de `com-design`. |
-| `findings` | lista de `{ id, lens, severity, title, status, detail?, file?, line?, suggestion? }` | achados do `harness-review`. `lens`=firestore\|nextjs\|perf\|security\|testing\|general; `severity`=blocker\|high\|medium\|low; `status`=open\|acknowledged\|fixed\|wontfix. Um `blocker` `open` trava o gate `hasNoBlockers` (entrada em `qa-automatizado`). Só emitido quando ≥1. |
+| `findings` | lista de `{ id, lens, severity, title, status, detail?, file?, line?, suggestion? }` | achados do `harness-review`. `lens`=um id de lente de revisão — as embutidas (`security`, `testing`, `perf`, `general`, `design`) mais as que o alvo declara em `target.reviewLenses` (a lista válida vem do `target_profile`); `severity`=blocker\|high\|medium\|low; `status`=open\|acknowledged\|fixed\|wontfix. Um `blocker` `open` trava o gate `hasNoBlockers` (entrada em `qa-automatizado`). Só emitido quando ≥1. |
 | `reviewedAt` / `reviewCommit` | string \| omitido | quando o `harness-review` rodou + o commit/HEAD revisado. |
 | `questions` | lista de `{ id, text, status, askedBy?, askedAt?, answer?, answeredAt?, answeredBy?, context?, mode?, options?, selectedOptionIds?, recommendation?, category?, proxy? }` \| omitido | perguntas HITL na **Pilotagem** — o canal agente↔orquestrador humano. Qualquer `harness-*` que bata numa decisão que **só o humano resolve** grava uma pergunta rica aqui e PAUSA o run (protocolo **ASK_HUMAN**, abaixo). `text`=a pergunta; `context`=o PORQUÊ/stakes (1-2 linhas); `options[]`=caminhos discretos, cada um com `pros[]`/`cons[]` e no máx. UMA com `recommended: true`; `mode`=`single`\|`multi`; `recommendation`=recomendação em prosa quando NÃO há opções discretas. `status: open` até o humano responder na Pilotagem; o free-text answer está sempre disponível. Setado por `harness-grill` e por qualquer skill via ASK_HUMAN; resolvido na UI `/perguntas`. `category` = o TIPO da decisão (`interview` \| `ui-choice` \| `delivery` \| `money`), o sinal que a chave de autonomia lê (ver "Modo ultra"); `proxy` = o rastro de uma resposta dada pelo PROXY (`answeredBy: proxy`): `{ assumptions, confidence, runId?, declined?, audit?, auditedAt?, auditOutcome? }`. |
 | `autonomyMode` | `human` \| `ultra` \| omitido | a EXCEÇÃO da story à chave de autonomia do board (`board.yaml` `autonomy`). Omitido = segue o board. Posto por `set_card_autonomy` (decisão do operador — só o token `full`). |
@@ -314,42 +315,44 @@ A view de priorização ordena pelas stories que já têm `riceScore`.
 ---
 id: story-ex0001
 type: story
-title: Guardar um livro na lista de desejos
+title: Reservar uma bancada da oficina comunitária
 storyType: user
-status: pronta
-parent: step-ex0001
-release: r1
-personas: [leitor]
-systems: [catalogo, conta]
+status: priorizar
+parent: step-ex0003
+release: r2
+personas: [voluntaria]
+systems: [agenda]
 links:
-  - { rel: depends-on, to: story-ex0002 }
+  - { rel: blocks, to: story-ex0004 }
 narrative:
-  role: leitor frequente
-  want: guardar um livro para comprar depois
-  soThat: não perder de vista o que me interessou
+  role: voluntária de fim de semana
+  want: reservar uma bancada para o sábado de manhã
+  soThat: chegar com as ferramentas certas sem disputar espaço
 acceptance:
-  - Dado que estou na página de um livro, quando toco em «Guardar», então ele aparece na minha lista de desejos.
-  - A lista mostra a capa, o título e o preço de hoje de cada livro.
+  - A agenda mostra as bancadas livres de cada turno do próximo sábado.
+  - Dado que escolhi uma bancada livre, quando confirmo a reserva, então ela some da lista de livres daquele turno.
+  - Uma reserva pode ser cancelada até a véspera, e a bancada volta a aparecer.
 tasks:
-  - { id: t1, title: Botão «Guardar» na página do livro, done: false }
-  - { id: t2, title: Tela da lista de desejos com capa, título e preço, done: false }
+  - { id: t1, title: Grade de turnos com bancadas livres, done: true }
+  - { id: t2, title: Confirmar e cancelar reserva, done: false }
+  - { id: t3, title: Lembrete na véspera, done: false }
 rice:
-  reach: 600
-  impact: 2
-  confidence: 0.7
-  effort: 8
-kano: must-be
-funnelStage: retention
-order: 20
-created: "2026-06-02"
-updated: "2026-06-02"
+  reach: 150
+  impact: 1
+  confidence: 0.9
+  effort: 3
+kano: performance
+funnelStage: activation
+order: 5
+created: "2026-03-17"
+updated: "2026-04-02"
 ---
 
-Guardado o livro, ele aparece na lista de desejos do leitor no site e no aplicativo.
+A reserva vale por um turno. Sem reserva, a bancada continua por ordem de chegada.
 ```
 
-> Lê-se: *"Como **leitor frequente**, quero **guardar um livro para comprar depois**,
-> para **não perder de vista o que me interessou**."* — os conectores vêm do `storyType: user`.
+> Lê-se: *"Como **voluntária de fim de semana**, quero **reservar uma bancada para o sábado de manhã**,
+> para **chegar com as ferramentas certas sem disputar espaço**."* — os conectores vêm do `storyType: user`.
 
 ### `type: opportunity` — Opportunity Solution Tree (OST)
 
@@ -417,8 +420,8 @@ conductor:                   # opcional: UMA sessão condutora por story (ver "C
   # status diferentes por tipo, e a entrada em QUALQUER um deles é o "vai".
 view:                        # opcional: o Kanban em RAIAS (ver "Vista em raias", abaixo) — ausente = Kanban de sempre
   lanes:
-    - { id: triagem,  label: Triagem,         statuses: [capturando, triage, priorizar, pronta] }
-    - { id: voce,     label: Precisa de você, statuses: [com-design, ready, revisao, release], demand: true }
+    - { id: aprovar,  label: Para aprovar, statuses: [], demand: true }   # a raia do dono: puxa por demanda, nunca por status
+    - { id: chegando, label: Chegando,     statuses: [capturando, triage] }
     # … cada status (menos os terminais de arquivo) em EXATAMENTE uma raia
 autonomy:                    # opcional: a CHAVE DE AUTONOMIA (ver "Modo ultra", abaixo) — ausente = human
   mode: ultra                # human | ultra
@@ -472,7 +475,7 @@ As skills de automação operam sobre os status que declaram `trigger`:
 8. **`harness-qa`** (status `qa-automatizado`): **ramifica por storyType**. `user` → sobe o stack
    dev seedado, roda os critérios de aceite de ponta a ponta (E2E) + sweep visual headless, marca
    `qaPassed` e move para `revisao` (gate `hasQaPassed`). `technical`/`chore`/`spike`/`bug` → o
-   gate concreto é a **suíte do pacote** (`just test-<pkg>`) verde + as lentes do `harness-review` —
+   gate concreto é a **suíte do pacote** (o check `test` do perfil do alvo) verde + as lentes do `harness-review` —
    sem seed/E2E/visual; o carimbo registra `qaEvidence.suite: true`, que é o que o gate exige de um
    card com código. Suíte vermelha vira um finding `testing: blocker` e NÃO destrava o gate.
    `revisao` é a **PARADA** final — revisão humana do que foi entregue.
@@ -638,6 +641,11 @@ deploy). "O detalhe de cada etapa aparece como etiqueta dentro do card, não com
   Pergunta sem categoria (um `texts` livre, uma skill que esqueceu) é do dono: o único default automático é
   o CONSERVADOR do texto livre — fala de dinheiro ⇒ `money`; o resto fica sem categoria. Nada é
   classificado como proxiável por palpite.
+- **Quem é «do dono»:** as classes de `autonomy.ownerClasses` (rótulo + descrição). O classificador de
+  perguntas, o juiz da triagem e o prompt do proxy leem a MESMA lista — a frase «isto nunca é seu» do proxy é
+  montada dela, não escrita no código. Sem declaração valem as quatro classes neutras da ferramenta; a de
+  dinheiro inclui «trocar o modelo ou o fornecedor de IA que atende o usuário do produto» (muda custo e
+  qualidade). `money` nunca sai da lista.
 - **O proxy:** uma execução headless SEPARADA, com contexto LIMPO (diretório temporário, nenhum token nem
   servidor MCP, postura contida), que recebe o PRD (`docs/prd.md`), as personas, o guia de estilo, as
   respostas passadas do DONO no board e as variantes — sem a recomendação de quem perguntou. A saída é um

@@ -198,3 +198,94 @@ test('AC4 (board) — run writes board.yaml but only changes statuses (non-human
     else process.env.AGILEHARNESS_AUTORUN_RUN_ID = savedEnv;
   }
 });
+
+// ── Lote D: ownership achado por LISTA ORDENADA (vendorizada > AGILEHARNESS_TOOL_ROOT > árvore legada) ───────────────
+// Esta é a guarda que falha ABERTA: sem a lib, um agente edita os campos do dono (persona, release) sem ninguém ver.
+// Num repositório-ALVO não há `packages/storymap-ui`; a lista cobre o alvo, e a ausência total vira AVISO, nunca silêncio.
+
+const { spawnSync } = require('node:child_process');
+
+const TOOL_PKG = path.resolve(__dirname, '..', '..', '..', 'packages', 'storymap-ui');
+const HOOK_SRC = path.resolve(__dirname, '..', 'checks', 'pre-write', 'guard-business-intent.js');
+const OWNERSHIP_SRC = path.join(TOOL_PKG, 'src', 'lib', 'storymap', 'ownership.js');
+
+test('(lote D) lista de ownership: vendorizada primeiro, depois TOOL_ROOT, depois worktree e árvore legada', () => {
+  const dir = path.join(path.sep + 'repo', '.claude', 'hooks', 'checks', 'pre-write');
+  const cands = check._libCandidatesFor(dir, 'ownership.js', { AGILEHARNESS_TOOL_ROOT: path.sep + 'ferramenta' + path.sep + 'pkg' });
+  assert.deepStrictEqual(cands, [
+    path.join(path.sep + 'repo', '.claude', 'hooks', 'lib', 'ownership.js'),
+    path.join(path.sep + 'ferramenta', 'pkg', 'src', 'lib', 'storymap', 'ownership.js'),
+    path.join(path.sep + 'repo', 'packages', 'storymap-ui', 'src', 'lib', 'storymap', 'ownership.js'),
+  ]);
+  // dentro de um worktree o candidato local vem ANTES do checkout principal
+  const wtDir = ['', 'repo', '.worktrees', 'run-abc', '.claude', 'hooks', 'checks', 'pre-write'].join(path.sep);
+  const wt = check._libCandidatesFor(wtDir, 'ownership.js', {});
+  assert.strictEqual(wt.length, 3);
+  assert.ok(wt[1].includes('run-abc'), 'o worktree vem antes do checkout principal');
+  assert.ok(!wt[2].includes('.worktrees'));
+});
+
+function targetFixture({ vendored }) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'alvo-sem-ferramenta-own-'));
+  const hookDir = path.join(root, '.claude', 'hooks', 'checks', 'pre-write');
+  fs.mkdirSync(hookDir, { recursive: true });
+  fs.copyFileSync(HOOK_SRC, path.join(hookDir, 'guard-business-intent.js'));
+  if (vendored) {
+    fs.mkdirSync(path.join(root, '.claude', 'hooks', 'lib'), { recursive: true });
+    fs.copyFileSync(OWNERSHIP_SRC, path.join(root, '.claude', 'hooks', 'lib', 'ownership.js'));
+  }
+  const board = path.join(root, 'storymap', 'boards', 'oficina', 'board.yaml');
+  fs.mkdirSync(path.dirname(board), { recursive: true });
+  fs.writeFileSync(board, BEFORE_YAML_UNCHANGED.replace(/demo/g, 'oficina'), 'utf8');
+  return { root, board };
+}
+
+function runGuardIn({ root, board }, env) {
+  const script = `
+    const check = require(${JSON.stringify(path.join(root, '.claude', 'hooks', 'checks', 'pre-write', 'guard-business-intent.js'))});
+    const out = check.test({ tool_input: { file_path: ${JSON.stringify(board)}, content: ${JSON.stringify(AFTER_YAML_PERSONAS_CHANGED.replace(/demo/g, 'oficina'))} } });
+    process.stdout.write(JSON.stringify(out));
+  `;
+  const r = spawnSync(process.execPath, ['-e', script], {
+    env: { PATH: process.env.PATH, AGILEHARNESS_AUTORUN_RUN_ID: 'run-ex9902', ...env },
+    encoding: 'utf8',
+  });
+  return { out: JSON.parse(r.stdout || 'null'), stderr: r.stderr };
+}
+
+test('(lote D) alvo SEM packages/storymap-ui, com a lib vendorizada: a guarda owner:human BLOQUEIA a edição de persona', () => {
+  const fx = targetFixture({ vendored: true });
+  try {
+    const { out, stderr } = runGuardIn(fx, { AGILEHARNESS_TOOL_ROOT: TOOL_PKG });
+    assert.ok(out, 'a guarda devia bloquear');
+    assert.strictEqual(out.rule, 'business-intent-guard');
+    assert.match(out.message, /personas/);
+    assert.doesNotMatch(stderr, /HARNESS WARNING/);
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('(lote D) sem cópia vendorizada mas com AGILEHARNESS_TOOL_ROOT: a lib vem da ferramenta e a guarda BLOQUEIA', () => {
+  const fx = targetFixture({ vendored: false });
+  try {
+    const { out } = runGuardIn(fx, { AGILEHARNESS_TOOL_ROOT: TOOL_PKG });
+    assert.ok(out);
+    assert.match(out.message, /personas/);
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});
+
+test('(lote D) NENHUMA lib alcançável: a guarda continua permitindo (fail-open) mas AVISA em voz alta, UMA vez', () => {
+  const fx = targetFixture({ vendored: false });
+  try {
+    const { out, stderr } = runGuardIn(fx, {});
+    assert.strictEqual(out, null);
+    const avisos = stderr.split('\n').filter((l) => l.includes('[HARNESS WARNING] ownership não encontrado'));
+    assert.strictEqual(avisos.length, 1, `esperava UM aviso, veio: ${JSON.stringify(stderr)}`);
+    assert.match(avisos[0], /guarda owner:human DESLIGADO neste hook/);
+  } finally {
+    fs.rmSync(fx.root, { recursive: true, force: true });
+  }
+});

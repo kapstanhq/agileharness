@@ -14,6 +14,9 @@ import {
   initiatorFromOrigin,
   latchAutoRelease,
   localDayKey,
+  RESET_CONFIRM_MS,
+  RESET_DROP_PP,
+  resetDropObserved,
   mayClearLatch,
   meterStallSince,
   nextLocalDayStart,
@@ -346,6 +349,7 @@ describe("latchAutoRelease — só a trava da medição, só com a janela nova p
   const rolled = reading({ usage7dPct: 0, usage5hPct: 0, resetsAt7d: NOW + WEEK - 2 * HOUR_MS, resetsAt5h: NOW + 3 * HOUR_MS });
   const admit: CapacityVerdict = { kind: "admit", detail: "dentro dos tetos" };
   const base = { latch: engaged() as LatchState | null, haltPresent: false, reading: rolled as CapacityReading | null, fresh: true, verdict: admit };
+  const CAPS95 = { latchWeekPct: 95, latchFiveHourPct: 90 };
 
   it("semana virou + leitura fresca + a condição sumiu ⇒ solta, dizendo por quê", () => {
     const r = latchAutoRelease({ ...base });
@@ -365,9 +369,61 @@ describe("latchAutoRelease — só a trava da medição, só com a janela nova p
     expect(latchAutoRelease({ ...base, reading: after })).toMatchObject({ release: true });
   });
 
-  it("MESMA janela nunca solta, mesmo com o número abaixo do teto (o dono subiu o teto: soltar é gesto dele)", () => {
+  it("MESMA janela com o número só UM POUCO abaixo do teto não solta (o dono subiu o teto: soltar é gesto dele)", () => {
     const sameWindow = reading({ usage7dPct: 60, resetsAt7d: latchAt + WEEK - 3 * DAY_MS });
     expect(latchAutoRelease({ ...base, reading: sameWindow })).toMatchObject({ release: false });
+    // nem com os tetos e uma "queda" antiga: 60% não está RESET_DROP_PP abaixo de 95%
+    expect(latchAutoRelease({ ...base, reading: sameWindow, caps: CAPS95, resetDropSince: NOW - DAY_MS })).toMatchObject({ release: false });
+  });
+
+  // Regressão (caso real): o dono ZEROU a cota na conta; o reset da semana ficou onde estava, o uso foi a 6%, e a trava
+  // seguiu dizendo «95%» até um clique — a regra só conhecia a janela nova.
+  describe("cota ZERADA na mesma janela", () => {
+    const sameWeekReset = latchAt + WEEK - 3 * DAY_MS;
+    const zeroed = reading({ usage7dPct: 6, resetsAt7d: sameWeekReset, polledAt: NOW - 60_000 });
+
+    it("queda grande SUSTENTADA por RESET_CONFIRM_MS ⇒ solta, dizendo que a cota foi zerada", () => {
+      const r = latchAutoRelease({ ...base, reading: zeroed, caps: CAPS95, resetDropSince: zeroed.polledAt - RESET_CONFIRM_MS });
+      expect(r).toMatchObject({ release: true });
+      expect((r as { reason: string }).reason).toMatch(/cota de 7 dias foi zerada/);
+    });
+
+    it("a 1ª leitura da queda (ou menos de RESET_CONFIRM_MS dela) só CONFIRMA, não solta", () => {
+      expect(latchAutoRelease({ ...base, reading: zeroed, caps: CAPS95, resetDropSince: zeroed.polledAt })).toMatchObject({
+        release: false,
+        why: expect.stringMatching(/confirmando/),
+      });
+      expect(
+        latchAutoRelease({ ...base, reading: zeroed, caps: CAPS95, resetDropSince: zeroed.polledAt - RESET_CONFIRM_MS + 1 }),
+      ).toMatchObject({ release: false });
+      expect(latchAutoRelease({ ...base, reading: zeroed, caps: CAPS95, resetDropSince: null })).toMatchObject({ release: false });
+    });
+
+    it("sem os tetos (chamador antigo) a regra da cota zerada não vale — só a janela nova solta", () => {
+      expect(latchAutoRelease({ ...base, reading: zeroed, resetDropSince: NOW - DAY_MS })).toMatchObject({ release: false });
+    });
+
+    it("FRONTEIRA da queda: exatamente RESET_DROP_PP abaixo do teto conta; 1 ponto acima não", () => {
+      const latch = engaged();
+      expect(resetDropObserved(latch, reading({ usage7dPct: 95 - RESET_DROP_PP }), CAPS95)).toBe(true);
+      expect(resetDropObserved(latch, reading({ usage7dPct: 95 - RESET_DROP_PP + 1 }), CAPS95)).toBe(false);
+    });
+
+    it("leitura ANTERIOR ao engate não prova nada; trava que não é da medição (ou dura) nunca conta", () => {
+      expect(resetDropObserved(engaged(), reading({ usage7dPct: 0, polledAt: latchAt }), CAPS95)).toBe(false);
+      expect(resetDropObserved(engaged({ trippedBy: "operator" }), reading({ usage7dPct: 0 }), CAPS95)).toBe(false);
+      expect(resetDropObserved(engaged({ trippedBy: "auto:extra-usage" }), reading({ usage7dPct: 0 }), CAPS95)).toBe(false);
+      expect(resetDropObserved(engaged({ level: "hard" }), reading({ usage7dPct: 0 }), CAPS95)).toBe(false);
+    });
+
+    it("a trava de 5h segue a mesma régua, pelo número de 5h", () => {
+      const five = engaged({ trippedBy: "auto:five-hour", reason: "janela de 5 horas em 90%" });
+      const sameFive = reading({ usage5hPct: 4, resetsAt5h: latchAt + 2 * HOUR_MS });
+      const r = latchAutoRelease({ ...base, latch: five, reading: sameFive, caps: CAPS95, resetDropSince: sameFive.polledAt - RESET_CONFIRM_MS });
+      expect(r).toMatchObject({ release: true });
+      expect((r as { reason: string }).reason).toMatch(/cota de 5h foi zerada/);
+      expect(resetDropObserved(five, reading({ usage5hPct: null }), CAPS95)).toBe(false);
+    });
   });
 
   it("leitura defasada ou ausente ⇒ não solta (sem prova, a trava fica)", () => {

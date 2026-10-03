@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { partitionPaths, pathsTouchCode, promoteImportedDataPaths, isLiveCardFile } from "./staging";
+import {
+  STAGING_BRANCH_DEFAULT,
+  declaredCodePrefixes,
+  isCodePath,
+  partitionPaths,
+  pathsTouchCode,
+  promoteImportedDataPaths,
+  isLiveCardFile,
+  stagingBranchOf,
+} from "./staging";
+import { DEFAULT_STAGING_BRANCH } from "./config";
 
 const PREFIXES = ["packages/"];
 
@@ -224,5 +234,64 @@ describe("isLiveCardFile — o card vivo não é entregável", () => {
     "packages/app/storymap/boards/x/cards/y.md", // prefixo ancorado
   ])("%s NÃO é", (p) => {
     expect(isLiveCardFile(p)).toBe(false);
+  });
+});
+
+// ── Lote D (layout): `codePrefixes` INDECLARADO ≠ `[]` declarado ─────────────────────────────────────────────────
+describe("codePrefixes indeclarado (undefined) — o neutro seguro: tudo fora de storymap/boards/ é código", () => {
+  const ARQUIVOS = ["storymap/boards/oficina/cards/story-ex9962.md", "src/bicicleta/quadro.ts", "docs/manual.md", "justfile"];
+
+  it("isCodePath: undefined ⇒ só o board-data NÃO é código; [] ⇒ nada é código; declarado ⇒ o prefixo", () => {
+    expect(ARQUIVOS.map((p) => isCodePath(p, undefined))).toEqual([false, true, true, true]);
+    expect(ARQUIVOS.map((p) => isCodePath(p, []))).toEqual([false, false, false, false]);
+    expect(ARQUIVOS.map((p) => isCodePath(p, ["src/"]))).toEqual([false, true, false, false]);
+  });
+
+  it("pathsTouchCode: um repo de layout plano SEM declaração não perde o código de vista (era `false` com o default packages/)", () => {
+    expect(pathsTouchCode(["src/bicicleta/quadro.ts"], undefined)).toBe(true);
+    expect(pathsTouchCode(["storymap/boards/oficina/cards/story-ex9962.md"], undefined)).toBe(false);
+    // [] explícito mantém o comportamento de sempre: staging inerte
+    expect(pathsTouchCode(["src/bicicleta/quadro.ts"], [])).toBe(false);
+  });
+
+  it("partitionPaths: undefined manda o código para a metade de código; [] manda tudo para dados; declarado = o de sempre", () => {
+    expect(partitionPaths(ARQUIVOS, undefined)).toEqual({
+      code: ["src/bicicleta/quadro.ts", "docs/manual.md", "justfile"],
+      data: ["storymap/boards/oficina/cards/story-ex9962.md"],
+    });
+    expect(partitionPaths(ARQUIVOS, [])).toEqual({ code: [], data: ARQUIVOS });
+    expect(partitionPaths(ARQUIVOS, ["src/"])).toEqual({
+      code: ["src/bicicleta/quadro.ts"],
+      data: ["storymap/boards/oficina/cards/story-ex9962.md", "docs/manual.md", "justfile"],
+    });
+  });
+
+  it("partitionPaths: dataDerived continua valendo sobre o neutro (o derivado segue a FONTE)", () => {
+    expect(partitionPaths(["src/a.ts", "src/__snapshots__/a.snap"], undefined, ["src/__snapshots__/a.snap"])).toEqual({
+      code: ["src/a.ts"],
+      data: ["src/__snapshots__/a.snap"],
+    });
+  });
+});
+
+describe("declaredCodePrefixes / stagingBranchOf — o que o ARQUIVO declarou", () => {
+  it("bloco do settings (traz `declared`): só vale o que o arquivo disse; o default preenchido pela coerção NÃO conta", () => {
+    expect(declaredCodePrefixes({ codePrefixes: ["packages/"], declared: {} })).toBeUndefined();
+    expect(declaredCodePrefixes({ codePrefixes: ["oficina/"], declared: { codePrefixes: true } })).toEqual(["oficina/"]);
+    expect(declaredCodePrefixes({ codePrefixes: [], declared: { codePrefixes: true } })).toEqual([]); // vazio DECLARADO
+  });
+
+  it("objeto montado à mão (sem `declared`): o valor dado vale; ausente ⇒ indeclarado", () => {
+    expect(declaredCodePrefixes({ codePrefixes: ["src/"] })).toEqual(["src/"]);
+    expect(declaredCodePrefixes({})).toBeUndefined();
+    expect(declaredCodePrefixes(undefined)).toBeUndefined();
+  });
+
+  it("stagingBranchOf: o declarado, senão o default documentado — e o espelho client-safe é IGUAL ao de config.ts", () => {
+    expect(stagingBranchOf({ branch: "integracao" })).toBe("integracao");
+    expect(stagingBranchOf({ branch: "  integracao  " })).toBe("integracao");
+    expect(stagingBranchOf({ branch: "" })).toBe(STAGING_BRANCH_DEFAULT);
+    expect(stagingBranchOf(undefined)).toBe(STAGING_BRANCH_DEFAULT);
+    expect(STAGING_BRANCH_DEFAULT).toBe(DEFAULT_STAGING_BRANCH);
   });
 });

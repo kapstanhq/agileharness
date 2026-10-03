@@ -82,7 +82,7 @@ export interface DeltaRange {
 
 export interface DeltaLandedOpts {
   range: DeltaRange;
-  /** the ref the delta should be contained in: "main" | "stage" | a run's baseCommit sha */
+  /** the ref the delta should be contained in: the released branch | the declared integration branch | a run's baseCommit sha */
   target: string;
   /**
    * WS-1 — measure only the HALF of the delta under these paths (as `git diff -- <pathspec>` takes them).
@@ -357,7 +357,7 @@ export type DeltaLandedFn = (opts: DeltaLandedOpts) => Promise<DeltaLandedResult
 
 /**
  * deploy-truth FOLLOW-UP A — the RANGE-based sibling of {@link branchWorkLandedBySplit}: the SAME partition
- * (`partitionPaths` with the train's own {@link STAGING_CODE_PREFIXES}) and the SAME per-half measurement
+ * (`partitionPaths` with the repo's DECLARED `staging.codePrefixes`) and the SAME per-half measurement
  * ({@link deltaLanded} under `paths`), taken over an EXPLICIT {@link DeltaRange} instead of a branch. Exists
  * for the caller that holds a card's durable `commitRange` (the review-validated base..head) and NO branch
  * at all — the run branch is long deleted and no receipt id is derivable from a range, so the branch-based
@@ -377,11 +377,12 @@ export type DeltaLandedFn = (opts: DeltaLandedOpts) => Promise<DeltaLandedResult
  * because for board-data the runtime's main IS production).
  */
 /**
- * A FORMA DECLARADA por ESTE repositório — `autorun.staging.{codePrefixes,branch}` —, com a constante
- * do train como último recurso.
+ * A FORMA DECLARADA por ESTE repositório — `autorun.staging.{codePrefixes,branch}` —, e, SEM declaração, o NEUTRO:
+ * `codePrefixes` indeclarado (`undefined`) ⇒ tudo fora de `storymap/boards/` é código; branch ⇒ o default
+ * documentado da ferramenta (`stagingBranchOf`). Nunca a pasta nem o nome de branch de um repositório de origem.
  *
  * POR QUE EXISTE (fase 3): as réguas de ciclo de vida caíam direto em
- * `STAGING_CODE_PREFIXES` (`["packages/"]`) e no literal `"stage"`, porque NENHUM dos três chamadores
+ * uma constante `["packages/"]` e no literal `"stage"`, porque NENHUM dos três chamadores
  * de produção passava o valor declarado. Não era um problema só de adotante: um monorepo que declare
  * mais de um prefixo (p.ex. `["packages/", "tools/cli/"]`) particionava errado um branch que tocasse o segundo. Num repositório de layout PLANO (`src/` na raiz) a metade de código saía
  * com ZERO arquivo e o código inteiro era procurado em `main`, onde ele nunca esteve — e o veredito
@@ -391,24 +392,24 @@ export type DeltaLandedFn = (opts: DeltaLandedOpts) => Promise<DeltaLandedResult
  * Mesma correção que `commitBoardDataScoped` (worktree.ts) já tinha recebido na onda 1, e pelo mesmo
  * motivo: a régua tem de perguntar ao que foi CONFIGURADO, não à constante desta casa.
  *
- * `??` e não `.length`: um `codePrefixes: []` é uma declaração DELIBERADA ("nada aqui é código" ⇒
- * staging inerte) e não pode ser sobrescrita pela constante. NUNCA lança — settings ilegível devolve a
- * constante, que é o comportamento de antes.
+ * `undefined` e não `.length`: um `codePrefixes: []` é uma declaração DELIBERADA ("nada aqui é código" ⇒
+ * staging inerte) e não pode ser sobrescrita pelo neutro. NUNCA lança — settings ilegível devolve o neutro
+ * (que só trata MAIS caminhos como código: a direção segura para uma régua que decide preservar × descartar).
  */
 async function formaDeclarada(
   opts: { codePrefixes?: readonly string[]; stageBranch?: string } = {},
-): Promise<{ codePrefixes: readonly string[]; stageBranch: string }> {
-  const { STAGING_CODE_PREFIXES } = await import("./config");
-  let declarado: { codePrefixes?: readonly string[]; branch?: string } | undefined;
+): Promise<{ codePrefixes: readonly string[] | undefined; stageBranch: string }> {
+  const { declaredCodePrefixes, stagingBranchOf } = await import("./staging");
+  let declarado: Parameters<typeof declaredCodePrefixes>[0];
   try {
     const { loadRunnerConfig } = await import("./config");
     declarado = loadRunnerConfig().autorun.staging;
   } catch {
-    declarado = undefined; // settings ilegível ⇒ a constante, como antes
+    declarado = undefined; // settings ilegível ⇒ o neutro
   }
   return {
-    codePrefixes: opts.codePrefixes ?? declarado?.codePrefixes ?? STAGING_CODE_PREFIXES,
-    stageBranch: opts.stageBranch ?? declarado?.branch?.trim() ?? "stage",
+    codePrefixes: opts.codePrefixes ?? declaredCodePrefixes(declarado),
+    stageBranch: opts.stageBranch?.trim() || stagingBranchOf(declarado),
   };
 }
 
@@ -417,11 +418,11 @@ export async function rangeLandedBySplit(
   repoRoot: string,
   opts: {
     range: DeltaRange;
-    /** where the CODE half must be contained (default "stage" — where the train puts code) */
+    /** where the CODE half must be contained (default: the declared integration branch — where the train puts code) */
     codeRef?: string;
     /** where the DATA half must be contained (default "main" — where the train puts board-data) */
     dataRef?: string;
-    /** the path prefixes that count as CODE — defaults to the train's own STAGING_CODE_PREFIXES */
+    /** the path prefixes that count as CODE — defaults to the declared `staging.codePrefixes` (undeclared ⇒ all but board data) */
     codePrefixes?: readonly string[];
     /**
      * Arquivos da metade de DADOS que NÃO entram no julgamento de aterrissagem (ex.: os cards vivos — ver
@@ -459,7 +460,7 @@ export async function rangeLandedBySplit(
     const deliverable = opts.ignoreDataPaths ? part.data.filter((p) => !opts.ignoreDataPaths!(p)) : part.data;
     const dataHalf = deliverable.length > 0 ? deliverable : part.data;
     const [code, data] = await Promise.all([
-      judge(part.code, opts.codeRef ?? "stage"),
+      judge(part.code, opts.codeRef ?? forma.stageBranch),
       judge(dataHalf, opts.dataRef ?? "main"),
     ]);
     return { code, data };
@@ -512,8 +513,8 @@ async function branchWorkLandedInRefs(
   stageBranch?: string,
 ): Promise<Landedness> {
   try {
-    const { isExactBase, resolveRunBase } = await import("./run-base");
-    const { base, provenance } = await resolveRunBase(exec, repoRoot, branch, { stageBranch: stageBranch ?? "stage" });
+    const [{ isExactBase, resolveRunBase }, { STAGING_BRANCH_DEFAULT }] = await Promise.all([import("./run-base"), import("./staging")]);
+    const { base, provenance } = await resolveRunBase(exec, repoRoot, branch, { stageBranch: stageBranch ?? STAGING_BRANCH_DEFAULT });
     if (!base || !isExactBase(provenance)) return "unknown";
     let weakest: Landedness = "absent";
     for (const ref of refs) {
@@ -533,7 +534,7 @@ export type HalfVerdict = Landedness | "n/a";
 
 /** The branch's work as the train actually applies it: the code half and the data half, judged separately. */
 export interface SplitLandedness {
-  /** the `packages/**` half vs `stage` */
+  /** the code half (under the declared code prefixes) vs the integration branch (`stage` by default) */
   code: HalfVerdict;
   /** the board-data half vs `main` */
   data: HalfVerdict;
@@ -563,7 +564,7 @@ export interface SplitLandedness {
  * vigilance.
  *
  * THE HALVES ARE NOT SYMMETRIC, and pretending otherwise is the trap:
- *   • CODE → `stage` is solidly measurable. Nobody mutates `packages/**` between the branch commit and the
+ *   • CODE → `stage` is solidly measurable. Nobody mutates the code paths between the branch commit and the
  *     measurement, so layer 3 answers exactly the right question.
  *   • DATA → `main` is STRUCTURALLY unprovable by git. The board is LIVE: the service mutates the card
  *     (status, findings, tasks) AFTER the train applied the patch, so the post-image diverges BY DESIGN. No

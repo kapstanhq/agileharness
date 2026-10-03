@@ -1,7 +1,8 @@
 // O PREFLIGHT DE FRESCOR — nenhum deploy de PRODUTO sai de um checkout que não carrega o que já está no ar.
 //
 // POR QUE ELE EXISTE. O serviço publica produto a partir do SEU checkout do alvo
-// (o de runtime): `just --yes orch-deploy <alvo>`, o `deploy.command` declarado, o agente de deploy — todos
+// (o de runtime): o comando de deploy legado que o alvo declara (`deploy.legacy.command`), o `deploy.command` do
+// board, o agente de deploy — todos
 // rodam da raiz desse checkout. O dono do produto também publica de OUTRA máquina: empurra para o upstream
 // e deploya de lá. Nada no caminho de deploy do motor buscava o upstream antes, então o checkout de runtime
 // podia estar DEZENAS de commits atrás do que estava no ar — e um deploy autônomo teria REGREDIDO produção
@@ -39,7 +40,7 @@
 // `product-deploy.ts` importa este módulo, e aquele lê manifesto em tempo de carga.
 
 import type { ExecFn } from "./worktree";
-import { authorizeDeployCommand, quoteArgv, shSingleQuote } from "./deploy-command-guard";
+import { authorizeDeployCommand, quoteArgv, shSingleQuote, type DeployCommandPolicy } from "./deploy-command-guard";
 
 /** Teto do `git fetch` do upstream. Um fetch pendurado não pode segurar a publicação — e estourar é recusa. */
 export const DEPLOY_FRESHNESS_FETCH_TIMEOUT_MS = 60_000;
@@ -66,7 +67,7 @@ export type FreshnessRefusalCode =
 
 /** O que um deploy pede ao preflight. */
 export interface DeployFreshnessRequest {
-  /** O ALVO que este deploy publica — a chave de job do registry (o app do `orch-deploy`, o id do board de um
+  /** O ALVO que este deploy publica — a chave de job do registry (o app do deploy legado, o id do board de um
    *  deploy declarado, o alvo da face composta). A autorização sai amarrada a ele. */
   target: string;
   /** A raiz do checkout de onde o deploy RODA (o de runtime). */
@@ -77,6 +78,10 @@ export interface DeployFreshnessRequest {
   /** `board.yaml` `deploy.liveShaCommand` de cada board que publica este alvo (normalmente UM) — board-data,
    *  então cada um passa pela régua dos comandos declarados. Vazio/ausente ⇒ a checagem é pulada COM log. */
   liveShaCommands?: readonly (string | undefined)[];
+  /** A POLÍTICA do passo privilegiado (lançadores, receitas e task runners que o alvo declarou): o `liveShaCommand` é
+   *  board-data e passa pela régua sob ela. OBRIGATÓRIA — este módulo não importa config (ver o cabeçalho), e um
+   *  chamador que a esqueça não compila, em vez de herdar uma allow-list suposta. */
+  policy: DeployCommandPolicy;
   /** Quem pede — só para o log (`board armazem`, `mcp deploy <alvo>`, `face <alvo> (board x)`). */
   label: string;
 }
@@ -389,7 +394,7 @@ export async function checkDeployFreshness(
     log("info", `${tag} deploy.liveShaCommand não declarado — ancestralidade do sha no ar NÃO checada (só fetch/atraso/sujeira)`);
   }
   for (const declared of declarados) {
-    const verdict = authorizeDeployCommand(declared);
+    const verdict = authorizeDeployCommand(declared, req.policy);
     if (!verdict.argv) {
       return refuse(
         "live-sha-refused",
@@ -467,17 +472,25 @@ export async function checkDeployFreshness(
 }
 
 /**
- * PURO — o escopo de sujeira de um alvo LEGADO (`orch-deploy <alvo>`, a tool MCP `deploy`), que não chega
- * por um board: a união do escopo de promoção de todo board cujo `package` resolve para o alvo, e — quando
- * nenhum resolve (um alvo sem board) — o diretório de convenção `packages/<alvo>/`. Também devolve os
- * `liveShaCommand` declarados por esses boards (sem repetição). `boards` chega JÁ LIDO pelo chamador.
+ * PURO — o escopo de sujeira de um alvo LEGADO (o comando de deploy legado declarado, a tool MCP `deploy`), que não
+ * chega por um board: a união do escopo de promoção de todo board cujo `package` resolve para o alvo, e — quando
+ * nenhum resolve (um alvo sem board) — o escopo que o alvo declara (`deploy.legacy.scope`, já expandido com o alvo).
+ * Sem declaração o escopo é VAZIO, que significa «o repositório inteiro» (fail-closed: não saber o escopo não vira
+ * «nada a checar»). Também devolve os `liveShaCommand` declarados por esses boards (sem repetição). `boards` chega
+ * JÁ LIDO pelo chamador.
+ *
+ * `legacy.packageRoot` é o prefixo que sai de `board.package` para virar o id do alvo; ausente ⇒ o `package` inteiro
+ * é comparado com o alvo (neutro: a ferramenta não supõe a pasta onde o alvo guarda os pacotes).
  */
 export function legacyTargetFreshnessInputs(
   target: string,
   boards: readonly { package?: string; scope: readonly string[]; liveShaCommand?: string }[],
+  legacy: { packageRoot?: string; scope?: readonly string[] } = {},
 ): { scope: string[]; liveShaCommands: string[] } {
-  const donos = boards.filter((b) => b.package && b.package.replace(/^packages\//, "").replace(/\/+$/, "") === target);
-  const scope = donos.length > 0 ? [...new Set(donos.flatMap((b) => b.scope))] : [`packages/${target}/`];
+  const root = legacy.packageRoot ?? "";
+  const idOf = (pkg: string): string => (root && pkg.startsWith(root) ? pkg.slice(root.length) : pkg).replace(/\/+$/, "");
+  const donos = boards.filter((b) => b.package && idOf(b.package) === target);
+  const scope = donos.length > 0 ? [...new Set(donos.flatMap((b) => b.scope))] : [...(legacy.scope ?? [])];
   const liveShaCommands = [
     ...new Set(donos.map((b) => b.liveShaCommand?.trim()).filter((c): c is string => !!c)),
   ];

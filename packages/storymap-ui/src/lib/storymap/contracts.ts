@@ -49,7 +49,7 @@ import {
   SESSION_MODELS,
   EFFORT_LEVELS,
   ENTRY_EFFECTS_IDS,
-  REVIEW_LENSES,
+  CORE_LENS_IDS,
   FINDING_SEVERITIES,
   FINDING_STATUSES,
   FAILURE_CLASSES,
@@ -65,6 +65,7 @@ import {
   RISK_CLASSES,
   RISK_DISPOSITIONS,
 } from "./types";
+import { isReviewLensId } from "./target-profile";
 
 /** A value that must be one of `ids` (a known vocabulary). Output type = the id union, so z.infer
  *  yields the exact branded enum (StoryType, GateId, …) — no duplicated literal lists. */
@@ -131,9 +132,12 @@ const CardRoutingSchema = z.object({
 });
 const CommitRangeSchema = z.object({ base: z.string(), head: z.string() });
 const DiffSnapshotSchema = z.object({ base: z.string(), mergeCommit: z.string() });
+// A lente é um SLUG (a FORMA), não um enum: as de domínio são do alvo (`target.reviewLenses`) e a leitura nunca recusa um id
+// antigo. A pertinência à declaração é checada na ESCRITA (add_finding / parseFindingBatch), que conhecem o alvo.
+const LensSchema = z.string().refine(isReviewLensId, { message: "lens: um slug em minúsculas (letras, dígitos e -; até 32)" });
 const FindingSchema = z.object({
   id: z.string(),
-  lens: oneOf(REVIEW_LENSES),
+  lens: LensSchema,
   severity: oneOf(FINDING_SEVERITIES),
   title: z.string(),
   detail: z.string().optional(),
@@ -163,6 +167,33 @@ const FindingSchema = z.object({
     .optional(),
 });
 
+function batchItemSchema(lens: z.ZodType<string>) {
+  return z
+    .object({
+      lens,
+      severity: oneOf(FINDING_SEVERITIES),
+      title: z.string().min(1),
+      detail: z.string().optional(),
+      file: z.string().nullable().optional(),
+      line: z.number().nullable().optional(),
+      suggestion: z.string().optional(),
+      failureClass: oneOf(FAILURE_CLASSES).optional(),
+    })
+    .strict();
+}
+
+/**
+ * The batch-item schema for a given set of ACCEPTED lenses (the embutidas + what the target declared in
+ * `target.reviewLenses`). The caller that knows the target builds it; `FindingBatchItemSchema` below is the target-less
+ * default (the embutidas only), so a lens nobody declared is rejected here exactly as it was when the set was fixed.
+ */
+export function findingBatchItemSchemaFor(lenses?: ReadonlySet<string>) {
+  const allowed: ReadonlySet<string> = lenses ?? new Set<string>(CORE_LENS_IDS);
+  return batchItemSchema(
+    LensSchema.refine((v) => allowed.has(v), { message: `lente não declarada (as válidas: ${[...allowed].join(", ")}; declare outra em storymap/settings.yaml → target.reviewLenses)` }),
+  );
+}
+
 /**
  * The AUTHORABLE subset of a Finding — the exact shape a harness-review lens sub-agent emits in its
  * `finding-batch` JSON block: `{ lens, severity, title, detail?, file?, line?, suggestion? }`. It
@@ -171,22 +202,12 @@ const FindingSchema = z.object({
  *
  * Unlike `FindingSchema` (which validates the COERCED, post-`coerceFindings` shape and is part of the
  * tolerant general read path), this is the STRICT cooperative gate: `.strict()` rejects any extra key
- * so a typo/hallucinated field can't slip through silently. It reuses the SAME `oneOf(REVIEW_LENSES)`/
- * `oneOf(FINDING_SEVERITIES)` enums as `FindingSchema` — no duplicated vocab. The runtime validator is
+ * so a typo/hallucinated field can't slip through silently. The lens must be one the target ACCEPTS
+ * (see `findingBatchItemSchemaFor`; the default is the embutidas only) — the read-path `FindingSchema` only checks its
+ * SHAPE. It reuses the SAME `oneOf(FINDING_SEVERITIES)` as `FindingSchema` — no duplicated vocab. The runtime validator is
  * `parseFindingBatch` (runner/findings.ts); the skill prose mirrors it cooperatively.
  */
-export const FindingBatchItemSchema = z
-  .object({
-    lens: oneOf(REVIEW_LENSES),
-    severity: oneOf(FINDING_SEVERITIES),
-    title: z.string().min(1),
-    detail: z.string().optional(),
-    file: z.string().nullable().optional(),
-    line: z.number().nullable().optional(),
-    suggestion: z.string().optional(),
-    failureClass: oneOf(FAILURE_CLASSES).optional(),
-  })
-  .strict();
+export const FindingBatchItemSchema = findingBatchItemSchemaFor();
 
 /** A single sub-agent-authored finding (the `finding-batch` block element) — `id`/`status` excluded. */
 export type FindingBatchItem = z.infer<typeof FindingBatchItemSchema>;
@@ -311,16 +332,23 @@ export const CardSchema = z.object({
   // a projeção de custo mensal de uma entrega (cost-impact.ts)
   costImpact: z
     .object({
-      monthlyBRL: z.number().min(0),
+      // as DUAS grafias (types.ts `CostImpact`): a neutra (`monthlyAmount`+`currency`) e a legada (`monthlyBRL`, BRL no nome).
+      monthlyAmount: z.number().min(0).optional(),
+      baselineMonthlyAmount: z.number().min(0).optional(),
+      currency: z.string().regex(/^[A-Z]{3}$/).optional(),
+      monthlyBRL: z.number().min(0).optional(),
+      baselineMonthlyBRL: z.number().min(0).optional(),
       scope: z.enum(["infra", "cash"]),
       assumptions: z.string().min(1),
-      baselineMonthlyBRL: z.number().min(0).optional(),
       newVendor: z.string().min(1).optional(),
       paidPlan: z.boolean().optional(),
       paidApi: z.boolean().optional(),
       decider: z.enum(["owner", "system"]),
       by: z.string(),
       at: z.string(),
+    })
+    .refine((c) => c.monthlyAmount != null ? c.currency != null : c.monthlyBRL != null, {
+      message: "costImpact precisa de monthlyAmount+currency (neutro) ou de monthlyBRL (legado)",
     })
     .optional(),
   ownerReviewsUi: z.boolean().optional(),
@@ -726,6 +754,13 @@ export const BoardConfigSchema = z.object({
       // os tetos mensais do dono (cost-impact.ts) e o mapa regra de deploy → classe do dono.
       budget: z
         .object({
+          // a moeda do teto (ISO 4217); ausente ⇒ a do alvo (`target.currency`) — ou BRL quando o teto vem pelas chaves legadas.
+          currency: z.string().regex(/^[A-Z]{3}$/).optional(),
+          cashMonthly: z.number().min(0).optional(),
+          infraMonthly: z.number().min(0).optional(),
+          baselineCashMonthly: z.number().min(0).optional(),
+          baselineInfraMonthly: z.number().min(0).optional(),
+          // a grafia LEGADA (BRL no nome): lida para sempre, devolvida como lida.
           cashMonthlyBRL: z.number().min(0).optional(),
           infraMonthlyBRL: z.number().min(0).optional(),
           baselineCashMonthlyBRL: z.number().min(0).optional(),

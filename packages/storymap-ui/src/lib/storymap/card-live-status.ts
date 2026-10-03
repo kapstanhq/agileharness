@@ -39,6 +39,8 @@
 // existia aqui foi como o card e o nav passaram a pintar a mesma coisa de cores diferentes.
 
 import type { BoardConfig, Card, StatusDef } from "./types";
+import { scopeAdmitsCard, scopeHoldsCard, type EffectiveScope } from "./runner/board-pace";
+import { resolveConductorPolicy } from "./driver";
 import type { MergeQueueEntry, RunnerFailure, RunnerRun } from "./runner/types";
 import { ageWords } from "./inbox/copy";
 import { CARD_STALLED_FINDING_ID, isDeployStep } from "./demands";
@@ -142,6 +144,12 @@ export interface ConductorSlotFact {
   extra?: { open: boolean; why?: string };
 }
 
+/** O ESCOPO de tipos em vigor num board (runner/board-pace.ts): os tipos de story que ele pode COMEÇAR sozinho. Só existe para board limitado. */
+export interface BoardScopeFact {
+  board: string;
+  scope: EffectiveScope;
+}
+
 export interface CardLiveFeed {
   at: number;
   sessions: CardSessionFact[];
@@ -151,6 +159,8 @@ export interface CardLiveFeed {
   judging: string[];
   /** as vagas de condutor por board (opcional: ver {@link ConductorSlotFact}). */
   slots?: ConductorSlotFact[];
+  /** o escopo de tipos dos boards limitados (opcional: ausente = nenhum board limita o que começa). */
+  scopes?: BoardScopeFact[];
 }
 
 export const EMPTY_CARD_LIVE_FEED: CardLiveFeed = { at: 0, sessions: [], queue: [], throttles: [], judging: [] };
@@ -174,6 +184,8 @@ export interface CardLiveFacts {
   terminal?: TerminalWaitFact | null;
   queue?: CardQueueFact | null;
   throttle?: BoardThrottleFact | null;
+  /** o escopo de tipos do board DESTE card, quando ele limita o que o board começa. */
+  scope?: EffectiveScope | null;
   judging?: boolean;
   /** a decisão do DONO que o card carrega (cardInboxSignal — só o que o Inbox põe em Decidir). */
   ownerDecision?: { label: string; itemId: string } | null;
@@ -227,6 +239,7 @@ export function cardLiveFactsFor(
     terminal,
     queue: mine(src.feed?.queue)[0] ?? null,
     throttle: (src.feed?.throttles ?? []).find((t) => t.board === boardId) ?? null,
+    scope: (src.feed?.scopes ?? []).find((x) => x.board === boardId)?.scope ?? null,
     judging: (src.feed?.judging ?? []).includes(`${boardId}/${cardId}`),
   };
 }
@@ -348,8 +361,9 @@ function ms(iso: string | null | undefined): number | undefined {
  * A linha de estado de um card. PURA. `null` = nada vivo e nada provado — a tela mostra só a etapa.
  */
 export function projectCardLiveStatus(
-  card: Pick<Card, "status" | "deployFiredAt" | "deployProof" | "releasedAt" | "findings">,
-  config: Pick<BoardConfig, "statuses">,
+  card: Pick<Card, "status" | "deployFiredAt" | "deployProof" | "releasedAt" | "findings"> & Partial<Pick<Card, "type" | "storyType" | "mode" | "routing">>,
+  // `conductor` (opcional): o despacho do condutor do board — onde o escopo também segura o card (ver 9b).
+  config: Pick<BoardConfig, "statuses"> & Partial<Pick<BoardConfig, "conductor">>,
   facts: CardLiveFacts,
   now: number,
 ): CardLiveStatus | null {
@@ -447,6 +461,23 @@ export function projectCardLiveStatus(
   if (facts.queue) {
     const q = facts.queue;
     return out({ kind: "queued", actor: "Condutor", label: `Na fila do condutor · ${q.position}º`, since: ms(q.queuedAt), note: q.waitReason });
+  }
+
+  // 9b. fora do escopo de tipos do board: nada o impede além de a decisão do dono (ou do agente) de só começar certos
+  // tipos por enquanto. Não é falha nem travamento — é espera de propósito, e a linha diz isso. A MESMA pergunta do painel
+  // (a contagem «N cards esperando», `scopeHoldsCard`): só o card que o escopo realmente SEGURA — parado num status barrado
+  // (a construção e, num board com condutor, o despacho dele), sem condutor e sem run (o que já executa termina e tem a linha
+  // dele, acima). Design, «pronta» e o fechamento (revisão/QA) não são barrados: ali o card anda, e a linha não finge espera.
+  if (facts.scope && card.type && card.status) {
+    const held = scopeHoldsCard(
+      facts.scope,
+      { id: "", type: card.type, storyType: card.storyType ?? null, mode: card.mode, status: card.status, routing: card.routing },
+      { conductorFrom: resolveConductorPolicy(config)?.fromStatuses },
+    );
+    if (held) {
+      const verdict = scopeAdmitsCard(facts.scope, { id: "", type: card.type, storyType: card.storyType ?? null, mode: card.mode, status: card.status }, "conductor");
+      return out({ kind: "waiting", actor: "Board", label: "Esperando: fora do que o board pode começar agora", note: verdict.why });
+    }
   }
 
   // 10. o juiz da triagem

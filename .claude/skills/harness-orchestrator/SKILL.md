@@ -450,7 +450,7 @@ item único isolado → `create_card`; bug/ideia em texto livre → `report_issu
 ```
 
 ## Referências
-- `.claude/CLAUDE.md` (raiz) — regras sempre-on (git, VPS, 3008, deploys background).
+- As instruções do repositório do alvo (CLAUDE.md/AGENTS.md, se houver) e `target_profile({board})` — os comandos, o ambiente e as regras DESTE repositório.
 - `packages/storymap-ui/` — o app do board (porta 3008, `bun run dev`).
 - `storymap/boards/<board>/cards/*.md` — os cards como Markdown.
 - Skills da esteira: `/harness-enrich` `/harness-interview` `/harness-prioritize` `/harness-plan`

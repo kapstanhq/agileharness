@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 
 import { NAMESPACE_PROBE } from "./runner/autonomy-sandbox";
 import { CONTRATO_DE_ENV } from "./env-contract";
-import { runPreflight, preflightMessage, type PreflightProbes, type PreflightCheck } from "./preflight";
+import { runPreflight, preflightMessage, deployDeclarationsProbe, type DeployDeclarationsProbe, type PreflightProbes, type PreflightCheck } from "./preflight";
+import { deployPolicyFromSettings } from "./runner/deploy-command-guard";
 
 // O relatório de prontidão. Tudo aqui roda sobre sondas INJETADAS — nada toca o disco, o PATH ou o
 // git da máquina que roda a suíte. Ver o cabeçalho de preflight.ts para o porquê do módulo existir.
@@ -549,5 +550,195 @@ describe("gate.isolation — o aviso de preflight do fallback do selo", () => {
 
   it("[NÃO-VACUIDADE] sem a sonda, o check não aparece — não medir não é passar", () => {
     expect(runPreflight(saudavel()).checks.some((c) => c.id === "gate.isolation")).toBe(false);
+  });
+});
+
+
+// ── O DEPLOY QUE O ALVO DECLAROU: `host.just` condicional e `deploy.declared-commands` ──────────────────────
+describe("deploy.declared-commands e host.just — a ferramenta não supõe o executor de tarefas do alvo", () => {
+  // Alvo INVENTADO (oficina de bicicletas): publica por `shipit`, com receitas `ship-app`/`plan-app` num task runner `taskrun`.
+  const politica = (over: Partial<Parameters<typeof deployPolicyFromSettings>[0] & object> = {}) =>
+    deployPolicyFromSettings({ launchers: ["shipit", "taskrun"], recipes: ["ship-app", "plan-app"], recipeRunners: ["taskrun"], ...over }, {});
+  const probe = (over: Partial<DeployDeclarationsProbe> = {}): DeployDeclarationsProbe => ({
+    policy: politica(),
+    boardCommands: [{ where: "board oficina → deploy.liveShaCommand", command: "taskrun ship-app oficina.v2" }],
+    programs: ["taskrun"],
+    ...over,
+  });
+  const semJust = (over: Partial<PreflightProbes> = {}) => saudavel({ exists: (p) => NO_DISCO.includes(p) && !p.endsWith("/just"), ...over });
+
+  it("sem o probe os dois checks NÃO existem (o boot empacotado não carrega a config), e não há mais cobrança incondicional do `just`", () => {
+    const ids = runPreflight(semJust()).checks.map((c) => c.id);
+    expect(ids).not.toContain("host.just");
+    expect(ids).not.toContain("deploy.declared-commands");
+  });
+
+  it("[CONDICIONAL] nenhum comando declarado usa `just` ⇒ ok mesmo sem o binário, dizendo que não é exigido", () => {
+    const c = acha(runPreflight(semJust({ deploy: probe() })).checks, "host.just");
+    expect(c.status).toBe("ok");
+    expect(c.observed).toMatch(/não é exigido/);
+    expect(c.observed).toContain("taskrun");
+  });
+
+  it("[CONDICIONAL] um comando declarado USA `just` e o binário falta ⇒ missing, com a declaração do operador nomeada", () => {
+    const c = acha(runPreflight(semJust({ deploy: probe({ programs: ["just"] }) })).checks, "host.just");
+    expect(c.status).toBe("missing");
+    expect(c.remedy).toContain("AGILEHARNESS_JUST");
+    // e com o binário presente passa
+    expect(acha(runPreflight(saudavel({ deploy: probe({ programs: ["just"] }) })).checks, "host.just").status).toBe("ok");
+  });
+
+  it("todo comando de board que a política efetiva RECUSARIA vira degraded, com onde ele está e o que declarar", () => {
+    const c = acha(
+      runPreflight(
+        saudavel({
+          deploy: probe({
+            boardCommands: [
+              { where: "board oficina → deploy.liveShaCommand", command: "taskrun ship-app oficina.v2" }, // passa
+              { where: "board oficina → deploy.planCommand", command: "pulumi up --yes" }, // lançador fora da lista
+              { where: "board oficina → deploy.canaryCommand", command: "taskrun wipe-all" }, // receita fora da lista
+            ],
+          }),
+        }),
+      ).checks,
+      "deploy.declared-commands",
+    );
+    expect(c.status).toBe("degraded");
+    expect(c.observed).toContain("board oficina → deploy.planCommand");
+    expect(c.observed).toContain("board oficina → deploy.canaryCommand");
+    expect(c.observed).not.toContain("liveShaCommand");
+    expect(c.observed).toContain("deploy.launchers");
+    expect(c.remedy).toMatch(/deploy\.launchers/);
+    expect(c.remedy).toMatch(/deploy\.recipes/);
+    expect(c.remedy).toMatch(/deploy\.recipeRunners/);
+  });
+
+  it("alvo SEM política nenhuma: todo comando é recusado nomeando a chave — nada passa por suposição", () => {
+    const c = acha(runPreflight(saudavel({ deploy: probe({ policy: deployPolicyFromSettings(undefined, {}) }) })).checks, "deploy.declared-commands");
+    expect(c.status).toBe("degraded");
+    expect(c.observed).toContain("deploy.launchers");
+  });
+
+  it("tudo passa ⇒ ok; nenhum comando declarado ⇒ ok dizendo isso; task runner conhecido fora de recipeRunners ⇒ warn", () => {
+    expect(acha(runPreflight(saudavel({ deploy: probe() })).checks, "deploy.declared-commands").status).toBe("ok");
+    const vazio = acha(runPreflight(saudavel({ deploy: probe({ boardCommands: [], programs: [] }) })).checks, "deploy.declared-commands");
+    expect(vazio.status).toBe("ok");
+    expect(vazio.observed).toMatch(/nenhum comando/);
+    const sem = acha(
+      runPreflight(
+        saudavel({
+          deploy: probe({
+            policy: deployPolicyFromSettings({ launchers: ["just"], recipes: ["ship-app"] }, {}),
+            boardCommands: [{ where: "board oficina → deploy.liveShaCommand", command: "just ship-app" }],
+            programs: ["just"],
+          }),
+        }),
+      ).checks,
+      "deploy.declared-commands",
+    );
+    expect(sem.status).toBe("warn");
+    expect(sem.remedy).toContain("deploy.recipeRunners: [just]");
+  });
+
+  it("[NÃO-VACUIDADE] `null` (a config não pôde ser lida) ⇒ unknown, nunca ok", () => {
+    expect(acha(runPreflight(saudavel({ deploy: null })).checks, "deploy.declared-commands").status).toBe("unknown");
+  });
+
+  it("deployDeclarationsProbe junta os comandos de board e os programas de settings, sem inventar nenhum", () => {
+    const p = deployDeclarationsProbe(
+      { policy: politica(), canaryCommand: "shipit canary", argvs: [["taskrun", "--yes", "ship-app", "{target}"], undefined, ["recorder", "verdict", "{file}"]] },
+      [
+        { id: "oficina", deploy: { command: "shipit publish", liveShaCommand: " taskrun ship-app oficina.v2 ", surfaces: [{ prefix: "tools/x/", deployCmd: "shipit site" }, { prefix: "tools/y/" }] } },
+        { id: "vitrine" },
+      ],
+    );
+    expect(p.boardCommands.map((c) => c.where)).toEqual([
+      "settings.yaml → deploy.canaryCommand",
+      "board oficina → deploy.command",
+      "board oficina → deploy.liveShaCommand",
+      "board oficina → deploy.surfaces[0].deployCmd",
+    ]);
+    expect(p.boardCommands[2].command).toBe("taskrun ship-app oficina.v2"); // aparado
+    expect([...p.programs].sort()).toEqual(["recorder", "shipit", "taskrun"]);
+  });
+});
+
+// ── .artifacts/ fora do git ─────────────────────────────────────────────────────────────────────────────────
+describe("artifacts.ignored — o motor commita com `git add -A`", () => {
+  const comCheckIgnore = (code: number | null) => (cmd: string, args: string[]) =>
+    cmd === "git" && args.includes("check-ignore") ? (code === null ? null : { code, stdout: "", stderr: "" }) : sondaOk(cmd, args);
+
+  it("ignorado ⇒ ok; NÃO ignorado ⇒ warn (não degraded) com o bloco de .gitignore a colar", () => {
+    expect(acha(runPreflight(saudavel({ run: comCheckIgnore(0) })).checks, "artifacts.ignored").status).toBe("ok");
+    const r = runPreflight(saudavel({ run: comCheckIgnore(1) }));
+    const c = acha(r.checks, "artifacts.ignored");
+    expect(c.status).toBe("warn");
+    expect(c.remedy).toContain(".gitignore");
+    expect(c.remedy).toContain("\n.artifacts/");
+    expect(c.remedy).toContain("git add -A");
+    expect(r.worst).toBe("warn"); // aviso: não derruba o veredito além disso
+  });
+
+  it("a sonda quebrou (código 128) ou não respondeu ⇒ unknown, nunca ok", () => {
+    expect(acha(runPreflight(saudavel({ run: comCheckIgnore(128) })).checks, "artifacts.ignored").status).toBe("unknown");
+    expect(acha(runPreflight(saudavel({ run: comCheckIgnore(null) })).checks, "artifacts.ignored").status).toBe("unknown");
+    expect(acha(runPreflight(saudavel({ run: undefined })).checks, "artifacts.ignored").status).toBe("unknown");
+  });
+
+  it("a consulta usa um caminho DENTRO de .artifacts/ e ignora o índice (um arquivo já rastreado não mascara a regra)", () => {
+    const chamadas: string[][] = [];
+    runPreflight(saudavel({ run: (cmd, args) => { if (args.includes("check-ignore")) chamadas.push(args); return sondaOk(cmd, args); } }));
+    expect(chamadas).toHaveLength(1);
+    expect(chamadas[0]).toEqual(expect.arrayContaining(["--no-index", RAIZ]));
+    expect(chamadas[0].at(-1)).toMatch(/^\.artifacts\//);
+  });
+});
+
+// ── as libs que os hooks do alvo carregam ───────────────────────────────────────────────────────────────────
+describe("hooks.lib — o fail-open mudo dos hooks vira um item que o operador VÊ", () => {
+  const FERRAMENTA = "/opt/ferramenta/packages/ui";
+  const HOOK = `${RAIZ}/.claude/hooks/runner.js`;
+  const comHooks = (extra: string[], over: Partial<PreflightProbes> = {}) =>
+    saudavel({ exists: (p) => NO_DISCO.includes(p) || p === HOOK || extra.includes(p), toolPackageDir: FERRAMENTA, ...over });
+
+  it("sem o probe do pacote da ferramenta o check não existe", () => {
+    expect(runPreflight(saudavel()).checks.some((c) => c.id === "hooks.lib")).toBe(false);
+  });
+
+  it("o alvo não instala os hooks ⇒ ok dizendo isso (não há o que alcançar)", () => {
+    const c = acha(runPreflight(saudavel({ toolPackageDir: FERRAMENTA })).checks, "hooks.lib");
+    expect(c.status).toBe("ok");
+    expect(c.observed).toMatch(/não instala os hooks/);
+  });
+
+  it("nenhuma lib alcançável ⇒ degraded, nomeando as duas e as DUAS saídas (vendorizar ou declarar a raiz da ferramenta)", () => {
+    const c = acha(runPreflight(comHooks([])).checks, "hooks.lib");
+    expect(c.status).toBe("degraded");
+    expect(c.observed).toContain("gate-core.js");
+    expect(c.observed).toContain("ownership.js");
+    expect(c.remedy).toContain("owner: human");
+    expect(c.remedy).toContain(".claude/hooks/lib");
+    expect(c.remedy).toContain("AGILEHARNESS_TOOL_ROOT");
+  });
+
+  it("a ordem de busca dos hooks: cópia vendorizada, depois o pacote da ferramenta, depois o caminho legado", () => {
+    const vendorizada = [`${RAIZ}/.claude/hooks/lib/gate-core.js`, `${RAIZ}/.claude/hooks/lib/ownership.js`];
+    const daFerramenta = [`${FERRAMENTA}/src/lib/storymap/gate-core.js`, `${FERRAMENTA}/src/lib/storymap/ownership.js`];
+    const legado = [`${RAIZ}/packages/storymap-ui/src/lib/storymap/gate-core.js`, `${RAIZ}/packages/storymap-ui/src/lib/storymap/ownership.js`];
+    for (const [nome, achados] of [["vendorizada", vendorizada], ["pacote da ferramenta", daFerramenta], ["legado", legado]] as const) {
+      const c = acha(runPreflight(comHooks([...achados])).checks, "hooks.lib");
+      expect(c.status, nome).toBe("ok");
+      expect(c.observed, nome).toContain(achados[0]);
+    }
+    // uma só das duas alcançável: continua degraded e diz QUAL falta (a guarda de owner:human é a que custa)
+    const metade = acha(runPreflight(comHooks([vendorizada[0]])).checks, "hooks.lib");
+    expect(metade.status).toBe("degraded");
+    expect(metade.observed).toContain("ownership.js");
+    expect(metade.observed).toMatch(/ok: gate-core\.js/);
+  });
+
+  it("a ferramenta não foi localizada (null): só vendorizada e legado valem", () => {
+    const c = acha(runPreflight(comHooks([`${FERRAMENTA}/src/lib/storymap/gate-core.js`, `${FERRAMENTA}/src/lib/storymap/ownership.js`], { toolPackageDir: null })).checks, "hooks.lib");
+    expect(c.status).toBe("degraded");
   });
 });

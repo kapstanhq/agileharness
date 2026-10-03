@@ -7,7 +7,8 @@
 //     detached, surviving the parent's death. The build runs BEFORE the restart, so a broken build never
 //     restarts onto bad code (the old service keeps serving). A FIXED unit name makes it idempotent: a
 //     second deploy while one is in flight fails to start a duplicate (a no-op, reported non-fatal).
-//   - product board: `just orch-deploy <target>` via the shared ProductDeployRegistry
+//   - product board: the LEGACY DIFF-AWARE COMMAND the target declares (settings.yaml → deploy.legacy.command,
+//     an argv with `{target}`; without it the dispatch REFUSES naming the key) via the shared ProductDeployRegistry
 //     (the SAME mechanism the MCP `deploy` tool uses — observable via deploy_status). A product deploy does
 //     NOT restart storymap, so it needs no systemd-run: it is a tracked child process. Idempotent via the
 //     registry's per-pkg `isRunning`. The `<pkg>` is the basename of `package` (deployPkgForPackage),
@@ -15,7 +16,7 @@
 //     not among them is a no-op note (never silently fired).
 //   - DECLARED deploy (D-AG1..D-AG4): a board.yaml `deploy:` descriptor
 //     overrides the package-derived routing — kind "command" runs the owner's declared LAUNCHER (an
-//     allow-listed argv, never an arbitrary script: authorizeDeployCommand), kind "agent" runs a bounded
+//     argv allow-listed by the target's declared policy, never an arbitrary script: authorizeDeployCommand), kind "agent" runs a bounded
 //     headless claude following the owner's recipe — BOTH through the same registry/settle cycle.
 //     Absent descriptor / kind "auto" ⇒ the two legacy paths above, byte-identical.
 //
@@ -34,6 +35,8 @@ import {
   composedFaceFiles,
   composedFacePrefixes,
   composedFaceTarget,
+  declaredDeployPolicy,
+  deployCommandFor,
   deployPkgForPackage,
   productDeployTargets,
   getProductDeploy,
@@ -53,17 +56,20 @@ import type { DeployFailureDetail } from "./deploy-revert";
 // import de `product-deploy` logo acima lê um manifesto do disco em tempo de CARGA, a mina que forçou o
 // split do face-probe. Enquanto a régua era propriedade deste caminho, o campo vizinho ia cru para
 // `/bin/sh -c` e contornava as duas ondas anteriores. Re-exportada abaixo para quem já a importava daqui.
-import { authorizeDeployCommand, quoteArgv, shSingleQuote } from "./deploy-command-guard";
+import { authorizeDeployCommand, deployPolicyFromSettings, quoteArgv, shSingleQuote, type DeployCommandPolicy } from "./deploy-command-guard";
 import { findToolPackageDir } from "@/lib/storymap/paths";
+import type { ResolvedDeployPolicy } from "@/lib/storymap/deploy-policy";
 
 export {
   authorizeDeployCommand,
+  deployPolicyFromSettings,
   parseDeclaredArgv,
   quoteArgv,
   resolveDeployLaunchers,
   resolveDeployRecipes,
   resolveRecipeRunners,
   shSingleQuote,
+  type DeployCommandPolicy,
   type DeployCommandVerdict,
 } from "./deploy-command-guard";
 
@@ -120,15 +126,17 @@ const defaultRefusalRevert: DeployRefusalRevertFn = async (board, cardId, detail
 };
 
 export interface DeployResult {
-  /** the deploy was dispatched (the detached unit started / the product orch-deploy kicked off) */
+  /** the deploy was dispatched (the detached unit started / the product's declared legacy command kicked off) */
   fired: boolean;
   /** D-AG2/D-AG3 add the board-DECLARED mechanisms: "board-command" (deploy.command via bash -lc) and
-   *  "deploy-agent" (deploy.description via a bounded headless claude). */
+   *  "deploy-agent" (deploy.description via a bounded headless claude).
+   *  "orch-deploy" is an OPAQUE, observable identity (events, tests, deploy_status) of the legacy diff-aware path — kept
+   *  as is; what stopped being assumed is the COMMAND (it is `deploy.legacy.command`, declared by the target). */
   tool?: "systemd-restart" | "orch-deploy" | "board-command" | "deploy-agent";
-  /** the product app deployed (orch-deploy target), when a product board fired */
+  /** the product app deployed (the legacy-command target), when a product board fired */
   pkg?: string;
   /** story-ex0071: the deployment's declared face recipe is ARMED to fire once this backend deploy
-   *  settles OK (the promoted diff touched the merged face, which orch-deploy does not publish). */
+   *  settles OK (the promoted diff touched the merged face, which the legacy command does not publish). */
   chainedComposedFace?: boolean;
   /** The product-deploy targets whose publication makes the triggering card LIVE — the backend pkg plus the
    *  merged face when it was chained. Returned (not re-derived by the caller) so the effect layer can stamp it
@@ -142,7 +150,7 @@ export interface DeployResult {
   /** 1.5: a self-deploy could NOT start because one is already IN FLIGHT (the fixed `storymap-deploy` systemd
    *  unit is busy building). The caller parks the card in pending-self-deploy so the in-flight deploy's settle
    *  re-dispatches it — otherwise the card sits in "No ar" with no deployFiredAt, no settle and no watchdog
-   *  (a silent terminal). On a registry deploy (orch-deploy / declared) the same flag means a job of the same
+   *  (a silent terminal). On a registry deploy (legacy command / declared) the same flag means a job of the same
    *  target is running, and `attached` says the card rode it. */
   inFlight?: boolean;
   /** The card rode the in-flight registry deploy of the same target (ProductDeployRegistry.attach): that job's
@@ -212,6 +220,9 @@ export interface SelfDeployScriptOpts {
    *  successful build+restart (from the repo root via a login shell), each time-boxed and NON-FATAL. Empty/
    *  absent ⇒ byte-identical legacy self-deploy. Only the storymap self-deploy path threads these. */
   postBuildCommands?: readonly string[];
+  /** A POLÍTICA do passo privilegiado (lançadores/receitas que o alvo declarou): os `postBuildCommands` são board-data e
+   *  passam pela régua sob ela. OBRIGATÓRIA — sem ela um chamador novo herdaria uma allow-list suposta. */
+  commandPolicy: DeployCommandPolicy;
   /** story-ex9514 — o caminho ABSOLUTO do `bun` que roda o build STAGED, resolvido pelo DESPACHO
    *  ({@link resolveHostTool}) e passado para cá para o builder seguir puro. Ausente ⇒ o nome nu `bun`,
    *  resolvido pelo PATH de quem executar o script. */
@@ -235,7 +246,7 @@ const POSTBUILD_TIMEOUT_S = 120;
  *
  * story-ex0067 — COMO o passo privilegiado roda, e por quê assim. Ele roda como ROOT, então:
  *  - ALVO AUTORIZADO, não comando qualquer: {@link authorizeDeployCommand} decide o que pode ser
- *    EXECUTADO (allow-list de lançadores) — é isso que impede um `deployCmd: "bash -c '<payload>'"`, que a
+ *    EXECUTADO (allow-list de lançadores declarada pelo alvo) — é isso que impede um `deployCmd: "bash -c '<payload>'"`, que a
  *    régua anterior (metacaractere fora de aspas) deixava passar inteiro por não ter metacaractere nenhum
  *    solto. Interpretador nunca é alvo válido. E a régua vale para a CADEIA inteira, não só para `argv[0]`:
  *    num task runner a RECEITA (allow-list) e a FORMA dos argumentos (palavra literal) também são
@@ -251,11 +262,11 @@ const POSTBUILD_TIMEOUT_S = 120;
  *  - FAIL-CLOSED: uma declaração não autorizada NÃO É EXECUTADA — só registrada, e o unit segue (a recusa
  *    é tão não-fatal quanto uma falha do passo; a prova do self-deploy é build+restart, não a superfície).
  */
-function buildPostBuildSegment(cmds: readonly string[], rootDirJson: string, logJson: string): string {
+function buildPostBuildSegment(cmds: readonly string[], rootDirJson: string, logJson: string, policy: DeployCommandPolicy): string {
   if (cmds.length === 0) return "";
   const steps = cmds
     .map((cmd) => {
-      const { argv, refusal } = authorizeDeployCommand(cmd);
+      const { argv, refusal } = authorizeDeployCommand(cmd, policy);
       if (!argv) {
         return `echo ${shSingleQuote(`[postBuild] RECUSADO (${refusal}; nada executado): ${cmd}`)} >> ${logJson};`;
       }
@@ -341,7 +352,7 @@ export function buildSelfDeployScript(opts: SelfDeployScriptOpts): string {
   const log = JSON.stringify(logPath);
   // The declared surface-publish supplement, spliced INTO this detached script so it inherits the systemd-run
   // detach + STATUS-gating + fixed-unit idempotency. Empty ⇒ "" ⇒ byte-identical legacy script.
-  const postBuild = buildPostBuildSegment(opts.postBuildCommands ?? [], JSON.stringify(repoRoot), log);
+  const postBuild = buildPostBuildSegment(opts.postBuildCommands ?? [], JSON.stringify(repoRoot), log, opts.commandPolicy);
 
   // Manual deploy (no card) → the classic build-before-restart chain, fail-open, nothing to settle.
   if (!board || !cardId) {
@@ -401,7 +412,7 @@ export async function deployBoard(opts: {
    *  work; a ~0s no-drift settle then means nothing shipped (deploySettledWithoutWork → revert). */
   expectWork?: boolean;
   /** story-ex0071: the file paths the release just promoted to main. When any is a composed-face path
-   *  (touchesComposedFace), the board deploy ALSO publishes the merged web face — `orch-deploy` doesn't. */
+   *  (touchesComposedFace), the board deploy ALSO publishes the merged web face — the legacy command doesn't. */
   changedFiles?: string[];
   /** D-AG1 — the board's DECLARED deploy descriptor (BoardConfig.deploy), threaded by fireDeployBoard.
    *  Absent or kind "auto" ⇒ the legacy package-derived routing below, byte-identical. */
@@ -418,6 +429,12 @@ export async function deployBoard(opts: {
    * no repositório de origem, vermelho num checkout que não declara nada, e nenhum dos dois medindo o roteamento.
    */
   deployTargets?: readonly string[];
+  /**
+   * DI: a POLÍTICA de deploy que o alvo declarou (settings.yaml → `deploy:`): a allow-list do passo privilegiado, o comando
+   * legado, a face composta. Ausente ⇒ lê a declaração do alvo. Injetável pela mesma razão que `deployTargets`: sem isto,
+   * um caso de roteamento passaria a depender do settings.yaml da máquina em que a suíte roda.
+   */
+  deployPolicy?: ResolvedDeployPolicy;
   /** DI: the agent path's proof settle (defaults to the real settleDeploySuccess via dynamic import). */
   settle?: DeploySettleFn;
   /** DI: a unidade de serviço desta instalação. Ausente ⇒ `resolveServiceUnit()` (a declarada no ambiente). */
@@ -442,6 +459,12 @@ export async function deployBoard(opts: {
   followUp?: boolean;
 }): Promise<DeployResult> {
   const { exec, repoRoot, boardPackage } = opts;
+  // A POLÍTICA declarada pelo alvo, lida UMA vez por disparo (o settings é por mtime: uma edição no meio não rasga um disparo).
+  // Preguiçosa: um caminho que não a usa (o self-deploy sem passos de publicação) não toca o settings.
+  let policyMemo: ResolvedDeployPolicy | undefined;
+  const policy = (): ResolvedDeployPolicy => (policyMemo ??= opts.deployPolicy ?? declaredDeployPolicy());
+  // A régua do passo privilegiado = o que o alvo declarou ∪ o env do serviço (aditivo). SEM default no código.
+  const commandPolicy = (): DeployCommandPolicy => deployPolicyFromSettings(policy());
   // ── O PREFLIGHT DE FRESCOR — antes de QUALQUER deploy de produto lançado daqui (declarado, legado, face).
   // A recusa não lança: vira `freshnessRefused` e o efeito devolve o card pelo caminho de falha de deploy.
   const freshness: DeployFreshnessGate =
@@ -536,7 +559,7 @@ export async function deployBoard(opts: {
       // Nenhuma capacidade é perdida: `just deploy-x` e `vercel deploy --prod` (o exemplo do `_base`) são
       // alvos autorizados; uma receita de N passos se declara como receita VERSIONADA do repo (`just <alvo>`)
       // ou como `kind: agent`; outro CLI de publicação entra pelo env do operador (AGILEHARNESS_DEPLOY_LAUNCHERS).
-      const verdict = authorizeDeployCommand(command);
+      const verdict = authorizeDeployCommand(command, commandPolicy());
       if (!verdict.argv) {
         return refuse({ tool }, `deploy.kind=command recusado — ${verdict.refusal}`);
       }
@@ -549,7 +572,7 @@ export async function deployBoard(opts: {
       const authorizedCommand = quoteArgv(verdict.argv);
       // O preflight vem DEPOIS da régua do comando (config inválida é config inválida, não "checkout velho")
       // e ANTES do registry — que de qualquer forma não lançaria sem a autorização que só ele cunha.
-      const fresh = await freshness({ target: opts.board, repoRoot, scope: deployScope, liveShaCommands, label: `board ${opts.board}` });
+      const fresh = await freshness({ target: opts.board, repoRoot, scope: deployScope, liveShaCommands, policy: commandPolicy(), label: `board ${opts.board}` });
       if (!fresh.ok) return refusedByFreshness({ tool }, fresh);
       const meanwhile = ride(registry, opts.board, { tool });
       if (meanwhile) return meanwhile;
@@ -560,7 +583,7 @@ export async function deployBoard(opts: {
         fired: true,
         tool,
         // The card's live-target is the board's own declared deploy. Proof is the SAME evidence contract
-        // as every target: the settle measures scripts/deploy/state/<board>.json (which the declared
+        // as every target: the settle measures the target's declared state file (deploy.legacy.state, {target}=<board>) (which the declared
         // command MAY write — opt-in proof); absent, the card holds in Publicando for the human/watchdog.
         targets: [opts.board],
         reason: `deploy declarado do board: ${command.slice(0, 120)} (pid ${job.pid ?? "?"}, log ${job.logFile})`,
@@ -574,7 +597,7 @@ export async function deployBoard(opts: {
     }
     // O agente publica A PARTIR deste checkout tanto quanto o comando — a mesma pré-condição, e ANTES de
     // assinar o settle abaixo (uma recusa não pode deixar um assinante órfão no registry).
-    const fresh = await freshness({ target: opts.board, repoRoot, scope: deployScope, liveShaCommands, label: `board ${opts.board}` });
+    const fresh = await freshness({ target: opts.board, repoRoot, scope: deployScope, liveShaCommands, policy: commandPolicy(), label: `board ${opts.board}` });
     if (!fresh.ok) return refusedByFreshness({ tool }, fresh);
     const meanwhile = ride(registry, opts.board, { tool });
     if (meanwhile) return meanwhile;
@@ -673,7 +696,7 @@ export async function deployBoard(opts: {
     // reportando sucesso, exatamente o que um ADOTANTE veria (a allow-list default é a deste repo). Então a
     // recusa também GRITA no log do serviço e volta no resultado. Continua NÃO-FATAL: o deploy roda igual.
     const refusedPublishSteps = postBuildCommands
-      .map((command) => ({ command, refusal: authorizeDeployCommand(command).refusal }))
+      .map((command) => ({ command, refusal: authorizeDeployCommand(command, commandPolicy()).refusal }))
       .filter((r): r is { command: string; refusal: string } => r.refusal !== null);
     if (refusedPublishSteps.length > 0) {
       console.warn(
@@ -710,6 +733,7 @@ export async function deployBoard(opts: {
       tokenEnvName: WEBHOOK_TOKEN_ENV,
       logPath: `${repoRoot}/storymap/.runner/self-deploy.log`,
       postBuildCommands,
+      commandPolicy: commandPolicy(),
       bunPath: bun.path,
       serviceUnit,
     });
@@ -741,13 +765,19 @@ export async function deployBoard(opts: {
     }
   }
 
-  // Product board → `just orch-deploy <target>` via the shared registry (same path as the MCP `deploy`
-  // tool, observable via deploy_status). Agnostic: `<target>` is derived from `package` and validated
-  // against the targets THIS deployment declares (settings.yaml `deploy.targets`), never a name in this
-  // source. Um alvo que não declara nenhum cai no ramo "nada a deployar" logo abaixo.
-  const pkg = deployPkgForPackage(boardPackage, opts.deployTargets ?? productDeployTargets());
+  // Product board → the LEGACY DIFF-AWARE COMMAND the target declares (settings.yaml `deploy.legacy.command`) via the
+  // shared registry (same path as the MCP `deploy` tool, observable via deploy_status). Agnostic: `<target>` is derived
+  // from `package` (with `deploy.legacy.packageRoot` when declared) and validated against the targets THIS deployment
+  // declares (settings.yaml `deploy.targets`), never a name in this source. Um alvo que não declara nenhum cai no ramo
+  // "nada a deployar" logo abaixo. Um alvo que declara `targets` mas NÃO o comando RECUSA nomeando a chave: nada roda
+  // por suposição do ferramental de outro repositório.
+  const pkg = deployPkgForPackage(boardPackage, opts.deployTargets ?? policy().targets, policy().legacy.packageRoot ?? null);
   if (pkg) {
     const registry = opts.productDeploy ?? getProductDeploy();
+    const legacyCommand = deployCommandFor(pkg, policy());
+    if (!legacyCommand.ok) {
+      return refuse({ tool: "orch-deploy", pkg }, `deploy NÃO disparado: ${legacyCommand.refusal}`);
+    }
     // Card cujo diff toca a face composta precisa dela publicada também — o job em curso só a encadeia para o
     // card que o disparou. A carona mede a prova contra os DOIS alvos: sem a face, ela não prova e o card ganha
     // o deploy próprio (que encadeia a face) em vez de virar «No ar» com a face velha.
@@ -763,12 +793,13 @@ export async function deployBoard(opts: {
       repoRoot,
       scope: deployScope,
       liveShaCommands,
+      policy: commandPolicy(),
       label: opts.board ? `board ${opts.board}` : `alvo ${pkg}`,
     });
     if (!fresh.ok) return refusedByFreshness({ tool: "orch-deploy", pkg }, fresh);
     const meanwhile = ride(registry, pkg, { tool: "orch-deploy", pkg }, alvosDaCarona);
     if (meanwhile) return meanwhile;
-    // story-ex0071 — `orch-deploy <target>` ships the backend but NOT the merged web face (no hosting unit
+    // story-ex0071 — the legacy deploy command of `<target>` ships the backend but NOT the merged web face (no hosting unit
     // in any manifest, by design). When the release promoted a diff that touched a face path (its
     // own web/, or the shared SDK), ALSO publish the face via the deployment's DECLARED face recipe. Chain
     // it off the backend deploy SETTLING OK — the SAME G3 onDone hook the revert path uses — so the new
@@ -785,6 +816,15 @@ export async function deployBoard(opts: {
     // tem de ser o MESMO que o callback publica, ou a prova cobraria um alvo que ninguém publicou.
     const alvoDaFace = composedFaceTarget();
     const chainComposedFace = !!alvoDaFace && touchesComposedFace(opts.changedFiles ?? []) && !!(opts.board && opts.cardId);
+    // A face declarada SEM o comando que a publica não tem como subir: recusar AGORA (nada foi lançado) é melhor que publicar o
+    // backend e só então descobrir, minutos depois, que o encadeamento da face falha — o card ficaria «No ar» pela metade.
+    const faceDecl = policy().composedFace;
+    if (chainComposedFace && faceDecl?.target === alvoDaFace && !faceDecl.command) {
+      return refuse(
+        { tool: "orch-deploy", pkg },
+        "deploy NÃO disparado: o diff toca a superfície composta, mas o alvo não declarou como publicá-la — declare em settings.yaml → deploy.composedFace.command (um argv, sem shell).",
+      );
+    }
     let unsubscribeFace: (() => void) | null = null;
     if (chainComposedFace) {
       const face = alvoDaFace!;
@@ -809,6 +849,7 @@ export async function deployBoard(opts: {
             repoRoot,
             // escopo VAZIO significa "o repositório inteiro" — somar a face a ele o ESTREITARIA
             scope: deployScope.length === 0 ? [] : [...deployScope, ...composedFacePrefixes(), ...composedFaceFiles()],
+            policy: commandPolicy(),
             label: `face ${face} (board ${board})`,
           });
           if (!faceFresh.ok) {
@@ -851,7 +892,7 @@ export async function deployBoard(opts: {
       chainedComposedFace: chainComposedFace,
       // Os alvos que ESTE deploy publica — a evidência que a reconciliação lê depois (deploy-reconcile.ts).
       targets: [pkg, ...(chainComposedFace ? [alvoDaFace!] : [])],
-      reason: `just orch-deploy ${pkg} (pid ${job.pid ?? "?"}, log ${job.logFile})`,
+      reason: `deploy legado declarado: ${legacyCommand.argv.join(" ")} (pid ${job.pid ?? "?"}, log ${job.logFile})`,
     };
   }
   if (boardPackage) {

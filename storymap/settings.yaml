@@ -81,6 +81,13 @@ autorun:
       packages:
         packages/storymap-ui: vitest run
       maxUnits: 3
+      # O FALLBACK É DECLARAÇÃO, NÃO SUPOSIÇÃO: a ferramenta não sabe qual pacote é a suíte do repositório de quem a
+      # usa, então sem esta chave o gate RECUSA (inconclusivo) todo delta com código fora do mapa acima — e o merge
+      # train da PRÓPRIA ferramenta congelaria essas entradas. Aqui o repositório É a ferramenta: a suíte padrão é a
+      # do pacote dela.
+      fallback:
+        cwd: packages/storymap-ui
+        command: vitest run
     # ── UM ALVO MONOREPO (exemplo — comentado; este repositório só tem o pacote acima) ─────────────
     # Cada unidade DECLARA como é medida. A string solta (`dir: comando`) continua valendo: é uma unidade
     # `vitest-json`. Todo gate grava, por unidade, a argv EXATA executada e QUANTOS testes rodaram
@@ -161,6 +168,9 @@ autorun:
   staging:
     enabled: true
     branch: stage
+    # SEM DEFAULT: com o staging LIGADO o alvo tem de DECLARAR onde o código mora — sem esta lista o merge train recusa subir
+    # no boot dizendo «declare autorun.staging.codePrefixes» (`[]` explícito = nada é código). Ausente com o staging
+    # desligado, tudo fora de storymap/boards/ é tratado como código (o lado seguro: só preserva e verifica mais).
     codePrefixes:
       - packages/
       # o terminal web estático (tools/web-terminal/, servido pelo Caddy) é CÓDIGO
@@ -338,3 +348,107 @@ deploy:
   #   Declarar uma
   #   face cujo manifesto não existe é pior que não declarar — o motor não saberia se o
   #   diff a toca e republicaria a face a cada promote.
+
+# ══ O ALVO DECLARA O QUE É DELE ═════════════════════════════════════════════════════════════════════════════════
+# A ferramenta NÃO supõe o ferramental do repositório que gerencia: executor de testes, pasta de regras, moeda dos
+# tetos, lentes de revisão, layout de pacotes, portas do ambiente de QA, comandos de publicação, limite da assinatura.
+# Tudo isso é DECLARAÇÃO do operador, aqui (o canal versionado e sob o gate de código — `board.yaml` é editável por
+# agente e por isso NUNCA carrega um comando). Sem declaração a ferramenta recusa dizendo a chave exata a declarar, ou
+# manda a skill descobrir o comando nas instruções do repositório; nunca cai num default do repositório de origem.
+#
+# QUENTE: tudo abaixo é relido a cada leitura do arquivo (por mtime), sem restart — exceto `autorun.staging.*`, que é
+# lido uma vez na construção da fila do train. Peça fora da forma é DESCARTADA com UMA linha de aviso no log do serviço
+# (o resto do bloco segue). Já um YAML ilegível derruba a configuração INTEIRA nos defaults — e também avisa no log.
+#
+#   target.checks / dev / docs  moldes: {pkg} = último segmento de board.yaml `package`, {package} = o caminho inteiro,
+#                               {board} = o id. Comandos rodam SEM shell (lista de palavras), então sem pipe nem `&&`.
+#   target.currency            {code: ISO 4217 em MAIÚSCULAS, locale?: BCP 47, neutralWrites?: bool}. O símbolo vem do
+#                               Intl, nunca do operador. Sem isto, escrever/decidir custo recusa; exibir usa a moeda do dado.
+#   target.reviewLenses        id → {name, description, agent?, when?, mandatoryWhen?}. As lentes embutidas (security,
+#                               testing, perf, general, design) são sempre válidas; declarar uma delas só sobrescreve.
+#   target.layout              workspaces / packages: globs relativos à raiz, segmentos literais ou `*` (nunca `**`).
+#   target.qa                  ports, health (sondas GET só em loopback com porta), seeded, failureClasses (regex ≤ 200
+#                               caracteres, sem quantificador aninhado; a primeira que casar vence).
+#   deploy.*                   launchers / recipeRunners / recipes (a allow-list de comandos declarados em board-data).
+#                               ⚠ É UM PAR: um lançador que é TASK RUNNER (just, task, mise, rake, mask…) tem de aparecer
+#                               TAMBÉM em recipeRunners — senão ele só recebe a régua de lançador comum e um argumento de
+#                               comando de board (editável por agente) seria interpolado como texto na linha de shell da
+#                               receita, com o privilégio do serviço. O carregador avisa alto e o preflight
+#                               (`deploy.declared-commands`) mede os comandos de board que a política recusaria.
+#                               Demais chaves:
+#                               legacy {packageRoot, command, plan, scope, state} com {target}, composedFace.command,
+#                               proof {record {securityReview, ownerApproval} com {file}, staleMarkers}. Entram no bloco
+#                               `deploy:` JÁ EXISTENTE acima — não existe `target.deploy`. O env AGILEHARNESS_DEPLOY_*
+#                               continua ADITIVO (união; o env nunca remove o que o arquivo declarou).
+#   vps.*                      weeklyTokenLimit (o denominador do «% usado») e headroomUrl (de onde se LÊ o medidor;
+#                               só loopback). Env AGILEHARNESS_WEEKLY_TOKEN_LIMIT / AGILEHARNESS_HEADROOM_URL vencem.
+#   autorun.maxBudgetUSD       o teto de custo por run: um número ou um mapa skill → número (já existia).
+#
+# O exemplo abaixo é INVENTADO (uma oficina de bicicletas) e é carregado por um teste (config-target-schema.test.ts):
+# se a forma mudar, este exemplo quebra a suíte — a documentação não pode envelhecer em silêncio.
+# >>> exemplo
+# target:
+#   checks:
+#     test: "make test PKG={pkg}"
+#     testUnit: "make test-unit PKG={pkg}"
+#     typecheck: "make typecheck"
+#     validate: "make validate"
+#   dev:
+#     up: "make dev PKG={pkg}"
+#     down: "make dev-stop"
+#   docs:
+#     conventions: "{package}/CONTRIBUTING.md"
+#     testing: "docs/testing.md"
+#   currency:
+#     code: EUR
+#     locale: pt-PT
+#   reviewLenses:
+#     brakes:
+#       name: "Freios"
+#       description: "folga, desgaste e regulagem das pastilhas e dos cabos"
+#       agent: brake-reviewer
+#       when: "o diff toca o sistema de freio"
+#       mandatoryWhen: "o diff toca o cabo ou a pinça do freio"
+#     security:
+#       agent: lock-reviewer
+#   layout:
+#     workspaces: ["shops/*", "shops/*/web"]
+#     packages: ["shops/*"]
+#   qa:
+#     ports: [7101, 7102]
+#     health:
+#       - { name: broker, url: "http://127.0.0.1:7101/" }
+#       - { name: store, url: "http://127.0.0.1:7102/ready" }
+#     seeded: { url: "http://127.0.0.1:7102/docs/sentinel" }
+#     failureClasses:
+#       - { pattern: "fakebus[\\s\\S]{0,60}stalled", class: infra }
+#       - { pattern: "assertion", class: test }
+# vps:
+#   weeklyTokenLimit: 400000000
+#   headroomUrl: "http://127.0.0.1:9100"
+# autorun:
+#   maxBudgetUSD: { harness-do: 20, harness-review: 12 }
+#   staging: { enabled: true, branch: release, codePrefixes: ["shops/"] }
+# deploy:   # no arquivo real estas chaves entram no bloco `deploy:` acima; aqui ficam juntas para o exemplo carregar
+#   canaryCommand: "node probe.mjs"
+#   targets: [storefront, workshop]
+#   launchers: [taskrun]
+#   recipeRunners: [taskrun]
+#   recipes: [ship-app, plan-app]
+#   legacy:
+#     packageRoot: "shops/"
+#     command: [taskrun, "--yes", ship-app, "{target}"]
+#     plan: [taskrun, plan-app, "{target}"]
+#     scope: ["shops/{target}/"]
+#     state: "ops/state/{target}.json"
+#   composedFace:
+#     target: storefront-site
+#     recipe: ship-face
+#     manifest: ops/face.json
+#     command: [taskrun, "--yes", ship-face]
+#   proof:
+#     record:
+#       securityReview: [recorder, verdict, "{file}"]
+#       ownerApproval: [recorder, approve, "{file}"]
+#     staleMarkers: ["outro assunto"]
+# <<< exemplo

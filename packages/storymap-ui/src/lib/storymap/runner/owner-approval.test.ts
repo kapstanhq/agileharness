@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DeployCause } from "@/lib/storymap/types";
-import { OWNER_APPROVAL_PLACEHOLDER, OWNER_APPROVAL_SCHEMA, buildOwnerApproval, ownerApprovalRequestsOf, parseDeployExit3Report, recordCommandFor, type OwnerApprovalRequest } from "./deploy-proof";
+import { OWNER_APPROVAL_PLACEHOLDER, OWNER_APPROVAL_SCHEMA, buildOwnerApproval, ownerApprovalRequestsOf, parseDeployExit3Report, type OwnerApprovalRequest } from "./deploy-proof";
 import { approvalsForCause, backfillDeployApprovals, grantDeployApprovals, mutateDeployBlocks, readDeployBlocks, touchDeployBlock, upsertDeployBlock, type DeployBlockRow } from "./deploy-blocks";
 import { approvalRefusedAsStale, authorizeOwnerPublish, type OwnerApprovalDeps, type RecordOutcome } from "./owner-approval";
 
@@ -51,13 +51,6 @@ describe("o pedido de autorização, lido do plano", () => {
     expect(ownerApprovalRequestsOf([{ ownerApproval: { subject: ok, record: "  " } }])).toEqual([]);
     expect(ownerApprovalRequestsOf("lixo")).toEqual([]);
     expect(parseDeployExit3Report("sem json").ownerApprovals).toEqual([]);
-  });
-
-  it("o comando de gravação vira argv (nunca shell) com o arquivo no lugar do marcador; fora do contrato ⇒ null", () => {
-    expect(recordCommandFor(RECORD, "/tmp/a.json", OWNER_APPROVAL_PLACEHOLDER)).toEqual(["node", "tools/sign-off.mjs", "/tmp/a.json"]);
-    expect(recordCommandFor("node x.js <verdict.json>", "/tmp/a.json", OWNER_APPROVAL_PLACEHOLDER)).toBeNull(); // o marcador é o do pedido
-    expect(recordCommandFor(`sh -c "rm -rf x" ${OWNER_APPROVAL_PLACEHOLDER}`, "/tmp/a.json", OWNER_APPROVAL_PLACEHOLDER)).toBeNull();
-    expect(recordCommandFor(`node x.js ${OWNER_APPROVAL_PLACEHOLDER}; echo`, "/tmp/a.json", OWNER_APPROVAL_PLACEHOLDER)).toBeNull();
   });
 
   it("a autorização copia o ASSUNTO do pedido — quem autoriza não escolhe o que está autorizando", () => {
@@ -209,7 +202,7 @@ describe("o clique do dono — authorizeOwnerPublish", () => {
   });
 
   it("o código guardado mudou desde o pedido (o alvo recusa como OUTRA mudança): nada é autorizado, e a publicação roda para refazer o pedido", async () => {
-    const h = harness({ record: () => ({ ok: false, stale: true, error: "✗ a autorização é de OUTRA mudança" }) });
+    const h = harness({ record: () => ({ ok: false, stale: true, error: "recusado: o pedido descreve OUTRA mudança" }) });
     const res = await run(h);
     expect(res.ok).toBe(false);
     expect(!res.ok && res.error).toMatch(/mudou desde este pedido/);
@@ -233,10 +226,16 @@ describe("o clique do dono — authorizeOwnerPublish", () => {
     expect(res.ok && res.message).toMatch(/1 de 2 pedido\(s\)/);
   });
 
-  it("a recusa do alvo por mudança velha é reconhecida nas duas línguas do contrato", () => {
-    expect(approvalRefusedAsStale("✗ a autorização é de OUTRA mudança: ela diz sha256:…")).toBe(true);
-    expect(approvalRefusedAsStale("the owner approval is for another change")).toBe(true);
-    expect(approvalRefusedAsStale("ENOENT: no such file")).toBe(false);
+  it("a recusa do alvo por mudança velha é reconhecida pelas frases que o ALVO declarou (nas línguas que ele quiser)", () => {
+    const marcas = ["OUTRA mudança", "another change"];
+    expect(approvalRefusedAsStale("recusado: o pedido descreve OUTRA mudança (hash não confere)", marcas)).toBe(true);
+    expect(approvalRefusedAsStale("the owner approval is for another change", marcas)).toBe(true);
+    expect(approvalRefusedAsStale("ENOENT: no such file", marcas)).toBe(false);
+  });
+
+  it("SEM marcas declaradas nunca é «stale» — a ferramenta não traz frase de fábrica do script de ninguém", () => {
+    expect(approvalRefusedAsStale("recusado: o pedido descreve OUTRA mudança", [])).toBe(false);
+    expect(approvalRefusedAsStale("the owner approval is for another change", [])).toBe(false);
   });
 });
 

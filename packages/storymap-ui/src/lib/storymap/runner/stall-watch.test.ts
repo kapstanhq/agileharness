@@ -9,6 +9,8 @@ import type { SystemDecision } from "@/lib/storymap/system-decisions";
 import type { BoardConfig, Card, Finding } from "@/lib/storymap/types";
 import { classifyStall, isStallCandidate, stalledFinding, sweepStalledCards, type StallFacts, type StallRow, type StallWatchDeps } from "./stall-watch";
 import { DEFAULT_PARK_SETTINGS, ladderGraceMs } from "./conductor-pause";
+import { resolveBoardGate, type BoardPaceRow } from "./board-pace";
+import { scopeHeldCards } from "./stall-watch-deps";
 
 const MIN = 60_000;
 const AFTER = 15 * MIN;
@@ -376,3 +378,92 @@ describe("status de condutor SEM ator", () => {
   });
 });
 
+
+// O ESCOPO DE TIPOS (board-pace.ts, T2): a funcionalidade que o board não pode começar espera num passo de condutor SEM
+// driver e SEM fila — a adoção de órfãos a nega de propósito. Isso é parada DE PROPÓSITO (como o adiado e o board pausado):
+// o vigia não conta o relógio, não refaz o passo e não abre card de conserto.
+describe("escopo de tipos — parado DE PROPÓSITO não é travamento", () => {
+  const AT = "2026-10-02T12:00:00.000Z";
+  const NOW = Date.parse(AT) + 1000;
+  const withConductor = { ...configOf(), conductor: { enabled: true, fromStatus: ["desenvolver"] } } as unknown as BoardConfig;
+  const feature = (extra: Record<string, unknown> = {}) => cardIn("desenvolver", { storyType: "user", ...extra });
+  const fixesRow = (): BoardPaceRow => ({ board: "b", ownerScope: { types: ["bug", "technical", "chore", "spike"], by: { kind: "owner" }, at: AT } });
+  const gate = resolveBoardGate({}, fixesRow(), NOW);
+
+  describe("scopeHeldCards — quem o escopo segura", () => {
+    it("só o órfão do condutor de tipo fora do escopo: funcionalidade sim; conserto, conduzido e outro passo não", () => {
+      const cards = [
+        coerceCard("f1", { type: "story", storyType: "user", status: "desenvolver" }, ""),
+        coerceCard("f2", { type: "story", status: "desenvolver" }, ""), // sem storyType vale user
+        coerceCard("b1", { type: "story", storyType: "bug", status: "desenvolver" }, ""),
+        coerceCard("f3", { type: "story", storyType: "user", status: "desenvolver", routing: { driver: "conductor" } }, ""), // já começou
+        coerceCard("f4", { type: "story", storyType: "user", status: "deploy" }, ""), // entrega: nunca barrada
+      ];
+      expect([...scopeHeldCards(cards, withConductor, gate)].sort()).toEqual(["f1", "f2"]);
+    });
+    it("sem escopo, ou com o conductor desligado no board, ninguém é segurado", () => {
+      const cards = [coerceCard("f1", { type: "story", storyType: "user", status: "desenvolver" }, "")];
+      expect(scopeHeldCards(cards, withConductor, resolveBoardGate({}, null, NOW)).size).toBe(0);
+      expect(scopeHeldCards(cards, configOf(), gate).size).toBe(0);
+    });
+    it("C10: um card em coluna de CLASSIFICAÇÃO (a skill de especificação roda ali) não entra: o vigia segue valendo", () => {
+      const conductorFromSpec = { ...configOf(), conductor: { enabled: true, fromStatus: ["enriquecer", "desenvolver"] } } as unknown as BoardConfig;
+      const cards = [
+        coerceCard("spec", { type: "story", storyType: "user", status: "enriquecer" }, ""),
+        coerceCard("build", { type: "story", storyType: "user", status: "desenvolver" }, ""),
+      ];
+      expect([...scopeHeldCards(cards, conductorFromSpec, gate)]).toEqual(["build"]);
+    });
+    it("um `user` em modo `fix` (erro) não é segurado", () => {
+      const cards = [coerceCard("f1", { type: "story", storyType: "user", mode: "fix", status: "desenvolver" }, "")];
+      expect(scopeHeldCards(cards, withConductor, gate).size).toBe(0);
+    });
+  });
+
+  it("a funcionalidade segurada pelo escopo: o relógio não conta, nada é refeito, nenhum conserto nasce — por mais que o tempo passe", async () => {
+    const { deps, state, sweep } = world({ card: feature(), mode: "manual" });
+    state.config = withConductor;
+    (deps as { boards: StallWatchDeps["boards"] }).boards = async () => [{ id: "b", config: state.config, cards: [state.card], scopeHeld: new Set(["story-x"]) }];
+    expect(await sweep()).toEqual([]);
+    for (let i = 0; i < 6; i++) expect(await sweep(60)).toEqual([]);
+    expect(deps.reevaluate).not.toHaveBeenCalled();
+    expect(deps.openFixCard).not.toHaveBeenCalled();
+    expect(deps.stamp).not.toHaveBeenCalled();
+    expect(state.rows.every((r) => r.firstSeenAt === null)).toBe(true);
+  });
+
+  it("o MESMO card sem o escopo é parado como sempre (a prova de que é o escopo, e não o card)", async () => {
+    const { deps, state, sweep } = world({ card: feature(), mode: "manual" });
+    state.config = withConductor;
+    await sweep();
+    expect(await sweep(15)).toEqual([{ board: "b", cardId: "story-x", action: "retried" }]);
+    expect(deps.reevaluate).toHaveBeenCalledWith("b", "story-x");
+  });
+
+  it("o escopo ALARGOU: o relógio recomeça do zero (não escala de uma vez por tempo que o card passou esperando de propósito)", async () => {
+    const { deps, state, sweep } = world({ card: feature(), mode: "manual" });
+    state.config = withConductor;
+    const held = new Set(["story-x"]);
+    (deps as { boards: StallWatchDeps["boards"] }).boards = async () => [{ id: "b", config: state.config, cards: [state.card], scopeHeld: held }];
+    await sweep();
+    await sweep(600); // 10 horas esperando de propósito
+    held.clear(); // o dono alargou
+    expect(await sweep(1)).toEqual([{ board: "b", cardId: "story-x", action: "watching" }]);
+    expect(deps.reevaluate).not.toHaveBeenCalled();
+    expect(await sweep(15)).toEqual([{ board: "b", cardId: "story-x", action: "retried" }]);
+  });
+
+  it("um aviso de «parado» que já estava aberto sai quando o escopo passa a segurar o card", async () => {
+    const stalled = feature({ findings: [finding(CARD_STALLED_FINDING_ID)] });
+    const { deps, state, sweep } = world({ card: stalled, mode: "manual" });
+    state.config = withConductor;
+    (deps as { boards: StallWatchDeps["boards"] }).boards = async () => [{ id: "b", config: state.config, cards: [state.card], scopeHeld: new Set(["story-x"]) }];
+    expect(await sweep()).toEqual([{ board: "b", cardId: "story-x", action: "cleared" }]);
+    expect(deps.clear).toHaveBeenCalledWith("b", "story-x");
+  });
+
+  it("o card JÁ conduzido (começou antes de o escopo estreitar) continua sob vigia: condutor morto é aviso de verdade", () => {
+    const c = feature({ routing: { driver: "conductor" } });
+    expect(classifyStall(c, withConductor, conductorFacts({ live: false, queued: false }), AFTER)).toMatchObject({ subject: { kind: "conductor-dead" } });
+  });
+});

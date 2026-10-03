@@ -7,7 +7,7 @@
 //
 // A tentação é uma tabela `opus → "Opus 5"` no código. Ela seria MENTIRA na semana seguinte ao próximo
 // lançamento — e este pacote já tem a regra escrita: o tier se lê da CONFIG/realidade, nunca de um segundo
-// mapa hardcoded (packages/storymap-ui/.claude/CLAUDE.md § Papéis × modelos).
+// mapa hardcoded (a regra «Papéis × modelos» das instruções de desenvolvimento da ferramenta).
 //
 // A verdade existe e é de graça: o próprio CLI ANUNCIA o id resolvido no evento `system/init` de cada
 // spawn (`{"type":"system","subtype":"init","model":"claude-sonnet-5"}` — verificado na CLI 2.1.220). Este

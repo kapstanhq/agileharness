@@ -47,8 +47,8 @@ autonomy:
       label: Dinheiro e preço
       description: >-
         Qualquer compromisso de gasto: contratar fornecedor, assinar plano pago, comprar créditos, definir ou mudar
-        preço, mexer no código de cobrança, ultrapassar os tetos mensais de custo, ou trocar o modelo de IA usado nas
-        respostas ao usuário (muda o custo por chamada e a qualidade).
+        preço, mexer no código de cobrança, ultrapassar os tetos de custo declarados, ou trocar um serviço pago de que
+        o produto depende, ou o modelo ou o fornecedor de IA que atende o usuário do produto (muda custo e qualidade).
     - id: brand-voice
       label: Falar em nome da marca
       description: >-
@@ -64,13 +64,16 @@ autonomy:
         Coleta de telefone, e-mail, localização ou nome de uma pessoa; envio de dados a um fornecedor NOVO; apagar
         dados de usuários; tornar público algo que era privado. Medição anônima já coberta pela política de
         privacidade vigente fica de fora (é técnica).
-  # Os TETOS mensais do dono (src/lib/storymap/cost-impact.ts), em R$: um aumento de custo DENTRO deles é do sistema;
-  # acima deles — ou um fornecedor, plano pago ou API paga NOVOS, qualquer que seja o valor — é do dono (dinheiro).
-  # Declare os SEUS no board. Sem teto declarado, nenhum aumento prova que cabe: todo aumento vai ao dono — o default
-  # seguro, e por isso este template não traz valor nenhum (um número aqui seria o orçamento de outra pessoa).
+  # Os TETOS mensais do dono (src/lib/storymap/cost-impact.ts), na MOEDA do alvo: um aumento de custo DENTRO deles é
+  # do sistema; acima deles — ou um fornecedor, plano pago ou API paga NOVOS, qualquer que seja o valor — é do dono
+  # (dinheiro). Declare os SEUS no board. Sem teto declarado, nenhum aumento prova que cabe: todo aumento vai ao dono —
+  # o default seguro, e por isso este template não traz valor nenhum (um número aqui seria o orçamento de outra pessoa).
+  # A moeda NUNCA é suposta: ela vem de `currency` aqui embaixo (código ISO 4217) ou de `target.currency` em
+  # storymap/settings.yaml. Sem nenhuma das duas, a ferramenta recusa projetar custo e diz o que declarar.
   # budget:
-  #   cashMonthlyBRL: 0
-  #   infraMonthlyBRL: 0
+  #   currency: USD
+  #   cashMonthly: 0
+  #   infraMonthly: 0
   # A AUDITORIA POR AMOSTRA (src/lib/storymap/delivery-audit.ts). Ao dono volta só o que o usuário VÊ (telas e
   # textos), com antes/depois e o link. Uma parte das entregas TÉCNICAS é revista por um auditor independente (um
   # agente de contexto limpo, que não escreveu o código): achou problema, abre um card de conserto — o dono não é
@@ -101,7 +104,7 @@ toolConfigs:
     mcp: storymap/qa-mcp.json
     match: "^mcp__chrome-devtools__"
     provides: browser
-    probe: node scripts/capability-probe/browser-mcp.mjs
+    probe: node "${AGILEHARNESS_TOOL_ROOT:+$AGILEHARNESS_TOOL_ROOT/../../}scripts/capability-probe/browser-mcp.mjs"
     probeTimeoutMs: 120000
     fallback: browser-script
     # FORA DA JAULA DO RUN, e é isto que nenhum probe consegue descobrir. O servidor MCP é filho do processo
@@ -115,7 +118,7 @@ toolConfigs:
     outsideRunSandbox: true
     description: navegador headless via chrome-devtools MCP — interativo (o agente navega e REAGE ao que vê)
   browser-script:
-    cli: node scripts/visual-sweep.mjs
+    cli: node "${AGILEHARNESS_TOOL_ROOT:-packages/storymap-ui}/../../scripts/visual-sweep.mjs"
     provides: browser
     # O QUE ESTE PROBE PROVA, e o que ele não pode provar. Ele lança um Chromium DE VERDADE e grava um PNG,
     # então cobre o que é propriedade do HOST: playwright resolvível, Chromium executável como root (o modo
@@ -125,10 +128,10 @@ toolConfigs:
     # capacidade pode medi-la; quem garante isso é o protocolo da skill subir o servidor e varrer na MESMA
     # chamada. A versão anterior deste comentário afirmava que verde aqui não podia significar algo diferente
     # de verde lá — era falso, e era falso justamente na frase que autorizava confiar no probe.
-    probe: node scripts/visual-sweep.mjs --probe
+    probe: node "${AGILEHARNESS_TOOL_ROOT:+$AGILEHARNESS_TOOL_ROOT/../../}scripts/visual-sweep.mjs" --probe
     probeTimeoutMs: 60000
     description: >-
-      varredura visual por script Playwright (`node scripts/visual-sweep.mjs --url … --label …`): captura
+      varredura visual por script Playwright (`node "${AGILEHARNESS_TOOL_ROOT:-packages/storymap-ui}/../../scripts/visual-sweep.mjs" --url … --label …`): captura
       PNGs por breakpoint na pasta de artefatos do alvo e você JULGA lendo os PNGs com o tool Read
 
 # WS4 (F3) — PERFIS DE ROTA nomeados (BoardConfig.routeProfiles). O harness-enrich escolhe um pela

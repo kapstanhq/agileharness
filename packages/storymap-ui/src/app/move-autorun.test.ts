@@ -591,6 +591,14 @@ describe("resultado estruturado — iniciado × feito × recusado (B2)", () => {
     expect(runSkill).not.toHaveBeenCalled();
   });
 
+  it("«Tentar novamente» / run_skill repassa o card ao engine como scopeCard (o escopo de tipos decide no pump, sem esperar a leitura)", async () => {
+    cardOnDisk = coerceCard("story-x", { type: "story", storyType: "user", status: "desenvolver", tasks: [{ id: "t1", title: "t", done: false }] }, "");
+    const res = await runCardSkillAction({ boardId: "b", cardId: "story-x" });
+    expect(res.ok).toBe(true);
+    const opts = runSkill.mock.calls[0][4] as { scopeCard?: Record<string, unknown> };
+    expect(opts.scopeCard).toMatchObject({ id: "story-x", type: "story", storyType: "user", status: "desenvolver" });
+  });
+
   it("«Tentar novamente» num card comum ⇒ `started`", async () => {
     cardOnDisk = coerceCard("story-x", { type: "story", storyType: "bug", status: "desenvolver", tasks: [{ id: "t1", title: "t", done: false }] }, "");
     const res = await runCardSkillAction({ boardId: "b", cardId: "story-x" });

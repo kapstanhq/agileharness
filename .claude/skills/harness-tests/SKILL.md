@@ -8,11 +8,11 @@ description: >-
   criteria, records it as extra tasks[] (test- prefixed) + a Test Plan section,
   and — for UI-observable user-story criteria — writes a FAILING Playwright spec
   per criterion (the criterion text IS the test title; no cucumber/BDD framework)
-  under packages/<pkg>/tests/e2e/, so harness-do builds against them (red→green) and
+  in the board package's existing E2E folder, so harness-do builds against them (red→green) and
   harness-qa executes them as the acceptance gate. Does NOT move the status — it
   sharpens an existing card. Use when the user says "/harness tests", "/harness-tests",
   "plano de testes", "pirâmide de testes", "test plan da story". Edits storymap
-  data files AND product test code under packages/<pkg>/tests/e2e/ — never the
+  data files AND product test code in the board package's existing E2E folder — never the
   storymap-ui package.
 triggers:
   - /harness tests
@@ -35,7 +35,7 @@ advance the pipeline — it enriches an existing card with a test plan.
 > Test layers/philosophy: the target repository's own testing rules, if it declares any (cheapest layer first; fix the app, never weaken assertions).
 > This skill edits the data files under `storymap/boards/<board>/cards/` AND, for
 > UI-observable user-story criteria, authors FAILING Playwright specs under
-> `packages/<pkg>/tests/e2e/` (test-first). NEVER touch `packages/storymap-ui/`.
+> the board package's existing E2E folder (test-first). NEVER touch the tool's own package (`storymap-ui`).
 > Permission mode: acceptEdits (it writes test files, not product/runtime code).
 
 ## When to Use
@@ -64,7 +64,7 @@ advance the pipeline — it enriches an existing card with a test plan.
 2. **Derive the pyramid.** Map each acceptance criterion to the cheapest test
    layer that proves it (favor the base of the pyramid):
    - **unit** — one function in isolation, collaborators replaced by fakes (the target repo's unit-test location and naming).
-   - **integration** — one operation against real dependencies or emulators (the repo's integration-test naming).
+   - **integration** — one operation against real dependencies or local stand-ins for them (the repo's integration-test naming).
    - **journey / e2e** — a chain of operations or a browser run, only for the user-visible goal.
    Be explicit and minimal — e2e is expensive; prefer integration for ROI.
 
@@ -87,8 +87,8 @@ advance the pipeline — it enriches an existing card with a test plan.
    - **Location = the package's EXISTING E2E layout** (read `board.yaml` `package:`;
      follow the target repository's testing rules + the package's playwright.config).
      Cheapest layer that proves the criterion: the mocked/`browser` project for pure
-     UI logic, `tests/e2e/emulator/<card-id>.level2.spec.ts` for criteria that need
-     the real seeded stack. One file per card. REUSE the package's auth/storageState
+     UI logic, the layer that runs against the real seeded stack (same folder and
+     file-name pattern the existing specs use) for criteria that need it. One file per card. REUSE the package's auth/storageState
      setup (e.g. an existing `.auth/user.json` + the `authenticated`/`level2` projects) —
      never invent a new harness.
    - **Test-first = it MUST fail now** (the feature isn't built yet, or is the delta).
@@ -116,5 +116,5 @@ no status moves here. If you find a card with no `acceptance`, stop and suggest
 
 Authored specs are the acceptance CONTRACT `harness-qa` later runs: they must FAIL
 first (red — never write a spec that already passes against unbuilt behaviour),
-must match the package's E2E conventions (so `just test-<pkg>-e2e` picks them up),
+must match the package's E2E conventions (so the target's `e2e` check — `target.checks.e2e` in the `target` block of `storymap/settings.yaml`, or `target_profile({board})` when the MCP is mounted; with no declaration, discover the command in the repository's own instructions — picks them up),
 and must never weaken an assertion to go green. Fix the app, not the test.

@@ -10,7 +10,7 @@
 
 ## Procedimento de diagnóstico (read-only)
 
-Encontre o que, se algo, já implementa o card em `packages/<pkg>/` (o `package:` do
+Encontre o que, se algo, já implementa o card no pacote do board (o `package:` do
 `board.yaml`):
 
 - **Superfícies a mapear:** rotas/páginas, componentes, server actions, Cloud

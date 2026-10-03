@@ -6,6 +6,7 @@ import {
   coerceRunnerSettings,
   DEFAULT_RUNNER_SETTINGS,
   maxTurnsResumeMax,
+  stagingBootRefusal,
 } from "./config";
 import { CHAT_EFFORTS, CHAT_MODEL_BASES, composeModel } from "@/lib/storymap/copilot/copilot-status";
 import type { RunnerSettings } from "@/lib/storymap/types";
@@ -254,11 +255,38 @@ describe("applyEnvOverrides", () => {
     const base = fileSettings(); // no staging
     expect(base.autorun.staging).toBeUndefined();
     process.env.AGILEHARNESS_AUTORUN_STAGING = "1";
-    expect(applyEnvOverrides(base).autorun.staging).toEqual({
-      enabled: true,
-      branch: "stage",
-      codePrefixes: ["packages/"],
-    });
+    // SEM codePrefixes: a ferramenta não tem mais o default `["packages/"]` (a pasta de UM repositório). O objeto
+    // sintetizado nasce com o branch convencional e a régua de código INDECLARADA — e ligar assim é recusado no boot
+    // (stagingBootRefusal), não suposto. Expectativa trocada de propósito, junto com a remoção do default.
+    const out = applyEnvOverrides(base).autorun.staging;
+    expect(out).toEqual({ enabled: true, branch: "stage" });
+    expect(out).not.toHaveProperty("codePrefixes");
+  });
+
+  it("o override NÃO materializa codePrefixes: indeclarado continua AUSENTE depois do clone, [] explícito continua []", () => {
+    // `[]` («nada é código») e ausente («não declarei») têm semânticas OPOSTAS — um clone que normalizasse um no outro
+    // trocaria o lado seguro pelo inseguro em silêncio.
+    const ausente = fileSettings();
+    ausente.autorun.staging = { enabled: false, branch: "stage" };
+    process.env.AGILEHARNESS_AUTORUN_STAGING = "1";
+    expect(applyEnvOverrides(ausente).autorun.staging).not.toHaveProperty("codePrefixes");
+    const vazio = fileSettings();
+    vazio.autorun.staging = { enabled: false, branch: "stage", codePrefixes: [] };
+    expect(applyEnvOverrides(vazio).autorun.staging?.codePrefixes).toEqual([]);
+  });
+
+  it("stagingBootRefusal: ligado SEM codePrefixes declarado recusa dizendo a chave; [] explícito, desligado ou declarado passam", () => {
+    const refusal = stagingBootRefusal({ enabled: true });
+    expect(refusal).toMatch(/autorun\.staging\.codePrefixes/);
+    expect(refusal).toMatch(/settings\.yaml/);
+    expect(stagingBootRefusal({ enabled: true, codePrefixes: [] })).toBeNull(); // «nada é código» é uma declaração
+    expect(stagingBootRefusal({ enabled: true, codePrefixes: ["src/"] })).toBeNull();
+    expect(stagingBootRefusal({ enabled: false })).toBeNull();
+    expect(stagingBootRefusal(undefined)).toBeNull();
+    // e o env que LIGA o staging sobre um arquivo sem a régua cai na mesma recusa
+    process.env.AGILEHARNESS_AUTORUN_STAGING = "1";
+    const ligado = applyEnvOverrides(fileSettings()).autorun.staging;
+    expect(stagingBootRefusal(ligado)).not.toBeNull();
   });
 
   it("does not mutate the input staging object (codePrefixes array is cloned, not shared)", () => {

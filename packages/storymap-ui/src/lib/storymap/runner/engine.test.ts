@@ -24,7 +24,7 @@ import type { BoardConfig, Card, Finding, StatusDef, TriggerId } from "@/lib/sto
 import { BUDGET_CUT_FINDING_ID, withBudgetCutFinding } from "./findings";
 import { coerceCard } from "@/lib/storymap/repo";
 import type { CapacityGatePort } from "./capacity-service";
-import type { PaceLevel } from "./board-pace";
+import { effectiveScope, type BoardPaceRow, type EffectiveScope, type PaceLevel, type ScopeCard } from "./board-pace";
 import type { GateVerdict, Initiator } from "./capacity-governor";
 import { runWithMcpActor } from "@/lib/storymap/mcp/actor";
 
@@ -305,6 +305,8 @@ function makeEngine(
     capacityGate?: CapacityGatePort;
     // O RITMO DO BOARD (DI). Default = sempre `normal`, então a suíte não lê o arquivo de ritmo do host.
     paceOf?: (board: string) => PaceLevel;
+    // O ESCOPO DE TIPOS do board (DI). Default = sem limite, então a suíte não lê o arquivo de ritmo do host.
+    scopeOf?: (board: string) => EffectiveScope | null;
   } = {},
 ) {
   // f1: an isolated run commits its worktree before detaching. Default committed:true (the run
@@ -464,6 +466,7 @@ function makeEngine(
       opts.branchWorkLandedBySplitFn,
       opts.capacityGate ?? ADMIT_ALL_GATE,
       opts.paceOf ?? (() => "normal"),
+      opts.scopeOf ?? (() => null),
     ),
     pumpTimers,
     killCalls,
@@ -1856,19 +1859,35 @@ describe("SM-09 — per-app context note injected into the spawn prompt", () => 
       expect(buildContextNote(cfg({ id: "acme", name: "Armazem", package: undefined }))).toBeNull();
     });
 
-    it("a board WITH a brandbook names both the package CLAUDE.md and the brandbook", () => {
+    it("a board WITH a brandbook names both the repository instructions and the brandbook (no declared conventions → no invented path)", () => {
       const note = buildContextNote(
         cfg({ id: "acme", name: "Armazem", package: "packages/acmeapp", brandbook: "docs/voice/shopfront-voice.md" }),
       );
+      // lote D: sem `target.docs.conventions` a nota NÃO inventa `<pacote>/.claude/CLAUDE.md` — manda ler as instruções do
+      // repositório e do pacote e diz como descobrir o comando de cada check.
       expect(note).toBe(
-        "Context: antes de qualquer ação de código ou copy, leia packages/acmeapp/.claude/CLAUDE.md e docs/voice/shopfront-voice.md para respeitar as convenções específicas deste app.",
+        "Context: antes de qualquer ação de código ou copy, leia as instruções do repositório e do pacote packages/acmeapp (README, CLAUDE.md/AGENTS.md) e docs/voice/shopfront-voice.md para respeitar as convenções específicas deste app." +
+          " Este repositório não declarou comandos de verificação (storymap/settings.yaml → target.checks): descubra o comando nas instruções do repositório.",
       );
     });
 
-    it("AC4: a board WITHOUT a brandbook (storymap) names ONLY the package CLAUDE.md — no brandbook clause", () => {
+    it("com `target.docs.conventions` declarado a nota aponta o caminho DECLARADO, e a primeira frase é a de sempre", () => {
+      const profile = { checks: { test: "make test" }, dev: {}, docs: { conventions: "{package}/AGENTS.md" } };
+      const note = buildContextNote(
+        cfg({ id: "acme", name: "Armazem", package: "packages/acmeapp", brandbook: "docs/voice/shopfront-voice.md" }),
+        { board: "acme", targetProfile: profile },
+      );
+      expect(note).toContain(
+        "Context: antes de qualquer ação de código ou copy, leia packages/acmeapp/AGENTS.md e docs/voice/shopfront-voice.md para respeitar as convenções específicas deste app.",
+      );
+      expect(note).toContain("checks: test");
+      expect(note).not.toContain("descubra o comando"); // há check declarado: nada a descobrir
+    });
+
+    it("AC4: a board WITHOUT a brandbook (storymap) names ONLY the repository instructions — no brandbook clause", () => {
       const note = buildContextNote(cfg({ id: "storymap", name: "AgileHarness", package: "packages/storymap-ui" }));
-      expect(note).toBe(
-        "Context: antes de qualquer ação de código ou copy, leia packages/storymap-ui/.claude/CLAUDE.md para respeitar as convenções específicas deste app.",
+      expect(note).toContain(
+        "Context: antes de qualquer ação de código ou copy, leia as instruções do repositório e do pacote packages/storymap-ui (README, CLAUDE.md/AGENTS.md) para respeitar as convenções específicas deste app.",
       );
       expect(note).not.toContain("brandbook");
     });
@@ -1886,7 +1905,7 @@ describe("SM-09 — per-app context note injected into the spawn prompt", () => 
         cfg({ id: "storymap", name: "AgileHarness", package: "packages/storymap-ui" }),
         { board: "storymap", personaIds: ["ana", "davi"] },
       );
-      expect(note).toContain("packages/storymap-ui/.claude/CLAUDE.md");
+      expect(note).toContain("as instruções do repositório e do pacote packages/storymap-ui");
       expect(note).toContain("atende a(s) persona(s) ana, davi");
       expect(note).toContain("storymap/boards/storymap/board.yaml");
     });
@@ -1915,7 +1934,7 @@ describe("SM-09 — per-app context note injected into the spawn prompt", () => 
       const semBoard = buildContextNote(base);
 
       for (const note of [comBoard, semBoard]) {
-        expect(note).toContain("leia packages/storymap-ui/.claude/CLAUDE.md");
+        expect(note).toContain("leia as instruções do repositório e do pacote packages/storymap-ui");
         expect(note).not.toContain("persona");
       }
       // SEM board não há slug shell-safe para citar, então a nota para aí — é a mesma régua fail-open
@@ -2008,7 +2027,7 @@ describe("SM-09 — per-app context note injected into the spawn prompt", () => 
         // A nota deixou de ser byte-idêntica ao "legacy" porque o ponteiro do PRD é incondicional
         // (ver o teste do PRD acima) — o que esta asserção mede é a AUSÊNCIA da cláusula de ideia,
         // e é isso que ela continua medindo.
-        expect(note).toContain("leia packages/storymap-ui/.claude/CLAUDE.md");
+        expect(note).toContain("leia as instruções do repositório e do pacote packages/storymap-ui");
       }
     });
   });
@@ -2335,7 +2354,7 @@ describe("SM-09 — per-app context note injected into the spawn prompt", () => 
       expect(cmds).toHaveLength(1);
       expect(cmds[0]).toContain("--append-system-prompt-file");
       // the note no longer rides INLINE in the -p user prompt (it lives in the file now)
-      expect(cmds[0]).not.toContain("packages/acmeapp/.claude/CLAUDE.md");
+      expect(cmds[0]).not.toContain("as instruções do repositório e do pacote packages/acmeapp");
       expect(cmds[0]).toContain('-p "/harness-do acme/story-1"');
     });
 
@@ -2379,7 +2398,7 @@ describe("SM-09 — per-app context note injected into the spawn prompt", () => 
         expect(engine.runSkill("acme", "story-1", "harness-do", codeDef).ok).toBe(true);
         await flush();
         expect(cmds[0]).not.toContain("--append-system-prompt-file");
-        expect(cmds[0]).toContain("packages/acmeapp/.claude/CLAUDE.md"); // the inline contextNote is restored
+        expect(cmds[0]).toContain("as instruções do repositório e do pacote packages/acmeapp"); // the inline contextNote is restored
         // G8: the fix-the-app/scope invariants (CODE_SKILL_INVARIANTS) now ALSO ride the inline -p — the
         // fallback no longer silently strips a code run of its non-negotiables.
         expect(cmds[0]).toContain("fix-the-app");
@@ -4769,20 +4788,20 @@ describe("RunnerEngine.runSkill — teto de custo por run chega ao comando execu
     else process.env.AGILEHARNESS_AUTORUN_MAX_BUDGET_USD = ORIGINAL_BUDGET;
   });
 
-  it("um run de harness-do nasce com `--max-budget-usd 23.8` (o default da tabela)", async () => {
+  it("um run de harness-do nasce com `--max-budget-usd 25` (o default da tabela neutra por camadas)", async () => {
     const { engine, cmds } = makeEngine();
     expect(engine.runSkill("acme", "story-1", "harness-do", codeDef).ok).toBe(true);
     await flush();
     expect(cmds).toHaveLength(1);
-    expect(cmds[0]).toMatch(/ --max-budget-usd 23\.8(\s|$)/);
+    expect(cmds[0]).toMatch(/ --max-budget-usd 25(\s|$)/);
   });
 
-  it("o teto é o do TRIGGER do run: harness-enrich nasce com 3.5, uma skill fora da tabela com 8", async () => {
+  it("o teto é o do TRIGGER do run: harness-enrich nasce com 5, uma skill fora da tabela com 8", async () => {
     const enrichDef: StatusDef = { id: "enriquecer", name: "Enriquecer" };
     const a = makeEngine();
     expect(a.engine.runSkill("acme", "story-1", "harness-enrich", enrichDef).ok).toBe(true);
     await flush();
-    expect(a.cmds[0]).toMatch(/ --max-budget-usd 3\.5(\s|$)/);
+    expect(a.cmds[0]).toMatch(/ --max-budget-usd 5(\s|$)/);
     const b = makeEngine();
     expect(b.engine.runSkill("acme", "story-2", "harness-refine", codeDef).ok).toBe(true);
     await flush();
@@ -4795,7 +4814,7 @@ describe("RunnerEngine.runSkill — teto de custo por run chega ao comando execu
     expect(a.engine.runSkill("acme", "story-1", "harness-do", codeDef).ok).toBe(true);
     await flush();
     expect(a.cmds[0]).toMatch(/ --max-budget-usd 5(\s|$)/);
-    expect(a.cmds[0]).not.toContain("23.8");
+    expect(a.cmds[0]).not.toMatch(/ --max-budget-usd 25(\s|$)/); // a env vence a tabela
 
     process.env.AGILEHARNESS_AUTORUN_MAX_BUDGET_USD = "0";
     const b = makeEngine();
@@ -4866,7 +4885,7 @@ describe("RunnerEngine.runSkill — corte por orçamento (budget-cut)", () => {
     const f = cardWrites.at(-1)!.findings!.find((x) => x.id === BUDGET_CUT_FINDING_ID)!;
     expect(f.severity).toBe("medium");
     expect(f.status).toBe("open");
-    expect(f.detail).toContain("--max-budget-usd $23.80");
+    expect(f.detail).toContain("--max-budget-usd $25.00");
     expect(f.detail).toContain("harness-do");
   });
 
@@ -5259,5 +5278,355 @@ describe("ritmo do board — o pump segura o automático do board pausado e, em 
     expect(engine.isInFlight("acme", "op-c")).toBe(true);
     expect(engine.isInFlight("other", "o1")).toBe(true);
     expect(finishes.some((f) => f.cardId === "op-c" || f.cardId === "o1")).toBe(false);
+  });
+});
+
+// ── O ESCOPO DE TIPOS do board (board-pace.ts, segundo eixo do ritmo) no pump e na purga ────────────────────────────
+describe("escopo de tipos — o pump segura o job de card fora do escopo; a purga tira só ele", () => {
+  const PACE_ENV = ["AGILEHARNESS_AUTORUN_MAX", "AGILEHARNESS_AUTORUN_LANE_LIGHT_MAX", "AGILEHARNESS_AUTORUN_LANE_HEAVY_MAX"] as const;
+  beforeEach(() => {
+    for (const k of PACE_ENV) process.env[k] = "5"; // folga de sobra: quem segura aqui é só o escopo
+  });
+  afterEach(() => {
+    for (const k of PACE_ENV) delete process.env[k];
+  });
+  const dev: StatusDef = { id: "desenvolver", name: "Dev" };
+  const enrich: StatusDef = { id: "enriquecer", name: "Especificar" };
+  const ran = (cmds: string[], key: string) => cmds.some((c) => c.includes(` ${key}"`) || c.includes(` ${key} `));
+  const AT = "2026-10-02T12:00:00.000Z";
+  const fixesRow = (): BoardPaceRow => ({ board: "acme", ownerScope: { types: ["bug", "technical", "chore", "spike"], by: { kind: "owner" }, at: AT } });
+  const scopeFrom = (row: { value: BoardPaceRow | null }) => (board: string) => (board === "acme" ? effectiveScope(row.value, Date.parse(AT) + 1000) : null);
+  const card = (id: string, storyType: ScopeCard["storyType"], status = "desenvolver", mode?: ScopeCard["mode"]): ScopeCard => ({ id, type: "story", storyType, mode, status });
+
+  it("o job automático de uma FUNCIONALIDADE na construção espera na fila (não spawna); o conserto e o operador passam; o kick do alargamento o admite", async () => {
+    const row = { value: fixesRow() as BoardPaceRow | null };
+    const { engine, cmds } = makeEngine(async () => null, { scopeOf: scopeFrom(row) });
+    engine.runSkill("acme", "feat", "harness-do", dev, { scopeCard: card("feat", "user") });
+    engine.runSkill("acme", "fix", "harness-do", dev, { scopeCard: card("fix", "bug") });
+    engine.runSkill("acme", "op", "harness-do", dev, { origin: "manual", scopeCard: card("op", "user") });
+    await flush();
+    expect(ran(cmds, "acme/feat")).toBe(false);
+    expect(engine.isInFlight("acme", "feat")).toBe(true); // espera NA FILA, não se perde
+    expect(ran(cmds, "acme/fix")).toBe(true);
+    expect(ran(cmds, "acme/op")).toBe(true); // o operador nunca espera pelo escopo (run manual não é gateado)
+
+    row.value = null; // o dono alargou
+    engine.kick();
+    await flush();
+    expect(ran(cmds, "acme/feat")).toBe(true);
+  });
+
+  it("FORA da construção a funcionalidade passa (a especificação segue andando)", async () => {
+    const row = { value: fixesRow() as BoardPaceRow | null };
+    const { engine, cmds } = makeEngine(async () => null, { scopeOf: scopeFrom(row) });
+    engine.runSkill("acme", "spec", "harness-enrich", enrich, { scopeCard: card("spec", "user", "enriquecer") });
+    await flush();
+    expect(ran(cmds, "acme/spec")).toBe(true);
+  });
+
+  it("um `user` em modo `fix` (erro) passa", async () => {
+    const row = { value: fixesRow() as BoardPaceRow | null };
+    const { engine, cmds } = makeEngine(async () => null, { scopeOf: scopeFrom(row) });
+    engine.runSkill("acme", "fx", "harness-do", dev, { scopeCard: card("fx", "user", "desenvolver", "fix") });
+    await flush();
+    expect(ran(cmds, "acme/fx")).toBe(true);
+  });
+
+  it("outro board não é afetado pelo escopo do primeiro", async () => {
+    const row = { value: fixesRow() as BoardPaceRow | null };
+    const { engine, cmds } = makeEngine(async () => null, { scopeOf: scopeFrom(row) });
+    engine.runSkill("other", "feat", "harness-do", dev, { scopeCard: card("feat", "user") });
+    await flush();
+    expect(ran(cmds, "other/feat")).toBe(true);
+  });
+
+  it("sem o card do chamador o engine o completa pela leitura do enfileiramento: o job que esperou na fila é segurado no bombeio seguinte", async () => {
+    const row = { value: fixesRow() as BoardPaceRow | null };
+    const featureCard = { id: "late", type: "story", storyType: "user", status: "desenvolver" } as Card;
+    const { engine, cmds, children } = makeEngine(async () => null, {
+      scopeOf: scopeFrom(row),
+      paceOf: () => "slow", // o 1º ocupa a única vaga: o "late" espera NA FILA enquanto a leitura do card chega
+      readCard: async (_b, id) => (id === "late" ? featureCard : ({ id, type: "story", storyType: "user", status: "enriquecer" } as Card)),
+    });
+    engine.runSkill("acme", "first", "harness-enrich", enrich);
+    engine.runSkill("acme", "late", "harness-do", dev);
+    await flush();
+    expect(ran(cmds, "acme/first")).toBe(true);
+    children[0].emit("close", 0); // a vaga abre: sem o escopo, o "late" entraria agora
+    await flush();
+    await flush();
+    expect(ran(cmds, "acme/late")).toBe(false);
+    expect(engine.isInFlight("acme", "late")).toBe(true);
+    row.value = null;
+    engine.kick();
+    await flush();
+    expect(ran(cmds, "acme/late")).toBe(true);
+  });
+
+  it("o card do re-drive do merge train (origem `conflict-redrive`) não leva o filtro do escopo: integrar trabalho feito não é começar", async () => {
+    const row = { value: fixesRow() as BoardPaceRow | null };
+    const { engine, cmds } = makeEngine(async () => null, { scopeOf: scopeFrom(row) });
+    engine.runSkill("acme", "redrive", "harness-do", dev, { origin: "conflict-redrive", initiator: "automation", scopeCard: card("redrive", "user") });
+    await flush();
+    expect(ran(cmds, "acme/redrive")).toBe(true);
+  });
+
+  it("a leitura do escopo que LANÇA não derruba o pump: o job entra como sem limite", async () => {
+    const { engine, cmds } = makeEngine(async () => null, {
+      scopeOf: () => {
+        throw new Error("boom");
+      },
+    });
+    engine.runSkill("acme", "t1", "harness-do", dev, { scopeCard: card("t1", "user") });
+    await flush();
+    expect(ran(cmds, "acme/t1")).toBe(true);
+  });
+
+  it("PAUSADO + escopo são eixos independentes: o pausado segura mesmo o conserto", async () => {
+    const row = { value: fixesRow() as BoardPaceRow | null };
+    const { engine, cmds } = makeEngine(async () => null, { scopeOf: scopeFrom(row), paceOf: () => "paused" });
+    engine.runSkill("acme", "fix", "harness-do", dev, { scopeCard: card("fix", "bug") });
+    await flush();
+    expect(ran(cmds, "acme/fix")).toBe(false);
+  });
+
+  it("DEVAGAR + escopo: o conserto roda um por vez; a funcionalidade segurada NÃO ocupa a vaga", async () => {
+    const row = { value: fixesRow() as BoardPaceRow | null };
+    const { engine, cmds, children } = makeEngine(async () => null, { scopeOf: scopeFrom(row), paceOf: () => "slow" });
+    engine.runSkill("acme", "feat", "harness-do", dev, { scopeCard: card("feat", "user") });
+    engine.runSkill("acme", "fix1", "harness-do", dev, { scopeCard: card("fix1", "bug") });
+    engine.runSkill("acme", "fix2", "harness-do", dev, { scopeCard: card("fix2", "chore") });
+    await flush();
+    expect(ran(cmds, "acme/feat")).toBe(false);
+    expect(ran(cmds, "acme/fix1")).toBe(true);
+    expect(ran(cmds, "acme/fix2")).toBe(false); // um por vez
+    children[0].emit("close", 0);
+    await flush();
+    await flush();
+    expect(ran(cmds, "acme/fix2")).toBe(true);
+    expect(ran(cmds, "acme/feat")).toBe(false);
+  });
+
+  it("C1: um AGENTE escopado (run_skill/enqueue = origin manual, initiator automation) numa funcionalidade em CONSTRUÇÃO fica segurado e anotado; o mesmo pedido do operador roda", async () => {
+    const row = { value: fixesRow() as BoardPaceRow | null };
+    const { engine, cmds } = makeEngine(async () => null, { scopeOf: scopeFrom(row) });
+    // o agente escopado (token != full): a origem é `manual`, mas quem iniciou é a AUTOMAÇÃO
+    runWithMcpActor({ level: "orch", tokenEnv: "AGILEHARNESS_MCP_TOKEN_ORCH" }, () =>
+      engine.runSkill("acme", "agent-feat", "harness-do", dev, { origin: "manual", scopeCard: card("agent-feat", "user") }),
+    );
+    runWithMcpActor({ level: "orch", tokenEnv: "AGILEHARNESS_MCP_TOKEN_ORCH" }, () =>
+      engine.runSkill("acme", "agent-fix", "harness-do", dev, { origin: "manual", scopeCard: card("agent-fix", "bug") }),
+    );
+    // o operador (token full, ou chamada interna) pede a MESMA coisa
+    runWithMcpActor({ level: "full" }, () => engine.runSkill("acme", "op-feat", "harness-do", dev, { origin: "manual", scopeCard: card("op-feat", "user") }));
+    await flush();
+    expect(ran(cmds, "acme/agent-feat")).toBe(false);
+    expect(engine.isInFlight("acme", "agent-feat")).toBe(true); // espera NA FILA, anotada (a purga/kick a veem), não se perde
+    expect(ran(cmds, "acme/agent-fix")).toBe(true); // conserto passa
+    expect(ran(cmds, "acme/op-feat")).toBe(true); // o operador nunca é barrado
+
+    row.value = null; // o dono alargou
+    engine.kick();
+    await flush();
+    expect(ran(cmds, "acme/agent-feat")).toBe(true);
+  });
+
+  it("C1: o agente escopado SEM o card na mão: o engine o completa pela leitura e segura (o furo era só o `autorun` ser lido)", async () => {
+    const row = { value: fixesRow() as BoardPaceRow | null };
+    const featureCard = { id: "agent-late", type: "story", storyType: "user", status: "desenvolver" } as Card;
+    const { engine, cmds, children } = makeEngine(async () => null, {
+      scopeOf: scopeFrom(row),
+      paceOf: () => "slow", // o 1º ocupa a vaga única: o "agent-late" espera NA FILA enquanto a leitura do card chega
+      readCard: async (_b, id) => (id === "agent-late" ? featureCard : ({ id, type: "story", storyType: "user", status: "enriquecer" } as Card)),
+    });
+    engine.runSkill("acme", "first", "harness-enrich", enrich);
+    runWithMcpActor({ level: "orch" }, () => engine.runSkill("acme", "agent-late", "harness-do", dev, { origin: "manual" }));
+    await flush();
+    children[0].emit("close", 0);
+    await flush();
+    await flush();
+    expect(ran(cmds, "acme/agent-late")).toBe(false);
+    row.value = null;
+    engine.kick();
+    await flush();
+    expect(ran(cmds, "acme/agent-late")).toBe(true);
+  });
+
+  // O furo que sobrou do C1: o engine completa o scopeCard DEPOIS (cardP.then, assíncrono), mas o pump desta mesma chamada roda
+  // SÍNCRONO logo após o push na fila — com a vaga livre o job saía antes de o escopo saber o que ele era. A marca
+  // `scopePending` segura o job até a leitura chegar (e, se ela falhar, para sempre — nunca libera «porque não sei»).
+  describe("FAIL-SAFE: o agente escopado SEM scopeCard e com a vaga LIVRE", () => {
+    const deferred = <T,>() => {
+      let resolve!: (v: T) => void;
+      let reject!: (e: unknown) => void;
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    };
+    const agent = <T,>(fn: () => T) => runWithMcpActor({ level: "orch", tokenEnv: "AGILEHARNESS_MCP_TOKEN_ORCH" }, fn);
+    const featureCard = { id: "agent-free", type: "story", storyType: "user", status: "desenvolver" } as Card;
+
+    it("(a) a funcionalidade NÃO começa nem durante a leitura assíncrona; fica na fila, anotada", async () => {
+      const row = { value: fixesRow() as BoardPaceRow | null };
+      const read = deferred<Card | null>();
+      const { engine, cmds } = makeEngine(async () => null, { scopeOf: scopeFrom(row), readCard: () => read.promise });
+      agent(() => engine.runSkill("acme", "agent-free", "harness-do", dev, { origin: "manual" })); // engine ocioso, vaga livre
+      await flush();
+      expect(ran(cmds, "acme/agent-free")).toBe(false); // a leitura ainda não chegou
+      expect(engine.getQueueInfo("acme", "agent-free").status).toBe("queued"); // anotada na fila, não perdida
+      read.resolve(featureCard);
+      await flush();
+      await flush();
+      expect(ran(cmds, "acme/agent-free")).toBe(false); // chegou: uma funcionalidade em construção, o escopo recusa
+      expect(engine.getQueueInfo("acme", "agent-free").status).toBe("queued");
+      row.value = null; // o dono alargou
+      engine.kick();
+      await flush();
+      expect(ran(cmds, "acme/agent-free")).toBe(true);
+    });
+
+    it("(b) a leitura devolvendo um BUG: o job começa depois da leitura (e não antes)", async () => {
+      const row = { value: fixesRow() as BoardPaceRow | null };
+      const read = deferred<Card | null>();
+      const { engine, cmds } = makeEngine(async () => null, { scopeOf: scopeFrom(row), readCard: () => read.promise });
+      agent(() => engine.runSkill("acme", "agent-bug", "harness-do", dev, { origin: "manual" }));
+      await flush();
+      expect(ran(cmds, "acme/agent-bug")).toBe(false);
+      read.resolve({ id: "agent-bug", type: "story", storyType: "bug", status: "desenvolver" } as Card);
+      await flush();
+      await flush();
+      expect(ran(cmds, "acme/agent-bug")).toBe(true);
+    });
+
+    it("(c) a leitura FALHANDO: segurado e anotado no log do card — nunca liberado", async () => {
+      const row = { value: fixesRow() as BoardPaceRow | null };
+      const { engine, cmds } = makeEngine(async () => null, {
+        scopeOf: scopeFrom(row),
+        readCard: async () => {
+          throw new Error("disco indisponível");
+        },
+      });
+      agent(() => engine.runSkill("acme", "agent-fail", "harness-do", dev, { origin: "manual" }));
+      await flush();
+      await flush();
+      engine.kick(); // nenhum re-bombeio o libera
+      await flush();
+      expect(ran(cmds, "acme/agent-fail")).toBe(false);
+      expect(engine.getQueueInfo("acme", "agent-fail").status).toBe("queued");
+      row.value = null; // alargar o escopo continua devolvendo o job
+      engine.kick();
+      await flush();
+      expect(ran(cmds, "acme/agent-fail")).toBe(true);
+    });
+
+    it("(d) o OPERADOR começa de imediato, sem esperar a leitura (nenhum scopePending para ele)", async () => {
+      const row = { value: fixesRow() as BoardPaceRow | null };
+      // o spawn aguarda a leitura do card para os flags, então ela resolve já: o que se prova é que NADA o segura por escopo
+      const { engine, cmds } = makeEngine(async () => null, { scopeOf: scopeFrom(row), readCard: async () => featureCard });
+      runWithMcpActor({ level: "full" }, () => engine.runSkill("acme", "op-free", "harness-do", dev, { origin: "manual" }));
+      await flush();
+      expect(ran(cmds, "acme/op-free")).toBe(true);
+    });
+
+    it("(d2) o re-drive do merge train e o sync do card seguem isentos, mesmo sem scopeCard", async () => {
+      const row = { value: fixesRow() as BoardPaceRow | null };
+      const { engine, cmds } = makeEngine(async () => null, { scopeOf: scopeFrom(row), readCard: async () => featureCard });
+      engine.runSkill("acme", "redrive", "harness-do", dev, { origin: "conflict-redrive", initiator: "automation" });
+      agent(() => engine.runSkill("acme", "sync", "harness-sync-card", dev, { origin: "manual" }));
+      await flush();
+      expect(ran(cmds, "acme/redrive")).toBe(true);
+      expect(ran(cmds, "acme/sync")).toBe(true);
+    });
+
+    it("(d3) a RETOMADA de um run que já começou (resumeSessionId) não é um começo: o escopo estreitado no meio do run não a segura", async () => {
+      const row = { value: fixesRow() as BoardPaceRow | null };
+      const { engine, cmds } = makeEngine(async () => null, { scopeOf: scopeFrom(row), readCard: async () => featureCard });
+      agent(() => engine.runSkill("acme", "resume-feat", "harness-do", dev, { origin: "manual", resumeSessionId: "11111111-1111-4111-8111-111111111111" }));
+      await flush();
+      expect(ran(cmds, "acme/resume-feat")).toBe(true); // o mesmo pedido SEM resumeSessionId é o do teste (a): segurado
+    });
+
+    it("board SEM escopo: o agente sem scopeCard começa de imediato (a marca só segura onde há escopo)", async () => {
+      const { engine, cmds } = makeEngine(async () => null, { readCard: async () => featureCard });
+      agent(() => engine.runSkill("acme", "no-scope", "harness-do", dev, { origin: "manual" }));
+      await flush();
+      expect(ran(cmds, "acme/no-scope")).toBe(true);
+    });
+  });
+
+  it("C1: `harness-sync-card` (só diagnostica, em qualquer coluna) é isento do escopo mesmo pelo agente", async () => {
+    const row = { value: fixesRow() as BoardPaceRow | null };
+    const { engine, cmds } = makeEngine(async () => null, { scopeOf: scopeFrom(row) });
+    runWithMcpActor({ level: "orch" }, () =>
+      engine.runSkill("acme", "sync-feat", "harness-sync-card", dev, { origin: "manual", scopeCard: card("sync-feat", "user") }),
+    );
+    await flush();
+    expect(ran(cmds, "acme/sync-feat")).toBe(true);
+  });
+
+  it("C6: DEVAGAR + escopo: a funcionalidade em drain (já saiu da fila antes do limite) NÃO ocupa a vaga única — o conserto entra", async () => {
+    const row = { value: null as BoardPaceRow | null };
+    const { engine, cmds } = makeEngine(async () => null, { scopeOf: scopeFrom(row), paceOf: () => "slow" });
+    engine.runSkill("acme", "feat-drain", "harness-do", dev, { scopeCard: card("feat-drain", "user") });
+    await flush();
+    expect(ran(cmds, "acme/feat-drain")).toBe(true); // sem limite ainda: entra e executa
+    engine.runSkill("acme", "fix-q", "harness-do", dev, { scopeCard: card("fix-q", "bug") });
+    await flush();
+    expect(ran(cmds, "acme/fix-q")).toBe(false); // sem escopo, a vaga única está ocupada
+
+    row.value = fixesRow(); // o dono estreita: a funcionalidade segue executando (termina), mas não conta mais para a vaga
+    engine.kick();
+    await flush();
+    expect(engine.isInFlight("acme", "feat-drain")).toBe(true);
+    expect(ran(cmds, "acme/fix-q")).toBe(true);
+  });
+
+  it("stopBoardAutomation com `only`: tira da fila SÓ o que o predicado aponta; o resto do board segue", async () => {
+    const row = { value: fixesRow() as BoardPaceRow | null };
+    const { engine, cmds, finishes } = makeEngine(async () => null, { scopeOf: scopeFrom(row), paceOf: () => "slow" });
+    engine.runSkill("acme", "run-a", "harness-enrich", enrich, { scopeCard: card("run-a", "user", "enriquecer") });
+    engine.runSkill("acme", "feat-q", "harness-enrich", enrich, { scopeCard: card("feat-q", "user", "enriquecer") });
+    engine.runSkill("acme", "fix-q", "harness-enrich", enrich, { scopeCard: card("fix-q", "user", "enriquecer") });
+    await flush();
+    expect(ran(cmds, "acme/run-a")).toBe(true);
+    expect(ran(cmds, "acme/feat-q")).toBe(false);
+
+    const purged = await engine.stopBoardAutomation("acme", "só consertos", { running: false, only: (id) => id === "feat-q" });
+    await flush();
+    expect(purged).toEqual([{ board: "acme", cardId: "feat-q", trigger: "harness-enrich" }]);
+    expect(finishes).toContainEqual(expect.objectContaining({ cardId: "feat-q", outcome: "cancelled" }));
+    expect(engine.isInFlight("acme", "fix-q")).toBe(true); // o conserto na fila FICA
+    expect(engine.isInFlight("acme", "run-a")).toBe(true); // o que executa TERMINA (sem `running`)
+  });
+
+  it("stopBoardAutomation com `only` que LANÇA ou rejeita: na dúvida o card fica na fila", async () => {
+    const { engine } = makeEngine(async () => null, { paceOf: () => "slow" });
+    engine.runSkill("acme", "run-a", "harness-enrich", enrich);
+    engine.runSkill("acme", "q1", "harness-enrich", enrich);
+    engine.runSkill("acme", "q2", "harness-enrich", enrich);
+    await flush();
+    const none = await engine.stopBoardAutomation("acme", "x", {
+      running: false,
+      only: (id) => {
+        if (id === "q1") return Promise.reject(new Error("falhou"));
+        return Promise.reject(new Error("outra"));
+      },
+    });
+    expect(none).toEqual([]);
+    expect(engine.isInFlight("acme", "q1")).toBe(true);
+    expect(engine.isInFlight("acme", "q2")).toBe(true);
+  });
+
+  it("stopBoardAutomation com `only` e running:true também tira o que executa, mas só o apontado", async () => {
+    const { engine, cmds } = makeEngine(async () => null, {});
+    engine.runSkill("acme", "a", "harness-enrich", enrich);
+    engine.runSkill("acme", "b", "harness-enrich", enrich);
+    await flush();
+    expect(ran(cmds, "acme/a") && ran(cmds, "acme/b")).toBe(true);
+    const stopped = await engine.stopBoardAutomation("acme", "x", { running: true, only: (id) => id === "a" });
+    expect(stopped.map((r) => r.cardId)).toEqual(["a"]);
+    expect(engine.isInFlight("acme", "b")).toBe(true);
   });
 });

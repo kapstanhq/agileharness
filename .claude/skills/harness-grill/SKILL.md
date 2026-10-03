@@ -114,8 +114,8 @@ what the human (and only the human) can give, before specification. So:
    BUG, where the right move is investigation, not an interrogation of the reporter.
 
    - **Read the relevant code.** Map the card to its package via the board's
-     `package:` field in `storymap/boards/<board>/board.yaml` (the root `CLAUDE.md`
-     documents the repo's package layout). Read the routes/components/actions/functions
+     `package:` field in `storymap/boards/<board>/board.yaml` (the repository's own
+     instructions, if it has any, document its package layout). Read the routes/components/actions/functions
      the card is about. `Grep`/`Glob`/`Read` are free — use them liberally.
    - **Open the bug screenshot when one exists.** `bugReport.screenshot` (and
      `bugReport.contextScreenshots[]`) is a **FILENAME**, not a path — resolve it to
@@ -125,10 +125,11 @@ what the human (and only the human) can give, before specification. So:
      anexado" but `screenshot` is null, note that gap as a finding (the evidence
      never reached the card — see the report-issue/BugModal capture surface).
    - **Run read-only spikes/queries when the card points to data.** Follow the repo
-     convention (`diag-*`/`spike-*`, per `CLAUDE.md`): a read-only script or query
+     convention (`diag-*`/`spike-*`, per the repository's own instructions): a read-only script or query
      against real data beats human memory (a catalog comparison, a timestamp lookup,
      an audit query for duplicate pairs, an empirical distribution). Write any scratch
-     script under `.artifacts/scratch/` (auto-rotated — no `rm` needed).
+     script under `.artifacts/scratch/` (the tool's scratch convention; nothing rotates or ignores it
+     for you — leave the file where it is and NEVER `git add` or commit it).
    - **Record findings** in an `## Investigação` section in the card body: short,
      each with its evidence (file:line, query result, what the screenshot shows).
      These are findings, NOT questions and NOT answers to the `questions:` list.
@@ -136,13 +137,13 @@ what the human (and only the human) can give, before specification. So:
    > **Permission envelope (execution note).** This skill runs under
    > `--permission-mode acceptEdits` (NOT full-autonomy). That is enough for
    > read-only investigation: `Read`/`Grep`/`Glob` are free everywhere, and the
-   > project `.claude/settings.json` allowlist pre-approves the read-only Bash you
-   > need (`git status`/`log`/`diff`/`show`, `grep`, `bun`, `bunx`, `just`, `ls`,
-   > `node -e`). But **exotic commands are DENIED** under acceptEdits — command
+   > project's permission allowlist (`.claude/settings.json`) pre-approves the read-only Bash you
+   > need (`git status`/`log`/`diff`/`show`, `grep`, `ls`, `node -e`, plus whatever runner the
+   > project allowlisted). But **exotic commands are DENIED** under acceptEdits — command
    > substitution `$(...)`, pipelines/compounds (`&&`, `|`), and `rm`. So: prefer
    > simple, allowlisted, single commands; write any multi-step probe as a scratch
    > script under `.artifacts/scratch/` and run it directly (`node .artifacts/scratch/spike-x.js`);
-   > never reach for `rm` (the dir auto-rotates).
+   > never reach for `rm` inside the run (leave the scratch file in place and do not commit it).
 
 4. **Ask only what survives the filter.** After investigating, look at what is
    LEFT. A question earns a spot ONLY if BOTH hold:

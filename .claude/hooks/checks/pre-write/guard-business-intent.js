@@ -15,6 +15,12 @@
 // Edit/Write tool_input, parses before/after via js-yaml, and delegates to
 // ownership.evaluateOwnerGuard. Lenient-allow on any parse/resolution surprise.
 //
+// WHAT THE OPERATOR ACTUALLY SEES (read before trusting this hook): THIS is the guard that fails open for real — an
+// unloadable ownership lib lets a run edit the owner:human fields. It still ALLOWS and says so with ONE
+// `[HARNESS WARNING] … DESLIGADO neste hook` line on STDERR, exit 0. Claude Code does not surface the stderr of an
+// exit-0 hook to the model or to the operator outside verbose / transcript mode, so that line is a breadcrumb, NOT an
+// alarm; an operator-visible check of whether the libs are reachable is the service preflight's job, not this hook's.
+//
 // Interface (auto-discovered by ../../runner.js):
 //   module.exports = { name, test(input) -> null | { rule, message, fix } }
 
@@ -53,7 +59,14 @@ function worktreeRootFor(dirname) {
   }
 }
 
-function yamlCandidatesFor(dirname) {
+// Lote D: the TOOL's own checkout (AGILEHARNESS_TOOL_ROOT, injected by the engine into every run) is also a
+// candidate — a target repository has no `packages/storymap-ui` of its own.
+function toolRootOf(env) {
+  const v = (env || process.env).AGILEHARNESS_TOOL_ROOT;
+  return typeof v === 'string' && v.trim() ? v.trim() : null;
+}
+
+function yamlCandidatesFor(dirname, env) {
   const candidates = ['js-yaml'];
   const repoRoot = repoRootFor(dirname);
   if (repoRoot) {
@@ -62,7 +75,36 @@ function yamlCandidatesFor(dirname) {
       path.join(repoRoot, 'node_modules', 'js-yaml'),
     );
   }
+  const toolRoot = toolRootOf(env);
+  if (toolRoot) candidates.push(path.join(toolRoot, 'node_modules', 'js-yaml'));
   return candidates;
+}
+
+// Ordered candidates for one of the tool's isomorphic libs (ownership.js). (1) a copy VENDORED beside the hook
+// (`.claude/hooks/lib/<name>`); (2) the TOOL's checkout (AGILEHARNESS_TOOL_ROOT/src/lib/storymap); (3) the legacy
+// path of the tool's own tree — worktree-local first (a newly committed lib may not be in the main checkout yet),
+// then the main checkout.
+function libCandidatesFor(dirname, name, env) {
+  const out = [path.join(dirname, '..', '..', 'lib', name)];
+  const toolRoot = toolRootOf(env);
+  if (toolRoot) out.push(path.join(toolRoot, 'src', 'lib', 'storymap', name));
+  const rel = path.join('packages', 'storymap-ui', 'src', 'lib', 'storymap', name);
+  const wtRoot = worktreeRootFor(dirname);
+  if (wtRoot) out.push(path.join(wtRoot, rel));
+  const repoRoot = repoRootFor(dirname);
+  if (repoRoot) out.push(path.join(repoRoot, rel));
+  return out;
+}
+
+// Said ONCE per process, out loud: THIS is the guard that fails open (an unloadable ownership lib lets an agent edit
+// the human-owned fields), and a guard that silently degrades is indistinguishable from one that works.
+let _warnedMissingLib = false;
+function warnLibMissing(name, what, tried) {
+  if (_warnedMissingLib) return;
+  _warnedMissingLib = true;
+  try {
+    process.stderr.write(`[HARNESS WARNING] ${name} não encontrado — ${what} DESLIGADO neste hook (procurei: ${tried.join(', ')}). Declare AGILEHARNESS_TOOL_ROOT ou vendorize a lib ao lado do hook.\n`);
+  } catch { /* stderr fechado: nada a fazer */ }
 }
 
 let _yamlLib;
@@ -78,19 +120,12 @@ function loadYamlLib() {
 let _ownership;
 function loadOwnership() {
   if (_ownership !== undefined) return _ownership;
-  const OWNERSHIP_REL = path.join('packages', 'storymap-ui', 'src', 'lib', 'storymap', 'ownership.js');
-  // Try worktree-local first (ownership.js is new — may not be in main checkout yet).
-  const wtRoot = worktreeRootFor(__dirname);
-  if (wtRoot) {
-    try { _ownership = require(path.join(wtRoot, OWNERSHIP_REL)); return _ownership; } catch { /* fallthrough */ }
+  const tried = libCandidatesFor(__dirname, 'ownership.js');
+  _ownership = null;
+  for (const c of tried) {
+    try { _ownership = require(c); return _ownership; } catch { /* try next */ }
   }
-  // Fallback: main checkout (once merged).
-  const repoRoot = repoRootFor(__dirname);
-  try {
-    _ownership = repoRoot ? require(path.join(repoRoot, OWNERSHIP_REL)) : null;
-  } catch {
-    _ownership = null;
-  }
+  warnLibMissing('ownership', 'a guarda owner:human', tried);
   return _ownership;
 }
 
@@ -189,3 +224,6 @@ module.exports = {
     }
   },
 };
+
+module.exports._libCandidatesFor = libCandidatesFor;
+module.exports._yamlCandidatesFor = yamlCandidatesFor;

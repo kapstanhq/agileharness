@@ -11,7 +11,7 @@
 // `"needs-units"`, o contrato novo), a lista `human` (no topo ou em `plan`) nomeia as unidades (`{unit}` ou o nome) e as
 // regras. QUEM destrava não é o status único: é a régua de deploy-blocks.ts, entrada por entrada (um mesmo plano pode
 // misturar regras de dinheiro, do dono, e lacunas de configuração, do sistema — e o status único mandaria tudo ao dono).
-// O contrato é do COMANDO: o agente de deploy responde por veredito, e o orch-deploy legado não dá sentido
+// O contrato é do COMANDO: o agente de deploy responde por veredito, e o comando legado diff-aware (deploy.legacy.command) não dá sentido
 // ao 3 — para eles, 3 segue sendo falha.
 //
 // Leitura PURA + um read best-effort (nunca lança — um callback de deploy não pode quebrar por um log ausente).

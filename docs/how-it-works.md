@@ -403,6 +403,92 @@ recorded its commit range) can only enter the human review column with a QA stam
 **what was proven**: `qaEvidence.suite` or `qaEvidence.visual`. The "no screen, no QA" exemption
 still applies to board-only cards, and no longer to code.
 
+### The target declares what is its own — the tool never assumes it
+
+AgileHarness manages a repository it did not write, so it cannot assume that repository's
+toolchain: which command runs the tests, where the rules live, what currency the cost ceilings are
+in, which review lenses exist, how packages are laid out, which ports the QA stack uses, how a
+publish is launched, how many tokens the subscription allows. The operator declares each of those
+in `storymap/settings.yaml` — the channel that is versioned and goes through the code gate, unlike
+`board.yaml`, which agents edit and which therefore never carries a command.
+
+```yaml
+# storymap/settings.yaml — an invented bicycle workshop
+target:
+  checks: { testUnit: "make test-unit PKG={pkg}", validate: "make validate" }   # {pkg} {package} {board}
+  docs: { conventions: "{package}/CONTRIBUTING.md" }
+  currency: { code: EUR, locale: pt-PT }
+  reviewLenses:
+    brakes: { name: "Brakes", description: "pad wear, cable slack", agent: brake-reviewer }
+  layout: { workspaces: ["shops/*", "shops/*/web"], packages: ["shops/*"] }
+  qa:
+    ports: [7101, 7102]
+    health: [{ name: broker, url: "http://127.0.0.1:7101/" }]
+    failureClasses: [{ pattern: "fakebus[\\s\\S]{0,60}stalled", class: infra }]
+vps: { weeklyTokenLimit: 400000000, headroomUrl: "http://127.0.0.1:9100" }
+deploy:
+  launchers: [taskrun]
+  recipes: [ship-app]
+  legacy: { command: [taskrun, ship-app, "{target}"], state: "ops/state/{target}.json" }
+  proof: { record: { securityReview: [recorder, verdict, "{file}"] } }
+```
+
+- **Undeclared means undeclared.** Every resolver returns an explicit "nothing" (`undefined`, `{}`,
+  an empty list) — never a default from the repository the tool was written in. A skill told to
+  run a check the target did not declare is told to *discover the command in the repository's own
+  instructions*; a tool that needs a value (a currency to judge a cost, a command to publish)
+  refuses and names the exact key to declare. The only built-in vocabularies are the tool's own:
+  the five core review lenses (`security`, `testing`, `perf`, `general`, `design`) and the `stage`
+  branch name.
+- **Commands are argv, never shell.** A declared command is a list of words (or a string the loader
+  can split into words without a shell); a pipe, `&&` or `$(…)` is refused, and the only
+  placeholders are the closed set for that key (`{pkg}`, `{package}`, `{board}` in `target`;
+  `{target}` and `{file}` in `deploy`). Commands in `board.yaml` still pass the launcher/recipe
+  allow-list; commands in `settings.yaml` are the operator's own and do not.
+- **Tolerant, and loud.** Free text from this file ends up in prompts, argv and file names, so only
+  values with a *shape* get in (slugs, relative paths without `..`, loopback URLs with a port, ISO
+  currency codes the runtime knows, regexes with no nested quantifier), with a length cap and no
+  control characters. A piece with no shape is **discarded on its own** — the rest of the block
+  keeps working — and the service log gets one line naming the path that was dropped (never the
+  hostile value). An unreadable YAML file still falls back to the built-in defaults as a whole, but
+  it now says so in the log, once per version of the file.
+- **Hot unless it is staging.** All of the above is re-read when the file's mtime changes.
+  `autorun.staging.*` is read once when the merge train is built, so changing it needs a safe
+  restart. `autorun.staging` also records which keys the file actually declared, so "no
+  `codePrefixes`" and "`codePrefixes: []` (nothing is code)" are different answers.
+- **The environment still wins.** `AGILEHARNESS_WEEKLY_TOKEN_LIMIT`, `AGILEHARNESS_HEADROOM_URL` and
+  the `AGILEHARNESS_DEPLOY_*` lists override or extend the file (the deploy lists are a union: the
+  environment never removes what the file declared). `vps.headroomUrl` only says where the meter is
+  *read* from; routing agent traffic through the proxy is a separate switch.
+- **Skills name checks, never commands.** The shipped skills do not say "run `just test-x`": they tell the
+  agent which check to run by name (`test`, `testUnit`, `e2e`, `typecheck`, `lint`, `validate`) and to run the
+  declared command itself, in its own worktree (`run_check` runs in the runtime checkout, so it is for the
+  operator, not for a run). **Where the agent reads it depends on the session.** A column run
+  (`harness-do`, `-qa`, `-tests`, `-review`) is headless and starts with *no* AgileHarness MCP mounted, so it
+  reads the `target` block of `storymap/settings.yaml` straight from its worktree — the run's context note
+  names the declared checks, and for the review lenses the skill points at `target.reviewLenses`. A conductor
+  session has the MCP, where `target_profile({board})` returns the same profile already resolved. The review
+  lenses, the dev command and the convention documents come from that one profile. Only the conventions
+  document is "read before acting"; the rest are paths to open when the work calls for them, so a target that
+  declares five documents does not pay for five in every run. A target that declared nothing gets the same
+  instruction every time: *discover the command in the repository's own instructions*.
+- **The owner's classes drive the proxy's prompt.** What counts as the owner's decision (money, speaking for
+  the brand, the PRD, people's data) is `autonomy.ownerClasses`. The question classifier, the triage judge
+  and the owner's proxy all read that one list; the proxy's "these are never yours" sentence is built from
+  each class's label and description, not written into the code. With no declaration the tool's neutral four
+  apply, and the money class keeps one generic clause: switching the model or vendor of the AI that serves
+  the product's users changes cost and quality, so it is the owner's call.
+- **Hooks find the tool's libraries by an ordered list.** The pre-write guards need the tool's
+  `gate-core` and `ownership` modules, and a target repository does not carry the tool's source. They
+  look, in order, for a copy vendored beside the hook (`.claude/hooks/lib/`), then the tool's own
+  checkout (`AGILEHARNESS_TOOL_ROOT`, which the engine sets for every run), then the legacy path of
+  the tool's tree. If none loads the hook still allows the write (the app's own gate stays the authority),
+  and writes one `[HARNESS WARNING]` line to stderr. **Do not read that as an alarm:** it exits 0, and Claude Code
+  does not show the stderr of an exit-0 hook to the model or to the operator outside verbose / transcript mode,
+  so the line is a breadcrumb and the guard is, in practice, off. The ownership guard is the one that fails
+  open for real (a run could edit the human-owned fields); checking that the libraries are reachable is a job
+  for the service preflight, not for the hook.
+
 ### A deploy can't roll production back
 
 The service publishes from its own checkout of your repository. If you also deploy by hand from
@@ -427,6 +513,91 @@ and usable once, and the deploy registry won't launch without one. That makes sk
 impossible rather than merely discouraged. `liveShaCommand` goes through the same allow-list as the
 other declared commands. The escape hatch is for humans only: `AGILEHARNESS_DEPLOY_FRESHNESS=off` in
 the service's environment. It is read on every deploy and logs a warning each time it's used.
+
+### A board has a pace, and — separately — a scope
+
+Two independent brakes sit in front of everything the board starts by itself, and the owner can
+reach both from the board header (an agent reaches them through `pause_board`, see
+[AGENTS.md](../AGENTS.md)).
+
+- **The pace** says *how much* the board moves: `normal`, `slow` (one card at a time, no
+  background agents) or `paused` (nothing automatic starts).
+- **The scope** says *what kind of work* it may begin. The first version has two settings:
+  *everything*, and **only fixes and maintenance** — every story type except the one real new
+  feature, `user`. Bugs, technical work, chores and spikes keep going; a new feature waits. The
+  file stores the list of admitted types, so a finer choice later needs no migration, but the
+  screen offers only those two presets today.
+
+The axes do not combine into a fourth speed. `paused` wins over any scope; `slow` plus a scope is
+one card at a time *inside* the scope; `normal` plus a scope is full speed, with nothing outside it
+starting.
+
+**What the scope stops is the *start* of construction, and nothing else.** It stops a conductor from
+being dispatched or adopted, the conductor queue, and the columns from technical plan through
+development (`plano-tecnico`, `quebrar-tasks`, `desenvolver`; the list is named and tested against
+the base board). Capture, triage, questions, the interview, specification and prioritisation keep
+running on purpose: a bug captured an hour ago is born with the default type, and it can only be
+recognised as a bug if those columns still run. On a board with a conductor the exception is the
+conductor's own entry points: the interview and the refine door of a *new feature* wait together
+with the conductor (there is no column skill to run there), while `enriquecer` keeps running to
+decide the type.
+
+**What already started finishes.** Code review and automated QA are *not* gated, even though the base
+board files them under "Construction": a card only reaches them after development wrote the code, and
+stopping there would leave the feature parked with code written and no review or QA. The scope bars
+the start; reviewing and proving what exists is finishing, and it carries on to delivery.
+
+Publishing is not gated either — the publish queue, the merge train, and every operator action
+finish and ship work that is already built. The gate is by *who started it*, not by which tool: the
+owner's session and the operator's "run now" are never held, but an agent that calls `run_skill`,
+`enqueue` or `enqueue_batch` is automation and is held like the cascade is (the per-card
+`harness-sync-card`, which only diagnoses, is the one exception). A feature already in review or on
+the stage leaves with the next publication; the pace panel counts how many will go along. The
+copilot follows the same line: it neither queues nor moves a card of an excluded type *while that
+card still waits to be built*, but a feature that is already in delivery stays actionable, so a
+merge block, a failed deploy or a pending proof on built work is still handled.
+
+**Narrowing lets what is running finish.** Work already executing is not interrupted and live
+conductors are not parked; only the engine and conductor queues are cleared of the types that no
+longer fit, and each removed card is noted so it can come back on its own. **Widening** re-scans
+the non-terminal cards and sends each one through the same column-entry path a move would use
+(idempotent), so what was waiting restarts without anyone moving a card. This is separate from a
+pause's own "held" notes, and the two never clear each other.
+
+**Two layers, like the pace.** An agent can only *narrow* — including through `pause_board`, which is
+never held for approval — and can only undo the scope an agent set. Only the owner widens, and
+writing the owner's scope erases the agent's. The effective scope is the **intersection** of the
+types each live layer admits. Each layer can carry a deadline (one hour, until tomorrow morning, or
+none) that the existing sweep expires.
+
+**The type is the ratchet.** While any restrictive scope is active, every change of a card's story
+type is written to the audit trail with before, after and author, and an agent cannot move a card
+already classified as `user` to another type — the owner does that. Classifying a card that is
+still new (before specification) stays open to agents, which is what lets a freshly captured bug
+become a bug. "Report a bug" re-types a story as `bug` too, so it goes through the same ratchet: an
+agent cannot use it on a feature that is not delivered yet (a delivered feature that broke is a
+legitimate fix, and so is the owner's report). `mode` and `type` are not otherwise writable by
+`update_card` (`mode` is rejected as a pipeline field and `type` is not in its schema).
+
+*Known limits of the ratchet.* A card an agent *creates* already carrying another type is not stopped
+(classifying something new is free by design; the creation is in the agent-action trail), and a
+session that edits the card's `.md` inside its own worktree reaches `main` through the merge train,
+not through these functions.
+
+Support agents follow the same rule. With a scope active, the technical auditor and the copilot
+still run when the pace is `normal`, but the copilot neither queues nor moves a card of an excluded
+type, while the triage judge keeps accepting new features into the backlog, where they wait ready
+and cost nothing. The stalled-card watch treats an out-of-scope card as stalled on purpose, the
+same way it treats a deferred one, and opens no repair card for it (except in the classification
+columns, where the specification skill runs and the watch stays on).
+
+**The state file fails closed.** The scope lives in the pace state, not in the board or the cards (it
+is operation, not data). The pace file stays at `version: 1` while no scope exists and becomes
+`version: 2` only when at least one does. An older binary that reads version 2 sees the file as
+unreadable and holds *everything*, which is the safe direction; the new reader accepts both. The
+scope *history* is the one scope field allowed in version 1 (an older binary ignores a field it does
+not know), so lifting the last limit — or its deadline expiring — keeps the record of who widened
+and when; the layers themselves and the held notes stay version-2 only.
 
 
 ## Built on Claude Code

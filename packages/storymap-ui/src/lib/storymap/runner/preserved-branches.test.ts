@@ -197,6 +197,41 @@ describe("listPreservedRunBranches — the run's OWN work, via git's record of t
     expect(b.superseded).toBe(false); // …but it is not called safe either
   });
 
+  // Lote D (layout): a régua de «toca código» é a DECLARADA — `deps.codePrefixes` — e, indeclarada, a segura.
+  describe("a régua de «toca código» vem de deps.codePrefixes", () => {
+    const rodar = async (arquivo: string, codePrefixes?: readonly string[]) =>
+      (
+        await listPreservedRunBranches({
+          exec: exec({ ...GIT_FIXTURE, "diff --name-only": `${arquivo}\n` }),
+          repoRoot: "/repo",
+          liveRunIds: async () => [],
+          stageBranch: "integracao",
+          ...(codePrefixes !== undefined ? { codePrefixes } : {}),
+          cardStatus: async () => ({ status: "desenvolver", title: "Quadro de bicicleta", terminal: false }),
+        })
+      )[0];
+
+    it("repo de layout PLANO declarado (`src/`): o branch que toca só src/ é CÓDIGO não integrado — não «sem código»", async () => {
+      const b = await rodar("src/quadro.ts", ["src/"]);
+      expect(b.touchesCode).toBe(true);
+      expect(b.verdict).toBe("unintegrated-code");
+      expect(b.needsAttention).toBe(true);
+    });
+
+    it("SEM declaração: tudo fora de storymap/boards/ conta como código (o lado seguro — nunca descartável por engano)", async () => {
+      const b = await rodar("src/quadro.ts");
+      expect(b.touchesCode).toBe(true);
+      expect(b.verdict).toBe("unintegrated-code");
+      // …e o board-data continua sendo só board-data
+      expect((await rodar("storymap/boards/oficina/cards/story-ex9965.md")).touchesCode).toBe(false);
+    });
+
+    it("declarado `packages/` e o arquivo em src/: a declaração vence (não é código); `[]` = nada é código", async () => {
+      expect((await rodar("src/quadro.ts", ["packages/"])).touchesCode).toBe(false);
+      expect((await rodar("packages/loja/x.ts", [])).touchesCode).toBe(false);
+    });
+  });
+
   it("a git failure reads as UNKNOWN (fail closed), never as an empty/safe branch", async () => {
     const brokenGit = (async (cmd: string) => {
       if (cmd.includes("for-each-ref")) return { stdout: `${BRANCH}\n`, stderr: "" };

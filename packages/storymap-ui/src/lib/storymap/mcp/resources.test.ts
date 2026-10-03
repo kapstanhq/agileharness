@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { RESOURCE_URIS, URI_AUTORUN, URI_PIPELINE_BASE, URI_PIPELINE_GATES, registerResources } from "./resources";
+import { RESOURCE_URIS, URI_AUTORUN, URI_PREFLIGHT, URI_PIPELINE_BASE, URI_PIPELINE_GATES, registerResources } from "./resources";
 import { GATE_IDS } from "@/lib/storymap/types";
 import { findRepoRoot } from "@/lib/storymap/paths";
 import { listBoards } from "@/lib/storymap/repo";
@@ -150,5 +150,21 @@ describe("agileharness://autorun — os interruptores", () => {
     // `false`. A árvore do dono tem board armado; a extraída, não — então a asserção é sobre o `demo`,
     // e o par é a asserção de tipo acima (o campo é derivado por board, não global).
     expect(demo!.armado).toBe(false);
+  });
+});
+
+
+describe("agileharness://preflight — carrega os checks que dependem da config do alvo", () => {
+  it("[NÃO-VACUIDADE] mede o deploy declarado e as libs dos hooks (o boot empacotado não os carrega; este resource sim)", async () => {
+    const r = (await ler(URI_PREFLIGHT)) as { checks: { id: string; status: string; observed: string }[] };
+    const ids = r.checks.map((c) => c.id);
+    // `unknown` seria "a config não pôde ser lida": o resource tem de LER, então o check mede de verdade
+    const declarado = r.checks.find((c) => c.id === "deploy.declared-commands");
+    expect(declarado, `checks: ${ids.join(", ")}`).toBeDefined();
+    expect(declarado!.status).not.toBe("unknown");
+    expect(ids).toContain("host.just");
+    expect(ids).toContain("hooks.lib");
+    expect(ids).toContain("artifacts.ignored");
+    for (const c of r.checks) expect(c.observed.trim(), `${c.id} sem observed`).not.toBe("");
   });
 });

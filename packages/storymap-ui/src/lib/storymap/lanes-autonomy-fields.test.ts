@@ -12,12 +12,11 @@ import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { dump } from "js-yaml";
-import { coerceAutonomy, coerceBoardNotifications, coerceBoardView, coerceCard, deriveBoardConfigForPersist, readBoardConfig } from "./repo";
+import { coerceAutonomy, coerceBoardNotifications, coerceBoardView, coerceCard, deriveBoardConfigForPersist, readBaseTemplateConfig, readBoardConfig } from "./repo";
 import { serializeCard } from "./write";
 import { parseBoardConfig, parseCard } from "./contracts";
 import { FIXTURE_BOARD } from "./board-fixture";
 import { findRepoRoot, resetRepoRootCache } from "./paths";
-import { DEFAULT_OWNER_CLASSES } from "./decision-class";
 
 const roundTrip = (raw: Record<string, unknown>) => {
   const card = coerceCard("story-x", raw, "");
@@ -68,7 +67,9 @@ describe("board `view.lanes` — type · coerce · contract · persist", () => {
     expect("view" in cfg).toBe(false);
     // o `_base` declara as quatro classes do dono; nenhum board liga o modo por herança.
     // Os tetos mensais NÃO vêm do `_base`: cada board declara os seus (sem teto, todo aumento de custo vai ao dono).
-    expect(cfg.autonomy).toEqual({ ownerClasses: DEFAULT_OWNER_CLASSES, technicalAuditSampleRate: 0.2, rolloutCleanStories: 10 });
+    // as classes herdadas SÃO as que o `_base` declara (o default do código é só o piso neutro, ver decision-class.test.ts)
+    const herdadas = (await readBaseTemplateConfig()).autonomy?.ownerClasses;
+    expect(cfg.autonomy).toEqual({ ownerClasses: herdadas, technicalAuditSampleRate: 0.2, rolloutCleanStories: 10 });
   });
 });
 
@@ -242,7 +243,8 @@ describe("readBoardConfig — os blocos declarados chegam ao config resolvido", 
     });
     const cfg = await readBoardConfig(board);
     expect(cfg.view).toEqual({ lanes });
-    expect(cfg.autonomy).toEqual({ mode: "ultra", auditSampleRate: 0.3, ownerClasses: DEFAULT_OWNER_CLASSES, technicalAuditSampleRate: 0.2, rolloutCleanStories: 10 });
+    const herdadas = (await readBaseTemplateConfig()).autonomy?.ownerClasses;
+    expect(cfg.autonomy).toEqual({ mode: "ultra", auditSampleRate: 0.3, ownerClasses: herdadas, technicalAuditSampleRate: 0.2, rolloutCleanStories: 10 });
     expect(cfg.conductor).toEqual({ enabled: true, fromStatus: ["enriquecer", "corrigir"] });
     expect(cfg.notifications).toEqual({ criticalTitlePrefixes: ["[aviso:rede:", "[aviso:backup:"] });
   });

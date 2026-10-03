@@ -516,7 +516,13 @@ async function registerImpl(): Promise<void> {
             // are already acquitted by the verdict ("integrated"), so this only runs for stuck code branches.
             // Read-only; exit 0 = ancestor. Neither ref → the code is NOT integrated → the GC keeps it.
             codeReachedMainOrStage: async (branch) => {
-              for (const ref of ["main", "stage"]) {
+              // «stage» é o branch de integração DECLARADO (`autorun.staging.branch`) — e só entra na lista quando o
+              // staging está LIGADO: num repositório sem staging não há segundo destino do código, e consultar um
+              // `stage` que ninguém criou só adivinha. (`main` é o branch liberado; ver convergence.ts p/ o gêmeo.)
+              const { stagingBranchOf } = await import("@/lib/storymap/runner/staging");
+              const staging = loadRunnerConfig().autorun.staging;
+              const refs = staging?.enabled ? ["main", stagingBranchOf(staging)] : ["main"];
+              for (const ref of refs) {
                 try {
                   await defaultExec(`git merge-base --is-ancestor ${q(branch)} ${ref}`, { cwd: repoRoot, timeout: 15_000 });
                   return true;
@@ -534,11 +540,14 @@ async function registerImpl(): Promise<void> {
             // the base-ref, not the reflog) permanently `unknown`, so the GC could never harvest a session
             // branch. It now delegates, so there is exactly one implementation to be right.
             contentLandedInMainOrStage: async (branch) => {
-              const { branchWorkLandedInMainOrStage } = await import("@/lib/storymap/runner/convergence");
+              const [{ branchWorkLandedInMainOrStage }, { stagingBranchOf }] = await Promise.all([
+                import("@/lib/storymap/runner/convergence"),
+                import("@/lib/storymap/runner/staging"),
+              ]);
               // o branch de integração é DECLARADO (`autorun.staging.branch`); fixar o literal aqui
-  // sobrescrevia a declaração do repositório — o train já lia o declarado, as réguas de ciclo de vida não
+              // sobrescrevia a declaração do repositório — o train já lia o declarado, as réguas de ciclo de vida não
               return branchWorkLandedInMainOrStage(defaultExec, repoRoot, branch, {
-                stageBranch: loadRunnerConfig().autorun.staging?.branch ?? "stage",
+                stageBranch: stagingBranchOf(loadRunnerConfig().autorun.staging),
               });
             },
             // A prova sobre o CARD (não sobre a branch): a tentativa perdedora de um card que ENTREGOU.

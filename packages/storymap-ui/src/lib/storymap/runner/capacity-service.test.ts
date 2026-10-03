@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CapacityGovernor, defaultRunKeepalive, meterBootRetryDelays, meterKeepaliveArgv, readingFromUsage, type CapacityServiceDeps, type GovernorNotice, type StoppedRun } from "./capacity-service";
-import { DAY_MS, DEFAULT_GOVERNOR_SETTINGS, HOUR_MS } from "./capacity-governor";
+import { DAY_MS, DEFAULT_GOVERNOR_SETTINGS, HOUR_MS, RESET_CONFIRM_MS } from "./capacity-governor";
 import type { GovernorSettings } from "@/lib/storymap/types";
 import type { UsageWindow } from "@/lib/vps/types";
 
@@ -112,6 +112,25 @@ describe("medidor ausente, pendente, defasado", () => {
     await h.g.refresh();
     expect(h.logs.filter((l) => l.includes("inerte"))).toHaveLength(1);
     expect(h.notices).toEqual([]);
+  });
+
+  it("sem NENHUM medidor declarado o log DIZ o que declarar (vps.headroomUrl), uma vez — não admite tudo em silêncio", async () => {
+    const h = harness({ statsUrl: null });
+    await h.g.refresh();
+    await h.g.refresh();
+    const inert = h.logs.filter((l) => l.includes("inerte"));
+    expect(inert).toHaveLength(1);
+    expect(inert[0]).toContain("declare vps.headroomUrl");
+    expect(inert[0]).toContain("storymap/settings.yaml");
+    expect(inert[0]).toContain("AGILEHARNESS_HEADROOM_URL=off"); // e como declarar «não tenho proxy»
+  });
+
+  it("COM o medidor declarado lê normalmente e não loga inércia", async () => {
+    const h = harness({ statsUrl: "http://127.0.0.1:7111/stats" });
+    expect(h.g.admission("automation")).toMatchObject({ admit: false, reason: "measuring" });
+    await h.g.flush();
+    expect(h.g.admission("automation")).toMatchObject({ admit: true, reason: "admit" });
+    expect(h.logs.filter((l) => l.includes("inerte"))).toEqual([]);
   });
 
   it("medidor configurado, 1ª leitura em voo ⇒ automação espera; lida ⇒ entra", async () => {
@@ -321,6 +340,50 @@ describe("a trava da medição se solta sozinha quando a janela vira (e nada mai
     await h.g.refresh();
     expect(existsSync(h.latchPath)).toBe(true);
     expect(h.g.admission("automation")).toMatchObject({ admit: false, reason: "latch" });
+  });
+
+  // Regressão (caso real): o dono ZEROU a cota na conta — o reset da semana não mudou, o uso foi a 6% — e a trava
+  // ficou dizendo «95%» até um clique.
+  it("cota ZERADA na mesma semana ⇒ solta sozinha, mas só depois de a queda se sustentar por RESET_CONFIRM_MS", async () => {
+    const h = harness({ usage: usage({ week: 95 }) });
+    await h.g.refresh();
+    expect(existsSync(h.latchPath)).toBe(true);
+    const t1 = T0 + HOUR_MS;
+    h.setNow(t1);
+    h.setUsage(usage({ week: 6, session: 7, polledAt: t1 - 60_000 })); // mesmo resetsAt7d: a mesma semana
+    await h.g.refresh();
+    expect(existsSync(h.latchPath)).toBe(true); // a 1ª leitura só começa a confirmar
+
+    const t2 = t1 + RESET_CONFIRM_MS;
+    h.setNow(t2);
+    h.setUsage(usage({ week: 6, session: 7, polledAt: t2 - 60_000 }));
+    await h.g.refresh();
+    expect(existsSync(h.latchPath)).toBe(false);
+    expect(h.g.admission("automation")).toMatchObject({ admit: true });
+    const audit = readFileSync(path.join(dir, "autonomy", "latch-audit.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(audit.at(-1)).toMatchObject({ action: "auto-release", reason: expect.stringMatching(/cota de 7 dias foi zerada/) });
+  });
+
+  it("uma leitura torta ISOLADA (cai e volta) não solta, e a confirmação recomeça do zero", async () => {
+    const h = harness({ usage: usage({ week: 95 }) });
+    await h.g.refresh();
+    const t1 = T0 + HOUR_MS;
+    h.setNow(t1);
+    h.setUsage(usage({ week: 0, polledAt: t1 - 60_000 }));
+    await h.g.refresh();
+    // volta ao número real (abaixo do teto da trava, mas sem a queda grande): a confirmação se desfaz
+    h.setNow(t1 + 5 * 60_000);
+    h.setUsage(usage({ week: 90, polledAt: t1 + 4 * 60_000 }));
+    await h.g.refresh();
+    // nova queda: precisa de RESET_CONFIRM_MS a partir DELA, não da primeira
+    const t3 = t1 + RESET_CONFIRM_MS + 60_000;
+    h.setNow(t3);
+    h.setUsage(usage({ week: 0, polledAt: t3 - 60_000 }));
+    await h.g.refresh();
+    expect(existsSync(h.latchPath)).toBe(true);
   });
 
   it("a janela de 5h vira ⇒ solta a trava de 5h (pelo reset de 5h, não pelo da semana)", async () => {

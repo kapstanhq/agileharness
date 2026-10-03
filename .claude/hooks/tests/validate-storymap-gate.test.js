@@ -367,3 +367,131 @@ test("(non-worktree) candidate resolver keeps the up-4-levels repo root", () => 
   const cands = check._yamlCandidatesFor(dir);
   assert.ok(cands.includes(path.join(path.sep + "repo", "packages", "storymap-ui", "node_modules", "js-yaml")));
 });
+
+// ── Lote D: gate-core achado por LISTA ORDENADA (vendorizada > AGILEHARNESS_TOOL_ROOT > árvore legada) ──────────────
+// Num repositório-ALVO não existe `packages/storymap-ui`: antes o hook só tentava esse caminho, falhava ABERTO e MUDO
+// (o gate de card ficava desligado sem ninguém saber). Agora a ordem é declarada, e quando NADA carrega o hook avisa.
+
+const { spawnSync } = require("node:child_process");
+
+const TOOL_PKG = path.resolve(__dirname, "..", "..", "..", "packages", "storymap-ui");
+const HOOK_SRC = path.resolve(__dirname, "..", "checks", "pre-write", "validate-storymap-gate.js");
+const GATE_CORE_SRC = path.join(TOOL_PKG, "src", "lib", "storymap", "gate-core.js");
+
+test("(lote D) lista de gate-core: vendorizada ao lado do hook primeiro, depois TOOL_ROOT, depois a árvore legada", () => {
+  const dir = path.join(path.sep + "repo", ".claude", "hooks", "checks", "pre-write");
+  const cands = check._libCandidatesFor(dir, "gate-core.js", { AGILEHARNESS_TOOL_ROOT: path.sep + "ferramenta" + path.sep + "pkg" });
+  assert.deepStrictEqual(cands, [
+    path.join(path.sep + "repo", ".claude", "hooks", "lib", "gate-core.js"),
+    path.join(path.sep + "ferramenta", "pkg", "src", "lib", "storymap", "gate-core.js"),
+    path.join(path.sep + "repo", "packages", "storymap-ui", "src", "lib", "storymap", "gate-core.js"),
+  ]);
+  // sem TOOL_ROOT a lista tem só a vendorizada e a legada
+  assert.strictEqual(check._libCandidatesFor(dir, "gate-core.js", {}).length, 2);
+});
+
+test("(lote D) o candidato de js-yaml também inclui o checkout da ferramenta", () => {
+  const dir = path.join(path.sep + "repo", ".claude", "hooks", "checks", "pre-write");
+  const cands = check._yamlCandidatesFor(dir, { AGILEHARNESS_TOOL_ROOT: path.sep + "ferramenta" + path.sep + "pkg" });
+  assert.ok(cands.includes(path.join(path.sep + "ferramenta", "pkg", "node_modules", "js-yaml")));
+  // o caminho legado continua, como candidato posterior
+  assert.ok(cands.includes(path.join(path.sep + "repo", "packages", "storymap-ui", "node_modules", "js-yaml")));
+});
+
+/**
+ * Monta um repositório-ALVO de fixture SEM `packages/storymap-ui` (uma oficina de bicicletas), com o hook copiado para
+ * `.claude/hooks/checks/pre-write/` e, opcionalmente, o gate-core vendorizado em `.claude/hooks/lib/`. Devolve a raiz.
+ */
+function targetFixture({ vendored }) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "alvo-sem-ferramenta-"));
+  const hookDir = path.join(root, ".claude", "hooks", "checks", "pre-write");
+  fs.mkdirSync(hookDir, { recursive: true });
+  fs.copyFileSync(HOOK_SRC, path.join(hookDir, "validate-storymap-gate.js"));
+  if (vendored) {
+    fs.mkdirSync(path.join(root, ".claude", "hooks", "lib"), { recursive: true });
+    fs.copyFileSync(GATE_CORE_SRC, path.join(root, ".claude", "hooks", "lib", "gate-core.js"));
+  }
+  const cards = path.join(root, "storymap", "boards", "oficina", "cards");
+  fs.mkdirSync(cards, { recursive: true });
+  // um board de fixture com um pipeline mínimo: `desenvolver` exige tasks (gate hasTasks)
+  fs.writeFileSync(
+    path.join(root, "storymap", "boards", "oficina", "board.yaml"),
+    [
+      "id: oficina",
+      "name: Oficina de bicicletas",
+      "statuses:",
+      "  - { id: quebrar-tasks, name: Tarefas, color: '#888' }",
+      "  - { id: desenvolver, name: Desenvolver, color: '#888', gate: hasTasks }",
+      "",
+    ].join("\n"),
+  );
+  return root;
+}
+
+/** Roda a cópia do hook num processo à parte (os caches de módulo e o aviso de «uma vez» são por processo). */
+function runHookIn(root, env) {
+  const card = path.join(root, "storymap", "boards", "oficina", "cards", "story-ex9901.md");
+  fs.writeFileSync(card, "---\nid: story-ex9901\ntype: story\nstatus: quebrar-tasks\ntasks: []\n---\n\nTrocar a corrente.\n");
+  const script = `
+    const check = require(${JSON.stringify(path.join(root, ".claude", "hooks", "checks", "pre-write", "validate-storymap-gate.js"))});
+    const out = check.test({ tool_input: { file_path: ${JSON.stringify(card)}, old_string: "status: quebrar-tasks", new_string: "status: desenvolver" } });
+    process.stdout.write(JSON.stringify(out));
+  `;
+  const r = spawnSync(process.execPath, ["-e", script], {
+    env: { PATH: process.env.PATH, ...env },
+    encoding: "utf8",
+  });
+  return { out: JSON.parse(r.stdout || "null"), stderr: r.stderr };
+}
+
+test("(lote D) alvo SEM packages/storymap-ui, com a lib vendorizada ao lado do hook: o gate BLOQUEIA a transição violada", () => {
+  const root = targetFixture({ vendored: true });
+  try {
+    // js-yaml: sem node_modules no alvo; o checkout da ferramenta (TOOL_ROOT) entra como candidato
+    const { out, stderr } = runHookIn(root, { AGILEHARNESS_TOOL_ROOT: TOOL_PKG });
+    assert.ok(out, "o hook devia bloquear (sem tasks)");
+    assert.strictEqual(out.rule, "storymap-gate");
+    assert.match(out.message, /hasTasks/);
+    assert.doesNotMatch(stderr, /HARNESS WARNING/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("(lote D) alvo SEM cópia vendorizada, mas com AGILEHARNESS_TOOL_ROOT: o gate vem da ferramenta e BLOQUEIA", () => {
+  const root = targetFixture({ vendored: false });
+  try {
+    const { out, stderr } = runHookIn(root, { AGILEHARNESS_TOOL_ROOT: TOOL_PKG });
+    assert.ok(out);
+    assert.match(out.message, /hasTasks/);
+    assert.doesNotMatch(stderr, /HARNESS WARNING/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("(lote D) NENHUMA lib alcançável: o hook continua permitindo (o app é a autoridade) mas AVISA em voz alta, UMA vez", () => {
+  const root = targetFixture({ vendored: false });
+  try {
+    const { out, stderr } = runHookIn(root, {});
+    assert.strictEqual(out, null); // fail-open preservado
+    const avisos = stderr.split("\n").filter((l) => l.includes("[HARNESS WARNING] gate-core não encontrado"));
+    assert.strictEqual(avisos.length, 1, `esperava UM aviso, veio: ${JSON.stringify(stderr)}`);
+    assert.match(avisos[0], /gate de card DESLIGADO neste hook/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// O aviso de lib inalcançável sai em stderr com exit 0 — e o Claude Code não mostra o stderr de um hook que sai 0
+// ao modelo nem ao operador fora do modo verbose. O cabeçalho dos DOIS hooks tem de dizer isso, para ninguém tomar
+// «falha aberta mas avisa» por um alarme (a leitura certa: um rastro, e a verificação visível é do preflight).
+test("(lote D) o cabeçalho dos dois hooks diz que o aviso em stderr/exit 0 é INVISÍVEL ao operador", () => {
+  for (const f of ["validate-storymap-gate.js", "guard-business-intent.js"]) {
+    const head = fs.readFileSync(path.join(__dirname, "..", "checks", "pre-write", f), "utf8").split("\n").slice(0, 60).join(" ").replace(/\s*\/\/\s?/g, " ");
+    assert.match(head, /WHAT THE OPERATOR ACTUALLY SEES/, f);
+    assert.match(head, /STDERR, exit 0/, f);
+    assert.match(head, /NOT an alarm/, f);
+    assert.match(head, /preflight/, f);
+  }
+});

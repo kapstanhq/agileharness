@@ -10,8 +10,10 @@ import { revalidatePath } from "next/cache";
 import { requireSession } from "@/lib/auth/action-guard";
 import { isScopedActor } from "@/lib/storymap/mcp/actor";
 import { setBoardAutorun } from "@/lib/storymap/board-registry";
-import { boardPaceViewNow, changeBoardPaceNow } from "@/lib/storymap/runner/board-pace-actions";
+import { boardPaceViewNow, changeBoardPaceNow, changeBoardScopeNow } from "@/lib/storymap/runner/board-pace-actions";
 import { paceLabel, type BoardPaceView, type PaceLevel, type PauseMode } from "@/lib/storymap/runner/board-pace";
+import { scopeLabel, SCOPE_PRESETS } from "@/lib/storymap/board-pace-words";
+import { mcpActorAttribution } from "@/lib/storymap/mcp/actor";
 import { appendAgentAction } from "@/lib/storymap/runner/agent-actions";
 
 type Result<T = unknown> = { ok: true; data: T } | { ok: false; error: string };
@@ -81,6 +83,61 @@ export async function setBoardPaceAction(input: {
     revalidatePath(`/board/${input.boardId}`);
     const pace = (await boardPaceViewNow(input.boardId)) ?? before;
     return { ok: true, data: { pace, message: outcomeWords(pace.level, res) } };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** A frase que o botão mostra depois de mudar o escopo — o que de fato aconteceu, em palavras. */
+function scopeOutcomeWords(label: string, o: { changed: boolean; purged: number; released: number }): string {
+  if (!o.changed) return `O board já estava em «${label}».`;
+  const parts: string[] = [`O board agora começa: ${label}.`];
+  if (o.purged) parts.push(`${o.purged} ${o.purged === 1 ? "trabalho na fila saiu" : "trabalhos na fila saíram"} do caminho e ${o.purged === 1 ? "volta" : "voltam"} quando o limite sair; o que já está rodando termina.`);
+  if (o.released) parts.push(`${o.released} ${o.released === 1 ? "card voltou" : "cards voltaram"} a andar.`);
+  return parts.join(" ");
+}
+
+/**
+ * Muda o ESCOPO de tipos do board (o que ele pode COMEÇAR sozinho) — o segundo eixo, independente do ritmo. A tela oferece
+ * dois botões: `all` («Tudo») e `fixes` («Só consertos e manutenção», o único limite pronto). Quem chega com sessão no
+ * navegador é o DONO (alarga, estreita, e ao gravar o dele apaga o limite de agente); um agente escopado que chame a action
+ * só estreita e só desfaz o próprio limite — a regra mora em `changeBoardScope`, a mesma da tool MCP.
+ */
+export async function setBoardScopeAction(input: {
+  boardId: string;
+  preset: "all" | "fixes";
+  reason?: string;
+  forMinutes?: number;
+}): Promise<Result<{ pace: BoardPaceView; message: string }>> {
+  await requireSession("setBoardScopeAction");
+  try {
+    const preset = SCOPE_PRESETS.find((p) => p.id === input.preset);
+    if (!preset) return { ok: false, error: "Escolha «Tudo» ou «Só consertos e manutenção»." };
+    const agent = isScopedActor();
+    const res = await changeBoardScopeNow({
+      board: input.boardId,
+      types: preset.types === "all" ? "all" : [...preset.types],
+      reason: input.reason?.trim() || undefined,
+      forMinutes: preset.types === "all" ? undefined : input.forMinutes,
+      by: agent ? { kind: "agent", id: mcpActorAttribution() } : { kind: "owner" },
+    });
+    if (!res.ok) return { ok: false, error: res.error };
+    if (!agent) {
+      // a trilha de auditoria das ações do dono (fail-open: nunca quebra o clique)
+      void appendAgentAction({
+        actor: "human:board-header",
+        board: input.boardId,
+        tool: "setBoardScopeAction",
+        cls: preset.types === "all" ? "run" : "write-board",
+        disposition: "auto",
+        outcome: "executed",
+        note: [`escopo=${preset.id}`, input.forMinutes && preset.types !== "all" ? `prazo=${input.forMinutes}min` : null, input.reason?.trim() ? `motivo=${input.reason.trim()}` : null].filter(Boolean).join(" · "),
+      });
+    }
+    revalidatePath(`/board/${input.boardId}`);
+    const pace = await boardPaceViewNow(input.boardId);
+    if (!pace) return { ok: false, error: "Este board não existe ou não pôde ser lido." };
+    return { ok: true, data: { pace, message: scopeOutcomeWords(scopeLabel(pace.scope?.types ?? null), res) } };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }

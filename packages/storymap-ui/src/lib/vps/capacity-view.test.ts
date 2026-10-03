@@ -62,13 +62,16 @@ describe("capacityView", () => {
       snap({ latch: { level: "soft", reason: "janela de 7 dias em 93%", at: NOW - 600_000, trippedBy: "auto:week", source: "file" } }),
       NOW,
     )!;
-    expect(latched).toMatchObject({ tone: "danger", headline: "Travado (mole)", canClear: true, detail: "janela de 7 dias em 93%" });
+    expect(latched).toMatchObject({ tone: "danger", headline: "Travado (mole)", canClear: true });
     expect(latched.latch).toMatchObject({ by: "auto:week", since: "há 10min", halt: false });
+    // o número da trava é o do ENGATE: o detalhe diz quando foi e o uso de AGORA, para o 93% não passar por uso de hoje
+    expect(latched.detail).toBe("acionada há 10min: janela de 7 dias em 93% · agora: semana em 42.3%, sessão em 20%");
     const halt = capacityView(
       snap({ latch: { level: "hard", reason: "arquivo /etc/agileharness/HALT presente no host", at: NOW, trippedBy: "host:HALT", source: "halt" } }),
       NOW,
     )!;
     expect(halt).toMatchObject({ tone: "danger", headline: "Travado — HALT do host", canClear: false });
+    expect(halt.detail).toBe("arquivo /etc/agileharness/HALT presente no host");
   });
 
   it("inerte sem medidor: sem linhas de janela (não inventa número), só os retidos", () => {

@@ -1,5 +1,6 @@
-import type { FailureClass, Finding } from "@/lib/storymap/types";
-import { FindingBatchItemSchema, type FindingBatchItem } from "@/lib/storymap/contracts";
+import { CORE_LENS_IDS, type FailureClass, type Finding } from "@/lib/storymap/types";
+import { findingBatchItemSchemaFor, type FindingBatchItem } from "@/lib/storymap/contracts";
+import { isReviewLensId, matchDeclaredFailureClass, QA_FAILURE_TEXT_TAIL_BYTES, type TargetFailureRule } from "@/lib/storymap/target-profile";
 
 // PURE finding builders for the merge train — the cohesive "stamp a blocker/note onto a card's
 // findings[]" concern, lifted out of merge-queue.ts (the god-file) into its own testable home (C4).
@@ -616,7 +617,7 @@ export function withDataNotLandedFinding(
  * `JSON.parse` failure), `ok` is `false`; `items` carries only the items that DID validate, and `errors`
  * describes each failure (by `item[<index>]`, or a top-level parse/shape message). Never throws.
  */
-export function parseFindingBatch(raw: unknown): { ok: boolean; items: FindingBatchItem[]; errors: string[] } {
+export function parseFindingBatch(raw: unknown, declared?: ReadonlySet<string>): { ok: boolean; items: FindingBatchItem[]; errors: string[] } {
   let value: unknown = raw;
   // A fenced ```json finding-batch block arrives as a STRING — parse it first.
   if (typeof value === "string") {
@@ -632,13 +633,22 @@ export function parseFindingBatch(raw: unknown): { ok: boolean; items: FindingBa
 
   const items: FindingBatchItem[] = [];
   const errors: string[] = [];
+  // `declared` = os ids de lente que o alvo aceita (`reviewLensIdsOf(target)`); ausente = só as embutidas.
+  const allowed: ReadonlySet<string> = declared ?? new Set<string>(CORE_LENS_IDS);
+  const schema = findingBatchItemSchemaFor(declared);
   value.forEach((entry, i) => {
-    const parsed = FindingBatchItemSchema.safeParse(entry);
+    const parsed = schema.safeParse(entry);
     if (parsed.success) {
       items.push(parsed.data);
     } else {
+      const lens = (entry as { lens?: unknown } | null)?.lens;
+      const wellFormedButUndeclared = typeof lens === "string" && isReviewLensId(lens) && !allowed.has(lens);
       const detail = parsed.error.issues
+        // Uma lente mal-formada reprova nas DUAS regras do esquema (forma e declaração): fica só a de forma, a 1ª.
+        .filter((issue, k, all) => !(issue.path[0] === "lens" && issue.path.length === 1 && (wellFormedButUndeclared || all.findIndex((o) => o.path[0] === "lens") !== k)))
         .map((issue) => `${issue.path.join(".") || "(raiz)"}: ${issue.message}`)
+        // A lente bem-formada que o alvo não declarou: diz QUAL e quais valem, sem o esquema ter de conhecer o valor.
+        .concat(wellFormedButUndeclared ? [`lens "${lens}" não declarada (declaradas: ${[...allowed].join(", ")}; declare outra em storymap/settings.yaml → target.reviewLenses)`] : [])
         .join("; ");
       errors.push(`item[${i}] inválido: ${detail}`);
     }
@@ -663,18 +673,37 @@ export interface FailureSignals {
   criterionUnmet?: boolean;
 }
 
-// Env/stack breakage — the run's environment failed, NOT the card. Mirrors the "QA infra" vocabulary
-// enumerated in .claude/skills/harness-qa/SKILL.md so prose and code stay in lockstep.
-const INFRA_PATTERNS: RegExp[] = [
+// ── O que é ambiente UNIVERSAL e o que é do ALVO ─────────────────────────────────────────────────────────────
+// O baseline abaixo é só o que vale para QUALQUER repositório que rode sob Node/Bun: módulo ausente, porta ocupada,
+// falta de memória, binário que não existe, espera que estoura. Nada aqui supõe um banco, um emulador ou uma stack
+// de nuvem: o vocabulário do ambiente DE UM alvo (as portas que a stack dele ocupa, o prompt que trava o emulador
+// dele) é DECLARADO em `storymap/settings.yaml → target.qa` (`ports`, `failureClasses`; ver target-profile.ts) e
+// chega aqui como `rules`. Sem declaração o classificador é neutro — e cai em `app` para uma mensagem que não
+// reconhece, em vez de afirmar «ambiente» por um nome de produto que ele não conhece.
+
+/** A porta PADRÃO da própria ferramenta (o serviço). Texto de falha que cita `:<porta>` dela é disputa de porta. */
+export const TOOL_DEFAULT_PORT = 3008;
+
+/**
+ * O que um alvo declara sobre o ambiente de teste dele — a forma ESTRUTURAL de `ResolvedQa`/`TargetQa`
+ * (assim este módulo, que também roda no cliente, não importa nada do servidor).
+ */
+export interface FailureRules {
+  /** `target.qa.ports`: texto que cita `:<porta>` ⇒ ambiente em disputa. */
+  ports?: readonly number[];
+  /** `target.qa.failureClasses`: a primeira que casar vence, qualquer classe, ANTES do baseline. */
+  failureClasses?: readonly TargetFailureRule[];
+  /** a porta em que ESTA instalação da ferramenta escuta, quando não é a padrão (quem tem acesso ao env a passa). */
+  selfPort?: number;
+}
+
+// Env/stack breakage universal — the run's environment failed, NOT the card.
+const BASELINE_INFRA_PATTERNS: RegExp[] = [
   /MODULE_NOT_FOUND/i,
   /cannot find module/i,
-  /enter a string value/i, // interactive emulator prompt that hangs headless
   /EADDRINUSE|address already in use|port \d+ (is )?(already )?in use/i,
-  /:(3008|9099|5001|8080|9199)\b/, // storymap / shared emulator ports contended
   /(javascript )?heap out of memory|out of memory|oom-?killed/i,
   /ENOENT[\s\S]*node_modules/i,
-  /firebase[\s\S]{0,60}emulator/i, // "the firebase emulator suite" — order-independent of a leading "could not start"
-  /emulator[\s\S]{0,40}(exited|crashed|failed|could not|não sob|error)/i,
   /command not found|spawn \S+ ENOENT/i,
   /ETIMEDOUT|timed out (starting|booting|waiting for the (dev )?server)/i,
 ];
@@ -688,15 +717,46 @@ const TEST_PATTERNS: RegExp[] = [
   /no (node|element) found for selector/i,
 ];
 
+/** A regex de «cita uma destas portas» — `:3008`, `:7101`… (só dígitos inteiros: nenhum texto declarado vira regex). */
+function portsPattern(ports: readonly number[]): RegExp | null {
+  const valid = [...new Set(ports.filter((p) => Number.isInteger(p) && p >= 1 && p <= 65535))];
+  return valid.length ? new RegExp(`:(${valid.join("|")})\\b`) : null;
+}
+
+/**
+ * A classe das regras DECLARADAS para o texto. Até {@link QA_FAILURE_TEXT_TAIL_BYTES} o texto vai inteiro; passando disso
+ * `matchDeclaredFailureClass` só lê o RABO (custo de regex com teto), e aqui a CABEÇA entra também — o baseline sempre
+ * olhou o texto todo, e o erro que explica a falha costuma estar no começo OU no fim de um log longo. Por regra, na ordem
+ * do arquivo (a primeira que casar vence, em qualquer das duas pontas). PURA.
+ */
+function declaredFailureClassOf(msg: string, rules: readonly TargetFailureRule[] | undefined): FailureClass | undefined {
+  if (msg.length <= QA_FAILURE_TEXT_TAIL_BYTES) return matchDeclaredFailureClass(msg, rules);
+  const head = msg.slice(0, QA_FAILURE_TEXT_TAIL_BYTES);
+  for (const rule of rules ?? []) {
+    const hit = matchDeclaredFailureClass(msg, [rule]) ?? matchDeclaredFailureClass(head, [rule]);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
 /**
  * Auto-attribute a QA red to `infra` | `test` | `app` from observable signals — so the
  * agent stops spending turns DECIDING whose defect it is. Deterministic + ordered (most-specific first):
- * env breakage (infra) → bad-spec/selector or passes-elsewhere (test) → genuine criterion miss (app).
+ * the target's DECLARED rules (`rules`, first match wins, any class) → env breakage (declared ports, then the
+ * universal baseline) → bad-spec/selector or passes-elsewhere (test) → genuine criterion miss (app).
  * Returns undefined when there is no signal to attribute (stays sparse). PURE.
+ *
+ * `rules` ausente = alvo sem declaração: só o baseline universal. Um caller de servidor passa `qaOf(target)`.
  */
-export function classifyFailure(signals: FailureSignals): FailureClass | undefined {
+export function classifyFailure(signals: FailureSignals, rules?: FailureRules): FailureClass | undefined {
   const msg = typeof signals.message === "string" ? signals.message : "";
-  if (msg && INFRA_PATTERNS.some((re) => re.test(msg))) return "infra";
+  if (msg) {
+    const declared = declaredFailureClassOf(msg, rules?.failureClasses);
+    if (declared) return declared;
+    const ownPorts = [TOOL_DEFAULT_PORT, ...(rules?.selfPort ? [rules.selfPort] : []), ...(rules?.ports ?? [])];
+    const portRe = portsPattern(ownPorts);
+    if (portRe?.test(msg) || BASELINE_INFRA_PATTERNS.some((re) => re.test(msg))) return "infra";
+  }
   if (signals.passedAtOtherLayer === true) return "test";
   if (msg && TEST_PATTERNS.some((re) => re.test(msg))) return "test";
   if (signals.criterionUnmet === true) return "app";
@@ -769,7 +829,7 @@ export function withPendingEffectFailureFinding(
     detail:
       `O efeito onEnter "${effect}" re-disparado na recuperação de boot lançou: ${error.slice(0, 300)}. ` +
       `O card pode ter avançado ("liberado"/"no ar") sem o promote/deploy concluir — verifique manualmente ` +
-      `(harness-ship / just orch-deploy) ou rearraste o card.`,
+      `(rode o comando de deploy do alvo) ou rearraste o card.`,
     status: "open",
   });
 }
@@ -850,7 +910,7 @@ export function withBudgetCutFinding(existing: Finding[], facts: BudgetCutFacts)
   const what =
     `O run \`${facts.trigger}\` (run ${facts.runId}) foi CORTADO pelo teto de custo por run ` +
     `(--max-budget-usd ${usd(facts.capUSD)}; gastou ${usd(facts.costUSD)}) sem o card avançar. ` +
-    `O teto é um disjuntor contra run desembestado, calibrado largo (max(2×p90, p99) do histórico da skill): ` +
+    `O teto é um disjuntor contra run desembestado, calibrado largo (acima do que um run normal da skill gasta): ` +
     `bater nele quase sempre significa que o card é GRANDE ou AMBÍGUO demais para um run. O worktree/branch do ` +
     `run foi preservado (trabalho parcial inspecionável); o run NÃO é retomado.`;
   const ask = repeat

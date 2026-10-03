@@ -37,6 +37,8 @@ import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 
 import { resolveClaudeBinVerdict } from "./runner/claude-bin";
+// PURO e sem imports (deploy-command-guard.ts): a restrição 1 do cabeçalho — não arrastar `runner/config.ts` — continua valendo.
+import { authorizeDeployCommand, taskRunnersMissingFromRecipeRunners, type DeployCommandPolicy } from "./runner/deploy-command-guard";
 import { HOST_TOOL_ENV, lookupOnPath, resolveHostTool } from "./runner/host-tools";
 import { NAMESPACE_PROBE } from "./runner/autonomy-sandbox";
 import {
@@ -79,6 +81,77 @@ export interface ProbeResult {
   code: number;
   stdout: string;
   stderr: string;
+}
+
+/**
+ * O que o ALVO declarou em matéria de deploy, já lido (quem tem a config monta com {@link deployDeclarationsProbe}; este
+ * arquivo não importa `runner/config.ts`). Serve a DOIS checks: `host.just` (só cobra o `just` se algum comando declarado o
+ * usa) e `deploy.declared-commands` (todo comando de board que a política efetiva RECUSARIA).
+ */
+export interface DeployDeclarationsProbe {
+  /** a política EFETIVA do passo privilegiado (settings.yaml → deploy.* ∪ o env aditivo do serviço). */
+  policy: DeployCommandPolicy;
+  /** os comandos declarados em board-data (texto) — o que `authorizeDeployCommand` julga na hora do deploy. */
+  boardCommands: readonly { where: string; command: string }[];
+  /** o NOME do programa (`argv[0]`) de todo comando declarado — settings (legacy, plan, face, prova) e boards. */
+  programs: readonly string[];
+}
+
+/** A entrada mínima de um board para {@link deployDeclarationsProbe} (estrutural: sem importar o tipo do board). */
+export interface DeclaredDeployBoard {
+  id: string;
+  deploy?: {
+    kind?: string;
+    command?: string;
+    canaryCommand?: string;
+    liveShaCommand?: string;
+    planCommand?: string;
+    surfaces?: readonly { prefix: string; deployCmd?: string }[];
+  };
+}
+
+/** A parte do settings (política de deploy já resolvida) que o probe lê. */
+export interface DeclaredDeploySettings {
+  policy: DeployCommandPolicy;
+  /** `deploy.canaryCommand` do settings: o canário DEFAULT, que também é board-data-like e passa pela régua. */
+  canaryCommand?: string;
+  /** os argvs declarados em settings (legacy.command/plan, composedFace.command, proof.record.*) — só o `argv[0]` conta. */
+  argvs: readonly (readonly string[] | undefined)[];
+}
+
+/** O primeiro token de um comando em texto (o programa), sem aspas de abertura. Vazio ⇒ null. PURA. */
+function firstWord(command: string): string | null {
+  const w = command.trim().split(/\s+/)[0]?.replace(/^['"]/, "") ?? "";
+  return w ? w : null;
+}
+
+/**
+ * Monta o probe de declarações de deploy a partir do que o settings e os boards declararam. PURA — a leitura (config,
+ * boards) é de quem chama. Só entram os comandos que EXISTEM: um board sem deploy declarado não contribui com nada.
+ */
+export function deployDeclarationsProbe(settings: DeclaredDeploySettings, boards: readonly DeclaredDeployBoard[]): DeployDeclarationsProbe {
+  const boardCommands: { where: string; command: string }[] = [];
+  const add = (where: string, command: string | undefined) => {
+    const c = command?.trim();
+    if (c) boardCommands.push({ where, command: c });
+  };
+  add("settings.yaml → deploy.canaryCommand", settings.canaryCommand);
+  for (const b of boards) {
+    const d = b.deploy;
+    if (!d) continue;
+    add(`board ${b.id} → deploy.command`, d.command);
+    add(`board ${b.id} → deploy.canaryCommand`, d.canaryCommand);
+    add(`board ${b.id} → deploy.liveShaCommand`, d.liveShaCommand);
+    add(`board ${b.id} → deploy.planCommand`, d.planCommand);
+    for (const [i, sf] of (d.surfaces ?? []).entries()) add(`board ${b.id} → deploy.surfaces[${i}].deployCmd`, sf.deployCmd);
+  }
+  const programs = new Set<string>();
+  for (const bc of boardCommands) {
+    const w = firstWord(bc.command);
+    if (w) programs.add(w);
+  }
+  for (const argv of settings.argvs) if (argv?.[0]) programs.add(argv[0]);
+  return { policy: settings.policy, boardCommands, programs: [...programs] };
 }
 
 export interface PreflightProbes {
@@ -145,6 +218,18 @@ export interface PreflightProbes {
    * `measureSkills`). Ausente ⇒ o check não existe; `null` ⇒ "não medi" (uma das árvores não pôde ser lida).
    */
   skills?: SkillsProbe | null;
+  /**
+   * Os comandos de deploy que o alvo declarou ({@link DeployDeclarationsProbe}). Ausente ⇒ os checks `host.just` e
+   * `deploy.declared-commands` NÃO existem (quem monta o relatório não carrega a config — o boot/`--preflight` do servidor
+   * empacotado não importa `runner/config.ts`); `null` ⇒ "não medi" (a config não pôde ser lida).
+   */
+  deploy?: DeployDeclarationsProbe | null;
+  /**
+   * O diretório do PACOTE da ferramenta (o que o engine exporta como `AGILEHARNESS_TOOL_ROOT` a cada run — `paths.ts`
+   * `findToolPackageDir`). Serve ao check `hooks.lib`: é o segundo lugar onde os hooks procuram `gate-core.js` e
+   * `ownership.js`. Ausente ⇒ o check não existe; `null` ⇒ a ferramenta não foi localizada (só os outros dois lugares valem).
+   */
+  toolPackageDir?: string | null;
 }
 
 /** O piso declarado em `package.json#engines`. Duplicar aqui é ruim; medir contra nada é pior. */
@@ -236,7 +321,70 @@ export function runPreflight(probes: PreflightProbes = {}): PreflightReport {
   }
   checks.push(cClaude);
   checks.push(daRegua("host.bun", "o `bun` do build do self-deploy", resolveHostTool("bun", { env, exists })));
-  checks.push(daRegua("host.just", "o `just` das receitas do repositório", resolveHostTool("just", { env, exists })));
+
+  // ── O DEPLOY QUE O ALVO DECLAROU ──────────────────────────────────────────────────────────────
+  // O `just` só é exigido de quem DECLARA um comando que o usa (settings → deploy.*, ou um comando de board): a ferramenta
+  // não supõe o executor de tarefas de ninguém, então um alvo que publica por outro programa não leva um «ausente» por um
+  // binário que nunca vai chamar. E o que um comando de board precisa para PASSAR na régua é dito aqui, ANTES do deploy.
+  if (probes.deploy === null) {
+    checks.push({
+      id: "deploy.declared-commands",
+      title: "os comandos de deploy declarados passam pela política do alvo",
+      status: "unknown",
+      observed: "não medido — a configuração do alvo ou os boards não puderam ser lidos",
+      remedy: "rode o preflight pela superfície MCP (resource de prontidão), que lê o settings.yaml e os boards do alvo.",
+    });
+  } else if (probes.deploy) {
+    const d = probes.deploy;
+    if (d.programs.includes("just")) {
+      checks.push(daRegua("host.just", "o `just` que os comandos declarados do alvo usam", resolveHostTool("just", { env, exists })));
+    } else {
+      checks.push({
+        id: "host.just",
+        title: "o `just` que os comandos declarados do alvo usam",
+        status: "ok",
+        observed: d.programs.length ? `nenhum comando declarado usa \`just\` (programas: ${d.programs.join(", ")}) — não é exigido` : "o alvo não declarou nenhum comando de deploy — o `just` não é exigido",
+      });
+    }
+    const recusados = d.boardCommands
+      .map((c) => ({ ...c, refusal: authorizeDeployCommand(c.command, d.policy).refusal }))
+      .filter((c): c is typeof c & { refusal: string } => c.refusal !== null);
+    const semRegua = taskRunnersMissingFromRecipeRunners(d.policy);
+    const titulo = "os comandos de deploy declarados passam pela política do alvo";
+    if (recusados.length > 0) {
+      checks.push({
+        id: "deploy.declared-commands",
+        title: titulo,
+        status: "degraded",
+        observed: recusados.map((c) => `${c.where}: ${c.refusal}`).join(" | ").slice(0, 600),
+        remedy:
+          "o passo privilegiado vai RECUSAR cada comando acima na hora do deploy (e o board fica parado sem o deploy rodar). " +
+          "Declare em storymap/settings.yaml → `deploy.launchers` o programa que ele chama, `deploy.recipes` as receitas que " +
+          "ele nomeia e, se o programa é um task runner, também `deploy.recipeRunners` — ou corrija o comando no board.yaml. " +
+          "A recusa de cada linha diz qual dessas chaves falta.",
+      });
+    } else if (semRegua.length > 0) {
+      checks.push({
+        id: "deploy.declared-commands",
+        title: titulo,
+        status: "warn",
+        observed: `${d.boardCommands.length} comando(s) de board passam, mas ${semRegua.map((r) => `\`${r}\``).join(", ")} é task runner conhecido FORA de deploy.recipeRunners`,
+        remedy:
+          `declare \`deploy.recipeRunners: [${semRegua.join(", ")}]\` em storymap/settings.yaml. Sem isso o lançador recebe só a régua de ` +
+          "lançador comum e um argumento de comando de board (editável por agente) seria interpolado como TEXTO numa linha de shell da " +
+          "receita, executando com o privilégio do serviço.",
+      });
+    } else {
+      checks.push({
+        id: "deploy.declared-commands",
+        title: titulo,
+        status: "ok",
+        observed: d.boardCommands.length
+          ? `${d.boardCommands.length} comando(s) de board passam pela política efetiva (${d.policy.launchers.length} lançador(es), ${d.policy.recipes.length} receita(s))`
+          : "nenhum comando de deploy declarado em board-data — nada a recusar",
+      });
+    }
+  }
 
   // ── A CONTENÇÃO ───────────────────────────────────────────────────────────────────────────────
   const plataforma = probes.platform ?? process.platform;
@@ -674,6 +822,42 @@ export function runPreflight(probes: PreflightProbes = {}): PreflightReport {
     );
   }
 
+  // ── .artifacts/ FORA DO GIT ───────────────────────────────────────────────────────────────────
+  // O motor commita com `git add -A` (commitAllPending: merge train, split de board-data, resgate de worktree) e escreve
+  // saídas efêmeras em `.artifacts/` (logs de deploy, screenshots, rastros). Num alvo que não ignora a pasta, elas
+  // entrariam num commit — e um log pode trazer segredo. É AVISO (o motor funciona), com o bloco a colar.
+  if (raiz) {
+    const titulo = ".artifacts/ (saídas efêmeras do motor) fora do git do alvo";
+    const bloco = "# AgileHarness: saídas efêmeras dos agentes e do motor (logs, screenshots, rastros)\n.artifacts/";
+    if (!run || !gitBin) {
+      checks.push({
+        id: "artifacts.ignored",
+        title: titulo,
+        status: "unknown",
+        observed: run ? "git ausente" : "sonda não executada",
+        remedy: `não medido. Se o seu .gitignore não cobre a pasta, acrescente:\n${bloco}`,
+      });
+    } else {
+      // `check-ignore` acha a regra mesmo com o caminho inexistente: 0 = ignorado, 1 = NÃO ignorado, outro = erro.
+      const r = run("git", ["-C", raiz, "check-ignore", "-q", "--no-index", ".artifacts/preflight-probe"]);
+      checks.push(
+        r == null || (r.code !== 0 && r.code !== 1)
+          ? { id: "artifacts.ignored", title: titulo, status: "unknown", observed: "a sonda do git não respondeu", remedy: `não medido. Se o seu .gitignore não cobre a pasta, acrescente:\n${bloco}` }
+          : r.code === 0
+            ? { id: "artifacts.ignored", title: titulo, status: "ok", observed: ".artifacts/ é ignorado pelo git do alvo" }
+            : {
+                id: "artifacts.ignored",
+                title: titulo,
+                status: "warn",
+                observed: ".artifacts/ NÃO é ignorado pelo git do alvo",
+                remedy:
+                  "o motor commita com `git add -A`: logs de deploy e rastros de agente entrariam num commit (e um log pode carregar " +
+                  `segredo). Acrescente ao .gitignore do alvo e commite:\n${bloco}`,
+              },
+      );
+    }
+  }
+
   // ── A SUPERFÍCIE MCP ──────────────────────────────────────────────────────────────────────────
   // FECHADA é uma postura VÁLIDA, não uma configuração faltando: sem token o endpoint responde 404
   // nu, e `token-bootstrap.ts` documenta que nada gera um no boot de propósito. Por isso `ok`.
@@ -818,6 +1002,46 @@ export function runPreflight(probes: PreflightProbes = {}): PreflightReport {
   // sem a própria skill. FALTA é defeito (o motor despacha um papel sem instrução); DIFERE é aviso (pode ser
   // customização do alvo, e nada é sobrescrito sozinho). Ver skills-drift.ts.
   if (probes.skills !== undefined) checks.push(skillsCheck(probes.skills));
+
+  // ── AS LIBS QUE OS HOOKS CARREGAM ─────────────────────────────────────────────────────────────
+  // Os hooks do alvo (`.claude/hooks/checks/pre-write/`) carregam `gate-core.js` (o gate de card) e `ownership.js` (a guarda
+  // dos campos `owner: human`) da ferramenta. Quando nenhuma carrega, o hook PERMITE e escreve UMA linha em stderr que o
+  // Claude Code não mostra a ninguém fora do modo verbose — fail-open mudo. A guarda de `owner: human` é a que mais custa
+  // falhar assim. Aqui a mesma busca, na mesma ordem, vira um item que o operador vê: (1) cópia VENDORIZADA ao lado do hook,
+  // (2) o pacote da ferramenta (`AGILEHARNESS_TOOL_ROOT`), (3) o caminho legado da árvore que desenvolve a ferramenta.
+  if (raiz && probes.toolPackageDir !== undefined) {
+    const titulo = "as libs (gate-core, ownership) que os hooks do alvo carregam";
+    if (!exists(path.join(raiz, ".claude", "hooks", "runner.js"))) {
+      checks.push({ id: "hooks.lib", title: titulo, status: "ok", observed: "o alvo não instala os hooks (.claude/hooks/runner.js ausente) — nada a alcançar" });
+    } else {
+      const toolDir = probes.toolPackageDir;
+      const resolvida = (nome: string): string | null => {
+        const candidatos = [
+          path.join(raiz, ".claude", "hooks", "lib", nome),
+          ...(toolDir ? [path.join(toolDir, "src", "lib", "storymap", nome)] : []),
+          path.join(raiz, "packages", "storymap-ui", "src", "lib", "storymap", nome),
+        ];
+        return candidatos.find((c) => exists(c)) ?? null;
+      };
+      const medidas = ["gate-core.js", "ownership.js"].map((nome) => ({ nome, onde: resolvida(nome) }));
+      const faltam = medidas.filter((m) => m.onde === null).map((m) => m.nome);
+      checks.push(
+        faltam.length === 0
+          ? { id: "hooks.lib", title: titulo, status: "ok", observed: medidas.map((m) => `${m.nome} → ${m.onde}`).join("; ") }
+          : {
+              id: "hooks.lib",
+              title: titulo,
+              status: "degraded",
+              observed: `não alcançável(is) pelos hooks: ${faltam.join(", ")}${medidas.some((m) => m.onde) ? ` · ok: ${medidas.filter((m) => m.onde).map((m) => m.nome).join(", ")}` : ""}`,
+              remedy:
+                "sem elas o hook PERMITE a escrita e só escreve uma linha em stderr (invisível fora do modo verbose): o gate de card " +
+                "e a guarda dos campos `owner: human` ficam DESLIGADOS nos hooks (o gate do app segue sendo a autoridade). " +
+                "Vendorize as libs ao lado do hook (`.claude/hooks/lib/gate-core.js` e `ownership.js`, copiadas do checkout da " +
+                "ferramenta) ou declare `AGILEHARNESS_TOOL_ROOT` com o diretório do pacote da ferramenta no ambiente da sessão.",
+            },
+      );
+    }
+  }
 
   // ── AS VERSÕES ───────────────────────────────────────────────────────────────────────────────
   const nodeV = probes.versions?.node ?? process.versions.node;

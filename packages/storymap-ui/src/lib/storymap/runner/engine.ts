@@ -41,7 +41,9 @@ import { resolveRunBase } from "./run-base";
 const UI_SURFACE_EVIDENCE_PATH_CAP = 5;
 import { getMergeQueue, type MergeQueuePort } from "./merge-queue";
 import { serialCommit, type CommitSerializer } from "./commit-serializer";
-import { SLOW_MAX_PARALLEL, type PaceLevel } from "./board-pace";
+import { SLOW_MAX_PARALLEL, scopeAdmitsCard, type EffectiveScope, type PaceLevel, type ScopeCard } from "./board-pace";
+import type { PurgeFilter } from "./board-pace-actions";
+import { SYNC_TRIGGER } from "./sync";
 import { boardGateNow } from "./board-pace-store";
 import { getCapacityGovernor, type CapacityGatePort, type StoppedRun } from "./capacity-service";
 import { initiatorFromOrigin, type GateVerdict, type Initiator } from "./capacity-governor";
@@ -92,7 +94,7 @@ import type { AutonomyTier, BoardConfig, Card, RunnerSettings, StatusDef, Trigge
 import { AUTONOMY_TIERS } from "@/lib/storymap/types";
 import { isConducted } from "@/lib/storymap/driver";
 import { resolvedClaudeBin } from "./claude-bin";
-import { resolveTargetProfile, targetProfileNote, type TargetProfile } from "@/lib/storymap/target-profile";
+import { DISCOVER_COMMAND_HINT, resolveTargetProfile, targetProfileNote, type TargetProfile } from "@/lib/storymap/target-profile";
 
 /** The headless `/<skill>` command for a trigger. A trigger id IS the skill name (uma convenção
  * validada pelo skill-board-consistency.test), então o comando é só `/<triggerId>` — sem Record
@@ -168,10 +170,12 @@ export function buildStyleGuideNote(boardId: string, boardConfig: BoardConfig | 
 
 /**
  * SM-09: build the per-app context note injected into the spawn prompt — an explicit instruction to
- * read the target app's `packages/<pkg>/.claude/CLAUDE.md` (+ the board's brandbook when one exists)
- * BEFORE any code or copy, so even a `.md`-only skill (enrich/prioritize/tasks/plan/ux) honors the
- * app's conventions and brand voice it would otherwise never load (the worktree auto-loads ONLY the
- * monorepo-root CLAUDE.md). Returns null when the board has no `package:` mapping — AC4: the note is
+ * read the target app's conventions (+ the board's brandbook when one exists) BEFORE any code or copy,
+ * so even a `.md`-only skill (enrich/prioritize/tasks/plan/ux) honors the app's conventions and brand
+ * voice it would otherwise never load (the worktree auto-loads ONLY the repository-root instructions).
+ * ONDE ficam as convenções é do ALVO, não da ferramenta: vêm de `target.docs.conventions` (settings.yaml). Sem essa
+ * declaração a nota NÃO inventa um caminho — manda ler «as instruções do repositório e do pacote <pkg>» (README,
+ * CLAUDE.md/AGENTS.md) e diz que o comando de cada check se descobre ali. Returns null when the board has no `package:` mapping — AC4: the note is
  * omitted silently and the spawn never fails. Also returns null when `package:` carries shell-unsafe
  * characters (fail-open to the legacy prompt rather than risk a corrupted command). Pure — exported for tests.
  */
@@ -181,17 +185,24 @@ export function buildContextNote(
 ): string | null {
   const pkg = boardConfig?.package;
   if (!pkg || !SAFE_PKG_PATH.test(pkg)) return null;
-  // O PERFIL DO ALVO (target-profile.ts): quando o repositório declara onde ficam as convenções dele, é para lá que a
-  // nota aponta. Sem declaração vale o caminho de sempre (`<pacote>/.claude/CLAUDE.md`) — nada muda para quem já usava.
+  // O PERFIL DO ALVO (target-profile.ts): o repositório declara onde ficam as convenções dele, e é para lá que a nota
+  // aponta. SEM declaração não há caminho a supor (cada repositório guarda as regras num lugar — ou em lugar nenhum):
+  // a nota manda ler as instruções do repositório e do pacote, por nome, sem inventar um arquivo que pode não existir.
   const profile = resolveTargetProfile(opts?.targetProfile, { board: opts?.board ?? "", package: pkg });
-  const appClaudePath = profile.docs.conventions ?? `${pkg}/.claude/CLAUDE.md`;
+  const conventions = profile.docs.conventions;
   const brandbook = brandbookPathFor(boardConfig);
-  const docs = brandbook ? `${appClaudePath} e ${brandbook}` : appClaudePath;
+  const where = conventions ?? `as instruções do repositório e do pacote ${pkg} (README, CLAUDE.md/AGENTS.md)`;
+  const docs = brandbook ? `${where} e ${brandbook}` : where;
   let note = `Context: antes de qualquer ação de código ou copy, leia ${docs} para respeitar as convenções específicas deste app.`;
-  // …e os outros documentos e os NOMES dos comandos declarados (o texto de um comando nunca é interpolado aqui).
+  // …e os outros documentos (por caminho, «consulte quando o trabalho pedir») e os NOMES dos comandos declarados (o
+  // texto de um comando nunca é interpolado aqui).
   const { conventions: _shown, ...otherDocs } = profile.docs;
   const profileNote = targetProfileNote({ ...profile, docs: otherDocs });
   if (profileNote) note += ` ${profileNote}`;
+  // Nenhum comando declarado: diga como proceder, em vez de deixar o agente supor o executor do repositório de origem.
+  if (!Object.keys(profile.checks).length && !Object.keys(profile.dev).length) {
+    note += ` Este repositório não declarou comandos de verificação (storymap/settings.yaml → target.checks): ${DISCOVER_COMMAND_HINT}.`;
+  }
   // story-ex9517: ground the run in WHO it serves (personas) and WHAT it touches (systems).
   // Both are now authored as full prompts (BoardConfig.personas[].prompt / systems[].prompt), but the
   // prose carries quotes/`$`/newlines and the note is interpolated VERBATIM into `-p "..."` — so we
@@ -1222,7 +1233,12 @@ export class RunnerEngine {
   // `${board}/${id}` → quem iniciou o run em voo/na fila (e o trigger + sessão), para a trava DURA parar só a
   // automação e para os re-dispatches internos (resume, fallback) herdarem o iniciador. A sessão é a chave de
   // posse: um teardown só apaga a entrada que é DELE.
-  private runMeta = new Map<string, { initiator: Initiator; trigger: TriggerId; sessionId: string }>();
+  // `scopeCard`: o que o ESCOPO DE TIPOS do board (board-pace.ts) precisa saber do card para o pump decidir sem IO — o
+  // tipo, o modo e a coluna do disparo. Vem do chamador da automação (que já tem o card) ou, na falta, da leitura do card
+  // no enfileiramento. `scopePending`: o chamador GOVERNADO não trouxe o card e a leitura ainda não chegou (ou FALHOU) — o
+  // pump SEGURA o job (fail-safe): liberar «porque ainda não sei» deixava um agente escopado com a vaga livre começar a
+  // funcionalidade, já que o pump roda SÍNCRONO logo após o push na fila e a leitura é assíncrona.
+  private runMeta = new Map<string, { initiator: Initiator; trigger: TriggerId; sessionId: string; scopeCard?: ScopeCard; scopePending?: boolean }>();
   private running = 0; // total in-flight across BOTH lanes (drives the global maxConcurrent ceiling)
   private runningHeavy = 0; // subset of `running` in the heavy lane (light = running - runningHeavy)
   private completionListeners = new Set<(ev: RunCompletion) => void>();
@@ -1425,6 +1441,10 @@ export class RunnerEngine {
     // O RITMO DO BOARD (board-pace.ts) para o pump: um job AUTOMÁTICO de um board pausado espera na fila, e em ritmo
     // devagar entra um por vez. Só o ritmo — o desarmado já foi barrado na entrada da coluna. DI (um dublê nos testes).
     private paceOf: (board: string) => PaceLevel = (board) => boardGateNow(board, {}).level,
+    // O ESCOPO DE TIPOS do board (segundo eixo do ritmo, board-pace.ts) para o pump: um job AUTOMÁTICO de card cujo tipo o
+    // board não pode começar espera na fila (rede de segurança — a entrada da coluna já barra antes de enfileirar, e a
+    // mudança de escopo já tira da fila o que ficou de fora). Null = nenhum limite. DI (um dublê nos testes). LAST param.
+    private scopeOf: (board: string) => EffectiveScope | null = (board) => boardGateNow(board, {}).scope ?? null,
   ) {
     // Quando a automação volta a poder entrar (trava solta, dia novo, leitura nova), re-pumpa NA HORA — o timer
     // de trabalho encalhado é só a rede de segurança.
@@ -1668,7 +1688,7 @@ export class RunnerEngine {
    *   • code landed, data absent ⇒ `half-landed`: the code IS published on `stage` and the board-data is
    *     NOT on `main`. Redriving would re-implement published code AND not fix the data (the failure was in
    *     `git apply`, not in the skill) — so it must NOT spawn. It parks with an honest detail naming the real
-   *     recovery; WS-3 is what retries the data half. This is the live shape of 3b9d51c2/c04e7a68.
+   *     recovery; WS-3 is what retries the data half. This is the shape a real half-landed run takes.
    *   • anything `unknown`, or the code absent ⇒ spawn (today's behaviour; doubt spawns, D11).
    *
    * Fail-open at every step: no base, an unmeasurable ref or a failed stamp all mean spawn. NEVER throws.
@@ -2039,6 +2059,22 @@ export class RunnerEngine {
     // atrás de trabalho que não pode andar seria reter o operador, que o governador nunca faz) OU um job já
     // CANCELADO na fila: ele não spawna nada (start() o finaliza na hora), e deixá-lo preso atrás do
     // governador manteria um cancelamento pendurado por horas, com a key reaproveitável por um run novo.
+    // O ESCOPO DE TIPOS, lido no máximo UMA vez por board por passada: o job automático de um card fora do escopo espera na
+    // fila (como na pausa) — e volta sozinho quando o escopo alargar (`kick()`). O operador nunca espera. Lido ANTES do ritmo
+    // porque o ritmo devagar também pergunta por ele (quem já está em voo só ocupa a vaga única se o escopo o admite).
+    const scopeByBoard = new Map<string, EffectiveScope | null>();
+    const scopeFor = (board: string): EffectiveScope | null => {
+      let scope = scopeByBoard.get(board);
+      if (scope === undefined) {
+        try {
+          scope = this.scopeOf(board);
+        } catch {
+          scope = null; // o escopo é um freio a mais; a leitura dele nunca derruba o pump
+        }
+        scopeByBoard.set(board, scope);
+      }
+      return scope;
+    };
     // O RITMO DO BOARD, lido no máximo UMA vez por board por passada: pausado, o job automático dele espera na fila
     // (a pausa já tirou os que estavam nela; isto pega o que chegar depois); devagar, um automático do board por vez.
     // O operador nunca espera pelo ritmo — «Rodar agora» é um pedido explícito.
@@ -2056,12 +2092,25 @@ export class RunnerEngine {
         paceByBoard.set(board, level);
       }
       if (level === "paused") return true;
-      if (level === "slow") return this.automationInFlightOn(board) + (startedByBoard.get(board) ?? 0) >= SLOW_MAX_PARALLEL;
+      // Em devagar + escopo, a vaga única é do que o escopo ADMITE: uma funcionalidade que o escopo já recusou e que só está
+      // TERMINANDO (o drain de «o que executa termina») não pode segurar os consertos da fila até acabar.
+      if (level === "slow") return this.automationInFlightOn(board, scopeFor(board)) + (startedByBoard.get(board) ?? 0) >= SLOW_MAX_PARALLEL;
       return false;
+    };
+    const scopeHolds = (key: string): boolean => {
+      const meta = this.runMeta.get(key);
+      const scope = scopeFor(key.slice(0, key.indexOf("/")));
+      // Sem escopo no board nada a segurar. Com escopo e o card ainda DESCONHECIDO (`scopePending`), segura: o job só sai
+      // quando a leitura chegar e o escopo admitir — a direção segura quando não sabemos o que ele é.
+      if (meta?.scopePending) return !!scope;
+      const card = meta?.scopeCard;
+      if (!card) return false;
+      return !scopeAdmitsCard(scope, card, "column").admit;
     };
     const nextIndex = (initiators: Initiator[], keys: string[]): number => {
       for (let n = 0; n < initiators.length; n += 1) {
         if (initiators[n] === "operator" || this.cancelled.has(keys[n])) return n;
+        if (scopeHolds(keys[n])) continue;
         if (paceHolds(keys[n])) continue;
         if (automationAdmitted()) return n;
       }
@@ -2174,12 +2223,20 @@ export class RunnerEngine {
     return out;
   }
 
-  /** Quantos runs AUTOMÁTICOS do board já saíram da fila e ainda não assentaram (subindo ou executando). */
-  private automationInFlightOn(board: string): number {
+  /**
+   * Quantos runs AUTOMÁTICOS do board já saíram da fila e ainda não assentaram (subindo ou executando). Com `scope`, só os
+   * que o escopo admite contam (o card do run vem do `scopeCard` do runMeta; sem ele — a leitura ainda não chegou — conta,
+   * a direção segura: pode custar um pouco de espera, nunca dois ao mesmo tempo em devagar).
+   */
+  private automationInFlightOn(board: string, scope?: EffectiveScope | null): number {
     const prefix = `${board}/`;
     const queued = this.automationQueuedOn(board);
     let n = 0;
-    for (const [key, meta] of this.runMeta) if (meta.initiator === "automation" && key.startsWith(prefix) && this.inFlight.has(key) && !queued.has(key)) n += 1;
+    for (const [key, meta] of this.runMeta) {
+      if (meta.initiator !== "automation" || !key.startsWith(prefix) || !this.inFlight.has(key) || queued.has(key)) continue;
+      if (scope && meta.scopeCard && !scopeAdmitsCard(scope, meta.scopeCard, "column").admit) continue;
+      n += 1;
+    }
     return n;
   }
 
@@ -2189,7 +2246,7 @@ export class RunnerEngine {
    * `running` (a pausa «parar agora»). O mesmo cancelamento do operador (forceRelease) — o card fica onde estava, e o
    * do operador nunca é tocado.
    */
-  async stopBoardAutomation(board: string, reason: string, opts: { running: boolean }): Promise<StoppedRun[]> {
+  async stopBoardAutomation(board: string, reason: string, opts: { running: boolean; only?: PurgeFilter }): Promise<StoppedRun[]> {
     const prefix = `${board}/`;
     const queued = this.automationQueuedOn(board);
     const stopped: StoppedRun[] = [];
@@ -2197,7 +2254,10 @@ export class RunnerEngine {
       if (meta.initiator !== "automation" || !key.startsWith(prefix) || !this.inFlight.has(key)) continue;
       if (!queued.has(key) && !opts.running) continue;
       const cardId = key.slice(prefix.length);
-      this.registry.appendLog(board, cardId, "system", `■ parado pelo ritmo do board: ${reason}`);
+      // `only` = a PURGA DO ESCOPO DE TIPOS: tira só os cards que o predicado aponta (os que ficaram fora do escopo novo); o
+      // resto do board segue na fila. Um predicado que falha NÃO tira o card (na dúvida, o job fica — o pump ainda o segura).
+      if (opts.only && !(await Promise.resolve(opts.only(cardId)).catch(() => false))) continue;
+      this.registry.appendLog(board, cardId, "system", `■ ${opts.only ? "tirado da fila pelo escopo de tipos do board" : "parado pelo ritmo do board"}: ${reason}`);
       const r = await this.forceRelease(board, cardId);
       if (r.released) stopped.push({ board, cardId, trigger: meta.trigger });
     }
@@ -2301,6 +2361,12 @@ export class RunnerEngine {
        * Os re-dispatches internos (resume, fallback) passam o do run original.
        */
       initiator?: Initiator;
+      /**
+       * O card que a automação está disparando, no que o ESCOPO DE TIPOS do board precisa (tipo, modo, coluna). A entrada da
+       * coluna já o tem na mão e o passa aqui, para o pump segurar o job SEM esperar a leitura do card (que só chega depois
+       * de o job já poder ter saído da fila). Ausente ⇒ o engine o completa com a leitura do card do enfileiramento.
+       */
+      scopeCard?: ScopeCard;
     } = {},
   ): RunAttempt {
     const key = `${board}/${cardId}`;
@@ -2349,7 +2415,26 @@ export class RunnerEngine {
     // Quem iniciou: o que o chamador disse, senão a origem + o ator MCP DESTA chamada (lido agora, na cadeia
     // síncrona do request — depois o AsyncLocalStorage não existe mais).
     const initiator: Initiator = opts.initiator ?? initiatorFromOrigin(origin, isScopedActor());
-    this.runMeta.set(key, { initiator, trigger, sessionId });
+    // O ESCOPO DE TIPOS governa TODO começo AUTOMÁTICO — não só o disparo da cascata (`autorun`): um AGENTE escopado que chama
+    // `run_skill`/`enqueue`/`enqueue_batch` entra por `origin: "manual"` mas com `initiator: "automation"`, e a pausa já o
+    // segurava (paceHolds vale para qualquer automação); sem isto o escopo seria o único freio que ele atravessava e a
+    // construção de uma funcionalidade começaria por ali. Ficam FORA, de propósito: (a) o operador/a sessão do dono (`initiator`
+    // "operator" — «Rodar agora» é um pedido explícito); (b) o re-drive do merge train (integra trabalho já feito); (c)
+    // `harness-sync-card`, que só DIAGNOSTICA o card (lê o código, reescreve o card) em qualquer coluna e não começa construção —
+    // o que ele mover para a construção passa pela entrada da coluna, que pergunta ao escopo como todo automático.
+    // (d) a RETOMADA de um run que já tinha começado (`resumeSessionId`: continuação por limite de turnos, ou retomada depois de
+    // queda — esta última já passou pela pergunta ao escopo em recovery.ts): «o que já executa termina», então uma retomada
+    // não é um COMEÇO e o escopo, estreitado no meio do run, não a segura.
+    const scopeGoverned = initiator !== "operator" && origin !== "conflict-redrive" && trigger !== SYNC_TRIGGER && !opts.resumeSessionId;
+    // FAIL-SAFE: governado e SEM o card do chamador ⇒ `scopePending` até a leitura assíncrona (abaixo) chegar — o pump desta
+    // mesma chamada síncrona já enxerga a marca e segura o job (antes dela, scopeCard ausente = «passa»).
+    this.runMeta.set(key, {
+      initiator,
+      trigger,
+      sessionId,
+      ...(opts.scopeCard && scopeGoverned ? { scopeCard: opts.scopeCard } : {}),
+      ...(!opts.scopeCard && scopeGoverned ? { scopePending: true } : {}),
+    });
     // WS-8.1: an EXPLICIT re-run (a human "Rodar agora"/enqueue = "manual", or a merge-train re-drive =
     // "conflict-redrive") is an unmistakable resume intent → drop any cancel phase-brake on this card so the
     // caller's run (and the cascade it feeds) proceeds. An "autorun" spawn does NOT clear it — that is the
@@ -2370,9 +2455,28 @@ export class RunnerEngine {
     // trigger column untouched here, so the signals are stable from enqueue to spawn. Fail-open to null
     // → the flags block degrades to the column policy (resolveColumnArgs), identical to before.
     const cardP = this.readCard(board, cardId).catch(() => null);
+    // O ESCOPO DE TIPOS: sem o card na mão do chamador, completa o runMeta com o que a leitura trouxe (só o job automático
+    // consulta isto, no pump). A coluna do disparo é a do card AGORA — o card ainda está na coluna do gatilho. Vale para
+    // todo começo automático (`scopeGoverned`, acima): o operador, o re-drive do merge train e o sync do card nunca são barrados.
+    if (!opts.scopeCard && scopeGoverned) {
+      void cardP.then((c) => {
+        const meta = this.runMeta.get(key);
+        if (!meta || meta.sessionId !== sessionId || !meta.scopePending) return;
+        if (c) {
+          // Chegou: preenche, solta a marca e re-bombeia — o escopo agora decide (admite ⇒ sai; recusa ⇒ segue na fila).
+          meta.scopeCard = { id: c.id, type: c.type, storyType: c.storyType, mode: c.mode, status: c.status };
+          delete meta.scopePending;
+          this.pump();
+          return;
+        }
+        // A leitura FALHOU (ou o card não existe): a direção segura é SEGURAR e anotar, nunca liberar. A marca fica; o
+        // dono vê o motivo no log do card e libera por cancelar/«Rodar agora» ou alargando o escopo na próxima leitura.
+        this.registry.appendLog(board, cardId, "system", "⏸ segurado pelo escopo de tipos do board: não consegui ler o card para saber se o escopo o admite");
+      });
+    }
 
     // SM-09: read the board config at ENQUEUE (parallel with cardP) so the spawn can inject a
-    // per-app context note (read packages/<pkg>/.claude/CLAUDE.md + brandbook before any code/copy).
+    // per-app context note (read the target's conventions + brandbook before any code/copy).
     // Fail-open to null → buildContextNote returns null and the note is omitted (AC4), identical to
     // the pre-SM-09 spawn. Reuses the same reader the conflict-redrive path already injects.
     const boardConfigP = this.readBoardConfig(board).catch(() => null);
@@ -2583,8 +2687,7 @@ export class RunnerEngine {
       // CAPABILITY PREFLIGHT — prove what this step REQUIRES before paying for a process. Runs on EVERY
       // dispatch path (a resume/redrive needs its browser just as much as a fresh run), and costs ~0 when
       // the verdicts are cached. On an unresolved capability: stamp the infra DIAGNOSIS on the card and
-      // settle $0 — the run that discovered the missing browser the expensive way booted a Next server and
-      // seeded four favourites in an emulator first.
+      // settle $0 — otherwise a run only discovers the missing browser after paying to boot the app and seed its data.
       const capabilityResolutions = await this.runCapabilityPreflight(board, cardId, def, await boardConfigP, await cardP);
       const unavailable = capabilityResolutions.filter((r) => r.active === null);
       if (unavailable.length) {
@@ -2785,7 +2888,7 @@ export class RunnerEngine {
             // A partir daqui a FILA é a dona do branch (deleta/preserva após integrar). Zerar os fechos
             // impede qualquer teardown posterior desta run (release()/removeWorktree em outro caminho de
             // settle) de "preservar" o branch AINDA NA FILA renomeando-o para failed/run/<id> — a corrida
-            // que fez a integração do 7d21ae05 ler uma ref sumida como diff vazio e assentar done-vazio.
+            // que já fez uma integração ler uma ref sumida como diff vazio e assentar done-vazio.
             worktreePath = undefined;
             worktreeBranch = undefined;
             onResult(true); // story-ex0119: enqueued → cascade fires from onMergeDone after the merge-back
@@ -4067,7 +4170,7 @@ export class RunnerEngine {
     trigger: TriggerId,
     def: StatusDef,
     deps: string[] = [],
-    opts: { origin?: "autorun" | "manual"; headroomUrl?: string | null; initiator?: Initiator } = {},
+    opts: { origin?: "autorun" | "manual"; headroomUrl?: string | null; initiator?: Initiator; scopeCard?: ScopeCard } = {},
   ): EnqueueResult {
     const origin = opts.origin ?? "manual";
     // Fixado AGORA, na cadeia do request (o ator MCP ainda existe) — um dependente liberado depois herda isto.
@@ -4085,6 +4188,8 @@ export class RunnerEngine {
         origin,
         headroomUrl: opts.headroomUrl,
         initiator,
+        // só no começo IMEDIATO: o dependente que espera é relido quando for liberado (o card pode ter mudado até lá)
+        ...(opts.scopeCard ? { scopeCard: opts.scopeCard } : {}),
       });
       if (!attempt.ok) {
         return { id: cardId, board, lane: null, position: null, estimatedStart: null, blocked: false, reason: attempt.reason };

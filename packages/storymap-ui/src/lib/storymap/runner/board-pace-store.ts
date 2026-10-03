@@ -6,6 +6,10 @@
 //
 // ILEGÍVEL NÃO É VAZIO: um arquivo que existe e não se lê segura TODOS os boards (board-pace.ts `resolveBoardGate`) até
 // alguém regravar — lido como vazio, um board que o dono pausou voltaria a gastar sozinho.
+//
+// O ESCOPO DE TIPOS mora na mesma linha de cada board. O arquivo é gravado na VERSÃO 1 enquanto nenhum board tem escopo e
+// na VERSÃO 2 assim que algum tem (`serializePaceFile`): o binário antigo lê a 2 como ilegível e segura tudo, em vez de
+// descartar o escopo em silêncio. A leitura nova entende as duas.
 
 import fs from "node:fs";
 import fsp from "node:fs/promises";
@@ -126,6 +130,15 @@ export async function holdBoardEntry(board: string, cardId: string, why: PaceHel
   } catch (err) {
     console.error(`[board-pace] anotar o que a pausa segurou em ${board}/${cardId} falhou:`, err instanceof Error ? err.message : err);
   }
+}
+
+/**
+ * Anota o que o ESCOPO segurou num card (um disparo de coluna recusado por tipo, um run tirado da fila), para o escopo
+ * alargar devolver. Só grava com um escopo em vigor no board; nunca lança (a anotação é a rede — alargar também re-varre
+ * os cards, e o vigia de card parado ainda pega o resto).
+ */
+export function holdBoardScopeEntry(board: string, cardId: string, now: number = Date.now()): Promise<void> {
+  return holdBoardEntry(board, cardId, "scope", now);
 }
 
 /**

@@ -42,7 +42,7 @@ import {
   withSecretScanBlockerFinding,
 } from "./findings";
 import { findRepoRoot, runnerStateDir } from "@/lib/storymap/paths";
-import { loadRunnerConfig, STAGING_CODE_PREFIXES } from "./config";
+import { loadRunnerConfig, stagingBootRefusal } from "./config";
 import { getRunnerRegistry } from "./registry";
 // O gate do train é a superfície MAIS exposta: ele lê o card de um branch de fora ANTES de ele
 // aterrissar. Frontmatter só pelo chokepoint — ver o cabeçalho de frontmatter.ts. `frontmatterLimits`
@@ -59,14 +59,16 @@ import {
   defaultWorktreeFs,
   deprovisionNodeModules,
   provisionNodeModules,
+  resolveWorkspaceGlobs,
   secretScanCommand,
   type ExecFn,
   type WorktreeFs,
 } from "./worktree";
+import { layoutOf } from "@/lib/storymap/target-profile";
 import { serialCommit, type CommitSerializer } from "./commit-serializer";
 import { neutralizeCloudCredentials, type DiretoriosSemCredencial } from "./spawn-env";
 import { patchCreatedPaths, sweepPatchCreations } from "./patch-creations";
-import { partitionPaths, pathsTouchCode, promoteImportedDataPaths } from "./staging";
+import { declaredCodePrefixes, isCodePath, partitionPaths, pathsTouchCode, promoteImportedDataPaths, stagingBranchOf } from "./staging";
 // story-ex0014 / story-ex0097 — a fronteira de contribuição é UMA régua para os TRÊS lugares que fazem
 // `fetch`+`merge FETCH_HEAD` na árvore que o deploy publica (o `stage` e o `main` do train, o `main` do
 // release), e `classifyDeltaPath` é a UMA definição de "o que não pode passar" que ela e o gate deste
@@ -587,7 +589,13 @@ export interface MergeQueueConfig {
   staging?: {
     enabled: boolean;
     branch: string;
-    codePrefixes: string[];
+    /**
+     * Os prefixos de código. AUSENTE = indeclarado ⇒ tudo fora de `storymap/boards/` é código (o neutro seguro; ver
+     * `isCodePath` em staging.ts). `[]` = «nada é código». O bloco vindo de `loadRunnerConfig()` também traz `declared`.
+     */
+    codePrefixes?: string[];
+    /** o que o ARQUIVO declarou (ver `declaredCodePrefixes`) — repassado tal qual do settings */
+    declared?: { branch?: boolean; codePrefixes?: boolean };
     /** artifacts under a code prefix that DERIVE from board data → data half + regenerated on main */
     dataDerived?: { artifact: string; sources: string[]; cwd: string; regen: string }[];
   };
@@ -818,9 +826,12 @@ function gateStagingBranch(runId: string): string {
 
 /** Fase 4a: the PERSISTENT stage worktree dir — a SIBLING of the repo (`<repo>-stage`), deliberately
  * OUTSIDE `.worktrees/` (where the gate's throwaway trees + the orphan reaper live) so it is long-lived,
- * never reaped, and its checkout never collides with main's (the systemd service's live tree). */
+ * never reaped, and its checkout never collides with main's (the systemd service's live tree).
+ *
+ * O nome deriva do branch DECLARADO (`autorun.staging.branch`). Um branch com `/` (`release/x`) viraria um diretório
+ * ANINHADO (`<repo>-release/x`), fora do contrato de «irmão do repo»: a `/` vira `-`. Para `stage` o caminho não muda. */
 export function stageWorktreePath(repoRoot: string, branch: string): string {
-  return path.join(path.dirname(repoRoot), `${path.basename(repoRoot)}-${branch}`);
+  return path.join(path.dirname(repoRoot), `${path.basename(repoRoot)}-${branch.replace(/\//g, "-")}`);
 }
 
 /** Best-effort teardown of a gate staging worktree (dir + branch). NEVER throws — used both at the
@@ -1004,7 +1015,11 @@ async function mergeBranchIntoStaging(
   const unmerged = await gitS(`diff --name-only --diff-filter=U`);
   const unmergedPaths = unmerged.ok ? unmerged.stdout.split("\n").map((s) => s.trim()).filter(Boolean) : [];
   const isSnap = (p: string): boolean => p.endsWith(".snap");
-  const isCode = (p: string): boolean => STAGING_CODE_PREFIXES.some((prefix) => p.startsWith(prefix));
+  // A régua de código é a DECLARADA (`autorun.staging.codePrefixes`) — a mesma do split —, não uma constante: um
+  // prefixo declarado a mais (outro diretório deployável) é código aqui também, e o conflito dele NÃO é resolvido
+  // «pelo lado do run» como se fosse board-data. Indeclarado ⇒ tudo fora de storymap/boards/ (o lado estrito).
+  const codePrefixes = declaredCodePrefixes(loadRunnerConfig().autorun.staging);
+  const isCode = (p: string): boolean => isCodePath(p, codePrefixes);
   const realCodeConflicts = unmergedPaths.filter((p) => isCode(p) && !isSnap(p));
   if (unmergedPaths.length === 0 || realCodeConflicts.length > 0) {
     // A real CODE conflict (or a conflict git left with no unmerged paths) → abort (no half-merge) +
@@ -1035,7 +1050,7 @@ async function mergeBranchIntoStaging(
     try {
       await provisionNodeModules(fs, repoRoot, stagingPath);
       // O `vitest -u` roda a suíte do delta — MESMO caminho (env neutralizado + selo) da checagem.
-      const regen = await regenSnapshotsInTree(runInTree, stagingPath, snapConflicts, DEFAULT_GATE_TIMEOUT_MS);
+      const regen = await regenSnapshotsInTree(runInTree, fs, stagingPath, snapConflicts, DEFAULT_GATE_TIMEOUT_MS);
       if (regen.status === "failed") regenErr = regen.detail || "vitest -u falhou";
     } catch (err) {
       regenErr = detailOf(err);
@@ -1058,12 +1073,50 @@ async function mergeBranchIntoStaging(
   return { ok: true };
 }
 
-/** O pacote a que um caminho repo-relativo pertence (`packages/<x>/…` → `packages/<x>`), ou null. PURA.
- *  Substitui o `packages/storymap-ui` literal que estava em três lugares: qual pacote regenerar/testar é
- *  uma propriedade do CAMINHO, não uma constante do harness (D13). */
-export function packageDirOf(file: string): string | null {
-  const m = file.match(/^(packages\/[^/]+)\//);
-  return m ? m[1] : null;
+/** O `cwd` do fallback quando o alvo não declarou nenhum — nunca chega ao exec: o gate recusa antes (ver o uso). */
+const UNDECLARED_FALLBACK_CWD = "<mergeGate.scope.fallback não declarado>";
+
+/** Um segmento de glob (`*` = qualquer nome; `app-*` parcial) casa um nome de pasta? */
+function globSegmentMatches(seg: string, name: string): boolean {
+  if (!seg.includes("*")) return seg === name;
+  const escaped = seg.split("*").map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp("^" + escaped.join("[^/]*") + "$").test(name);
+}
+
+/**
+ * O pacote a que um caminho repo-relativo pertence, ou null. PURA. O pacote é uma propriedade do LAYOUT DO ALVO, não
+ * uma constante do harness (D13): `packageGlobs` são os globs de diretório-de-pacote (`target.layout.packages`, ou, sem
+ * declaração, os workspaces do package.json do alvo — ver {@link resolvePackageGlobs}); vale o diretório MAIS RASO
+ * que casa algum glob e CONTÉM o arquivo (o snap `packages/x/web/y.snap`, com os globs de `packages` e de `packages/<x>/web`, pertence a `packages/x`).
+ * Sem globs (alvo sem layout resolvível) ⇒ null: quem chama decide o que fazer — nunca se adivinha uma pasta.
+ */
+export function packageDirOf(file: string, packageGlobs: readonly string[]): string | null {
+  const segs = file.split("/");
+  // o arquivo tem de estar DENTRO do diretório: o prefixo candidato é no máximo `segs.length - 1` segmentos
+  for (let depth = 1; depth < segs.length; depth++) {
+    for (const glob of packageGlobs) {
+      const gsegs = glob.split("/");
+      if (gsegs.length !== depth) continue;
+      if (gsegs.every((g, i) => globSegmentMatches(g, segs[i]))) return segs.slice(0, depth).join("/");
+    }
+  }
+  return null;
+}
+
+/**
+ * Os globs de PACOTE efetivos: `target.layout.packages` declarado; senão os workspaces do alvo
+ * ({@link resolveWorkspaceGlobs}: `target.layout.workspaces` > `workspaces` do package.json). Vazio ⇒ o alvo não deixa
+ * resolver «em que pacote este arquivo mora». `root` é a árvore onde o package.json é lido (a do gate / da regen).
+ */
+async function resolvePackageGlobs(fs: WorktreeFs, root: string): Promise<string[]> {
+  let declared: readonly string[] | undefined;
+  try {
+    declared = layoutOf(loadRunnerConfig()).packages;
+  } catch {
+    declared = undefined; // settings ilegível ⇒ cai nos workspaces do alvo (a leitura abaixo)
+  }
+  if (declared) return [...declared];
+  return resolveWorkspaceGlobs(fs, root);
 }
 
 // story-ex0097 — o que a classificação de caminho IMPEDE: que uma mudança atravesse o train sem o gate
@@ -1101,7 +1154,7 @@ export interface VerificationDemand {
  */
 export function verificationDemand(
   changedFiles: readonly string[],
-  codePrefixes: readonly string[],
+  codePrefixes: readonly string[] | undefined,
   opts: { diffReadable?: boolean } = {},
 ): VerificationDemand {
   if (opts.diffReadable === false) {
@@ -1136,13 +1189,27 @@ export function verificationDemand(
  * `node_modules` ligado (quem a montou provisionou), então aqui só roda o `vitest -u`.
  * NUNCA lança — devolve `failed` com o motivo, que o chamador trata como defeito do delta.
  */
-async function regenSnapshotsInTree(
+export async function regenSnapshotsInTree(
   runInTree: GateCommandRunner,
+  fs: WorktreeFs,
   treePath: string,
   snapFiles: string[],
   timeoutMs: number,
 ): Promise<{ status: "regenerated" | "noop" | "failed"; detail?: string }> {
-  const pkgs = [...new Set(snapFiles.map(packageDirOf).filter((p): p is string => !!p))];
+  if (snapFiles.length === 0) return { status: "noop" };
+  const packageGlobs = await resolvePackageGlobs(fs, treePath);
+  // Sem layout resolvível não há como saber em que pacote rodar o `vitest -u`. Antes isto era um `noop` SILENCIOSO: o
+  // snap voltava com a versão do run e o gate ficava vermelho com a culpa mal atribuída. Agora recusa dizendo o que declarar.
+  if (packageGlobs.length === 0) {
+    return {
+      status: "failed",
+      detail:
+        "não sei em que pacote regenerar os snapshots (" +
+        snapFiles.slice(0, 3).join(", ") +
+        "): o alvo não declara `target.layout.packages` em storymap/settings.yaml e a raiz não tem `workspaces` no package.json",
+    };
+  }
+  const pkgs = [...new Set(snapFiles.map((f) => packageDirOf(f, packageGlobs)).filter((p): p is string => !!p))];
   if (pkgs.length === 0) return { status: "noop" };
   try {
     for (const p of pkgs) {
@@ -1638,7 +1705,7 @@ function gateRunnerSemCredencial(
           exec,
           fs,
           provisionNodeModules,
-          regenerateSnapshots: (treePath, snaps) => regenSnapshotsInTree(runInTree, treePath, snaps, timeoutMs),
+          regenerateSnapshots: (treePath, snaps) => regenSnapshotsInTree(runInTree, fs, treePath, snaps, timeoutMs),
           join: (...parts) => path.join(...parts),
           readFile: (abs) => fsp.readFile(abs, "utf8"),
         },
@@ -1700,15 +1767,14 @@ function gateRunnerSemCredencial(
       }
       // P-7 — QUAIS suítes. O fallback cobre o delta que o mapa não conhece.
       //
-      // O DEFAULT É HISTÓRICO, E É UMA PREMISSA QUE EXPIROU. `packages/storymap-ui` só era caminho válido
-      // no repositório do usuário enquanto a ferramenta morava DENTRO dele. Desde a inversão ela roda de um
-      // checkout próprio, e esse caminho no alvo é cópia morta — ou não existe. Quando não existe, a recusa
-      // logo abaixo dispara para TODA entrada com código: a fila inteira congela, e o alvo não tem como
-      // consertar sozinho, porque o valor está aqui, no código da FERRAMENTA.
+      // O fallback é DECLARADO PELO ALVO (`mergeGate.scope.fallback`: cwd + command) — a ferramenta não sabe qual
+      // pacote é a suíte do repositório de quem a usa. Já foi `packages/storymap-ui` por omissão: premissa de
+      // quando ela morava DENTRO do repositório do usuário, e que no alvo de hoje é cópia morta ou não existe.
       //
-      // Por isso ele passa a ser DECLARÁVEL pelo alvo (`mergeGate.scope.fallback`). Ausente ⇒ o default de
-      // sempre, byte a byte: quem não declarar nada não muda de comportamento — e no artefato publicado o
-      // default continua CERTO, porque lá `packages/storymap-ui` existe de verdade.
+      // SEM declaração não se inventa uma suíte: se o delta precisa do fallback (o mapa `scope.packages` não o
+      // cobre, ou está vazio), o gate RECUSA — nomeado e INCONCLUSIVO (infra), dizendo o que declarar — em vez de
+      // medir a árvore errada e reprovar por módulo não resolvido. Um delta inteiramente coberto por
+      // `scope.packages` nem chega a precisar dele.
       const declaredFallback = scope?.fallback;
       const fallbackUnit: GateUnit = declaredFallback
         ? {
@@ -1720,8 +1786,20 @@ function gateRunnerSemCredencial(
             ...(declaredFallback.junitPath ? { junitPath: declaredFallback.junitPath } : {}),
             ...(declaredFallback.network ? { network: declaredFallback.network } : {}),
           }
-        : { cwd: "packages/storymap-ui", command: checkCommand, label: "packages/storymap-ui" };
+        : { cwd: UNDECLARED_FALLBACK_CWD, command: checkCommand, label: UNDECLARED_FALLBACK_CWD };
       const scoped = resolveGateUnits(changedInTree, fallbackUnit, scope);
+      if (!declaredFallback && scoped.units.includes(fallbackUnit)) {
+        await cleanupGateStaging(exec, fs, repoRoot, runId);
+        return {
+          passed: false,
+          inconclusive: true,
+          log:
+            `gate RECUSADO (não reprovado): este delta precisa da suíte padrão (${scoped.reason}), mas o alvo não declara ` +
+            `\`autorun.mergeGate.scope.fallback\` (cwd + command) em storymap/settings.yaml — a ferramenta não supõe qual ` +
+            `pacote é a suíte do seu repositório. A suíte NÃO rodou. Declare o fallback, ou declare em ` +
+            `\`mergeGate.scope.packages\` o pacote de cada caminho do delta.`,
+        };
+      }
 
       // ── RECUSA, e ela NÃO é uma reprovação de teste ────────────────────────────────────────────────
       // Toda unidade tem de EXISTIR na árvore medida. O fallback é o pacote da própria ferramenta, e ele
@@ -2636,7 +2714,9 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
     const base = entry.baseCommit || (await git(`merge-base HEAD ${quote(entry.branch)}`)).stdout.trim();
     const changed = base ? await git(`diff --name-only ${quote(base)}..${quote(entry.branch)}`) : null;
     const files = changed?.ok ? changed.stdout.split("\n").map((s) => s.trim()).filter(Boolean) : [];
-    const codePrefixes = cfg.staging?.codePrefixes ?? STAGING_CODE_PREFIXES;
+    // Indeclarado ⇒ tudo fora de storymap/boards/ é código: o branch com código é PRESERVADO, nunca deletado
+    // como «só dado» (a direção insegura seria tratar um repo de layout plano, sem declaração, como sem código).
+    const codePrefixes = declaredCodePrefixes(cfg.staging);
     // DELETE only when confidently data-only; otherwise PRESERVE (fail-safe — never destroy code).
     const isDataOnly = !!changed?.ok && files.length > 0 && !pathsTouchCode(files, codePrefixes);
     if (isDataOnly) {
@@ -2682,7 +2762,7 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
     // ela, um "origin não trouxe nada" — era o único caminho em que a incerteza LIBERAVA.
     const incomingDiff = await gitAt(cwd, `diff --name-only --no-renames HEAD...FETCH_HEAD`);
     const incoming = incomingDiff.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
-    const verdict = judgeIncoming(incoming, cfg.staging?.codePrefixes ?? STAGING_CODE_PREFIXES, {
+    const verdict = judgeIncoming(incoming, declaredCodePrefixes(cfg.staging), {
       readable: incomingDiff.ok,
     });
     if (verdict.detail) console.warn(`[harness-merge-queue] origin/${branch} ${verdict.detail}`);
@@ -3091,7 +3171,7 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
       });
       // No pacote de CADA snap (packageDirOf) — não num `packages/storymap-ui` literal, que no repositório de
       // um adotante não existe: a regen rodaria a suíte errada, ou morreria com cwd inexistente.
-      const regen = await regenSnapshotsInTree(makeGateCommandRunner(cfg.exec, semCredencial, seal), cwd, snapFiles, snapRegenTimeoutMs);
+      const regen = await regenSnapshotsInTree(makeGateCommandRunner(cfg.exec, semCredencial, seal), snapFs, cwd, snapFiles, snapRegenTimeoutMs);
       if (regen.status === "failed") throw new Error(regen.detail || "vitest -u falhou");
     } catch (err) {
       // The vitest run itself failed (a genuine red test the regen can't paper over) → signal the
@@ -3545,7 +3625,7 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
     // A DERIVED artifact travels with the SOURCE it derives from, not with its own path — otherwise the
     // pair is torn in half and both halves are wrong at once (see `staging.dataDerived` in types.ts).
     const dataDerived = staging.dataDerived ?? [];
-    const partitioned = partitionPaths(files, staging.codePrefixes, dataDerived.map((d) => d.artifact));
+    const partitioned = partitionPaths(files, declaredCodePrefixes(staging), dataDerived.map((d) => d.artifact));
     // …and the MIRROR of that rule: a data-half file that the code half IMPORTS travels WITH the code,
     // or `stage` lands with an import pointing at a file that only exists on main. Reads at the PINNED
     // rev (the tree the gate validated), synchronously pre-fetched because the promotion is pure.
@@ -4700,7 +4780,7 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
         ? await git(`diff --name-only ${quote(ownWorkBase)}..${quote(integrationRev(entry))}`)
         : await git(`diff --name-only HEAD...${quote(integrationRev(entry))}`);
       const changedFiles = changed.ok ? changed.stdout.split("\n").map((s) => s.trim()).filter(Boolean) : [];
-      const codePrefixes = cfg.staging?.codePrefixes ?? STAGING_CODE_PREFIXES;
+      const codePrefixes = declaredCodePrefixes(cfg.staging);
       // story-ex0097 — a régua de "isto exige verificação?" NÃO é mais `pathsTouchCode` (allow-list de
       // prefixo). Era ela que deixava `.github/**`, `justfile`, `scripts/git-hooks/**` (o próprio scanner
       // de segredo) e as configs de raiz FUNDIREM SEM O GATE RODAR NADA. Agora só `storymap/boards/**`
@@ -4801,7 +4881,7 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
         if (!gate.passed && gate.conflict) {
           entry.conflict = gate.conflict;
           await persist();
-          const gateConflictDetail = `gate: o delta não aplica em ${cfg.staging?.branch ?? "stage"} (run ${entry.runId})`;
+          const gateConflictDetail = `gate: o delta não aplica em ${stagingBranchOf(cfg.staging)} (run ${entry.runId})`;
           const ladderBase = ownWorkBase || entry.baseCommit || "";
           if (
             cfg.staging?.enabled &&
@@ -5772,12 +5852,17 @@ export function getMergeQueue(): MergeQueuePort {
   // entry. Flipping `mergeGate.enabled` (or its check/timeout) in settings.yaml then takes effect on the
   // next processed branch WITHOUT a service restart — the singleton no longer freezes the enabled flag.
   // `makeDefaultGateRunner()` is a pure closure (no I/O until invoked), so wiring it when disabled is free.
+  // A RECUSA DE BOOT: staging ligado sem `autorun.staging.codePrefixes` declarado. O split não sabe onde o código mora
+  // e a ferramenta não supõe a pasta do repositório de ninguém — lança a frase que diz o que declarar (o boot a registra).
+  const staging = loadRunnerConfig().autorun.staging;
+  const stagingRefusal = stagingBootRefusal(staging);
+  if (stagingRefusal) throw new Error(stagingRefusal);
   const mq = makeMergeQueue({
     repoRoot: findRepoRoot(),
     // Fase 4a staged release: read ONCE at construction (boot-fixed) — unlike mergeGate.enabled (hot
     // per-entry), splitting a live batch of runs across main/stage mid-flight would corrupt the train.
     // DEFAULT OFF until activation (creating the `stage` branch + flag + restart is an explicit step).
-    staging: loadRunnerConfig().autorun.staging,
+    staging: staging,
     exec: defaultExec,
     store: diskMergeQueueStore(runnerStateDir()),
     integrationGate: makeDefaultGateRunner(),

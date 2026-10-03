@@ -3,11 +3,11 @@
 // Um dono pode querer push para "estação sem leitura de GPS" ou "leitor de cartão recusando" —
 // fatos que só o produto conhece (o monitor das docas, o da telemetria), nunca o AgileHarness. O núcleo não pode
 // saber o que é "doca" nem "telemetria" de ninguém (ferramenta genérica): quem sabe é o BOARD. O contrato é um
-// prefixo de título qualquer (o `[sinal:` é só convenção, o código casa o texto que o board declarar):
-// o monitor do produto cria um card `[sinal:doca:…] …`, e o board declara em `board.yaml`
+// prefixo de título qualquer (a forma é do board; o código casa o texto que ele declarar):
+// o monitor do produto cria um card `ALERTA/doca — …`, e o board declara em `board.yaml`
 //
 //   notifications:
-//     criticalTitlePrefixes: ["[sinal:doca:", "[sinal:telemetria:sem_leitura", "[sinal:cartao:"]
+//     criticalTitlePrefixes: ["ALERTA/doca", "ALERTA/cartao"]
 //
 // Um card que NASCE com um desses prefixos vira o aviso `critical-signal` no barramento — SSE para a tela aberta e,
 // pela política de push (é crítico por padrão), celular e Slack. UMA vez por card: o watcher só emite

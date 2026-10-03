@@ -97,10 +97,25 @@ export function cardToFrontmatter(card: Card): Record<string, unknown> {
     ...(card.costImpact
       ? {
           costImpact: {
-            monthlyBRL: card.costImpact.monthlyBRL,
+            // A GRAFIA que o card tem é a que volta ao disco: legada (`monthlyBRL`) ou neutra (`monthlyAmount`+`currency`).
+            // Nunca uma troca de uma pela outra aqui — migrar a grafia num write qualquer reescreveria os cards em massa.
+            // A ORDEM das chaves também é a de sempre (valor, scope, assumptions, linha de base, …): mudar a ordem reescreve
+            // o frontmatter do card no 1º write de qualquer campo e o merge train 3-way enxerga diff espúrio.
+            ...(card.costImpact.monthlyAmount != null
+              ? { monthlyAmount: card.costImpact.monthlyAmount }
+              : card.costImpact.monthlyBRL != null
+                ? { monthlyBRL: card.costImpact.monthlyBRL }
+                : {}),
             scope: card.costImpact.scope,
             assumptions: card.costImpact.assumptions,
-            ...(card.costImpact.baselineMonthlyBRL != null ? { baselineMonthlyBRL: card.costImpact.baselineMonthlyBRL } : {}),
+            ...(card.costImpact.monthlyAmount != null
+              ? {
+                  ...(card.costImpact.baselineMonthlyAmount != null ? { baselineMonthlyAmount: card.costImpact.baselineMonthlyAmount } : {}),
+                  ...(card.costImpact.currency ? { currency: card.costImpact.currency } : {}),
+                }
+              : card.costImpact.baselineMonthlyBRL != null
+                ? { baselineMonthlyBRL: card.costImpact.baselineMonthlyBRL }
+                : {}),
             ...(card.costImpact.newVendor ? { newVendor: card.costImpact.newVendor } : {}),
             ...(card.costImpact.paidPlan ? { paidPlan: true } : {}),
             ...(card.costImpact.paidApi ? { paidApi: true } : {}),

@@ -11,6 +11,12 @@ const { mockGetBoard, mockNoopByItem, mockReadBoardConfig, mockMeterStall } = vi
   // v0.9 — o `meterStall` do snapshot do governador (o campo é do governador; aqui só a forma que o coletor lê).
   mockMeterStall: vi.fn(() => null as null | { since: number; detectedAt: number; detail: string }),
 }));
+// O ESCOPO DE TIPOS do board (runner/board-pace.ts): a linha de ritmo que o portão lê (null = sem limite) — nunca o arquivo de verdade.
+const { mockPaceRow } = vi.hoisted(() => ({ mockPaceRow: { value: null as unknown } }));
+vi.mock("@/lib/storymap/runner/board-pace-store", async () => {
+  const pace = await vi.importActual<typeof import("./runner/board-pace")>("./runner/board-pace");
+  return { boardGateNow: (_board: string, config: { autorunDisabled?: boolean } | null) => pace.resolveBoardGate(config, mockPaceRow.value as never, Date.now()) };
+});
 vi.mock("@/lib/storymap/runner/capacity-service", () => ({
   getCapacityGovernor: () => ({ snapshot: () => ({ meterStall: mockMeterStall() }) }),
 }));
@@ -28,7 +34,8 @@ vi.mock("@/lib/storymap/runner/orchestrator-state", async (orig) => {
   return { ...actual, readOrchestratorState: async () => ({ v: 1, budget: { day: "", ticksToday: 0, costToday: 0, pushesToday: 0 }, noopByItem: mockNoopByItem() }) };
 });
 
-import { collectActionableCockpit, collectBoardCockpitItems, isStuckCardMetric } from "./cockpit-collect";
+import { actionableForScope, collectActionableCockpit, collectBoardCockpitItems, isStuckCardMetric } from "./cockpit-collect";
+import { resolveBoardGate, type BoardPaceRow } from "./runner/board-pace";
 import { PER_ITEM_NOOP_MAX } from "./runner/orchestrator-state";
 import { coerceCard } from "./repo";
 import type { BoardConfig } from "./types";
@@ -245,5 +252,128 @@ describe("collectActionableCockpit — o acionável do tick é condicional ao TI
     mockGetBoard.mockResolvedValue({ config: config({ mode: "autonomous", riskMatrix: { deploy: "auto" } }), cards });
     mockReadBoardConfig.mockRejectedValue(new Error("ENOENT"));
     expect((await collectActionableCockpit("acme")).ids).toEqual(["story-ex0152:approval:release"]);
+  });
+});
+
+// R7 — O ESCOPO DE TIPOS (board-pace.ts): o copiloto/orquestrador NÃO enfileira nem move card de tipo que o board não pode
+// começar. O filtro mora na fonte do conjunto acionável do tick; o Inbox do humano segue mostrando tudo.
+describe("collectActionableCockpit — o escopo de tipos tira do acionável os cards de funcionalidade fora do escopo", () => {
+  const AT = "2026-10-02T12:00:00.000Z";
+  const fixesRow = (layer: "ownerScope" | "agentScope" = "ownerScope"): BoardPaceRow =>
+    ({ board: "acme", [layer]: { types: ["bug", "technical", "chore", "spike"], by: { kind: layer === "ownerScope" ? "owner" : "agent" }, at: AT } }) as unknown as BoardPaceRow;
+  const config: BoardConfig = {
+    id: "acme",
+    name: "Armazem",
+    statuses: [
+      { id: "desenvolver", name: "Desenvolver", autorun: true, trigger: "harness-do" },
+      { id: "stage", name: "Stage" },
+      { id: "release", name: "Publicar", autorun: false },
+      { id: "concluida", name: "No ar", terminal: true },
+    ],
+    releases: [],
+    personas: [],
+    systems: [],
+    linkTypes: [],
+    orchestrator: { mode: "autonomous", riskMatrix: { deploy: "auto" } },
+  };
+  // O item que o escopo julga: um bloqueio aberto num card que AINDA ESPERA para ser construído (`desenvolver`).
+  const withGate = (type: string, id: string, extra: Record<string, unknown> = {}) =>
+    coerceCard(
+      id,
+      { type: "story", storyType: type, status: "desenvolver", findings: [{ id: "f1", lens: "general", severity: "blocker", status: "open", title: "bloqueio" }], ...extra },
+      "",
+    );
+  const setBoard = (cards: ReturnType<typeof withGate>[]) => {
+    mockGetBoard.mockResolvedValue({ config, cards });
+    mockReadBoardConfig.mockResolvedValue(config);
+  };
+  beforeEach(() => {
+    mockNoopByItem.mockReturnValue({});
+    mockPaceRow.value = null;
+  });
+
+  it("sem escopo o conjunto é o de sempre (funcionalidade e conserto)", async () => {
+    setBoard([withGate("user", "story-feat"), withGate("bug", "story-fix")]);
+    const { ids } = await collectActionableCockpit("acme");
+    expect(ids).toEqual(["story-feat:b:f1", "story-fix:b:f1"]);
+  });
+
+  it("com «só consertos»: o item da funcionalidade sai do acionável (e do count/sig/itemCards); o do conserto fica", async () => {
+    mockPaceRow.value = fixesRow();
+    setBoard([withGate("user", "story-feat"), withGate("bug", "story-fix")]);
+    const { ids, count, sig, itemCards } = await collectActionableCockpit("acme");
+    expect(ids).toEqual(["story-fix:b:f1"]);
+    expect(count).toBe(1);
+    expect(sig).toBe("story-fix:b:f1");
+    expect(itemCards.map((i) => i.cardId)).toEqual(["story-fix"]);
+  });
+
+  it("o Inbox do HUMANO continua mostrando o card de funcionalidade (a exclusão é só do conjunto acionável do tick)", async () => {
+    mockPaceRow.value = fixesRow();
+    setBoard([withGate("user", "story-feat")]);
+    expect((await collectActionableCockpit("acme")).count).toBe(0);
+    expect((await collectBoardCockpitItems("acme")).map((i) => i.id)).toContain("story-feat:b:f1");
+  });
+
+  it("card sem storyType vale user; `user` em modo `fix` conta como erro", async () => {
+    mockPaceRow.value = fixesRow();
+    setBoard([coerceCard("story-nt", { type: "story", status: "desenvolver", findings: [{ id: "f1", lens: "general", severity: "blocker", status: "open", title: "bloqueio" }] }, ""), withGate("user", "story-fx", { mode: "fix" })]);
+    expect((await collectActionableCockpit("acme")).ids).toEqual(["story-fx:b:f1"]);
+  });
+
+  it("a camada dos AGENTES também limita (interseção) e um escopo vencido não limita", async () => {
+    setBoard([withGate("user", "story-feat")]);
+    mockPaceRow.value = fixesRow("agentScope");
+    expect((await collectActionableCockpit("acme")).count).toBe(0);
+    mockPaceRow.value = { board: "acme", ownerScope: { types: ["bug"], by: { kind: "owner" }, at: "2026-01-01T00:00:00.000Z", until: "2026-01-02T00:00:00.000Z" } };
+    expect((await collectActionableCockpit("acme")).count).toBe(1);
+  });
+
+  it("ritmo e escopo são independentes: o escopo não mexe nos itens de conserto em ritmo devagar", async () => {
+    mockPaceRow.value = { ...fixesRow(), owner: { level: "slow", by: { kind: "owner" }, at: AT } };
+    setBoard([withGate("bug", "story-fix")]);
+    expect((await collectActionableCockpit("acme")).ids).toEqual(["story-fix:b:f1"]);
+  });
+  it("C2: o card JÁ CONSTRUÍDO (entrega) segue acionável com o escopo ligado — falha de deploy, prova pendente e aprovação de publicar não ficam parados", async () => {
+    mockPaceRow.value = fixesRow();
+    setBoard([
+      withGate("user", "story-wait"), // ainda espera ser construído ⇒ sai
+      coerceCard(
+        "story-stage",
+        { type: "story", storyType: "user", status: "stage", findings: [{ id: "deploy-failure", lens: "deploy", severity: "blocker", status: "open", title: "o deploy falhou", deployPhase: "failed" }] },
+        "",
+      ),
+      coerceCard("story-rel", { type: "story", storyType: "user", status: "release", qaPassed: true }, ""),
+    ]);
+    const { ids } = await collectActionableCockpit("acme");
+    expect(ids).toContain("story-stage:deploy-failed");
+    expect(ids).toContain("story-rel:approval:release");
+    expect(ids).not.toContain("story-wait:b:f1");
+  });
+});
+
+describe("actionableForScope — a régua pura do filtro do copiloto", () => {
+  const NOW = Date.parse("2026-10-02T12:00:01.000Z");
+  const gate = resolveBoardGate({}, { board: "b", ownerScope: { types: ["bug", "technical", "chore", "spike"], by: { kind: "owner" }, at: "2026-10-02T12:00:00.000Z" } } as unknown as BoardPaceRow, NOW);
+  const cards = [coerceCard("f", { type: "story", storyType: "user", status: "desenvolver" }, ""), coerceCard("b", { type: "story", storyType: "bug", status: "desenvolver" }, "")];
+  const items = [{ cardId: "f" }, { cardId: "b" }, { cardId: "" }, { cardId: "orfao" }];
+
+  it("tira só o item do card de tipo fora do escopo QUE AINDA ESPERA; item de board (sem card) e de card desconhecido ficam", () => {
+    expect(actionableForScope(items, cards, gate).map((i) => i.cardId)).toEqual(["b", "", "orfao"]);
+  });
+  it("C2: o card de funcionalidade em ENTREGA (revisao/merge/stage/release) ou depois fica acionável", () => {
+    for (const status of ["revisao", "merge", "stage", "release", "concluida"]) {
+      const delivered = [coerceCard("f", { type: "story", storyType: "user", status }, "")];
+      expect(actionableForScope([{ cardId: "f" }], delivered, gate)).toEqual([{ cardId: "f" }]);
+    }
+    for (const status of ["pronta", "design-ux", "plano-tecnico", "desenvolver"]) {
+      const waiting = [coerceCard("f", { type: "story", storyType: "user", status }, "")];
+      expect(actionableForScope([{ cardId: "f" }], waiting, gate)).toEqual([]);
+    }
+  });
+  it("sem portão, sem escopo ou portão nulo devolve tudo", () => {
+    expect(actionableForScope(items, cards, null)).toEqual(items);
+    expect(actionableForScope(items, cards, undefined)).toEqual(items);
+    expect(actionableForScope(items, cards, resolveBoardGate({}, null, NOW))).toEqual(items);
   });
 });

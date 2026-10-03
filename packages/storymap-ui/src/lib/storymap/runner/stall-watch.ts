@@ -176,6 +176,12 @@ export interface StallBoard {
   id: string;
   config: BoardConfig;
   cards: Card[];
+  /**
+   * Os cards que o ESCOPO DE TIPOS do board (board-pace.ts) segura de propósito: tipo que o board não pode começar,
+   * esperando um condutor que a adoção nega enquanto o escopo valer. Estão parados DE PROPÓSITO (como o adiado e o board
+   * pausado): o vigia não os conta, não refaz o passo e não abre card de conserto. Ausente ⇒ nenhum.
+   */
+  scopeHeld?: ReadonlySet<string>;
 }
 
 export interface StallWatchDeps {
@@ -293,7 +299,9 @@ export async function sweepStalledCards(deps: StallWatchDeps): Promise<StallRepo
         const row = rows.find((r) => r.key === key);
         if (!isStallCandidate(card, board.config)) continue;
         inStep.add(key);
-        const verdict = classifyStall(card, board.config, await deps.facts(board, card), afterMs);
+        // Parado DE PROPÓSITO pelo escopo de tipos: tem explicação (como um card com pergunta aberta). O aviso que já
+        // estivesse aberto sai e o relógio zera — se o escopo alargar, a contagem recomeça do zero em vez de escalar de uma vez.
+        const verdict = board.scopeHeld?.has(card.id) ? null : classifyStall(card, board.config, await deps.facts(board, card), afterMs);
 
         if (!verdict) {
           // O card tem dono de novo (ou uma explicação). O aviso sai; as tentativas FICAM enquanto ele estiver no passo.

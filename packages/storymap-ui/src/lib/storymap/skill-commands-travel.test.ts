@@ -28,25 +28,10 @@ const SKILLS = path.join(ROOT, ".claude", "skills");
 /** Os executáveis que NÃO existem neste repositório (o `justfile` era do repositório de origem). */
 const EXECUTAVEL_QUE_NAO_VIAJA: Record<string, string> = { justfile: "just" };
 
-/**
- * DÍVIDA DECLARADA, e SÓ ENCOLHE — as receitas do PROJETO que algumas skills ainda chamam pelo nome.
- *
- * Por que elas não foram trocadas junto com o `advance-card`: são DUAS CLASSES diferentes de comando.
- *   · O gesto do PRÓPRIO harness (`advance-card`, subir o board) tem de funcionar em qualquer árvore,
- *     e por isso vira a invocação que viaja — foi o que esta onda fez.
- *   · A receita do PROJETO DO ADOTANTE (rodar os testes dele, deployar o app dele, ler os logs dele)
- *     NÃO tem invocação portátil: `just test-armazemweb` não vira `bun` nenhum, porque quem sabe como se
- *     testa aquele repositório é o repositório. A saída certa é a skill PERGUNTAR — o board declarar
- *     `commands.test`/`commands.deploy` e a skill ler dali —, e isso é desenho novo, não substituição.
- *
- * Enquanto esse desenho não existe, o número aqui é o teto: nenhuma skill pode ganhar mais uma receita
- * cravada, e uma entrada que zerar tem de SAIR da lista (senão a lista apodrece e para de medir).
- */
-const RECEITAS_DO_PROJETO_DECLARADAS: Record<string, number> = {
-  "harness-qa": 13,
-  "harness-do": 3,
-  "harness-tests": 1,
-};
+// A DÍVIDA DECLARADA ACABOU. Esta tabela carregava, por skill, quantas receitas do PROJETO (`just test-<pkg>`…) ainda
+// estavam cravadas (qa 13, do 3, tests 1) — um teto que só encolhia. Elas foram trocadas por NOMES de check do perfil do
+// alvo (`target_profile`), e a régua passou para skill-tooling-neutral.test.ts, que mede o vocabulário inteiro com teto
+// ZERO. Aqui o teto é zero também: nenhuma skill instrui um executável que a árvore publicada deixa para trás.
 
 function git(args: string[]): string {
   return execFileSync("git", args, { cwd: ROOT, encoding: "utf8", maxBuffer: 32_000_000 });
@@ -106,10 +91,7 @@ describe("comando de skill × o que a árvore publicada contém", () => {
   it("nenhuma skill que VIAJA instrui um executável que a régua deixa para trás", () => {
     const porSkill = contagemPorSkill();
     const violacoes: string[] = [];
-    for (const [nome, lista] of porSkill) {
-      const teto = RECEITAS_DO_PROJETO_DECLARADAS[nome] ?? 0;
-      if (lista.length > teto) violacoes.push(...lista.slice(teto));
-    }
+    for (const lista of porSkill.values()) violacoes.push(...lista);
     expect(
       violacoes.join("\n"),
       "skill publicada instruindo um comando que não existe na árvore publicada. O agente que a executa " +
@@ -117,22 +99,6 @@ describe("comando de skill × o que a árvore publicada contém", () => {
         "VIAJA (ex.: `bun packages/storymap-ui/scripts/advance-card.ts <board> <id>`, a que o próprio " +
         "script documenta) ou faça a ferramenta viajar.",
     ).toBe("");
-  });
-
-  it("a dívida declarada SÓ ENCOLHE — e uma entrada que zerou tem de sair da lista", () => {
-    const porSkill = contagemPorSkill();
-    const apodrecidas = Object.keys(RECEITAS_DO_PROJETO_DECLARADAS).filter(
-      (nome) => (porSkill.get(nome)?.length ?? 0) === 0,
-    );
-    expect(
-      apodrecidas.join(", "),
-      "skill declarada na dívida que já não tem receita cravada nenhuma — remova a entrada, senão a " +
-        "lista vira teto para uma regressão futura em vez de medida do que falta.",
-    ).toBe("");
-    const excedidas = Object.entries(RECEITAS_DO_PROJETO_DECLARADAS)
-      .filter(([nome, teto]) => (porSkill.get(nome)?.length ?? 0) > teto)
-      .map(([nome, teto]) => `${nome}: ${porSkill.get(nome)?.length} > ${teto}`);
-    expect(excedidas.join(", "), "a dívida declarada CRESCEU").toBe("");
   });
 
   it("NÃO-VACUIDADE: a varredura leu skills de verdade, e o extrator de comando ACUSA quando há o que acusar", () => {

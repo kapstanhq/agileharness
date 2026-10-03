@@ -202,7 +202,8 @@ describe("grepStagedCodeRangeDiff (cumulative staged code on `stage`)", () => {
       "rev-parse": () => "c0\n",
       diff: () => "diff --git a/packages/x b/packages/x\n+code\n",
     });
-    const res = await grepStagedCodeRangeDiff(run, "story-x");
+    // o repositório DECLARA o branch de integração e os prefixos de código; quem chama os repassa
+    const res = await grepStagedCodeRangeDiff(run, "story-x", { stageBranch: "stage", codePrefixes: ["packages/"] });
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.range).toEqual({ base: "c0", head: "c2" });
@@ -213,6 +214,40 @@ describe("grepStagedCodeRangeDiff (cumulative staged code on `stage`)", () => {
     const diffCall = calls.find((c) => c[0] === "diff")!;
     expect(diffCall).toContain("c0..c2");
     expect(diffCall).toContain("packages/");
+  });
+
+  it("lê o branch e os prefixos DECLARADOS pelo repositório (layout plano: `integracao` + `src/`), não `stage` + `packages/`", async () => {
+    const { run, calls } = fakeGit({ log: () => "c1\n", "rev-parse": () => "c0\n", diff: () => "+x\n" });
+    const res = await grepStagedCodeRangeDiff(run, "story-ex9963", { stageBranch: "integracao", codePrefixes: ["src/", "scripts/"] });
+    expect(res.ok).toBe(true);
+    expect(calls.find((c) => c[0] === "log")).toContain("integracao");
+    expect(calls.find((c) => c[0] === "log")).not.toContain("stage");
+    const diffCall = calls.find((c) => c[0] === "diff")!;
+    expect(diffCall.slice(diffCall.indexOf("--") + 1)).toEqual(["src/", "scripts/"]);
+  });
+
+  it("SEM declaração: o branch default da ferramenta e «tudo menos board-data» como pathspec (nunca `packages/`)", async () => {
+    const { run, calls } = fakeGit({ log: () => "c1\n", "rev-parse": () => "c0\n", diff: () => "+x\n" });
+    await grepStagedCodeRangeDiff(run, "story-ex9963");
+    expect(calls.find((c) => c[0] === "log")).toContain("stage");
+    const diffCall = calls.find((c) => c[0] === "diff")!;
+    expect(diffCall).not.toContain("packages/");
+    expect(diffCall.slice(diffCall.indexOf("--") + 1)).toEqual([".", ":(exclude)storymap/boards/"]);
+  });
+
+  it("`codePrefixes: []` declarado (nada é código) ⇒ ok:false e NENHUM diff (pathspec vazio seria o repositório inteiro)", async () => {
+    const { run, calls } = fakeGit({ log: () => "c1\n", "rev-parse": () => "c0\n" });
+    const res = await grepStagedCodeRangeDiff(run, "story-ex9963", { codePrefixes: [] });
+    expect(res.ok).toBe(false);
+    expect(calls.some((c) => c[0] === "diff")).toBe(false);
+  });
+
+  it("a mensagem de «sem branch» cita o branch declarado", async () => {
+    const run: GitRunner = async () => {
+      throw new Error("fatal: bad revision");
+    };
+    const res = await grepStagedCodeRangeDiff(run, "story-ex9963", { stageBranch: "integracao" });
+    expect(res).toEqual({ ok: false, error: expect.stringContaining("integracao") });
   });
 
   it("ok:false (and runs NO diff) when the card has no staged code yet", async () => {
@@ -267,6 +302,19 @@ describe("cardCumulativeDiff (board + code, all stages)", () => {
     expect(res.board?.diff).toContain("board line");
     expect(res.code).toMatchObject({ range: { base: "k0", head: "k2" }, additions: 1 });
     expect(res.code?.diff).toContain("code line");
+  });
+
+  it("repassa o escopo declarado (branch + prefixos) ao lado de CÓDIGO — e só a ele", async () => {
+    const { run, calls } = fakeGit({
+      log: (args) => (args.some((a) => a.startsWith("--grep=")) ? "k1\n" : "b1\n"),
+      "rev-parse": () => "x0\n",
+      diff: () => "+linha\n",
+    });
+    await cardCumulativeDiff(run, "oficina", "story-ex9964", { stageBranch: "integracao", codePrefixes: ["src/"] });
+    expect(calls.filter((c) => c[0] === "log" && c.includes("integracao"))).toHaveLength(1);
+    const diffs = calls.filter((c) => c[0] === "diff");
+    expect(diffs.some((c) => c.includes("src/"))).toBe(true); // a metade de código
+    expect(diffs.some((c) => c.some((a) => a.startsWith("storymap/boards/")))).toBe(true); // a de board segue por caminho
   });
 
   it("code is null when nothing is staged yet (board-only card)", async () => {

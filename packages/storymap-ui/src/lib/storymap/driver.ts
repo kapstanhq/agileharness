@@ -7,6 +7,7 @@
 
 import { CONDUCTOR_DEFAULT_MAX_SESSIONS, MODEL_TIERS } from "./types";
 import type { BoardConfig, Card, CardDriver, CardRouting, ModelTier, SessionModel } from "./types";
+import { gateAdmitsCard, type BoardGate } from "./runner/board-pace";
 
 /** Is this card driven by a conductor session instead of the column cascade? PURE. */
 export function isConducted(card: Pick<Card, "routing"> | null | undefined): boolean {
@@ -134,14 +135,29 @@ export function conductorTask(board: string, cardId: string): string {
   return `${conductorCommand(board, cardId)} — conduzir a story de ponta a ponta`;
 }
 
-export type ConductorEntryVerdict = { dispatch: true } | { dispatch: false; reason: string };
+export type ConductorEntryVerdict = { dispatch: true } | { dispatch: false; reason: string; scopeRefused?: true };
+
+/**
+ * A classe de ESPERA da fila do condutor quando o card é de um tipo que o escopo do board não deixa começar (board-pace.ts,
+ * segundo eixo do ritmo). Estável (o texto do motivo traz a frase do tipo); é o `lastWaitKind` da entrada na fila.
+ */
+export const CONDUCTOR_SCOPE_WAIT_KIND = "tipo-nao-admitido";
 
 /**
  * Does the card's CURRENT status make it a conductor dispatch? PURE — the shell calls it on every entry.
  * Only STORY cards are conducted (activities/steps are map structure; a capture container or a style-guide
  * container is not a unit of delivery), and only a non-terminal `fromStatus` (a terminal status is "done").
+ *
+ * `gate` (opcional): o portão do board com o ESCOPO DE TIPOS. O condutor leva a story de ponta a ponta, então a pergunta
+ * é `use: "conductor"` (qualquer coluna): uma funcionalidade nova que o board não pode começar NÃO é despachada. A recusa
+ * por tipo é a ÚLTIMA — só aparece quando todo o resto admitiria — e vem marcada (`scopeRefused`) para quem chama distinguir
+ * «espera pelo escopo» (o card volta sozinho quando o escopo alargar) de «não é caso de condutor». Sem `gate`, a régua é a de sempre.
  */
-export function conductorEntryVerdict(card: Pick<Card, "type" | "status" | "capture" | "container" | "deferred">, config: BoardConfig): ConductorEntryVerdict {
+export function conductorEntryVerdict(
+  card: Pick<Card, "type" | "status" | "capture" | "container" | "deferred"> & Partial<Pick<Card, "id" | "storyType" | "mode">>,
+  config: BoardConfig,
+  gate?: Pick<BoardGate, "scope"> | null,
+): ConductorEntryVerdict {
   // «Adiado — não agora» (deferral.ts): o dono quer, mas não agora. Nem a entrada nem a adoção de órfãos o admitem.
   if (card.deferred) return { dispatch: false, reason: "card adiado (não agora)" };
   const policy = resolveConductorPolicy(config);
@@ -152,6 +168,10 @@ export function conductorEntryVerdict(card: Pick<Card, "type" | "status" | "capt
   if (card.type !== "story") return { dispatch: false, reason: `card do tipo '${card.type}' não é conduzido (só story)` };
   if (card.capture || card.container) return { dispatch: false, reason: "contêiner (captura/guia) não é conduzido" };
   if (config.statuses.find((s) => s.id === card.status)?.terminal) return { dispatch: false, reason: "fromStatus é terminal" };
+  if (gate) {
+    const scope = gateAdmitsCard(gate, { id: card.id ?? "", type: card.type, storyType: card.storyType ?? null, mode: card.mode, status: card.status }, "conductor");
+    if (!scope.admit) return { dispatch: false, reason: scope.why, scopeRefused: true };
+  }
   return { dispatch: true };
 }
 

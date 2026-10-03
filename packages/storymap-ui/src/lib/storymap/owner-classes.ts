@@ -7,13 +7,20 @@ import type { BoardConfig, OwnerClassDef } from "./types";
 /** A classe que o piso de dinheiro aponta — nunca sai da lista de um board. */
 export const MONEY_CLASS = "money";
 
-/** As quatro classes do dono — o MESMO texto que o `_base/board.yaml` declara (um teste fixa a paridade). */
+/**
+ * As quatro classes do dono — o PISO NEUTRO da ferramenta. O alvo declara a redação dele em `autonomy.ownerClasses`
+ * do `_base/board.yaml` (ou do board) e ela vence; sem declaração valem estas, que não citam produto, fornecedor,
+ * stack nem exemplo de nenhum repositório — a cláusula «trocar o modelo ou o fornecedor de IA que atende o usuário» fica,
+ * de forma GENÉRICA, porque é a decisão de dinheiro que mais passa despercebida como «técnica» (troca de modelo muda custo
+ * por chamada e qualidade, e nenhum teto de custo a pega sozinho). Um teste (decision-class.test.ts) fixa que o `_base` da ferramenta declara
+ * as MESMAS classes (ids, rótulos e texto).
+ */
 export const DEFAULT_OWNER_CLASSES: readonly OwnerClassDef[] = [
   {
     id: "money",
     label: "Dinheiro e preço",
     description:
-      "Qualquer compromisso de gasto: contratar fornecedor, assinar plano pago, comprar créditos, definir ou mudar preço, mexer no código de cobrança, ultrapassar os tetos mensais de custo, ou trocar o modelo de IA usado nas respostas ao usuário (muda o custo por chamada e a qualidade).",
+      "Qualquer compromisso de gasto: contratar fornecedor, assinar plano pago, comprar créditos, definir ou mudar preço, mexer no código de cobrança, ultrapassar os tetos de custo declarados, ou trocar um serviço pago de que o produto depende, ou o modelo ou o fornecedor de IA que atende o usuário do produto (muda custo e qualidade).",
   },
   {
     id: "brand-voice",

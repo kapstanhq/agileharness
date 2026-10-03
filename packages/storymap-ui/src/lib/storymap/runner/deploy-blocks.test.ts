@@ -10,7 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BoardConfig, Card, DeployCause, Finding } from "@/lib/storymap/types";
 import { DEPLOY_FAILURE_FINDING_ID } from "@/lib/storymap/demands";
 import { parseDeployExit3Report, type DeployExit3Report, type PlanBlockEntry } from "./deploy-proof";
-import { defaultExec } from "./worktree";
+import { defaultExec, type ExecFn } from "./worktree";
+import { deployPolicyFromSettings } from "./deploy-command-guard";
 import {
   attributeGuardedFiles,
   attributeOwnerFiles,
@@ -30,6 +31,7 @@ import {
   unreadableDeployBlocksFile,
   parseDeployBlocks,
   mutateDeployBlocks,
+  remeasureBoardCauses,
   readDeployBlocks,
   resetRemeasureForTest,
   sweepDeployBlocks,
@@ -611,5 +613,39 @@ describe("causeKeyOf", () => {
   it("é estável e não carrega HEAD nem card (só a promoção, que é do diff do card, leva o card)", () => {
     expect(causeKeyOf("armazem", "owner", "money")).toBe("armazem:owner:money");
     expect(causeKeyOf("armazem", "system")).toBe("armazem:system");
+  });
+});
+
+// O `deploy.planCommand` é board-data que vira execução: passa pela régua sob a POLÍTICA que o ALVO declarou (deploy.launchers…).
+describe("remeasureBoardCauses — o planCommand declarado passa pela política do alvo", () => {
+  const board = "oficina-rm";
+  const comPlano = { ...config, id: board, deploy: { kind: "command", command: "ship-cli publish", planCommand: "ship-cli plan --json" } } as unknown as BoardConfig;
+  const linhas = () => upsertDeployBlock([], { board, cardId: "a", cause: deployCausesOf(LIVE_PLAN, { pkg: "oficina", config })[1], at: "2026-05-14T20:00:00Z", command: null });
+  const medir = (policy: ReturnType<typeof deployPolicyFromSettings>, stdout: string) => {
+    const calls: string[] = [];
+    const exec: ExecFn = async (cmd) => {
+      calls.push(String(cmd));
+      return { stdout, stderr: "" };
+    };
+    return remeasureBoardCauses(board, comPlano, linhas(), { exec, repoRoot: "/repo", now: Date.now(), policy }).then((v) => ({ v, calls }));
+  };
+  beforeEach(() => resetRemeasureForTest());
+
+  it("lançador DECLARADO ⇒ o plano roda (argv re-citada) e o plano limpo fecha a causa do sistema", async () => {
+    const { v, calls } = await medir(deployPolicyFromSettings({ launchers: ["ship-cli"] }, {}), JSON.stringify({ status: "ready" }));
+    expect(calls).toEqual([`'ship-cli' 'plan' '--json'`]);
+    expect(v.dead).toEqual(linhas().map((r) => r.causeKey));
+  });
+
+  it("SEM política declarada ⇒ o planCommand é RECUSADO, nada é executado, a causa segue (fail-closed)", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { v, calls } = await medir(deployPolicyFromSettings(undefined, {}), JSON.stringify({ status: "ready" }));
+      expect(calls).toEqual([]);
+      expect(v.dead).toEqual([]);
+      expect(String(err.mock.calls[0]?.[0])).toMatch(/deploy\.planCommand recusado.*settings\.yaml → deploy\.launchers/);
+    } finally {
+      err.mockRestore();
+    }
   });
 });

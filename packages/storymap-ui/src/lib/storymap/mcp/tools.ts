@@ -15,6 +15,9 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { defineTool } from "./register";
 import { currentMcpActor, isScopedActor } from "./actor";
 import { callerTag } from "./caller";
+import { effectiveScope, SCOPE_TYPE_ORDER, scopeCardOf, scopeTypesOf, storyTypeChangeLine, storyTypeChangeRefusal, type BoardPaceView, type ScopeCard } from "@/lib/storymap/runner/board-pace";
+import { boardPaceRow } from "@/lib/storymap/runner/board-pace-store";
+import { appendAgentAction } from "@/lib/storymap/runner/agent-actions";
 import { docIsCanonical, isPrdSection, prdSectionKeys, readGovernedValue } from "@/lib/storymap/doc/doc-governance";
 
 import { getBoard, listBoards, readBoardConfig, readCard, readCards } from "@/lib/storymap/repo";
@@ -35,6 +38,8 @@ import { waitForRunCore } from "@/lib/storymap/runner/run-wait";
 import { allSessions } from "@/lib/storymap/runner/session-worktree";
 import { readWorktreeSessionCost } from "@/lib/vps/session-cost";
 import { loadRunnerConfig } from "@/lib/storymap/runner/config";
+import { buildCostImpactInput } from "@/lib/storymap/cost-impact";
+import { reviewLensesOf } from "@/lib/storymap/target-profile";
 import { resolveHeadroomUrl } from "@/lib/storymap/runner/headroom";
 import { detectCycle, topologicalOrder } from "@/lib/storymap/runner/dep-graph";
 import type { EnqueueResult } from "@/lib/storymap/runner/types";
@@ -155,6 +160,21 @@ const paceActor = (): { kind: "owner" | "agent"; id?: string } => {
   const id = who?.caller ? callerTag(who.caller) : who?.tokenEnv;
   return isScopedActor() ? { kind: "agent", ...(id ? { id } : {}) } : { kind: "owner" };
 };
+
+/**
+ * O ritmo como a tool o devolve: a view inteira mais as chaves que um agente procura sem abrir `scope` — `types` (o que o
+ * board pode começar; os cinco tipos quando não há limite), `waitingByScope` (cards esperando por causa do escopo) e
+ * `featuresToShip` (funcionalidades já construídas que vão junto na próxima publicação: o escopo não segura a entrega).
+ */
+export function paceToolView(v: BoardPaceView): BoardPaceView & { types: StoryType[]; waitingByScope: number } {
+  return { ...v, types: v.scope ? v.scope.types : [...SCOPE_TYPE_ORDER], waitingByScope: v.scopeWaiting };
+}
+
+/** O pedido de tipos admite algum tipo que o escopo de hoje recusa? (pause_board só ESTREITA.) `current` null = sem limite. PURA. */
+function asksToWiden(current: readonly StoryType[] | null, asked: readonly StoryType[]): boolean {
+  const have = current ?? SCOPE_TYPE_ORDER;
+  return (scopeTypesOf(asked) ?? SCOPE_TYPE_ORDER).some((t) => !have.includes(t));
+}
 
 const json = (data: unknown): CallToolResult => ({
   content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
@@ -285,7 +305,7 @@ const proposedItemShape = z.object({
 async function resolveEnqueueTarget(
   board: string,
   cardId: string,
-): Promise<{ ok: true; trigger: TriggerId; def: StatusDef; headroomUrl: string | null } | { ok: false; error: string }> {
+): Promise<{ ok: true; trigger: TriggerId; def: StatusDef; headroomUrl: string | null; scopeCard: ScopeCard } | { ok: false; error: string }> {
   const [config, cards] = await Promise.all([readBoardConfig(board), readCards(board)]);
   const card = cards.find((c) => c.id === cardId);
   if (!card || !card.status) return { ok: false, error: `Card ${board}/${cardId} sem status — mova-o para uma coluna primeiro.` };
@@ -296,7 +316,10 @@ async function resolveEnqueueTarget(
   // Reabertura R1: a reopened card (reopenPending + mode) enqueues its DEDICATED skill (harness-fix/harness-refine)
   // — resolve the effective trigger so enqueue/run_skill of a reopened card runs the reopen skill, not the
   // column's own (and consumes reopenPending), mirroring the in-process cascade + runCardSkillAction.
-  return { ok: true, trigger: triggerForCard(card, status.trigger), def: status, headroomUrl: resolveHeadroomUrl(config, process.env) };
+  // `scopeCard`: o card que esta função já leu, para o ESCOPO DE TIPOS do board decidir no pump SEM esperar a leitura assíncrona do
+  // engine — um agente escopado que chega por run_skill/enqueue/enqueue_batch entra como automação, e sem o card na mão o job
+  // saía da fila no mesmo instante em que era posto nela (vaga livre).
+  return { ok: true, trigger: triggerForCard(card, status.trigger), def: status, headroomUrl: resolveHeadroomUrl(config, process.env), scopeCard: scopeCardOf(card) };
 }
 
 // --- registration ---------------------------------------------------------
@@ -457,8 +480,11 @@ export function registerStorymapTools(server: McpServer): void {
       description:
         "Lê o RITMO de um board: `paused` (nada automático começa), `slow` (um card por vez, sem os agentes de fundo) ou " +
         "`normal`. Diz quem pôs o ritmo, quando, por quê, até quando, quantos cards a pausa está segurando e — quando a " +
-        "cota da semana está acima do ritmo — a SUGESTÃO de andar devagar. Sem `board`: todos os boards. Consulte antes " +
-        "de enfileirar trabalho e antes de mudar o ritmo.",
+        "cota da semana está acima do ritmo — a SUGESTÃO de andar devagar. Traz também o ESCOPO de tipos (o outro eixo: " +
+        "`types` = o que o board pode COMEÇAR sozinho; `scope` = quem limitou, desde quando e até quando), quantos cards " +
+        "esperam por causa dele (`waitingByScope`) e quantas funcionalidades já prontas na entrega vão junto na próxima " +
+        "publicação (`featuresToShip`). O ritmo muda QUANTO o board anda; o escopo muda O QUE ele começa. Sem `board`: " +
+        "todos os boards. Consulte antes de enfileirar trabalho e antes de mudar o ritmo ou o escopo.",
       inputSchema: { board: z.string().optional().describe("id do board; omita para ver todos") },
     },
     async ({ board }) => {
@@ -466,62 +492,111 @@ export function registerStorymapTools(server: McpServer): void {
       const ids = board ? [board] : (await listBoards()).map((b) => b.id);
       const views = (await Promise.all(ids.map((id) => boardPaceViewNow(id)))).filter((v): v is NonNullable<typeof v> => !!v);
       if (board && !views.length) return fail(`board "${board}" não existe — confira o id com list_boards.`);
-      return json(board ? views[0] : { boards: views });
+      const shown = views.map(paceToolView);
+      return json(board ? shown[0] : { boards: shown });
     },
   );
 
   defineTool(server,
     "pause_board",
     {
-      title: "Pausar ou desacelerar um board",
+      title: "Pausar, desacelerar ou limitar o que um board começa",
       description:
         "Pausa (`paused`) ou desacelera (`slow`) um board INTEIRO, para não gastar cota à toa. `paused`: nada automático " +
         "começa (condutor, skills de coluna, procurador, juiz, provas, vigia, copiloto) e o que estava na fila sai dela; " +
         "`mode: drain` (padrão) deixa terminar o que já roda, `mode: stop` também para o que roda e pede aos condutores " +
         "que guardem o trabalho e encerrem — tudo volta na retomada. `slow`: um card por vez, sem os agentes de fundo. " +
-        "`forMinutes` faz o ritmo voltar sozinho. Só DESACELERA: para retomar ou acelerar use resume_board. O que o " +
-        "operador pede explicitamente (run_skill) nunca é retido. Diga o motivo — ele aparece para o dono no cabeçalho do board.",
+        "`types` é o OUTRO eixo, independente do ritmo: a lista de tipos de story que o board pode COMEÇAR sozinho " +
+        "(`bug`, `technical`, `chore`, `spike`; `user` é a funcionalidade nova). Sem `level`, só o escopo muda — ex.: " +
+        "`types:[\"bug\",\"technical\",\"chore\",\"spike\"]` = «só consertos e manutenção». O escopo muda O QUE o board começa, " +
+        "não QUANTO ele gasta: para poupar cota, use o ritmo. Só barra a CONSTRUÇÃO (a captura, a triagem e a especificação " +
+        "seguem); o que já executa termina, e a fila sai e volta sozinha quando o limite sair. " +
+        "`forMinutes` faz o ritmo (e o escopo) voltar sozinho. Só DESACELERA e ESTREITA: para retomar, acelerar ou alargar " +
+        "use resume_board. Um agente só desfaz o limite que um agente pôs. O que o operador pede explicitamente (run_skill) " +
+        "nunca é retido. Diga o motivo — ele aparece para o dono no cabeçalho do board.",
       inputSchema: {
         board: z.string().describe("id do board (os válidos vêm de list_boards)"),
-        level: z.enum(["paused", "slow"]).describe("paused = nada automático começa · slow = um card por vez, sem os agentes de fundo"),
+        level: z.enum(["paused", "slow"]).optional().describe("paused = nada automático começa · slow = um card por vez, sem os agentes de fundo (omita para mexer só no escopo)"),
+        types: z
+          .array(enumOf<StoryType>(STORY_TYPE_IDS as StoryType[]))
+          .min(1)
+          .optional()
+          .describe("os tipos de story que o board pode começar sozinho — só pode ser MENOR que o de hoje (para alargar, resume_board)"),
         reason: z.string().min(3).max(300).describe("por que — aparece no cabeçalho do board e no histórico"),
         mode: z.enum(["drain", "stop"]).optional().describe("só para paused: drain (padrão) deixa terminar o que roda · stop para e guarda"),
-        forMinutes: z.number().positive().optional().describe("em quantos minutos o ritmo volta sozinho (omita para sem prazo)"),
+        forMinutes: z.number().positive().optional().describe("em quantos minutos o ritmo e/ou o escopo voltam sozinhos (omita para sem prazo)"),
       },
     },
-    async ({ board, level, reason, mode, forMinutes }) => {
-      const { changeBoardPaceNow, boardPaceViewNow } = await import("@/lib/storymap/runner/board-pace-actions");
+    async ({ board, level, types, reason, mode, forMinutes }) => {
+      const { changeBoardPaceNow, changeBoardScopeNow, boardPaceViewNow } = await import("@/lib/storymap/runner/board-pace-actions");
+      if (!level && !types) return fail("Diga o que frear: `level` (paused ou slow), `types` (o que o board pode começar) ou os dois.");
       const before = await boardPaceViewNow(board);
       if (!before) return fail(`board "${board}" não existe — confira o id com list_boards.`);
       const { paceRank } = await import("@/lib/storymap/runner/board-pace");
-      if (paceRank(level) > paceRank(before.level))
+      if (level && paceRank(level) > paceRank(before.level))
         return fail(`O board "${board}" está em ${before.level}: ${level} seria ACELERAR. Para retomar ou acelerar use resume_board.`);
-      const res = await changeBoardPaceNow({ board, level, reason, mode, forMinutes, by: paceActor() });
-      if (!res.ok) return fail(res.error);
-      return json({ ok: true, changed: res.changed, stopped: res.stopped, parked: res.parked, pace: await boardPaceViewNow(board) });
+      if (types && asksToWiden(before.scope?.types ?? null, types))
+        return fail(`O board "${board}" já está limitado a um conjunto menor de tipos: pedir mais tipos seria ALARGAR. Para alargar use resume_board.`);
+      let pace: Awaited<ReturnType<typeof changeBoardPaceNow>> | null = null;
+      if (level) {
+        pace = await changeBoardPaceNow({ board, level, reason, mode, forMinutes, by: paceActor() });
+        if (!pace.ok) return fail(pace.error);
+      }
+      let scope: Awaited<ReturnType<typeof changeBoardScopeNow>> | null = null;
+      if (types) {
+        scope = await changeBoardScopeNow({ board, types, reason, forMinutes, by: paceActor() });
+        if (!scope.ok) return fail(pace?.ok ? `O ritmo mudou, mas o escopo não: ${scope.error}` : scope.error);
+      }
+      return json({
+        ok: true,
+        ...(pace?.ok ? { changed: pace.changed, stopped: pace.stopped, parked: pace.parked } : {}),
+        ...(scope?.ok ? { scopeChanged: scope.changed, queueCleared: scope.purged } : {}),
+        pace: await boardPaceViewNow(board).then((v) => (v ? paceToolView(v) : null)),
+      });
     },
   );
 
   defineTool(server,
     "resume_board",
     {
-      title: "Retomar ou acelerar um board",
+      title: "Retomar, acelerar ou alargar o que um board começa",
       description:
         "Retoma um board pausado ou o acelera: `normal` (o ritmo que o board declara) ou `slow` (um card por vez). Na " +
         "saída da pausa, o que ela segurou (runs parados, disparos de coluna retidos) volta ao pipeline e as filas andam " +
-        "na hora. REGRA DO DONO: um agente só desfaz a pausa (ou a lentidão) que um AGENTE pôs — o que o dono segurou, " +
-        "só o dono retoma (no cabeçalho do board). Um board DESARMADO não é retomado por aqui: armar é set_board_autorun.",
+        "na hora. `types` ALARGA o escopo (o outro eixo — ver pause_board): `\"all\"` tira o limite, ou uma lista maior de " +
+        "tipos; o que o limite segurava volta sozinho e as filas andam. Sem `level`, mas com `types`, só o escopo muda. " +
+        "REGRA DO DONO: um agente só desfaz a pausa (ou a lentidão, ou o limite de tipos) que um AGENTE pôs — o que o " +
+        "dono segurou, só o dono retoma (no cabeçalho do board). Um board DESARMADO não é retomado por aqui: armar é " +
+        "set_board_autorun.",
       inputSchema: {
         board: z.string().describe("id do board (os válidos vêm de list_boards)"),
-        level: z.enum(["slow", "normal"]).optional().describe("para onde ir (padrão: normal)"),
+        level: z.enum(["slow", "normal"]).optional().describe("para onde ir (padrão: normal, a menos que só `types` seja pedido)"),
+        types: z
+          .union([z.literal("all"), z.array(enumOf<StoryType>(STORY_TYPE_IDS as StoryType[])).min(1)])
+          .optional()
+          .describe("\"all\" tira o limite de tipos; uma lista define o que o board pode começar (só o dono passa do que ele mesmo limitou)"),
         reason: z.string().max(300).optional().describe("por que retomar agora — vai para o histórico"),
       },
     },
-    async ({ board, level, reason }) => {
-      const { changeBoardPaceNow, boardPaceViewNow } = await import("@/lib/storymap/runner/board-pace-actions");
-      const res = await changeBoardPaceNow({ board, level: level ?? "normal", reason, by: paceActor() });
-      if (!res.ok) return fail(res.error);
-      return json({ ok: true, changed: res.changed, released: res.released, pace: await boardPaceViewNow(board) });
+    async ({ board, level, types, reason }) => {
+      const { changeBoardPaceNow, changeBoardScopeNow, boardPaceViewNow } = await import("@/lib/storymap/runner/board-pace-actions");
+      let pace: Awaited<ReturnType<typeof changeBoardPaceNow>> | null = null;
+      // só o escopo foi pedido ⇒ o ritmo fica como está (um agente não precisa de licença do dono para alargar o que ele mesmo limitou)
+      if (level || !types) {
+        pace = await changeBoardPaceNow({ board, level: level ?? "normal", reason, by: paceActor() });
+        if (!pace.ok) return fail(pace.error);
+      }
+      let scope: Awaited<ReturnType<typeof changeBoardScopeNow>> | null = null;
+      if (types) {
+        scope = await changeBoardScopeNow({ board, types, reason, by: paceActor() });
+        if (!scope.ok) return fail(pace?.ok ? `O ritmo mudou, mas o escopo não: ${scope.error}` : scope.error);
+      }
+      return json({
+        ok: true,
+        ...(pace?.ok ? { changed: pace.changed, released: pace.released } : {}),
+        ...(scope?.ok ? { scopeChanged: scope.changed, scopeReleased: scope.released } : {}),
+        pace: await boardPaceViewNow(board).then((v) => (v ? paceToolView(v) : null)),
+      });
     },
   );
 
@@ -777,6 +852,26 @@ export function registerStorymapTools(server: McpServer): void {
       }
       const current = await readCard(input.board, input.cardId);
       if (!current) return fail(`card não encontrado: ${input.board}/${input.cardId}`);
+      // R6 (escopo de tipos do ritmo) — com o board limitando o que começa, o TIPO é a catraca: um agente não reclassifica
+      // uma funcionalidade já classificada (só o dono). Recusa AQUI, com a frase que diz o que fazer; a ação de servidor
+      // (updateCardAction) repete a régua para as outras portas e grava a trilha de quem troca com sucesso.
+      if (input.storyType !== undefined && (current.storyType ?? "user") !== input.storyType) {
+        const actor = paceActor();
+        const refusal = storyTypeChangeRefusal(effectiveScope(boardPaceRow(input.board), Date.now()), current, input.storyType, actor);
+        if (refusal) {
+          void appendAgentAction({
+            actor: currentMcpActor()?.tokenEnv,
+            board: input.board,
+            cardId: input.cardId,
+            tool: "update_card",
+            cls: "write-board",
+            disposition: "auto",
+            outcome: "refused",
+            note: `${storyTypeChangeLine(current, input.storyType, actor)} — recusado`,
+          });
+          return fail(refusal);
+        }
+      }
       // Apply ONLY the whitelisted human-authored fields onto the fresh snapshot.
       // updateCardAction re-reads inside the lock + mergeCardOnSave re-grafts every
       // pipeline-owned field from disk, so nothing here can clobber skill state.
@@ -1099,6 +1194,7 @@ export function registerStorymapTools(server: McpServer): void {
       const res = getRunnerEngine().enqueueWithDeps(board, cardId, t.trigger, t.def, [], {
         origin: "manual",
         headroomUrl: t.headroomUrl,
+        scopeCard: t.scopeCard,
       });
       return json(res);
     },
@@ -1141,11 +1237,11 @@ export function registerStorymapTools(server: McpServer): void {
 
       // Resolve EVERY card's trigger/def first — fail the whole batch on any unresolvable card so we
       // never enqueue a partial lote (transactional intent).
-      const targets = new Map<string, { board: string; cardId: string; trigger: TriggerId; def: StatusDef; headroomUrl: string | null }>();
+      const targets = new Map<string, { board: string; cardId: string; trigger: TriggerId; def: StatusDef; headroomUrl: string | null; scopeCard: ScopeCard }>();
       for (const c of cards) {
         const t = await resolveEnqueueTarget(c.board, c.cardId);
         if (!t.ok) return fail(t.error);
-        targets.set(`${c.board}/${c.cardId}`, { board: c.board, cardId: c.cardId, trigger: t.trigger, def: t.def, headroomUrl: t.headroomUrl });
+        targets.set(`${c.board}/${c.cardId}`, { board: c.board, cardId: c.cardId, trigger: t.trigger, def: t.def, headroomUrl: t.headroomUrl, scopeCard: t.scopeCard });
       }
 
       // Topological order ⇒ predecessors enqueue FIRST, so a dependency is already alive (in-flight or
@@ -1161,6 +1257,7 @@ export function registerStorymapTools(server: McpServer): void {
           getRunnerEngine().enqueueWithDeps(tgt.board, tgt.cardId, tgt.trigger, tgt.def, cardDeps, {
             origin: "manual",
             headroomUrl: tgt.headroomUrl,
+            scopeCard: tgt.scopeCard,
           }),
         );
       }
@@ -1509,26 +1606,41 @@ export function registerStorymapTools(server: McpServer): void {
       title: "Projetar o custo mensal de uma entrega",
       description:
         "ANTES de publicar, projete quanto a entrega muda o custo MENSAL do produto — simples e honesto, com as " +
-        "premissas (de onde vem o número) e a linha de base que você assumiu. Dentro dos tetos do dono " +
-        "(autonomy.budget) o sistema decide; acima de um teto, ou com fornecedor / plano pago / API paga NOVOS, o card " +
-        "passa a tocar a classe `money` e as paradas dele vão ao dono. Custo 0 também se registra (a entrega não custa).",
+        "premissas (de onde vem o número) e a linha de base que você assumiu. Os valores vão NA MOEDA DO ALVO " +
+        "(target.currency, ou autonomy.budget.currency do board): você não escolhe a moeda e a ferramenta não converte " +
+        "câmbio. Dentro dos tetos do dono (autonomy.budget) o sistema decide; acima de um teto, ou com fornecedor / plano " +
+        "pago / API paga NOVOS, o card passa a tocar a classe `money` e as paradas dele vão ao dono. Custo 0 também se " +
+        "registra (a entrega não custa). Se o alvo não declarou a moeda, a chamada é recusada dizendo o que declarar. " +
+        "Use `monthlyAmount`; `monthlyBRL`/`baselineMonthlyBRL` são o nome ANTIGO (DEPRECATED) e só valem quando a moeda " +
+        "do board é BRL.",
       inputSchema: {
         board: z.string(),
         cardId: z.string(),
-        monthlyBRL: z.number().describe("o AUMENTO mensal em R$ (0 quando não custa nada a mais)"),
+        monthlyAmount: z.number().optional().describe("o AUMENTO mensal, na moeda do alvo (0 quando não custa nada a mais) — informe este"),
         scope: z.enum(["infra", "cash"]).describe("infra = infraestrutura do produto; cash = todo o caixa (inclui IA)"),
         assumptions: z.string().describe("as premissas: de onde vem o número (tabela de preço, volume esperado…)"),
-        baselineMonthlyBRL: z.number().optional().describe("o custo mensal de hoje que você assumiu (sem ele, R$0 — e a conta diz isso)"),
+        baselineMonthlyAmount: z.number().optional().describe("o custo mensal de hoje que você assumiu, na moeda do alvo (sem ele, 0 — e a conta diz isso)"),
+        monthlyBRL: z.number().optional().describe("DEPRECATED — o nome antigo de monthlyAmount; só vale se a moeda do board for BRL"),
+        baselineMonthlyBRL: z.number().optional().describe("DEPRECATED — o nome antigo de baselineMonthlyAmount; só vale se a moeda do board for BRL"),
         newVendor: z.string().optional().describe("o nome do fornecedor NOVO, se a entrega traz um"),
         paidPlan: z.boolean().optional().describe("assina um plano pago novo"),
         paidApi: z.boolean().optional().describe("passa a usar uma API paga nova"),
         by: z.string().optional(),
       },
     },
-    async ({ board, cardId, monthlyBRL, scope, assumptions, baselineMonthlyBRL, newVendor, paidPlan, paidApi, by }) => {
-      const r = await recordCostImpactAction({ boardId: board, cardId, impact: { monthlyBRL, scope, assumptions, baselineMonthlyBRL, newVendor, paidPlan, paidApi }, by });
+    async ({ board, cardId, monthlyAmount, monthlyBRL, scope, assumptions, baselineMonthlyAmount, baselineMonthlyBRL, newVendor, paidPlan, paidApi, by }) => {
+      // A PORTA da moeda: o board → o alvo decidem a unidade (nunca o agente) e, sem nenhuma, a chamada é recusada ANTES de
+      // tocar o card. As duas grafias do número (a neutra e o alias antigo do condutor) são validadas aqui.
+      const config = await readBoardConfig(board).catch(() => null);
+      if (!config) return fail(`board "${board}" não existe — confira o id com list_boards.`);
+      const built = buildCostImpactInput(
+        { monthlyAmount, monthlyBRL, baselineMonthlyAmount, baselineMonthlyBRL, scope, assumptions, newVendor, paidPlan, paidApi },
+        { config, target: loadRunnerConfig().target },
+      );
+      if (!built.ok) return fail(built.error);
+      const r = await recordCostImpactAction({ boardId: board, cardId, impact: built.input, by });
       if (!r.ok) return fail(r.error);
-      return json({ ok: true, decider: r.data?.verdict.owner ? "owner" : "system", reason: r.data?.verdict.reason });
+      return json({ ok: true, decider: r.data?.verdict.owner ? "owner" : "system", reason: r.data?.verdict.reason, currency: built.input.currency?.code });
     },
   );
 
@@ -1631,7 +1743,8 @@ export function registerStorymapTools(server: McpServer): void {
       description:
         "Grava um finding no card NA MAIN, pelo escritor único do serviço — para o que aparece no MEIO do trabalho " +
         "(teto de orçamento, achado de verificação) e não pode esperar o submit final. `severity` blocker fecha o " +
-        "gate hasNoBlockers; high/medium/low só anotam. Um `id` ESTÁVEL (ex.: conductor-budget) torna a chamada " +
+        "gate hasNoBlockers; high/medium/low só anotam. A `lens` vem do vocabulário do alvo (as embutidas + as declaradas em " +
+        "target.reviewLenses); uma lente que o alvo não declarou é recusada com a lista das válidas. Um `id` ESTÁVEL (ex.: conductor-budget) torna a chamada " +
         "idempotente: repetir atualiza o conteúdo e NUNCA o status (quem muda status é triage_finding). Sem `id`, " +
         "um novo `<lens>-<n>` é criado `open`.",
       inputSchema: {
@@ -1640,7 +1753,13 @@ export function registerStorymapTools(server: McpServer): void {
         severity: z.enum(["blocker", "high", "medium", "low"]),
         title: z.string(),
         detail: z.string().optional(),
-        lens: z.enum(["firestore", "nextjs", "perf", "security", "testing", "general"]).optional().describe("padrão general"),
+        lens: z
+          .string()
+          .optional()
+          .describe(
+            "a lente de revisão — uma das EMBUTIDAS (security, testing, perf, general, design) ou das que este alvo declarou " +
+              "em storymap/settings.yaml → target.reviewLenses; uma lente fora do conjunto é recusada listando as válidas. Padrão general",
+          ),
         id: z.string().optional().describe("id estável para idempotência (letras, dígitos, . _ : -)"),
         file: z.string().optional(),
         line: z.number().int().optional(),
@@ -1651,7 +1770,9 @@ export function registerStorymapTools(server: McpServer): void {
       const r = await addFindingAction({
         boardId: board,
         cardId,
-        finding: { severity, title, detail, lens, id, file, line, suggestion },
+        // A porta que conhece o ALVO: as lentes aceitas são as embutidas + as de `target.reviewLenses` (resolvidas a cada
+        // chamada — o settings é quente). A recusa lista as válidas e diz onde declarar uma nova.
+        finding: { severity, title, detail, lens, id, file, line, suggestion, lenses: new Set(reviewLensesOf(loadRunnerConfig().target).map((l) => l.id)) },
       });
       return r.ok ? json({ ok: true, ...r.data }) : fail(r.error);
     },

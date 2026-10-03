@@ -14,6 +14,7 @@ import { listBoards } from "@/lib/storymap/repo";
 import { readSystemDecisions } from "@/lib/storymap/runner/decision-log";
 import { readInboxReceipts } from "@/lib/storymap/runner/receipts-log";
 import { readAgentActions } from "@/lib/storymap/runner/agent-actions";
+import { loadRunnerConfig } from "@/lib/storymap/runner/config";
 import { backfillDeployCause, deployBlocksFile, openDeployFailure, parseDeployBlocks, type DeployBlockRow } from "@/lib/storymap/runner/deploy-blocks";
 import { tryGetPublishBreaker } from "@/lib/storymap/runner/publish-breaker";
 import { followUpItems, type SystemDecision } from "@/lib/storymap/system-decisions";
@@ -21,7 +22,7 @@ import type { ApprovalRequest } from "@/lib/storymap/approvals";
 import type { CockpitItem } from "@/lib/storymap/demands";
 import type { BoardConfig, Card, DeployCause, GovernanceDraft } from "@/lib/storymap/types";
 import { deployAnchors, emptyFacts, type ExecutedAction, type InboxFacts } from "./contract";
-import { foldByCause, inboxSummary, settleItems, type InboxEntry, type RetiredItem } from "./entries";
+import { foldByCause, inboxSummary, lensNamesOf, settleItems, type InboxEntry, type RetiredItem } from "./entries";
 import { expiredFacts, RESOLVED_WINDOW_MS, resolvedToday, type InboxReceiptRecord, type ResolvedEntry } from "./receipts";
 import { followUpInWindow, isOwnerReview, systemDecisionEntry } from "./system-entries";
 
@@ -60,7 +61,8 @@ export async function collectBoardInbox(
   const { items, cards, config, approvals, governanceDrafts } = cockpit;
   if (!config) return null;
   const facts = await readInboxFacts({ boardId, config, cards, items, approvals, lastTransitionAt: cockpit.lastTransitionAt, stepEnteredAt: cockpit.stepEnteredAt, now });
-  const built = boardEntries({ boardId, config, cards, items, decisions, now, facts });
+  // O nome humano das lentes vem do settings do alvo, que só o servidor lê (o cliente não o recebe).
+  const built = boardEntries({ boardId, config, cards, items, decisions, now, facts, lensNames: lensNamesOf(loadRunnerConfig().target) });
   return {
     boardId,
     boardName: config.name,
@@ -233,10 +235,12 @@ export function boardEntries(input: {
   now: number;
   /** os fatos do board (contract.ts); ausentes ⇒ os itens decidem só pelo card. */
   facts?: InboxFacts;
+  /** `id → nome` das lentes de revisão do alvo (entries.ts `lensNamesOf`); ausente ⇒ o item mostra o id. */
+  lensNames?: Readonly<Record<string, string>>;
 }): { entries: InboxEntry[]; all: InboxEntry[]; retired: RetiredItem[] } {
   const { boardId, config, now } = input;
   const cardsById = input.facts?.cardsById ?? new Map(input.cards.map((c) => [c.id, c]));
-  const { entries: live, retired } = settleItems(input.items, { boardId, boardName: config.name, config, cardsById, now, ...(input.facts ? { facts: input.facts } : {}) });
+  const { entries: live, retired } = settleItems(input.items, { boardId, boardName: config.name, config, cardsById, now, ...(input.facts ? { facts: input.facts } : {}), ...(input.lensNames ? { lensNames: input.lensNames } : {}) });
   const system = followUpInWindow(followUpItems(input.decisions, { board: boardId }), now).map((d) => {
     const card = d.cardId ? cardsById.get(d.cardId) : undefined;
     return { entry: systemDecisionEntry(d, { boardId, boardName: config.name, config, card }), review: isOwnerReview(d, { config, card }) };

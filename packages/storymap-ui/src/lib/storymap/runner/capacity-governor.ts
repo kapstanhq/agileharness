@@ -11,6 +11,10 @@
 // era só MOSTRADOR: a admissão (o pump do engine, o scheduler) olhava RAM e load, nunca a conta.
 //
 // ── A POLÍTICA (os defaults de fábrica, e cada número é um knob de `settings.yaml governor:`) ──────────────────
+// Os números abaixo são a política NEUTRA da ferramenta, não a de uma instalação: quem adota declara os dele em
+// `settings.yaml → governor:` (tetos, trava, `timezone`) e a declaração vence — sem `timezone` vale o fuso do HOST. O
+// governador só governa com um MEDIDOR declarado (`vps.headroomUrl` ou AGILEHARNESS_HEADROOM_URL); sem ele fica inerte
+// e o serviço DIZ isso no log, uma vez (capacity-service.ts), em vez de admitir tudo em silêncio.
 //   · a frota trabalha até 80% da janela de 7 dias — uso TOTAL (dono + frota), porque é o que o limite mede;
 //   · nas últimas 24h antes do reset semanal ela pode ir a 90%, e só com a janela de 5h abaixo de 85%;
 //   · a janela de 5h tem teto de 85% para trabalho que não é do operador;
@@ -596,13 +600,37 @@ export function mayClearLatch(caller: string, reason: string): { ok: true } | { 
 //   1. SÓ o que a medição engatou e que não é dinheiro: `auto:week` e `auto:five-hour`. `auto:extra-usage` (uso
 //      extra PAGO), a trava do operador, a de um agente (`mcp:*`), a de origem desconhecida, a DURA e o HALT do
 //      host ficam exatamente como eram: só o operador solta (e o HALT, quem apaga o arquivo no host).
-//   2. SÓ com PROVA de que a janela que a engatou ACABOU: a janela corrente da leitura começou DEPOIS do engate.
-//      "O número está abaixo do teto" não basta — dentro de uma janela o uso só cresce, então um número baixo na
-//      MESMA janela é o dono que subiu o teto (soltar é gesto dele), ou uma leitura torta que não merece crédito.
+//   2. SÓ com PROVA de que a janela que a engatou ACABOU: a janela corrente da leitura começou DEPOIS do engate —
+//      OU a cota foi ZERADA dentro da mesma janela (o dono reseta a cota na conta: o reset fica onde estava, o uso
+//      cai a perto de zero). "O número está abaixo do teto" não basta — dentro de uma janela o uso só cresce, então
+//      um número POUCO abaixo na MESMA janela é o dono que subiu o teto (soltar é gesto dele). O que conta como
+//      cota zerada é uma QUEDA grande — {@link RESET_DROP_PP} pontos abaixo do teto da trava — vista em leituras
+//      frescas que se sustentam por {@link RESET_CONFIRM_MS} (uma leitura torta isolada não solta nada).
 //   3. SÓ com leitura FRESCA e a condição realmente ausente no veredito desta leitura.
 
 const FIVE_HOUR_MS = 5 * HOUR_MS;
 const WEEK_MS = 7 * DAY_MS;
+
+/** Quantos pontos abaixo do teto da trava o uso precisa estar, na mesma janela, para contar como cota zerada. */
+export const RESET_DROP_PP = 50;
+/** Por quanto tempo a queda tem de se sustentar em leituras frescas antes de soltar. */
+export const RESET_CONFIRM_MS = 10 * 60_000;
+
+/**
+ * A leitura mostra a cota ZERADA na mesma janela que engatou a trava? (uso ≥ {@link RESET_DROP_PP} pontos abaixo do
+ * teto da trava, numa leitura posterior ao engate). Só para a trava da medição (`auto:week`/`auto:five-hour`). PURA.
+ */
+export function resetDropObserved(
+  latch: LatchState | null,
+  reading: CapacityReading | null,
+  caps: Pick<GovernorSettings, "latchWeekPct" | "latchFiveHourPct">,
+): boolean {
+  if (!latch || !reading || latch.level !== "soft" || !(reading.polledAt > latch.at)) return false;
+  const which = /^auto:(week|five-hour)$/.exec(latch.trippedBy)?.[1];
+  if (which === "week") return reading.usage7dPct <= caps.latchWeekPct - RESET_DROP_PP;
+  if (which === "five-hour") return reading.usage5hPct != null && reading.usage5hPct <= caps.latchFiveHourPct - RESET_DROP_PP;
+  return false;
+}
 
 /** O veredito da soltura automática: soltar (com o motivo, em português, para o log e a auditoria) ou não (por quê). */
 export type LatchAutoRelease = { release: true; reason: string } | { release: false; why: string };
@@ -616,6 +644,10 @@ export function latchAutoRelease(input: {
   fresh: boolean;
   /** o veredito desta leitura, SEM a trava (a condição que engata) */
   verdict: CapacityVerdict;
+  /** os tetos da trava — a régua da cota ZERADA ({@link resetDropObserved}); sem eles, só a janela nova solta */
+  caps?: Pick<GovernorSettings, "latchWeekPct" | "latchFiveHourPct">;
+  /** `polledAt` da PRIMEIRA leitura fresca que mostrou a cota zerada, mantido pelo serviço; null = não há queda em curso */
+  resetDropSince?: number | null;
 }): LatchAutoRelease {
   const { latch, reading } = input;
   if (!latch) return { release: false, why: "não há trava" };
@@ -627,9 +659,21 @@ export function latchAutoRelease(input: {
   if (!input.fresh || !reading) return { release: false, why: "sem leitura fresca da janela — a trava fica" };
   if (input.verdict.kind === "latch") return { release: false, why: "a condição que engatou a trava segue viva" };
 
+  // a cota ZERADA na mesma janela: queda grande, sustentada por RESET_CONFIRM_MS em leituras frescas
+  const sameWindow = (label: string, pct: number): LatchAutoRelease => {
+    if (!input.caps || !resetDropObserved(latch, reading, input.caps)) {
+      return { release: false, why: `ainda é a mesma janela de ${label} que engatou a trava` };
+    }
+    const since = input.resetDropSince;
+    if (since == null || reading.polledAt - since < RESET_CONFIRM_MS) {
+      return { release: false, why: `a cota de ${label} parece zerada (${fmt(pct)}%) — confirmando por ${RESET_CONFIRM_MS / 60_000}min antes de soltar` };
+    }
+    return { release: true, reason: `a cota de ${label} foi zerada na mesma janela: o uso caiu a ${fmt(pct)}% e se sustentou desde ${new Date(since).toISOString()}` };
+  };
+
   if (which === "week") {
     const windowStart = reading.resetsAt7d - WEEK_MS;
-    if (!(windowStart > latch.at)) return { release: false, why: "ainda é a mesma janela de 7 dias que engatou a trava" };
+    if (!(windowStart > latch.at)) return sameWindow("7 dias", reading.usage7dPct);
     return {
       release: true,
       reason: `a janela de 7 dias reiniciou (a nova começou em ${new Date(windowStart).toISOString()}) e o uso leu ${fmt(reading.usage7dPct)}%`,
@@ -637,7 +681,7 @@ export function latchAutoRelease(input: {
   }
   if (reading.resetsAt5h == null) return { release: false, why: "a leitura não traz o reset da janela de 5h — sem como provar a janela nova" };
   const windowStart = reading.resetsAt5h - FIVE_HOUR_MS;
-  if (!(windowStart > latch.at)) return { release: false, why: "ainda é a mesma janela de 5h que engatou a trava" };
+  if (!(windowStart > latch.at)) return sameWindow("5h", reading.usage5hPct ?? 0);
   return {
     release: true,
     reason: `a janela de 5 horas reiniciou (a nova começou em ${new Date(windowStart).toISOString()}) e o uso leu ${fmt(reading.usage5hPct ?? 0)}%`,

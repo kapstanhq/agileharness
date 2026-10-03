@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   PROD_PORT,
+  prodPorts,
   EPHEMERAL_PORT_BASE,
   EPHEMERAL_PORT_SPAN,
   ephemeralPortForRun,
@@ -38,9 +39,9 @@ describe("ephemeralPortForRun — deterministic, in-range, never 3008", () => {
     }
   });
 
-  it("the range sits ABOVE every dev-all/emulator port + 3008 (base 3100 > 3008)", () => {
+  it("the range sits ABOVE the service port + the low 30xx band (base 3100 > 3008)", () => {
     expect(EPHEMERAL_PORT_BASE).toBeGreaterThan(PROD_PORT);
-    // The whole derived range avoids the 30xx web ports and below.
+    // The whole derived range avoids the 30xx ports and below; the target's OWN ports come via `reserved`.
     expect(EPHEMERAL_PORT_BASE).toBe(3100);
     expect(EPHEMERAL_PORT_BASE + EPHEMERAL_PORT_SPAN - 1).toBe(3899);
   });
@@ -58,9 +59,43 @@ describe("assertNotProdPort — the fail-early 3008 collision guard (AC3)", () =
   });
 
   it("is a NO-OP for any other port", () => {
-    expect(() => assertNotProdPort(3200)).not.toThrow();
-    expect(() => assertNotProdPort(EPHEMERAL_PORT_BASE)).not.toThrow();
-    expect(() => assertNotProdPort(0)).not.toThrow();
+    expect(() => assertNotProdPort(3200, {})).not.toThrow();
+    expect(() => assertNotProdPort(EPHEMERAL_PORT_BASE, {})).not.toThrow();
+    expect(() => assertNotProdPort(0, {})).not.toThrow();
+  });
+
+  it("an installation on ANOTHER port is guarded too (AGILEHARNESS_PORT / PORT), not only the 3008 default", () => {
+    expect(prodPorts({})).toEqual([3008]);
+    expect(prodPorts({ AGILEHARNESS_PORT: "3555" })).toEqual([3008, 3555]);
+    expect(prodPorts({ PORT: "3555" })).toEqual([3008, 3555]);
+    expect(() => assertNotProdPort(3555, { AGILEHARNESS_PORT: "3555" })).toThrow(/3555/);
+    expect(() => assertNotProdPort(3555, {})).not.toThrow(); // sem a declaração, 3555 é uma porta qualquer
+  });
+});
+
+describe("resolveDevServerPort — `reserved` (target.qa.ports): the target's own stack ports are never picked", () => {
+  const allFree: PortProbe = async () => true;
+
+  it("never returns a reserved port even when it is the first deterministic candidate", async () => {
+    const first = ephemeralPortForRun(RUN_ID);
+    const got = await resolveDevServerPort(RUN_ID, allFree, { reserved: [first] });
+    expect(got).not.toBe(first);
+    expect(got).toBe(first + 1);
+  });
+
+  it("a reserved port is skipped WITHOUT being probed", async () => {
+    const first = ephemeralPortForRun(RUN_ID);
+    const probed: number[] = [];
+    await resolveDevServerPort(RUN_ID, async (p) => (probed.push(p), true), { reserved: [first] });
+    expect(probed).not.toContain(first);
+  });
+
+  it("empty or absent `reserved` is IDENTICAL to today's behaviour (golden over 3 session ids)", async () => {
+    for (const id of ["run-a", "run-b", RUN_ID]) {
+      const base = await resolveDevServerPort(id, allFree);
+      expect(await resolveDevServerPort(id, allFree, { reserved: [] })).toBe(base);
+      expect(base).toBe(ephemeralPortForRun(id));
+    }
   });
 });
 

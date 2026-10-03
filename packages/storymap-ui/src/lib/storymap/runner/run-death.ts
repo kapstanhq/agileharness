@@ -21,7 +21,10 @@ import { updateCardOnDisk } from "@/lib/storymap/write";
 import { STEP_LABEL_BY_TRIGGER } from "@/lib/storymap/step-rollup";
 import type { Card, FailureClass, Finding, TriggerId } from "@/lib/storymap/types";
 import { shellDeniedWarning } from "./autonomy-sandbox";
-import { classifyFailure, upsertFinding, withBudgetCutResolved } from "./findings";
+import { classifyFailure, upsertFinding, withBudgetCutResolved, type FailureRules } from "./findings";
+import { loadRunnerConfig } from "./config";
+import { resolveServiceProbePort } from "./host-tools";
+import { qaOf } from "@/lib/storymap/target-profile";
 import { nextRunDeathRepeats, noOpVariant, runDeathTitle, toolSignature, type FailureOriginVerdict } from "./failure-origin";
 import { getRunnerRegistry } from "./registry";
 import { capTier, tierOf } from "./skill-registry";
@@ -53,13 +56,15 @@ export function classifyRunDeath(
   detail?: string | null,
   finalText?: string | null,
   postureWarn?: string | null,
+  /** o que o alvo declarou do ambiente de teste dele (`target.qa`); ausente = só o baseline universal. */
+  rules?: FailureRules,
 ): FailureClass | undefined {
   if (toolSignature(finalText) || toolSignature(detail) || toolSignature(postureWarn)) return "infra";
   if (reason === "error" && MAX_TURNS_CAP.test(detail ?? "")) return undefined;
   if (reason === "oom-killed" || reason === "error") return "infra";
   if (reason === "no-op") return "app";
   if (reason === "exit") {
-    const c = classifyFailure({ message: detail ?? "" });
+    const c = classifyFailure({ message: detail ?? "" }, rules);
     // Só um sinal POSITIVO de infra/test é confiável num detail de morte (o fallback 'app' do classifier
     // dispara para QUALQUER mensagem não-vazia — enganoso para um "exit N" seco). Senão: UNKNOWN.
     return c === "infra" || c === "test" ? c : undefined;
@@ -137,10 +142,12 @@ export function nextRunDeathFinding(
     step?: string | null;
     /** o aviso da postura REBAIXADA do spawn (autonomy-sandbox.ts shellDeniedWarning): o passo rodou sem shell. */
     postureWarn?: string | null;
+    /** as regras de ambiente do alvo (`target.qa`), já resolvidas por quem tem IO ({@link declaredFailureRules}). */
+    rules?: FailureRules;
   },
 ): Finding {
   const tool = toolSignature(input.finalText) ?? toolSignature(input.detail) ?? toolSignature(input.postureWarn);
-  const failureClass = classifyRunDeath(input.reason, input.detail, input.finalText, input.postureWarn);
+  const failureClass = classifyRunDeath(input.reason, input.detail, input.finalText, input.postureWarn, input.rules);
   const open = (card.findings ?? []).find((f) => f.id === RUN_DEATH_FINDING_ID && f.status === "open");
   const base = runDeathTitle(input.reason, { step: input.step, variant: noOpVariant(input.reason, input.detail), toolSignature: tool?.signature });
   const repeats = nextRunDeathRepeats(open?.title, base);
@@ -258,6 +265,20 @@ async function spawnShellDenied(board: string, trigger: string): Promise<string 
 }
 
 /**
+ * IO: o que o alvo DECLAROU do ambiente de teste dele (`settings.yaml → target.qa`), no formato que o classificador
+ * lê, mais a porta em que esta instalação da ferramenta escuta. Lido a cada carimbo (o settings é relido por mtime).
+ * Nunca lança: settings ilegível ⇒ só o baseline universal.
+ */
+export function declaredFailureRules(): FailureRules {
+  try {
+    const qa = qaOf(loadRunnerConfig().target);
+    return { ports: qa.ports, failureClasses: qa.failureClasses, selfPort: resolveServiceProbePort() };
+  } catch {
+    return {};
+  }
+}
+
+/**
  * IO: carimba o diagnóstico de morte no card. Best-effort — loga e NUNCA lança. Idempotente (upsert por id).
  */
 export async function stampRunDeathFinding(
@@ -269,6 +290,8 @@ export async function stampRunDeathFinding(
   finalText?: string | null,
   /** o passo que rodou (o trigger da falha): entra na chave da repetição e diz se o spawn rodou sem shell. */
   trigger?: string | null,
+  /** de onde vêm as regras de ambiente do alvo; injetável para o teste não tocar o disco. */
+  rulesOf: () => FailureRules = declaredFailureRules,
 ): Promise<void> {
   try {
     const today = new Date().toISOString().slice(0, 10);
@@ -276,7 +299,7 @@ export async function stampRunDeathFinding(
     const postureWarn = trigger ? await spawnShellDenied(board, trigger) : null;
     let finding: Finding | null = null;
     await updateCardOnDisk(board, cardId, (card) => {
-      finding = nextRunDeathFinding(card, { reason, detail, finalText, today, step, postureWarn });
+      finding = nextRunDeathFinding(card, { reason, detail, finalText, today, step, postureWarn, rules: rulesOf() });
       return applyRunDeathFinding(card, finding);
     });
     const f = finding as Finding | null;

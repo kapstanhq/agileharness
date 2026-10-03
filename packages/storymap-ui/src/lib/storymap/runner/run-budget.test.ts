@@ -48,22 +48,22 @@ const settingsWith = (maxBudgetUSD: RunnerSettings["autorun"]["maxBudgetUSD"]): 
   autorun: { ...DEFAULT_RUNNER_SETTINGS.autorun, ...(maxBudgetUSD !== undefined ? { maxBudgetUSD } : {}) },
 });
 
-describe("a tabela default por skill — max(2×p90, p99) do custo nocional histórico", () => {
-  it("cada skill medida tem o seu teto, e toda outra cai em US$ 8", () => {
+describe("a tabela default por skill — NEUTRA, por camadas de peso (25 / 15 / 8 / 5)", () => {
+  it("cada skill nomeada tem o teto da sua camada, e toda outra cai em US$ 8", () => {
     const esperado: Array<[TriggerId, number]> = [
-      ["harness-do", 23.8],
-      ["harness-review", 13.9],
-      ["harness-plan", 11.1],
-      ["harness-sync-card", 10.9],
-      ["harness-fix", 7.8],
-      ["harness-qa", 7.5],
-      ["harness-grill", 4.7],
-      ["harness-ui", 4.3],
-      ["harness-enrich", 3.5],
-      ["harness-ux", 3.5],
-      ["harness-interview", 3.3],
-      ["harness-prioritize", 2.8],
-      ["harness-capture", 2.6],
+      ["harness-do", 25],
+      ["harness-review", 15],
+      ["harness-plan", 15],
+      ["harness-sync-card", 15],
+      ["harness-fix", 8],
+      ["harness-qa", 8],
+      ["harness-grill", 5],
+      ["harness-ui", 5],
+      ["harness-enrich", 5],
+      ["harness-ux", 5],
+      ["harness-interview", 5],
+      ["harness-prioritize", 5],
+      ["harness-capture", 5],
     ];
     for (const [t, usd] of esperado) expect(resolveRunBudgetUSD(t, undefined), t).toBe(usd);
     expect(FALLBACK_RUN_BUDGET_USD).toBe(8);
@@ -72,8 +72,27 @@ describe("a tabela default por skill — max(2×p90, p99) do custo nocional hist
     }
   });
 
+  it("as camadas são ordenadas: construção >= leitura profunda >= conserto/QA >= leves", () => {
+    const usd = (t: TriggerId) => resolveRunBudgetUSD(t, undefined) as number;
+    const leves: TriggerId[] = ["harness-grill", "harness-ui", "harness-ux", "harness-enrich", "harness-interview", "harness-prioritize", "harness-capture"];
+    const fundas: TriggerId[] = ["harness-review", "harness-plan", "harness-sync-card"];
+    const execucao: TriggerId[] = ["harness-fix", "harness-qa"];
+    for (const f of fundas) expect(usd("harness-do")).toBeGreaterThanOrEqual(usd(f));
+    for (const f of fundas) for (const e of execucao) expect(usd(f)).toBeGreaterThanOrEqual(usd(e));
+    for (const e of execucao) for (const l of leves) expect(usd(e)).toBeGreaterThanOrEqual(usd(l));
+  });
+
   it("TODA skill conhecida resolve para um teto LIGADO por default (nenhuma nasce sem disjuntor)", () => {
     for (const t of TRIGGER_IDS) expect(resolveRunBudgetUSD(t, undefined), t).toBeGreaterThan(0);
+  });
+
+  it("o mapa DECLARADO em autorun.maxBudgetUSD vence a tabela, skill a skill (um alvo mantém os seus números)", () => {
+    // números inventados de uma oficina fictícia — a declaração do alvo, não do código
+    const declarado = { "harness-do": 21.5, "harness-review": 9.25, "harness-plan": 6.5 };
+    expect(resolveRunBudgetUSD("harness-do", declarado)).toBe(21.5);
+    expect(resolveRunBudgetUSD("harness-review", declarado)).toBe(9.25);
+    expect(resolveRunBudgetUSD("harness-plan", declarado)).toBe(6.5);
+    expect(resolveRunBudgetUSD("harness-fix", declarado)).toBe(8); // a que ele não nomeou segue a tabela
   });
 });
 
@@ -87,13 +106,13 @@ describe("resolveRunBudgetUSD — precedência número > mapa > tabela; 0 deslig
     const map = { "harness-do": 40, "harness-enrich": 1 };
     expect(resolveRunBudgetUSD("harness-do", map)).toBe(40);
     expect(resolveRunBudgetUSD("harness-enrich", map)).toBe(1);
-    expect(resolveRunBudgetUSD("harness-review", map)).toBe(13.9);
+    expect(resolveRunBudgetUSD("harness-review", map)).toBe(15);
   });
 
   it("0 desliga — global ou por skill", () => {
     expect(resolveRunBudgetUSD("harness-do", 0)).toBeNull();
     expect(resolveRunBudgetUSD("harness-do", { "harness-do": 0 })).toBeNull();
-    expect(resolveRunBudgetUSD("harness-plan", { "harness-do": 0 })).toBe(11.1); // só a skill nomeada desliga
+    expect(resolveRunBudgetUSD("harness-plan", { "harness-do": 0 })).toBe(15); // só a skill nomeada desliga
   });
 });
 
@@ -194,11 +213,11 @@ describe("resolveRunPolicyArgs — o ponto único por onde o spawn do engine pas
       "--effort",
       "high",
       "--max-budget-usd",
-      "23.8",
+      "25",
     ]);
-    expect(budgetOf(resolveRunPolicyArgs(card, def, DEFAULT_RUNNER_SETTINGS, "harness-do"))).toBe("23.8");
+    expect(budgetOf(resolveRunPolicyArgs(card, def, DEFAULT_RUNNER_SETTINGS, "harness-do"))).toBe("25");
     // O trigger efetivo manda, não o da coluna: um card reaberto na coluna de build roda harness-fix.
-    expect(budgetOf(resolveRunPolicyArgs(card, def, DEFAULT_RUNNER_SETTINGS, "harness-fix"))).toBe("7.8");
+    expect(budgetOf(resolveRunPolicyArgs(card, def, DEFAULT_RUNNER_SETTINGS, "harness-fix"))).toBe("8");
     // Skill sem linha na tabela ⇒ o fallback.
     expect(budgetOf(resolveRunPolicyArgs(null, def, DEFAULT_RUNNER_SETTINGS, "harness-refine"))).toBe("8");
   });
@@ -206,7 +225,7 @@ describe("resolveRunPolicyArgs — o ponto único por onde o spawn do engine pas
   it("o override do settings (número / mapa) e o 0 que desliga chegam ao argv", () => {
     expect(budgetOf(resolveRunPolicyArgs(null, def, settingsWith(5), "harness-do"))).toBe("5");
     expect(budgetOf(resolveRunPolicyArgs(null, def, settingsWith({ "harness-do": 40 }), "harness-do"))).toBe("40");
-    expect(budgetOf(resolveRunPolicyArgs(null, def, settingsWith({ "harness-do": 40 }), "harness-plan"))).toBe("11.1");
+    expect(budgetOf(resolveRunPolicyArgs(null, def, settingsWith({ "harness-do": 40 }), "harness-plan"))).toBe("15");
     expect(budgetOf(resolveRunPolicyArgs(null, def, settingsWith(0), "harness-do"))).toBeNull();
   });
 

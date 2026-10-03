@@ -2,7 +2,7 @@
 //   • absent `view.lanes` ⇒ no lane view at all (the legacy Kanban renders, byte-identical);
 //   • every card lands somewhere — an unmapped/unknown status goes to a VISIBLE "Outros", never nowhere;
 //   • the owner's lane holds EXACTLY the Inbox's Decidir, in the Inbox's order, whatever the status — and no status
-//     pulls a card into it (a lane that counted by status once showed more cards than Decidir did);
+//     pulls a card into it (a lane that counts by status drifts from Decidir);
 //   • a map that is wrong says so in words (unmapped, duplicated, unknown, two demand lanes, statuses in the owner's
 //     lane — the map a board used to carry).
 //
@@ -26,26 +26,22 @@ import type { OwnerDecisions } from "./inbox/decidir-set";
 import type { CardLiveKind } from "./card-live-status";
 import type { BoardConfig, Card, LaneDef } from "./types";
 
-// The old-style map: the owner's lane listing four fixed statuses. The lint must accuse it.
+// The old-style map: the owner's lane listing fixed statuses. The lint must accuse it.
 const OLD_MAP: LaneDef[] = [
-  { id: "entrada", label: "Entrada", statuses: ["capturando", "triage", "priorizar", "pronta", "grill"] },
-  { id: "desenho", label: "Desenho", statuses: ["enriquecer", "interview", "design-ux", "design-ui", "refinar", "corrigir", "descontinuar"] },
-  { id: "obra", label: "Obra", statuses: ["plano-tecnico", "desenvolver", "revisar-codigo"] },
-  { id: "voce", label: "Precisa de você", statuses: ["ready", "com-design", "revisao", "release"], demand: true },
-  { id: "conferencia", label: "Conferência", statuses: ["qa-automatizado", "merge", "stage", "deploy"] },
-  { id: "feito", label: "Feito", statuses: ["concluida"] },
+  { id: "chegada", label: "Chegada", statuses: ["capturando", "triage", "grill", "priorizar", "descontinuar"] },
+  { id: "risco", label: "Risco", statuses: ["enriquecer", "interview", "design-ux", "design-ui", "com-design", "refinar", "corrigir"] },
+  { id: "dono", label: "Com o dono", statuses: ["pronta", "stage", "deploy"], demand: true },
+  { id: "mesa", label: "Mesa", statuses: ["ready", "plano-tecnico", "desenvolver", "revisar-codigo", "qa-automatizado", "revisao", "merge", "release", "concluida"] },
 ];
 
-// The map that mirrors the invariant: the owner's lane first and status-free, the delivery steps in their own lane.
+// The map that mirrors the invariant: the owner's lane status-free (anywhere in the row), every status in one ordinary lane.
 const NEW_MAP: LaneDef[] = [
-  { id: "voce", label: "Precisa de você", statuses: [], demand: true },
-  { id: "entrada", label: "Entrada", statuses: ["capturando", "triage", "descontinuar"] },
-  { id: "preparo", label: "Preparo", statuses: ["priorizar", "pronta", "enriquecer", "interview"] },
-  { id: "desenho", label: "Desenho", statuses: ["grill", "design-ux", "design-ui", "com-design", "refinar"] },
-  { id: "obra", label: "Obra", statuses: ["ready", "plano-tecnico", "desenvolver", "corrigir"] },
-  { id: "conferencia", label: "Conferência", statuses: ["revisar-codigo", "qa-automatizado"] },
-  { id: "saida", label: "Saída automática", statuses: ["revisao", "merge", "stage", "release", "deploy"] },
-  { id: "feito", label: "Feito", statuses: ["concluida"] },
+  { id: "fila", label: "Fila", statuses: ["capturando", "triage", "grill", "descontinuar"] },
+  { id: "dono", label: "Com o dono", statuses: [], demand: true },
+  { id: "forma", label: "Forma", statuses: ["priorizar", "pronta", "enriquecer", "interview", "design-ux", "design-ui", "com-design", "refinar"] },
+  { id: "bancada", label: "Bancada", statuses: ["ready", "plano-tecnico", "desenvolver", "corrigir"] },
+  { id: "prova", label: "Prova", statuses: ["revisar-codigo", "qa-automatizado", "revisao", "merge"] },
+  { id: "envio", label: "Envio", statuses: ["stage", "deploy", "release", "concluida"] },
 ];
 let base: BoardConfig;
 beforeAll(async () => {
@@ -103,23 +99,23 @@ describe("boardLanes — a vista só existe quando declarada", () => {
 });
 
 describe("laneViewProblems — o mapa torto se explica em palavras", () => {
-  it("o mapa novo (dono primeiro e sem status, entrega à parte) cobre o pipeline canônico sem nenhum problema", () => {
+  it("o mapa novo (raia do dono sem status) cobre o pipeline canônico sem nenhum problema", () => {
     expect(laneViewProblems(withLanes(NEW_MAP))).toEqual([]);
   });
 
   it("o mapa antigo é acusado: cada status da raia do dono é nomeado, com o destino dos cards e a passagem do sistema", () => {
     const problems = laneViewProblems(withLanes(OLD_MAP));
-    expect(problems).toHaveLength(4);
-    for (const id of ["com-design", "ready", "revisao", "release"]) {
+    expect(problems).toHaveLength(3);
+    for (const id of ["pronta", "stage", "deploy"]) {
       expect(problems.join("\n")).toMatch(new RegExp(`ignora status: os cards em '${id}'.*Outros`));
     }
-    // revisão e liberação são passos da entrega — o sistema os conduz
-    expect(problems.find((p) => p.includes("'release'"))).toMatch(/passo que o sistema conduz/);
-    expect(problems.find((p) => p.includes("'ready'"))).not.toMatch(/sistema conduz/);
+    // publicar é passo da entrega — o sistema o conduz; «pronta» não
+    expect(problems.find((p) => p.includes("'deploy'"))).toMatch(/passo que o sistema conduz/);
+    expect(problems.find((p) => p.includes("'pronta'"))).not.toMatch(/sistema conduz/);
   });
 
   it("uma lista de tipos em `demand` é acusada: a raia do dono é o Decidir inteiro", () => {
-    const lanes = NEW_MAP.map((l) => (l.id === "voce" ? { ...l, demand: ["question" as const] } : l));
+    const lanes = NEW_MAP.map((l) => (l.id === "dono" ? { ...l, demand: ["question" as const] } : l));
     expect(laneViewProblems(withLanes(lanes)).join("\n")).toMatch(/lista tipos em `demand` \(question\).*use `demand: true`/);
   });
 
@@ -128,7 +124,7 @@ describe("laneViewProblems — o mapa torto se explica em palavras", () => {
   });
 
   it("status sem raia é nomeado, com o destino dos cards ('Outros')", () => {
-    const lanes = NEW_MAP.map((l) => (l.id === "feito" ? { ...l, statuses: [] } : l));
+    const lanes = NEW_MAP.map((l) => (l.id === "envio" ? { ...l, statuses: l.statuses.filter((s) => s !== "concluida") } : l));
     const problems = laneViewProblems(withLanes(lanes));
     expect(problems).toHaveLength(1);
     expect(problems[0]).toMatch(/'concluida'.*nenhuma raia.*Outros/);
@@ -136,14 +132,14 @@ describe("laneViewProblems — o mapa torto se explica em palavras", () => {
 
   it("status em duas raias, status inexistente, id repetido/reservado e duas raias de demanda", () => {
     const lanes: LaneDef[] = [
-      ...NEW_MAP.map((l) => (l.id === "obra" ? { ...l, statuses: [...l.statuses, "revisao", "fantasma"] } : l)),
-      { id: "feito", label: "Dup", statuses: [] },
+      ...NEW_MAP.map((l) => (l.id === "bancada" ? { ...l, statuses: [...l.statuses, "revisao", "fantasma"] } : l)),
+      { id: "envio", label: "Dup", statuses: [] },
       { id: LANE_OTHERS_ID, label: "Reservada", statuses: [], demand: ["blocker"] },
     ];
     const problems = laneViewProblems(withLanes(lanes)).join("\n");
-    expect(problems).toMatch(/'revisao' está em 2 raias \(Obra, Saída automática\)/);
+    expect(problems).toMatch(/'revisao' está em 2 raias \(Bancada, Prova\)/);
     expect(problems).toMatch(/'fantasma'.*não existe/);
-    expect(problems).toMatch(/duas raias com o id 'feito'/);
+    expect(problems).toMatch(/duas raias com o id 'envio'/);
     expect(problems).toMatch(/id reservado/);
     expect(problems).toMatch(/2 raias puxam por demanda/);
   });
@@ -158,18 +154,18 @@ describe("laneOfCard / groupStoriesByLane — todo card em UMA raia, nada some",
   it("cada status vai para a raia que o declara; a raia do dono nunca recebe por status", () => {
     const lanes = boardLanes(withLanes(NEW_MAP))!;
     const none = new Set<string>();
-    expect(laneOfCard({ id: "a", status: "triage" }, lanes, none)).toBe("entrada");
-    expect(laneOfCard({ id: "a", status: "com-design" }, lanes, none)).toBe("desenho");
-    expect(laneOfCard({ id: "a", status: "revisao" }, lanes, none)).toBe("saida");
-    expect(laneOfCard({ id: "a", status: "desenvolver" }, lanes, none)).toBe("obra");
-    expect(laneOfCard({ id: "a", status: "release" }, lanes, none)).toBe("saida");
-    expect(laneOfCard({ id: "a", status: "concluida" }, lanes, none)).toBe("feito");
+    expect(laneOfCard({ id: "a", status: "triage" }, lanes, none)).toBe("fila");
+    expect(laneOfCard({ id: "a", status: "com-design" }, lanes, none)).toBe("forma");
+    expect(laneOfCard({ id: "a", status: "revisao" }, lanes, none)).toBe("prova");
+    expect(laneOfCard({ id: "a", status: "desenvolver" }, lanes, none)).toBe("bancada");
+    expect(laneOfCard({ id: "a", status: "release" }, lanes, none)).toBe("envio");
+    expect(laneOfCard({ id: "a", status: "concluida" }, lanes, none)).toBe("envio");
     // no mapa antigo, um status listado na raia do dono SEM decisão cai em Outros (visível), nunca na raia do dono
-    expect(laneOfCard({ id: "a", status: "release" }, boardLanes(withLanes(OLD_MAP))!, none)).toBe(LANE_OTHERS_ID);
+    expect(laneOfCard({ id: "a", status: "deploy" }, boardLanes(withLanes(OLD_MAP))!, none)).toBe(LANE_OTHERS_ID);
   });
 
   it("status desconhecido / ausente / sem raia cai em 'Outros', que só aparece quando tem card", () => {
-    const cfg = withLanes(NEW_MAP.map((l) => (l.id === "feito" ? { ...l, statuses: [] } : l)));
+    const cfg = withLanes(NEW_MAP.map((l) => (l.id === "envio" ? { ...l, statuses: l.statuses.filter((s) => s !== "concluida") } : l)));
     const lanes = boardLanes(cfg)!;
     const empty = groupStoriesByLane([story("a", "triage")], lanes);
     expect(empty.lanes.map((l) => l.id)).not.toContain(LANE_OTHERS_ID);
@@ -199,10 +195,10 @@ describe("laneOfCard / groupStoriesByLane — todo card em UMA raia, nada some",
       { owner: owner(["entrega-decidir", "obra-decidir"]) },
     );
     // a ordem é a do Inbox (a mais urgente primeiro), não a do arquivo
-    expect(byLane.get("voce")!.map((c) => c.id)).toEqual(["entrega-decidir", "obra-decidir"]);
+    expect(byLane.get("dono")!.map((c) => c.id)).toEqual(["entrega-decidir", "obra-decidir"]);
     // a pergunta aberta que NÃO está em Decidir (o proxy responde) fica onde o status a põe
-    expect(byLane.get("desenho")!.map((c) => c.id)).toEqual(["pergunta-que-o-proxy-responde"]);
-    expect(byLane.get("saida")!.map((c) => c.id)).toEqual(["entrega-do-sistema"]);
+    expect(byLane.get("fila")!.map((c) => c.id)).toEqual(["pergunta-que-o-proxy-responde"]);
+    expect(byLane.get("envio")!.map((c) => c.id)).toEqual(["entrega-do-sistema"]);
     expect(outside).toBe(0);
   });
 
@@ -211,21 +207,21 @@ describe("laneOfCard / groupStoriesByLane — todo card em UMA raia, nada some",
     // 5 em Decidir: 2 cards no quadro (um deles com uma 2ª decisão), 1 card que o Kanban não mostra, 1 proposta sem card
     const d = owner(["a", "arquivado"], { total: 5, more: { a: 1 } });
     const { byLane, outside } = groupStoriesByLane([story("a", "desenvolver"), story("b", "triage")], lanes, { owner: d });
-    expect(byLane.get("voce")!.map((c) => c.id)).toEqual(["a"]);
-    expect(byLane.get("voce")!.length + 1 + outside).toBe(d.total);
+    expect(byLane.get("dono")!.map((c) => c.id)).toEqual(["a"]);
+    expect(byLane.get("dono")!.length + 1 + outside).toBe(d.total);
     expect(outside).toBe(3);
   });
 
   it("sem o Decidir (o Inbox ilegível) a raia do dono fica vazia — nunca volta a adivinhar por status", () => {
     const lanes = boardLanes(withLanes(OLD_MAP))!;
     const { byLane } = groupStoriesByLane([story("x", "revisao", { questions: [{ id: "q", text: "?", status: "open" }] })], lanes, { owner: null });
-    expect(byLane.get("voce")).toEqual([]);
+    expect(byLane.get("dono")).toEqual([]);
   });
 
   it("sem raia do dono, o Decidir não move o card (o status decide sozinho)", () => {
-    const lanes: ResolvedLane[] = boardLanes(withLanes(NEW_MAP.filter((l) => l.id !== "voce")))!;
+    const lanes: ResolvedLane[] = boardLanes(withLanes(NEW_MAP.filter((l) => l.id !== "dono")))!;
     const { byLane } = groupStoriesByLane([story("q", "desenvolver")], lanes, { owner: owner(["q"]) });
-    expect(byLane.get("obra")!.map((c) => c.id)).toEqual(["q"]);
+    expect(byLane.get("bancada")!.map((c) => c.id)).toEqual(["q"]);
   });
 });
 
@@ -233,9 +229,9 @@ describe("laneDropStatus / laneStatusTags", () => {
   it("soltar numa raia = o primeiro status visível dela (o gate ainda decide); 'Outros' e a raia do dono não aceitam", () => {
     const cfg = withLanes(NEW_MAP);
     const lanes = boardLanes(cfg)!;
-    expect(laneDropStatus(lanes.find((l) => l.id === "entrada")!, cfg)).toBe("triage"); // capturando é oculto
-    expect(laneDropStatus(lanes.find((l) => l.id === "obra")!, cfg)).toBe("ready");
-    expect(laneDropStatus(lanes.find((l) => l.id === "voce")!, cfg)).toBeNull();
+    expect(laneDropStatus(lanes.find((l) => l.id === "fila")!, cfg)).toBe("triage"); // capturando é oculto
+    expect(laneDropStatus(lanes.find((l) => l.id === "bancada")!, cfg)).toBe("ready");
+    expect(laneDropStatus(lanes.find((l) => l.id === "dono")!, cfg)).toBeNull();
     expect(laneDropStatus({ id: LANE_OTHERS_ID, label: "Outros", statuses: [], demand: false, others: true }, cfg)).toBeNull();
   });
 

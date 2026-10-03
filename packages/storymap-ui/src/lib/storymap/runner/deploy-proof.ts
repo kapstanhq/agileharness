@@ -11,6 +11,8 @@
 import { REOPEN_KINDS, applyReopen } from "@/lib/storymap/reopen";
 import { DEPLOY_FAILURE_FINDING_ID } from "@/lib/storymap/demands";
 import { upsertFinding } from "./findings";
+import { loadRunnerConfig } from "./config";
+import { deployPolicyOf, expandArgvTemplate } from "@/lib/storymap/deploy-policy";
 import type { BoardConfig, Card, Finding } from "@/lib/storymap/types";
 
 /**
@@ -343,22 +345,10 @@ export function isVerdictApproval(v: Pick<SecurityVerdict, "verdict" | "findings
   return v.verdict === "approve" && !v.findings.some((f) => BLOCKING.has(String(f.severity).toLowerCase()));
 }
 
-/**
- * O comando que grava o veredito — o `record` do PEDIDO (o contrato é do alvo), com o arquivo no lugar de
- * `<verdict.json>`. Executado sem shell e só quando é um comando simples (palavras sem metacaracteres): o texto vem
- * da saída de um comando do próprio alvo, mas ele vira argv, nunca uma linha de shell. PURA.
- */
-export function recordCommandFor(template: string, verdictPath: string, placeholder = "<verdict.json>"): string[] | null {
-  const words = template.trim().split(/\s+/);
-  if (!words.includes(placeholder) || words.length > 8) return null;
-  if (!words.every((w) => w === placeholder || /^[A-Za-z0-9._/:=-]+$/.test(w))) return null;
-  return words.map((w) => (w === placeholder ? verdictPath : w));
-}
-
 // ── a autorização do dono ──────────────────────────────────────────────────────────────────
 
 export const OWNER_APPROVAL_SCHEMA = "deploy-proof/owner-approval@1";
-/** O marcador do arquivo no comando de gravação da autorização (o `record` do pedido). */
+/** O marcador do arquivo no texto `record` que o log do deploy imprime (informativo: quem decide o que roda é `deploy.proof.record`). */
 export const OWNER_APPROVAL_PLACEHOLDER = "<approval.json>";
 
 export interface OwnerApproval {
@@ -380,9 +370,77 @@ export function buildOwnerApproval(request: Pick<OwnerApprovalRequest, "subject"
   return { schema: OWNER_APPROVAL_SCHEMA, subject: request.subject, approvedBy: "owner", via: meta.via, approvedAt: meta.at, ...(meta.card ? { card: meta.card } : {}) };
 }
 
-/** A gravação recusou porque o veredito é de OUTRO assunto (o checkout andou)? A mensagem da receita do alvo. PURA. */
-export function recordRefusedAsStale(stderr: string): boolean {
-  return /OUTRO assunto|another subject/i.test(stderr ?? "");
+/** As frases que o ALVO declarou (settings.yaml → `deploy.proof.staleMarkers`) para dizer «veredito de OUTRO assunto». */
+export function declaredStaleMarkers(): string[] {
+  return deployPolicyOf(loadRunnerConfig()).proof.staleMarkers;
+}
+
+/**
+ * A gravação recusou porque o veredito é de OUTRO assunto (o checkout andou)? A frase é a do script do ALVO — por isso é o ALVO
+ * quem a declara (`deploy.proof.staleMarkers`, texto LITERAL, sem caixa): a ferramenta não conhece o idioma nem o texto de erro
+ * do script de ninguém. SEM declaração nunca é «stale»: a falha cai no caminho contado de falhas (tentativas limitadas ⇒
+ * card de conserto), que é o lado seguro — jamais o dono. PURA sobre `markers` (o default lê a declaração do alvo).
+ */
+export function recordRefusedAsStale(stderr: string, markers: readonly string[] = declaredStaleMarkers()): boolean {
+  const haystack = String(stderr ?? "").toLowerCase();
+  return markers.some((m) => m.length > 0 && haystack.includes(m.toLowerCase()));
+}
+
+/**
+ * O comando que GRAVA a prova, como o ALVO o declarou (`deploy.proof.record.securityReview` / `.ownerApproval`, um argv com
+ * `{file}`) — NÃO o texto que o log do deploy imprimiu. O programa que roda com o privilégio do serviço é escolhido por quem
+ * opera o alvo (settings.yaml é superfície de revisão), nunca por uma linha de saída de comando. Sem declaração (ou com um
+ * `file` que não vira argumento seguro) devolve a recusa nomeando a chave. PURA sobre `record`.
+ */
+export function declaredRecordArgv(
+  kind: "securityReview" | "ownerApproval",
+  file: string,
+  record: { securityReview?: string[]; ownerApproval?: string[] } = deployPolicyOf(loadRunnerConfig()).proof.record,
+): { argv: string[] } | { refusal: string } {
+  const template = record[kind];
+  if (!template) return { refusal: `o alvo não declarou COMO gravar esta prova — declare em settings.yaml → deploy.proof.record.${kind} (um argv, sem shell, com {file}).` };
+  const argv = expandArgvTemplate(template, { file });
+  return argv ? { argv } : { refusal: `o arquivo ${JSON.stringify(file)} não é um caminho seguro para deploy.proof.record.${kind}.` };
+}
+
+/** O resultado de gravar uma prova pelo comando que o ALVO declarou. `stale` = o alvo recusou porque a mudança já é outra. */
+export type DeclaredRecordOutcome = { ok: true } | { ok: false; stale: boolean; error: string };
+
+/** As bordas de {@link runDeclaredRecord}: achar o executável e rodá-lo. Injetáveis para a lógica ser testável sem processo. */
+export interface DeclaredRecordIo {
+  /** o NOME do programa (`argv[0]`) → o caminho absoluto, ou a recusa que diz o que declarar. */
+  resolveProgram(name: string): { ok: true; path: string } | { ok: false; refusal: string };
+  /** roda o programa (sem shell). Lança em saída não-zero; o `stderr` do erro é o que `recordRefusedAsStale` lê. */
+  exec(program: string, args: string[]): Promise<void>;
+}
+
+/**
+ * GRAVA a prova (o veredito da revisão, ou a autorização do dono) pelo comando que o ALVO declarou — o ÚNICO caminho que
+ * executa o programa que roda com o privilégio do serviço. Antes, o comando saía do TEXTO `record` que o log do deploy
+ * imprimiu: o texto de uma saída de comando virava argv, e cada palavra só precisava casar `[A-Za-z0-9._/:=-]+`, então
+ * `bash -c id <verdict.json>` passava. Agora o argv é o de `settings.yaml → deploy.proof.record.<kind>`: o texto do log
+ * não decide NADA do que roda (o programa é escolhido por quem opera o alvo).
+ *
+ *   · sem declaração ⇒ recusa nomeando `deploy.proof.record.<kind>` (nada roda por suposição);
+ *   · a saída não-zero é «stale» só se casar uma marca declarada (`deploy.proof.staleMarkers`) — sem marcas nunca é stale.
+ */
+export async function runDeclaredRecord(
+  kind: "securityReview" | "ownerApproval",
+  file: string,
+  io: DeclaredRecordIo,
+  opts: { record?: { securityReview?: string[]; ownerApproval?: string[] }; markers?: readonly string[] } = {},
+): Promise<DeclaredRecordOutcome> {
+  const declared = declaredRecordArgv(kind, file, opts.record);
+  if ("refusal" in declared) return { ok: false, stale: false, error: declared.refusal };
+  const program = io.resolveProgram(declared.argv[0]);
+  if (!program.ok) return { ok: false, stale: false, error: program.refusal };
+  try {
+    await io.exec(program.path, declared.argv.slice(1));
+    return { ok: true };
+  } catch (err) {
+    const stderr = String((err as { stderr?: unknown }).stderr ?? (err instanceof Error ? err.message : err));
+    return { ok: false, stale: recordRefusedAsStale(stderr, opts.markers), error: stderr.trim().slice(-300) };
+  }
 }
 
 /**

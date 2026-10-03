@@ -2,13 +2,26 @@ import { describe, expect, it } from "vitest";
 import { dejargonText, lensLabel } from "./dejargon";
 
 describe("lensLabel", () => {
-  it("traduz as lenses conhecidas para linguagem de produto", () => {
+  it("traduz as lenses EMBUTIDAS para linguagem de produto", () => {
     expect(lensLabel("perf")).toBe("Performance");
-    expect(lensLabel("firestore")).toBe("Regras de acesso (Firestore)");
     expect(lensLabel("security")).toBe("Segurança");
     expect(lensLabel("testing")).toBe("Testes");
-    expect(lensLabel("nextjs")).toBe("Frontend (Next.js)");
     expect(lensLabel("general")).toBe("Revisão geral");
+    expect(lensLabel("design")).toBe("Design");
+  });
+
+  it("uma lens de DOMÍNIO só tem rótulo próprio se o alvo a declarou; sem declaração é o Capitalize seguro (a ferramenta não sabe o que é 'firestore')", () => {
+    const declared = { freios: "Freios e pinças", cambio: "Câmbio" };
+    expect(lensLabel("freios", declared)).toBe("Freios e pinças");
+    expect(lensLabel("cambio", declared)).toBe("Câmbio");
+    expect(lensLabel("freios")).toBe("Freios");
+    expect(lensLabel("firestore")).toBe("Firestore");
+    expect(lensLabel("nextjs")).toBe("Nextjs");
+  });
+
+  it("o nome declarado pelo alvo vence o da embutida (ele pode sobrescrever o rótulo)", () => {
+    expect(lensLabel("security", { security: "Segurança do cadeado" })).toBe("Segurança do cadeado");
+    expect(lensLabel("perf", { freios: "Freios e pinças" })).toBe("Performance");
   });
 
   it("lens ausente ⇒ null (o chamador esconde o rótulo)", () => {

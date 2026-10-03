@@ -18,7 +18,7 @@ import { execFile } from "node:child_process";
 import { promises as fsp } from "node:fs";
 import { promisify } from "node:util";
 import { agentActionsPath } from "@/lib/storymap/paths";
-import type { BoardThrottleFact, CardLiveFeed, CardQueueFact, CardSessionFact, DiffStat } from "@/lib/storymap/card-live-status";
+import type { BoardScopeFact, BoardThrottleFact, CardLiveFeed, CardQueueFact, CardSessionFact, DiffStat } from "@/lib/storymap/card-live-status";
 import { latestActivity } from "@/lib/storymap/agent-presence";
 import type { TerminalAttention } from "@/lib/terminal/attention";
 import type { AgentAction } from "./agent-actions";
@@ -205,6 +205,8 @@ export interface CardLiveSources {
   attention(): readonly TerminalAttention[];
   /** o IO da evidência de trabalho ({@link sessionEvidence}). */
   evidenceIo: EvidenceIo;
+  /** o escopo de tipos dos boards limitados (board-pace). Opcional: sem ele, nenhum board limita o que começa. */
+  loadScopes?(now: number): BoardScopeFact[];
   now?(): number;
 }
 
@@ -220,7 +222,14 @@ async function defaultSources(): Promise<CardLiveSources> {
     ]);
   const sessions = makeSessionStore();
   const queue = diskConductorQueueStore();
+  const { readBoardPace } = await import("./board-pace-store");
+  const { effectiveScope } = await import("./board-pace");
   return {
+    loadScopes: (now) =>
+      readBoardPace().rows.flatMap((row) => {
+        const scope = effectiveScope(row, now);
+        return scope ? [{ board: row.board, scope }] : [];
+      }),
     loadSessions: () => sessions.load(),
     loadConductorQueue: () => queue.load(),
     readActions: () => readActionsTail(),
@@ -308,6 +317,13 @@ export class CardLiveHub {
     } catch {
       /* sem a foto do vigia, conductorQuiet cai no transcript + tela */
     }
+    // o escopo de tipos é lido do arquivo de ritmo (cache em memória): sem a fonte, ou com ela falhando, ninguém é limitado
+    let scopes: BoardScopeFact[] = [];
+    try {
+      scopes = src.loadScopes?.(now) ?? [];
+    } catch {
+      scopes = [];
+    }
     const evidence = new Map<string, SessionEvidence>();
     await Promise.all(
       live.map(async (s) => {
@@ -320,6 +336,8 @@ export class CardLiveHub {
       queue: conductorQueueFacts(queue),
       throttles: throttleWindows(actions, now),
       judging,
+      // só quando algum board limita o que começa: o quadro sem limite continua byte-idêntico ao de antes
+      ...(scopes.length ? { scopes } : {}),
     };
     return this.last;
   }

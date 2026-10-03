@@ -1306,3 +1306,159 @@ describe("ritmo do board — a fila do condutor espera na pausa e anda um por ve
     expect(h.queue.entries.map((e) => e.lastWaitKind)).toEqual(["autorun-off"]);
   });
 });
+
+// ── O ESCOPO DE TIPOS (board-pace.ts, segundo eixo do ritmo) na fila e na adoção do condutor ─────────────────────────
+describe("escopo de tipos — o condutor leva a story de ponta a ponta, então só começa o que o board pode começar", () => {
+  const at = "2026-10-02T12:00:00.000Z";
+  const NOW = Date.parse(at) + 1000;
+  const FIXES = ["bug", "technical", "chore", "spike"] as const;
+  const scoped = (types: readonly string[] = FIXES, layer: "ownerScope" | "agentScope" = "ownerScope") => ({ board: "b", [layer]: { types, by: { kind: layer === "ownerScope" ? "owner" : "agent" }, at } }) as unknown as BoardPaceRow;
+  const gateFrom = (h: Harness, row: { value: BoardPaceRow | null }) => {
+    h.deps.boardGate = (_board, config) => resolveBoardGate(config, row.value, NOW);
+  };
+  const story = (id: string, storyType: string, extra: Record<string, unknown> = {}): Card => coerceCard(id, { type: "story", status: "pronta", storyType, ...extra }, "");
+  const queued = (h: Harness, ...cards: Card[]) =>
+    Promise.all(
+      cards.map(async (c) => {
+        h.cards.set(c.id, { ...c, routing: { skips: [], decidedBy: "rules", decidedAt: "x", driver: "conductor" } });
+        await admitConductorCard(h.deps, "b", c.id);
+      }),
+    );
+
+  it("a entrada de funcionalidade nova ESPERA na fila com a classe «tipo-nao-admitido» e a frase que diz o porquê — não é descartada", async () => {
+    const h = harness();
+    gateFrom(h, { value: scoped() });
+    await queued(h, story("f1", "user"));
+    const rep = await pumpConductorQueue(h.deps);
+    expect(rep.spawned).toEqual([]);
+    expect(rep.dropped).toEqual([]);
+    expect(rep.waiting).toHaveLength(1);
+    expect(rep.waiting[0].reason).toBe("Funcionalidade nova fica de fora: o board só começa Erro, Trabalho técnico, Manutenção e Investigação por enquanto — a fila espera");
+    expect(h.queue.entries.map((e) => [e.cardId, e.lastWaitKind])).toEqual([["f1", "tipo-nao-admitido"]]);
+    expect(h.cleared).toEqual([]); // o card mantém o driver: a vez dele está guardada
+  });
+
+  it("o conserto passa na frente do que espera: só a funcionalidade fica, e a vaga é do conserto", async () => {
+    const h = harness({ config: cfg({ maxSessions: 1 }) });
+    gateFrom(h, { value: scoped() });
+    await queued(h, story("f1", "user"), story("b1", "bug"));
+    const rep = await pumpConductorQueue(h.deps);
+    expect(rep.spawned.map((x) => x.cardId)).toEqual(["b1"]);
+    expect(h.queue.entries.map((e) => [e.cardId, e.lastWaitKind])).toEqual([["f1", "tipo-nao-admitido"]]);
+  });
+
+  it("o escopo que espera NÃO ocupa vaga nem conta como «esperando vaga» no nav", async () => {
+    const h = harness({ config: cfg({ maxSessions: 1 }) });
+    gateFrom(h, { value: scoped() });
+    await queued(h, story("f1", "user"));
+    await pumpConductorQueue(h.deps);
+    expect(isSlotWait(h.queue.entries[0].lastWaitKind)).toBe(false);
+    expect(conductorSlotFacts("b", { config: cfg({ maxSessions: 1 }), liveConductors: [], queue: h.queue.entries, extra: null })).toMatchObject({ queued: 1, waitingForSlot: 0 });
+  });
+
+  it.each([
+    ["user", false],
+    ["bug", true],
+    ["technical", true],
+    ["chore", true],
+    ["spike", true],
+  ])("tipo %s com «só consertos»: nasce o condutor? %s", async (storyType, spawns) => {
+    const h = harness();
+    gateFrom(h, { value: scoped() });
+    await queued(h, story("x1", storyType));
+    expect((await pumpConductorQueue(h.deps)).spawned.map((x) => x.cardId)).toEqual(spawns ? ["x1"] : []);
+  });
+
+  it("um `user` em modo `fix` conta como erro (tipo efetivo) e nasce", async () => {
+    const h = harness();
+    gateFrom(h, { value: scoped() });
+    await queued(h, story("x1", "user", { mode: "fix" }));
+    expect((await pumpConductorQueue(h.deps)).spawned.map((x) => x.cardId)).toEqual(["x1"]);
+  });
+
+  it("alargar o escopo: a MESMA entrada que esperava nasce na passada seguinte, sem ninguém re-enfileirar", async () => {
+    const h = harness();
+    const row = { value: scoped() as BoardPaceRow | null };
+    gateFrom(h, row);
+    await queued(h, story("f1", "user"));
+    expect((await pumpConductorQueue(h.deps)).spawned).toEqual([]);
+    row.value = null; // o dono alargou
+    expect((await pumpConductorQueue(h.deps)).spawned.map((x) => x.cardId)).toEqual(["f1"]);
+  });
+
+  it("a interseção das camadas vale: dono admite tudo, agente só consertos ⇒ user espera; o agente não alarga o dono", async () => {
+    const h = harness();
+    const row = { value: scoped(FIXES, "agentScope") as BoardPaceRow | null };
+    gateFrom(h, row);
+    await queued(h, story("f1", "user"));
+    expect((await pumpConductorQueue(h.deps)).spawned).toEqual([]);
+    // dono limitado a (bug, user); agente a (bug, chore): a interseção é só bug ⇒ user continua esperando
+    row.value = { board: "b", ownerScope: { types: ["user", "bug"], by: { kind: "owner" }, at }, agentScope: { types: ["bug", "chore"], by: { kind: "agent" }, at } } as unknown as BoardPaceRow;
+    expect((await pumpConductorQueue(h.deps)).spawned).toEqual([]);
+  });
+
+  it("escopo com PRAZO vencido não segura mais nada", async () => {
+    const h = harness();
+    gateFrom(h, { value: { board: "b", ownerScope: { types: ["bug"], by: { kind: "owner" }, at, until: "2026-10-02T12:00:00.500Z" } } as unknown as BoardPaceRow });
+    await queued(h, story("f1", "user"));
+    expect((await pumpConductorQueue(h.deps)).spawned.map((x) => x.cardId)).toEqual(["f1"]);
+  });
+
+  it("o PAUSADO ganha do escopo (a classe de espera é a da pausa) — ritmo e escopo são eixos independentes", async () => {
+    const h = harness();
+    gateFrom(h, { value: { ...scoped(), owner: { level: "paused", by: { kind: "owner" }, at } } as unknown as BoardPaceRow });
+    await queued(h, story("f1", "user"));
+    await pumpConductorQueue(h.deps);
+    expect(h.queue.entries.map((e) => e.lastWaitKind)).toEqual(["board-paused"]);
+  });
+
+  it("entrada de retomada (card estacionado) também espera: retomar é voltar a gastar", async () => {
+    const h = harness();
+    gateFrom(h, { value: scoped() });
+    h.cards.set("f1", { ...story("f1", "user"), routing: { skips: [], decidedBy: "rules", decidedAt: "x", driver: "conductor" } });
+    await admitConductorCard(h.deps, "b", "f1", { resume: true });
+    const rep = await pumpConductorQueue(h.deps);
+    expect(rep.spawned).toEqual([]);
+    expect(h.queue.entries.map((e) => [e.cardId, e.resume, e.lastWaitKind])).toEqual([["f1", true, "tipo-nao-admitido"]]);
+  });
+
+  it("sem a porta de ritmo (sem escopo), a fila anda como sempre", async () => {
+    const h = harness();
+    await queued(h, story("f1", "user"));
+    expect((await pumpConductorQueue(h.deps)).spawned.map((x) => x.cardId)).toEqual(["f1"]);
+  });
+
+  describe("adoção de órfãos", () => {
+    const orphans = (h: Harness, cards: Card[]) => {
+      for (const c of cards) h.cards.set(c.id, c);
+      h.deps.orphanCandidates = async () => [{ board: "b", config: h.config.value, cards: [...h.cards.values()] }];
+    };
+
+    it("a régua pura: com o portão do escopo, funcionalidade nova em fromStatus NÃO é órfão; conserto é; sem portão, a de sempre", () => {
+      const gate = resolveBoardGate({}, scoped(), NOW);
+      expect(isConductorOrphan(story("o1", "user"), cfg(), gate)).toBe(false);
+      expect(isConductorOrphan(story("o2", "bug"), cfg(), gate)).toBe(true);
+      expect(isConductorOrphan(story("o3", "user"), cfg())).toBe(true);
+      expect(isConductorOrphan(story("o4", "user"), cfg(), resolveBoardGate({}, null, NOW))).toBe(true);
+    });
+
+    it("o pump adota só o que o escopo admite; a funcionalidade fica SEM driver e SEM fila (nada a desfazer)", async () => {
+      const h = harness({ config: cfg({ maxSessions: 4 }) });
+      gateFrom(h, { value: scoped() });
+      orphans(h, [story("o1", "user"), story("o2", "bug")]);
+      const rep = await pumpConductorQueue(h.deps);
+      expect(rep.adopted).toEqual([{ board: "b", cardId: "o2" }]);
+      expect(h.marked).toEqual(["o2"]);
+    });
+
+    it("escopo alargado: a primeira varredura seguinte adota a funcionalidade que ficou parada", async () => {
+      const h = harness({ config: cfg({ maxSessions: 4 }) });
+      const row = { value: scoped() as BoardPaceRow | null };
+      gateFrom(h, row);
+      orphans(h, [story("o1", "user")]);
+      expect((await pumpConductorQueue(h.deps)).adopted).toEqual([]);
+      row.value = null;
+      expect((await pumpConductorQueue(h.deps)).adopted).toEqual([{ board: "b", cardId: "o1" }]);
+    });
+  });
+});

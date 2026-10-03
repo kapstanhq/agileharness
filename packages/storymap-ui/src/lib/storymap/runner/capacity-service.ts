@@ -29,7 +29,7 @@ import { runnerStateDir } from "@/lib/storymap/paths";
 import { atomicWriteFile } from "@/lib/storymap/atomic-write";
 import type { GovernorSettings } from "@/lib/storymap/types";
 import type { UsageWindow } from "@/lib/vps/types";
-import { headroomStatsUrl, readHeadroomStats } from "@/lib/vps/subscription-reader";
+import { meterStatsUrl, readHeadroomStats } from "@/lib/vps/subscription-reader";
 import { loadRunnerConfig } from "./config";
 import {
   DAY_MS,
@@ -41,6 +41,7 @@ import {
   effectiveLatch,
   latchAutoRelease,
   mayClearLatch,
+  resetDropObserved,
   meterStallSince,
   pacingFor,
   projectWeekAtReset,
@@ -349,6 +350,9 @@ export class CapacityGovernor implements CapacityGatePort {
   private state: GovernorState = emptyState();
   private reading: CapacityReading | null = null;
   private latchFile: LatchState | null = null;
+  /** `polledAt` da 1ª leitura fresca que mostrou a cota ZERADA sob a trava ({@link resetDropObserved}); só em memória:
+   *  um restart recomeça a confirmação, o lado seguro */
+  private resetDropSince: number | null = null;
   private firstReadDone = false;
   /** quantas re-tentativas de boot já foram AGENDADAS (índice em `bootRetryDelays`) */
   private bootRetryAttempt = 0;
@@ -373,7 +377,7 @@ export class CapacityGovernor implements CapacityGatePort {
   constructor(deps: CapacityServiceDeps = {}) {
     this.now = deps.now ?? Date.now;
     this.settingsOf = deps.settings ?? (() => loadRunnerConfig().governor ?? { ...DEFAULT_GOVERNOR_SETTINGS });
-    this.statsUrl = deps.statsUrl ?? (() => headroomStatsUrl());
+    this.statsUrl = deps.statsUrl ?? (() => meterStatsUrl());
     this.readUsage = deps.readUsage ?? (async (url) => (await readHeadroomStats(url)).usage);
     this.dirOf = deps.stateDir ?? capacityStateDir;
     this.haltPathOf = deps.haltPath ?? (() => haltFilePath());
@@ -710,9 +714,11 @@ export class CapacityGovernor implements CapacityGatePort {
         this.inertLogged = true;
         // Com o proxy configurado, "inerte" só chega aqui DEPOIS das re-tentativas — e o operador que não roda
         // proxy nenhum precisa saber como dizer isso de uma vez (declarado ⇒ inerte já no boot, sem espera).
+        // Sem NENHUM medidor declarado (nem env nem `vps.headroomUrl`), o governador admite tudo: dizer por quê e como
+        // ligar, em vez de deixar a proteção da cota desligada em silêncio.
         const how = this.statsUrl()
           ? ` (após ${this.bootRetryDelays.length} re-tentativa(s) da primeira leitura; sem proxy neste host? declare AGILEHARNESS_HEADROOM_URL=off)`
-          : "";
+          : " (governador ligado sem medidor: declare vps.headroomUrl em storymap/settings.yaml — a URL base do proxy de uso — ou AGILEHARNESS_HEADROOM_URL=off se não há proxy neste host)";
         this.log(`[capacity] ${verdict.detail}${how} — o trabalho automático não é limitado pela janela da conta.`);
       }
     } else {
@@ -763,9 +769,28 @@ export class CapacityGovernor implements CapacityGatePort {
    * espera pelo mesmo caminho de qualquer outra volta (passo 8 do evaluate). Nunca lança.
    */
   private async maybeAutoReleaseLatch(verdict: CapacityVerdict, fresh: boolean, now: number): Promise<void> {
-    if (!this.settings().enabled || !this.latchFile) return;
-    const r = latchAutoRelease({ latch: this.latchFile, haltPresent: !!this.haltProbe(), reading: this.reading, fresh, verdict });
+    const s = this.settings();
+    if (!s.enabled || !this.latchFile) {
+      this.resetDropSince = null;
+      return;
+    }
+    // a cota zerada na mesma janela só conta SUSTENTADA: guarda desde quando as leituras frescas a mostram
+    if (fresh && this.reading && resetDropObserved(this.latchFile, this.reading, s)) {
+      this.resetDropSince ??= this.reading.polledAt;
+    } else {
+      this.resetDropSince = null;
+    }
+    const r = latchAutoRelease({
+      latch: this.latchFile,
+      haltPresent: !!this.haltProbe(),
+      reading: this.reading,
+      fresh,
+      verdict,
+      caps: s,
+      resetDropSince: this.resetDropSince,
+    });
     if (!r.release) return;
+    this.resetDropSince = null;
     const previous = this.latchFile;
     try {
       await fsp.rm(path.join(this.dirOf(), "latch.json"), { force: true });

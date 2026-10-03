@@ -10,6 +10,8 @@ import {
   type PendingEffectStore,
 } from "./pending-effects";
 import type { EntryEffect } from "@/lib/storymap/types";
+import { load as loadYaml } from "js-yaml";
+import { SCOPE_BUILD_STATUSES, SCOPE_WAITING_STATUSES } from "./board-pace";
 
 // story-ex9511 A5: the forward↔onEnter transactional ledger. Tested at three layers — the
 // in-memory record/resolve logic, the atomic disk store, and the boot re-fire decision.
@@ -171,6 +173,23 @@ describe("recoverPendingEffects — one-shot boot re-fire", () => {
     expect(resolve).toHaveBeenCalledOnce(); // one-shot: cleared so it doesn't re-log every boot
   });
 
+  it("a mensagem ao operador manda rodar «o comando de deploy do alvo» — nunca o verbo do orquestrador de um repositório de origem", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { base } = deps({
+        loadPending: async () => [entry({ board: "oficina", effect: "promote-and-deploy" as EntryEffect })],
+        isBootSafe: async () => false,
+      });
+      await recoverPendingEffects(base);
+      const text = warn.mock.calls.map((c) => String(c[0])).join("\n");
+      expect(text).toContain("DEFERIDO no boot");
+      expect(text).toContain("o comando de deploy do alvo");
+      expect(text).not.toMatch(/orch-deploy|harness-ship/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("still re-fires a boot-safe effect when isBootSafe returns true", async () => {
     const { base, runEffect } = deps({ isBootSafe: async () => true });
     const summary = await recoverPendingEffects(base);
@@ -204,5 +223,21 @@ describe("recoverPendingEffects — one-shot boot re-fire", () => {
     const summary = await recoverPendingEffects(base);
     expect(summary).toMatchObject({ failed: 1, refired: 0 });
     expect(resolve).toHaveBeenCalledOnce();
+  });
+});
+
+// O ESCOPO DE TIPOS (board-pace.ts) só barra o INÍCIO da construção. Este livro refaz, no boot, o efeito de ENTRADA de um passo
+// (promover a stage, publicar) — entrega, nunca construção. A premissa que dispensa a pergunta por card aqui é declarativa e
+// conferida contra o board base: nenhum passo de construção (nem de espera da construção) declara `onEnter`.
+describe("efeitos de entrada × escopo de tipos — nenhum passo de construção tem efeito de entrada", () => {
+  const base = loadYaml(readFileSync(path.resolve(__dirname, "../../../../../../storymap/boards/_base/board.yaml"), "utf8")) as { statuses: Array<{ id: string; onEnter?: string }> };
+
+  it("todo `onEnter` do board base mora fora da construção e fora da espera da construção", () => {
+    const withEffect = base.statuses.filter((s) => !!s.onEnter).map((s) => s.id);
+    expect(withEffect.length).toBeGreaterThan(0); // a premissa não pode ser vazia
+    for (const id of withEffect) {
+      expect(SCOPE_BUILD_STATUSES, id).not.toContain(id);
+      expect(SCOPE_WAITING_STATUSES, id).not.toContain(id);
+    }
   });
 });

@@ -61,6 +61,8 @@ import {
   type TriggerId,
 } from "@/lib/storymap/types";
 import { coerceTargetProfile } from "@/lib/storymap/target-profile";
+import { DEPLOY_TARGET_SLUG, coerceArgvTemplate, coerceDeployPolicy } from "@/lib/storymap/deploy-policy";
+import { coerceVpsSettings } from "@/lib/storymap/vps-settings";
 
 const FAST_TIMEOUT_MS = 6 * 60_000;
 // Integration-gate defaults (story-ex0008): the suite run in the staging worktree + its ceiling.
@@ -82,9 +84,14 @@ const DEFAULT_NO_PROGRESS_MAX = 3;
 // Staged-release defaults (Fase 4a): the branch app code is held on, and the path prefixes treated as
 // deployable CODE (routed to stage); everything else (storymap/** board data, .claude/** skills) → main.
 const STAGING_BRANCH = "stage";
-/** Path prefixes that count as deployable CODE — the merge train gates + splits ONLY runs that touch
- * these (board-data runs skip the code gate). Exported so the merge train reads the SAME default. */
-export const STAGING_CODE_PREFIXES: readonly string[] = ["packages/"];
+/** A única convenção de branch que a ferramenta mantém: onde o código espera o portão de release quando o alvo não declara `autorun.staging.branch`. */
+export const DEFAULT_STAGING_BRANCH = STAGING_BRANCH;
+// OS PREFIXOS DE CÓDIGO NÃO TÊM DEFAULT. Já foram `["packages/"]` — a pasta em que UM repositório guarda os apps — e o
+// split do train, o diff de código do card e a promoção liam isso como verdade sobre qualquer alvo: num repositório de
+// layout plano (`src/` na raiz) o código virava «dado de board» e um branch com código era descartado. Agora o alvo DECLARA
+// (`autorun.staging.codePrefixes`); indeclarado é `undefined` (≠ `[]` explícito = «nada é código») e os consumidores tratam
+// tudo fora de `storymap/boards/` como código — a direção segura, que só preserva e verifica MAIS (ver `isCodePath`,
+// staging.ts). E ligar o staging SEM declarar a régua é RECUSADO no boot ({@link stagingBootRefusal}).
 /**
  * Default para `autorun.qa.uiSurfacePatterns` — o que conta como superfície visível ao usuário.
  *
@@ -189,7 +196,7 @@ export const DEFAULT_RUNNER_SETTINGS: RunnerSettings = {
     // its CODE to the `stage` branch (held for a human release gate) while board data lands on main.
     // Off ⇒ every run merges to main as before. Boot-fixed (not hot-reloaded). AGILEHARNESS_AUTORUN_STAGING=1/0.
     // `dataDerived` empty by default: routing stays pure path-prefix until a repo declares otherwise.
-    staging: { enabled: false, branch: STAGING_BRANCH, codePrefixes: [...STAGING_CODE_PREFIXES], dataDerived: [] },
+    staging: { enabled: false, branch: STAGING_BRANCH, dataDerived: [] },
     // Medição da superfície de UI: ON por default (ao contrário das capacidades dormentes acima) —
     // ela só ACRESCENTA um fato ao card; quem decide o que fazer com ele é o gate.
     qa: { uiSurfacePatterns: [...UI_SURFACE_PATTERNS] },
@@ -439,6 +446,10 @@ export function coerceRunnerSettings(raw: unknown): RunnerSettings {
   const dataUnits = mg.dataUnits && typeof mg.dataUnits === "object" ? coerceGateUnitMap(mg.dataUnits, "mergeGate.dataUnits") : {};
   const surfaceMaxBudgetUSD = coerceSurfaceBudgets(a.surfaceMaxBudgetUSD);
   const notifications = coerceNotificationSettings(r.notifications);
+  // Coagidos UMA vez cada (o aviso de descarte sai uma vez por leitura do arquivo, não duas).
+  const target = coerceTargetProfile(r.target);
+  const deploy = coerceDeploySettings(r.deploy);
+  const vps = coerceVpsSettings(r.vps);
 
   return {
     version: asPosInt(r.version) ?? d.version,
@@ -533,10 +544,15 @@ export function coerceRunnerSettings(raw: unknown): RunnerSettings {
       staging: {
         enabled: typeof st.enabled === "boolean" ? st.enabled : dst.enabled,
         branch: asNonEmptyString(st.branch) ?? dst.branch,
-        // An explicit (even empty) array is honored; a missing/invalid value falls back to the default.
-        // An EMPTY list means "nothing is code" → every run merges to main (staging effectively inert).
-        codePrefixes: Array.isArray(st.codePrefixes) ? asStringArray(st.codePrefixes) : [...dst.codePrefixes],
+        // An explicit (even empty) array is honored; a missing/invalid value stays UNDECLARED (a chave nem existe no
+        // objeto — não há default). An EMPTY list means "nothing is code" → every run merges to main (staging
+        // effectively inert); undeclared means "all but board data is code" (isCodePath) — duas coisas DIFERENTES.
+        ...(Array.isArray(st.codePrefixes) ? { codePrefixes: asStringArray(st.codePrefixes) } : {}),
         dataDerived: coerceDataDerived(st.dataDerived),
+        // O que o ARQUIVO declarou, distinto do default preenchido acima (`layoutOf` lê isto). Só aparece quando há algo declarado.
+        ...(asNonEmptyString(st.branch) || Array.isArray(st.codePrefixes)
+          ? { declared: { ...(asNonEmptyString(st.branch) ? { branch: true as const } : {}), ...(Array.isArray(st.codePrefixes) ? { codePrefixes: true as const } : {}) } }
+          : {}),
       },
       qa: {
         // Mesma regra do `codePrefixes`: um array EXPLÍCITO (mesmo vazio) vence — vazio significa
@@ -603,8 +619,9 @@ export function coerceRunnerSettings(raw: unknown): RunnerSettings {
       ...(coerceSandboxDecl(a.sandbox) ? { sandbox: coerceSandboxDecl(a.sandbox)! } : {}),
     },
     columnDefaults,
-    ...(coerceTargetProfile(r.target) ? { target: coerceTargetProfile(r.target) } : {}),
-    ...(coerceDeploySettings(r.deploy) ? { deploy: coerceDeploySettings(r.deploy) } : {}),
+    ...(target ? { target } : {}),
+    ...(deploy ? { deploy } : {}),
+    ...(vps ? { vps } : {}),
     orchestrator: coerceOrchestratorSettings(r.orchestrator, d.orchestrator!),
     // Coerção EXPLÍCITA campo a campo, sem spread (capacity-governor.ts): lixo cai no default com aviso — um
     // teto nunca some em silêncio. Sempre materializado: quem lê recebe um objeto completo.
@@ -942,7 +959,7 @@ export function mcpTokensBackedBySecret(
  * Um slug atravessa as três sem significar nada em nenhuma. Uma frase com espaço e pontuação vira
  * instrução na primeira e caminho na terceira.
  */
-const DEPLOY_TARGET_SLUG = /^[A-Za-z][A-Za-z0-9_-]{0,40}$/;
+// (a forma do slug vive em deploy-policy.ts, onde os comandos declarados também a usam)
 
 /** Um caminho de manifesto seguro: relativo, sem subir de diretório, sem raiz absoluta. */
 const isSafeRelPath = (p: string): boolean =>
@@ -1006,7 +1023,9 @@ function coerceDeploySettings(raw: unknown): RunnerSettings["deploy"] {
     // Os três são obrigatórios JUNTOS: uma face meio declarada não tem como ser publicada nem medida, e
     // aceitá-la pela metade produziria o pior estado — o motor achando que HÁ face e não sabendo publicá-la.
     if (DEPLOY_TARGET_SLUG.test(target) && DEPLOY_TARGET_SLUG.test(recipe) && isSafeRelPath(manifest)) {
-      out.composedFace = { target, recipe, manifest };
+      // `command` é o argv que publica a face (o caminho que substitui `just <recipe>`); inválido ⇒ só ELE cai, com aviso.
+      const command = coerceArgvTemplate(f.command, [], "deploy.composedFace.command", console.warn);
+      out.composedFace = { target, recipe, manifest, ...(command ? { command } : {}) };
     } else {
       console.warn(
         "[storymap] settings deploy.composedFace: descritor DESCARTADO — exige `target` e `recipe` em forma de " +
@@ -1016,7 +1035,26 @@ function coerceDeploySettings(raw: unknown): RunnerSettings["deploy"] {
     }
   }
 
+  // As chaves do ferramental de publicação (lançadores, receitas, comando diff-aware, estado, prova): deploy-policy.ts.
+  Object.assign(out, coerceDeployPolicy(r));
+
   return Object.keys(out).length ? out : undefined;
+}
+
+/**
+ * A RECUSA DE BOOT do staging: ligado (`enabled`, pelo arquivo ou por `AGILEHARNESS_AUTORUN_STAGING=1`) sem que o alvo
+ * tenha DECLARADO `autorun.staging.codePrefixes`. O split do train precisa saber onde o código mora; sem a régua, ou ele
+ * suporia a pasta de outro repositório (o defeito que o default `packages/` era) ou trataria tudo como código — nenhuma
+ * das duas é uma escolha que a ferramenta possa fazer pelo operador. Devolve a frase que diz o que declarar, ou null.
+ * `[]` explícito é declaração válida («nada é código», staging inerte). PURA; quem constrói o train (boot-fixed) lança.
+ */
+export function stagingBootRefusal(staging: { enabled: boolean; codePrefixes?: readonly string[] } | null | undefined): string | null {
+  if (!staging?.enabled || staging.codePrefixes !== undefined) return null;
+  return (
+    "autorun.staging está LIGADO, mas o alvo não declarou onde o código mora: declare `autorun.staging.codePrefixes` em " +
+    "storymap/settings.yaml (a lista de prefixos de diretório do CÓDIGO deployável, ex.: `[src/]`; `[]` = nada é código). " +
+    "A ferramenta não supõe a pasta do seu repositório — o merge train não sobe até a régua estar declarada."
+  );
 }
 
 /** Apply process.env overrides on top of file/default settings (ENV wins). Exported for tests. */
@@ -1031,7 +1069,9 @@ export function applyEnvOverrides(s: RunnerSettings): RunnerSettings {
       staging: s.autorun.staging
         ? {
             ...s.autorun.staging,
-            codePrefixes: [...s.autorun.staging.codePrefixes],
+            // Clona quando PRESENTE e continua AUSENTE quando ausente: materializar `[]` aqui transformaria «não declarei»
+            // em «nada é código» — o oposto, e a direção insegura.
+            ...(s.autorun.staging.codePrefixes ? { codePrefixes: [...s.autorun.staging.codePrefixes] } : {}),
             // Deep-clone when PRESENT, and stay absent when absent: an env override may only move
             // `enabled`. Materializing `dataDerived: []` here would have this layer inventing config the
             // file never declared — invisible today (empty ≡ absent) but exactly the kind of silent
@@ -1132,13 +1172,12 @@ export function applyEnvOverrides(s: RunnerSettings): RunnerSettings {
     next.autorun.mergeGate = { ...base, isolation: env.AGILEHARNESS_AUTORUN_GATE_ISOLATION };
   }
   // Staged release (Fase 4a): a 1/0 master switch over the file value. Ensure the object exists (an old
-  // file/default without the section) before flipping it, defaulting branch + codePrefixes. Boot-fixed —
+  // file/default without the section) before flipping it, defaulting the branch (NOT codePrefixes: o alvo declara a régua de código; ligar sem declarar é recusado no boot por {@link stagingBootRefusal}). Boot-fixed —
   // the queue reads this once at construction, so this override takes effect on the next service start.
   if (env.AGILEHARNESS_AUTORUN_STAGING === "1" || env.AGILEHARNESS_AUTORUN_STAGING === "0") {
     const base = next.autorun.staging ?? {
       enabled: false,
       branch: STAGING_BRANCH,
-      codePrefixes: [...STAGING_CODE_PREFIXES],
     };
     next.autorun.staging = { ...base, enabled: env.AGILEHARNESS_AUTORUN_STAGING === "1" };
   }
@@ -1188,6 +1227,8 @@ export function applyEnvOverrides(s: RunnerSettings): RunnerSettings {
 }
 
 let cache: { mtimeMs: number; settings: RunnerSettings } | null = null;
+/** O mtime do arquivo cuja falha de leitura já foi avisada (uma linha por versão do arquivo). */
+let parseFailureWarnedAt: number | null = null;
 
 /** Read settings.yaml from disk (no ENV), coerced. Memoized by mtime. */
 export function readFileSettings(): RunnerSettings {
@@ -1204,7 +1245,15 @@ export function readFileSettings(): RunnerSettings {
     const settings = coerceRunnerSettings(yaml.load(raw));
     cache = { mtimeMs, settings };
     return settings;
-  } catch {
+  } catch (err) {
+    // FAIL-OPEN CONTINUA (o serviço sobe com os defaults), mas NÃO MUDO: um YAML inválido (sintaxe, chave duplicada) derruba
+    // a config INTEIRA — autorun, governador, tokens, `target:` voltam ao default de uma vez, sem rastro. É hot (vale no
+    // instante do mtime), então o aviso sai UMA vez por versão do arquivo, para não inundar o log a cada leitura.
+    if (parseFailureWarnedAt !== mtimeMs) {
+      parseFailureWarnedAt = mtimeMs;
+      const why = String((err as Error)?.message ?? err).split("\n")[0].slice(0, 200);
+      console.warn(`[storymap] settings.yaml ilegível — a configuração INTEIRA caiu nos defaults até o arquivo voltar a carregar (autorun, governador, tokens, target e deploy incluídos): ${why}`);
+    }
     return DEFAULT_RUNNER_SETTINGS;
   }
 }

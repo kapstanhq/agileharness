@@ -21,6 +21,13 @@
 // card) degrades to "allow" — the app's checkGate remains the authoritative enforcement; this
 // just catches agent file-edits before they land.
 //
+// WHAT THE OPERATOR ACTUALLY SEES (read before trusting this hook): when none of the libs above loads, the hook
+// still ALLOWS the write and says so with ONE `[HARNESS WARNING] … DESLIGADO neste hook` line on STDERR, exit 0. Claude
+// Code does not surface the stderr of an exit-0 hook to the model or to the operator outside verbose / transcript mode,
+// so that line is a breadcrumb for whoever reads the hook output, NOT an alarm. "Fail-open but warns" is therefore
+// still, in practice, silent: the authority stays the app's checkGate, and an operator-visible check of whether these
+// libs are reachable is the service preflight's job, not this hook's.
+//
 // Interface (auto-discovered by ../../runner.js):
 //   module.exports = { name, test(input) -> null | { rule, message, fix } }
 // Write tool exposes the whole file via tool_input.content; Edit exposes
@@ -126,7 +133,10 @@ function repoRootFor(dirname) {
 // Ordered js-yaml require candidates for a given starting dir. A bare require fails under the
 // repo's bun node_modules layout, so we also point at the storymap-ui package copy and the root
 // copy, resolved RELATIVE to the (worktree-aware) repo root.
-function yamlCandidatesFor(dirname) {
+//
+// Lote D: the TOOL's own checkout is also a candidate (AGILEHARNESS_TOOL_ROOT, injected by the engine into every
+// run) — a target repository has no `packages/storymap-ui` of its own, so the legacy path alone never resolved there.
+function yamlCandidatesFor(dirname, env) {
   const candidates = ['js-yaml'];
   const repoRoot = repoRootFor(dirname);
   if (repoRoot) {
@@ -135,7 +145,40 @@ function yamlCandidatesFor(dirname) {
       path.join(repoRoot, 'node_modules', 'js-yaml'),
     );
   }
+  const toolRoot = toolRootOf(env);
+  if (toolRoot) candidates.push(path.join(toolRoot, 'node_modules', 'js-yaml'));
   return candidates;
+}
+
+// The tool's package dir as the engine declares it (AGILEHARNESS_TOOL_ROOT), or null.
+function toolRootOf(env) {
+  const v = (env || process.env).AGILEHARNESS_TOOL_ROOT;
+  return typeof v === 'string' && v.trim() ? v.trim() : null;
+}
+
+// Ordered candidates for one of the tool's isomorphic libs (gate-core.js). WHY an ordered list: the hook runs inside
+// a TARGET repository that only sometimes carries the tool's source. (1) a copy VENDORED beside the hook
+// (`.claude/hooks/lib/<name>`, what a target that installs the hook ships — it travels with the hook and is the
+// reference for the target's own version); (2) the TOOL's checkout (AGILEHARNESS_TOOL_ROOT/src/lib/storymap); (3) the
+// legacy path of the tool's own tree, where it lives inside the repository that develops it.
+function libCandidatesFor(dirname, name, env) {
+  const out = [path.join(dirname, '..', '..', 'lib', name)];
+  const toolRoot = toolRootOf(env);
+  if (toolRoot) out.push(path.join(toolRoot, 'src', 'lib', 'storymap', name));
+  const repoRoot = repoRootFor(dirname);
+  if (repoRoot) out.push(path.join(repoRoot, 'packages', 'storymap-ui', 'src', 'lib', 'storymap', name));
+  return out;
+}
+
+// Said ONCE per process, out loud: a hook that silently degrades to "allow" is indistinguishable from a hook that
+// works. The app's own checkGate stays the authority, so this still allows — but the operator can now SEE it.
+let _warnedMissingLib = false;
+function warnLibMissing(name, what, tried) {
+  if (_warnedMissingLib) return;
+  _warnedMissingLib = true;
+  try {
+    process.stderr.write(`[HARNESS WARNING] ${name} não encontrado — ${what} DESLIGADO neste hook (procurei: ${tried.join(', ')}). Declare AGILEHARNESS_TOOL_ROOT ou vendorize a lib ao lado do hook.\n`);
+  } catch { /* stderr fechado: nada a fazer */ }
 }
 
 // Load a real YAML parser. Cached. Returns the lib or null.
@@ -160,14 +203,17 @@ function loadYamlLib() {
 let _gateCore;
 function loadGateCore() {
   if (_gateCore !== undefined) return _gateCore;
-  const repoRoot = repoRootFor(__dirname);
-  try {
-    _gateCore = repoRoot
-      ? require(path.join(repoRoot, 'packages', 'storymap-ui', 'src', 'lib', 'storymap', 'gate-core.js'))
-      : null;
-  } catch {
-    _gateCore = null;
+  const tried = libCandidatesFor(__dirname, 'gate-core.js');
+  _gateCore = null;
+  for (const c of tried) {
+    try {
+      _gateCore = require(c);
+      return _gateCore;
+    } catch {
+      /* try next */
+    }
   }
+  warnLibMissing('gate-core', 'o gate de card', tried);
   return _gateCore;
 }
 
@@ -223,7 +269,7 @@ function checkGate(fm, status, normalized) {
   return {
     rule: 'storymap-gate',
     message: `Gate "${verdict.gate}" bloqueia a entrada no status "${status}": ${verdict.message}`,
-    fix: `${verdict.fix} O gate valida o conteúdo final do card (não só a linha alterada). Fonte única: board.yaml + packages/storymap-ui/src/lib/storymap/gate-core.js.`,
+    fix: `${verdict.fix} O gate valida o conteúdo final do card (não só a linha alterada). Fonte única: board.yaml + gate-core (a mesma lib que o app usa).`,
   };
 }
 
@@ -361,3 +407,4 @@ module.exports = {
 // (story-ex0035). The runner only consumes `name` + `test`; these are inert in production.
 module.exports._minimalDetectorFlags = minimalDetectorFlags;
 module.exports._yamlCandidatesFor = yamlCandidatesFor;
+module.exports._libCandidatesFor = libCandidatesFor;

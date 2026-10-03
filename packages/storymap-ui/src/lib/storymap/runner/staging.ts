@@ -2,29 +2,88 @@
 //
 // Empirical context (14 leftover run/* branches inspected): autorun work is ~93% board DATA — cards
 // under `storymap/**`, skills under `.claude/**` — and only `harness-do` produces app CODE under
-// `packages/**`. So the train routes a run by its changed paths:
+// the code prefixes (e.g. `packages/**`). So the train routes a run by its changed paths:
 //   - NO code paths (the common case) → merge straight to MAIN, exactly as before (board + cascade stay
 //     live; .md data can't break a build, so no gate is needed).
-//   - SOME code paths → the CODE is held on the `stage` branch behind the human release gate, while the
-//     run's non-code (board data / skills) still lands on MAIN so the live board keeps advancing.
+//   - SOME code paths → the CODE is held on the integration branch (`autorun.staging.branch`, default
+//     `stage`) behind the human release gate, while the run's non-code (board data / skills) still lands
+//     on MAIN so the live board keeps advancing.
 //
 // Kept OUT of merge-queue.ts so the routing decision is unit-testable without the queue's git DI. The
 // git plumbing (reading the diff, the dual-target merge) lives in the queue and calls these to decide.
+//
+// CLIENT-SAFE de propósito (zero import de servidor): `diff.ts` — que um componente de tela importa — lê a
+// régua de código e o branch de integração DAQUI. Por isso o default do branch mora aqui como espelho de
+// `DEFAULT_STAGING_BRANCH` (config.ts) e um teste trava a igualdade, em vez de um import de config.
+
+import { layoutOf } from "../target-profile";
+
+/**
+ * O ÚNICO default de branch de integração que a ferramenta mantém: onde o código espera o portão de release
+ * quando o alvo não declara `autorun.staging.branch`. É CONVENÇÃO da ferramenta (documentada), não suposição
+ * sobre o repositório — e o staging só liga por opt-in. Espelho de `DEFAULT_STAGING_BRANCH` (config.ts);
+ * staging.test.ts prova que os dois são o mesmo valor.
+ */
+export const STAGING_BRANCH_DEFAULT = "stage";
+
+/** O que se lê do bloco `autorun.staging` (estrutural: serve ao tipo do settings e ao do MergeQueueConfig). */
+export interface StagingScopeSource {
+  branch?: string;
+  codePrefixes?: readonly string[];
+  declared?: { branch?: boolean; codePrefixes?: boolean };
+}
+
+/**
+ * O branch de integração EFETIVO: o declarado em `autorun.staging.branch`, senão {@link STAGING_BRANCH_DEFAULT}.
+ * Existe para ninguém mais escrever `?? "stage"` à mão (eram nove cópias do literal, e uma delas sobrescrevia
+ * a declaração do repositório). PURA.
+ */
+export function stagingBranchOf(staging: StagingScopeSource | null | undefined): string {
+  return staging?.branch?.trim() || STAGING_BRANCH_DEFAULT;
+}
+
+/**
+ * Os `codePrefixes` que o repositório DECLAROU, ou `undefined` quando não declarou — e a diferença importa:
+ *   · `[]` explícito  ⇒ «nada é código» (staging inerte; vale como foi declarado);
+ *   · `undefined`     ⇒ «não declarei»: os consumidores tratam tudo fora de `storymap/boards/` como código
+ *     ({@link isCodePath}) — a direção SEGURA, que só preserva e verifica MAIS, nunca descarta código.
+ * O bloco vindo de `loadRunnerConfig()` traz `declared` (o que o ARQUIVO disse, distinto do default que a
+ * coerção preenche); um objeto montado à mão (testes, `MergeQueueConfig`) não traz, e então o valor dado vale
+ * como declarado. Mesma regra de `layoutOf` (target-profile.ts), que é quem a define. PURA.
+ */
+export function declaredCodePrefixes(staging: StagingScopeSource | null | undefined): readonly string[] | undefined {
+  if (!staging) return undefined;
+  if (staging.declared) return layoutOf({ autorun: { staging } }).codePrefixes;
+  return staging.codePrefixes;
+}
 
 /**
  * Does this set of changed paths include any DEPLOYABLE CODE — a path under one of `codePrefixes`
- * (e.g. `packages/`)? A run with code is routed to the `stage` branch; a run with NONE merges to main.
+ * (e.g. `packages/`)? A run with code is routed to the integration branch; a run with NONE merges to main.
  *
  * `changedPaths` are repo-relative POSIX paths as `git diff --name-only` emits them (no leading `./`).
  * An EMPTY `codePrefixes` means "nothing is code" → always false → every run merges to main (staging
- * inert). Pure: the caller supplies the already-read diff, so this never touches disk.
+ * inert); `undefined` (not declared) means everything outside `storymap/boards/` is code — see
+ * {@link isCodePath}. Pure: the caller supplies the already-read diff, so this never touches disk.
  */
 export function pathsTouchCode(
   changedPaths: readonly string[],
-  codePrefixes: readonly string[],
+  codePrefixes: readonly string[] | undefined,
 ): boolean {
-  if (codePrefixes.length === 0) return false;
-  return changedPaths.some((p) => codePrefixes.some((prefix) => p.startsWith(prefix)));
+  return changedPaths.some((p) => isCodePath(p, codePrefixes));
+}
+
+/**
+ * UM caminho é CÓDIGO? A régua única de quem decide entre «código» e «dado de board»:
+ *   · `codePrefixes` declarado ⇒ sob algum prefixo (um `[]` declarado ⇒ nada é código);
+ *   · `codePrefixes` INDECLARADO (`undefined`) ⇒ tudo fora de `storymap/boards/` é código. É o neutro seguro:
+ *     errar para este lado só faz o train gatear/preservar MAIS; errar para o outro (um repositório de layout
+ *     plano, `src/` na raiz, sem declaração) fazia `src/**` virar «dado» e um branch com código ser descartado.
+ * PURA.
+ */
+export function isCodePath(p: string, codePrefixes: readonly string[] | undefined): boolean {
+  if (codePrefixes === undefined) return !p.startsWith(BOARD_DATA_PREFIX);
+  return codePrefixes.some((prefix) => p.startsWith(prefix));
 }
 
 /**
@@ -70,7 +129,8 @@ export function uiSurfacePaths(
  * Partition a run's changed paths into the CODE set (routed to `stage`) and the DATA set (routed to
  * main: board cards, skills, docs, configs). The complement of {@link pathsTouchCode}'s predicate,
  * surfaced as the two lists the dual-target merge needs. Order-preserving and de-dup-free (the diff is
- * already unique). An empty `codePrefixes` puts everything in `data` (→ all to main).
+ * already unique). An empty `codePrefixes` puts everything in `data` (→ all to main); `undefined` (not
+ * declared) puts everything outside `storymap/boards/` in `code` — see {@link isCodePath}.
  *
  * `dataDerived` — paths that live UNDER a code prefix but are DERIVED FROM board data, so they belong
  * to the DATA half despite their location. Routing them by path tears a derived artifact away from the
@@ -86,14 +146,14 @@ export function uiSurfacePaths(
  */
 export function partitionPaths(
   changedPaths: readonly string[],
-  codePrefixes: readonly string[],
+  codePrefixes: readonly string[] | undefined,
   dataDerived: readonly string[] = [],
 ): { code: string[]; data: string[] } {
   const derived = new Set(dataDerived);
   const code: string[] = [];
   const data: string[] = [];
   for (const p of changedPaths) {
-    const looksLikeCode = codePrefixes.length > 0 && codePrefixes.some((prefix) => p.startsWith(prefix));
+    const looksLikeCode = isCodePath(p, codePrefixes);
     if (looksLikeCode && !derived.has(p)) code.push(p);
     else data.push(p);
   }
@@ -101,7 +161,7 @@ export function partitionPaths(
 }
 
 /** Board data NEVER travels with code — it is the one half whose destination is not negotiable. */
-const BOARD_DATA_PREFIX = "storymap/boards/";
+export const BOARD_DATA_PREFIX = "storymap/boards/";
 
 /**
  * O arquivo de um CARD (`storymap/boards/<board>/cards/<id>.md`) — ESTADO VIVO do pipeline, não entregável: o serviço o

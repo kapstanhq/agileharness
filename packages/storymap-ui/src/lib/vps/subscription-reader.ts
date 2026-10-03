@@ -5,25 +5,42 @@
 //
 // SERVER-ONLY (fetch com timeout). O parse é puro e mora em subscription.ts.
 
+import { loadRunnerConfig } from "@/lib/storymap/runner/config";
+import { vpsOf } from "@/lib/storymap/vps-settings";
 import { parseHeadroomStats } from "./subscription";
 import type { HeadroomSavings, UsageWindow } from "./types";
 
 /** Valores de `AGILEHARNESS_HEADROOM_URL` que desligam o proxy — a mesma régua de runner/headroom.ts. */
 const OFF_VALUES = /^(0|off|false|none|disabled)$/i;
 
-/** A porta convencional do proxy, usada só quando nenhuma URL foi declarada (o mostrador sempre a tentou). */
-const CONVENTIONAL_BASE = "http://127.0.0.1:8787";
-
 /**
- * A URL do `/stats`, ou null quando o proxy foi DESLIGADO por env (`off`/`0`/`false`/`none`/`disabled`).
- * Sem declaração, tenta a porta convencional: uma porta muda ou que responde outra coisa resulta em leitura
- * nula (o parse recusa o que não reconhece), nunca num número inventado.
+ * A URL do `/stats`, ou null quando NÃO HÁ medidor: o proxy foi DESLIGADO por env (`off`/`0`/`false`/`none`/`disabled`)
+ * ou ninguém declarou onde ele está. Precedência: `AGILEHARNESS_HEADROOM_URL` > `declared` (`vps.headroomUrl` do
+ * settings.yaml) > nada.
+ *
+ * NÃO há porta «convencional» a tentar. Um endereço de loopback não identifica quem atende nele: a mesma porta pode
+ * ser outra coisa na máquina de quem instala, e um medidor lendo outro serviço entrega um número que parece certo.
+ * Sem declaração o medidor não existe e o governador de capacidade fica inerte (e DIZ isso no log, uma vez).
  */
-export function headroomStatsUrl(env: Record<string, string | undefined> = process.env): string | null {
-  const declared = env.AGILEHARNESS_HEADROOM_URL?.trim();
-  if (declared && OFF_VALUES.test(declared)) return null;
-  const base = (declared || CONVENTIONAL_BASE).replace(/\/+$/, "");
-  return `${base}/stats`;
+export function headroomStatsUrl(env: Record<string, string | undefined> = process.env, declared?: string | null): string | null {
+  const fromEnv = env.AGILEHARNESS_HEADROOM_URL?.trim();
+  if (fromEnv && OFF_VALUES.test(fromEnv)) return null;
+  const base = (fromEnv || declared?.trim() || "").replace(/\/+$/, "");
+  return base ? `${base}/stats` : null;
+}
+
+/** O `vps.headroomUrl` que o alvo declarou no settings.yaml (relido por mtime), ou undefined. Nunca lança. */
+export function declaredHeadroomUrl(): string | undefined {
+  try {
+    return vpsOf(loadRunnerConfig()).headroomUrl;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A URL do `/stats` desta instalação: env > settings > nenhuma. É a que o mostrador e o governador usam. */
+export function meterStatsUrl(env: Record<string, string | undefined> = process.env): string | null {
+  return headroomStatsUrl(env, declaredHeadroomUrl());
 }
 
 /**

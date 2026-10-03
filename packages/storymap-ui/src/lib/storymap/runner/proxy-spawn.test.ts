@@ -11,6 +11,7 @@ import {
   buildProxyContextNote,
   buildProxyEnv,
   buildProxyPrompt,
+  ownerBusinessSentence,
   parseProxyAnswers,
   parseProxyCost,
   PROXY_ANSWERS_FILENAME,
@@ -121,6 +122,38 @@ describe("buildProxyContextNote — os fatos do dono, cercados como dados", () =
     expect(withClasses).toContain("`money` (Dinheiro e preço), `parcerias` (Parcerias)");
     expect(withClasses).toMatch(/falta de contexto.*não leva `ownerClass`/);
     expect(buildProxyPrompt(PROXY_ANSWERS_FILENAME)).not.toMatch(/ownerClass/);
+  });
+});
+
+// O trecho «o que é do dono» do prompt do proxy é MONTADO das classes que o board declara (rótulo + descrição), não um texto
+// fixo no código: um alvo que declara a redação dele (aqui, uma oficina de bicicletas inventada) a vê, e só a dele; sem
+// declaração valem as classes neutras da ferramenta — que mantêm a cláusula da troca de modelo/fornecedor de IA.
+describe("buildProxyPrompt — as decisões do dono vêm da declaração do board", () => {
+  const oficina = [
+    { id: "money", label: "Dinheiro da oficina", description: "Qualquer gasto novo, inclusive trocar a transportadora das entregas de bicicletas." },
+    { id: "parcerias", label: "Parcerias", description: "Fechar acordo com outra oficina." },
+  ];
+
+  it("com classes declaradas o prompt traz o texto DELAS e nenhum texto fixo da ferramenta", () => {
+    const p = buildProxyPrompt(PROXY_ANSWERS_FILENAME, oficina);
+    expect(p).toContain("Dinheiro da oficina (Qualquer gasto novo, inclusive trocar a transportadora das entregas de bicicletas)");
+    expect(p).toContain("Parcerias (Fechar acordo com outra oficina)");
+    expect(p).toContain("ele decide SÓ estas classes: Dinheiro da oficina; Parcerias.");
+    // nada do default neutro vaza por cima da declaração
+    expect(p).not.toMatch(/modelo ou o fornecedor de IA/);
+    expect(p).not.toMatch(/Dados de pessoas/);
+  });
+
+  it("sem declaração vale o default neutro, com a cláusula do modelo/fornecedor de IA", () => {
+    const p = buildProxyPrompt(PROXY_ANSWERS_FILENAME);
+    expect(p).toMatch(/ou o modelo ou o fornecedor de IA que atende o usuário do produto \(muda custo e qualidade\)/);
+    expect(p).toMatch(/Dados de pessoas/);
+    expect(p).not.toMatch(/ownerClass/); // sem declaração o proxy não é pedido a nomear a classe
+  });
+
+  it("ownerBusinessSentence junta rótulo + descrição (sem o ponto final) e aceita classe sem descrição", () => {
+    expect(ownerBusinessSentence([{ id: "a", label: "A", description: "faz isto. " }, { id: "b", label: "B" }])).toBe("A (faz isto); B");
+    expect(ownerBusinessSentence([])).toContain("Dinheiro e preço (");
   });
 });
 

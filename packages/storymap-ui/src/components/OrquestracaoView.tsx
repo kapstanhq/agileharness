@@ -172,14 +172,15 @@ function EmptyState({ children }: { children: React.ReactNode }) {
 }
 
 // Raio-x do contexto — o que TODO run neste board recebe antes da skill, derivado do board.yaml
-// (buildContextNote injeta o CLAUDE.md do pacote + o brandbook; o worktree auto-carrega o CLAUDE.md
-// raiz). Transparência pura: nenhum dado novo, só expõe o que o engine já monta. Mora na aba das
+// (buildContextNote injeta as convenções do pacote — o `docs.conventions` que o alvo declarou, ou as
+// instruções do repositório e do pacote — + o brandbook; o worktree auto-carrega as instruções da raiz).
+// Transparência pura: nenhum dado novo, só expõe o que o engine já monta. Mora na aba das
 // SKILLS porque é o resto do contexto delas — sozinho, no fim da página, não se sabia a que se referia.
 function RunContextXray({ config }: { config: BoardConfig }) {
   const feeds: { label: string; value: string }[] = [
-    { label: "Raiz", value: "CLAUDE.md (raiz do monorepo, auto-carregado no worktree)" },
+    { label: "Raiz", value: "instruções do repositório (carregadas no worktree)" },
   ];
-  if (config.package) feeds.push({ label: "App", value: `${config.package}/.claude/CLAUDE.md` });
+  if (config.package) feeds.push({ label: "App", value: `convenções do alvo (target.docs.conventions) ou instruções do pacote ${config.package}` });
   if (config.brandbook) feeds.push({ label: "Marca", value: config.brandbook });
   feeds.push({ label: "Skill", value: "o SKILL.md do step (acima) + o card alvo" });
 
