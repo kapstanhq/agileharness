@@ -115,6 +115,8 @@ const TOOL_ANNOTATIONS: Record<string, ToolHints> = {
   approve_qa: WRITE_IDEM, // QA first-class: sets qaPassed/qaRanAt/qaCommit (idempotent by card+args)
   approve_review: WRITE_IDEM, // review first-class (story-ex0038): sets reviewedAt/reviewCommit (idempotent by card+args)
   move_card: WRITE_IDEM,
+  // mudar de board: escrita de board-data (reversível — dá para mudar de volta), não idempotente (cada mudança é um salto).
+  transfer_card: WRITE,
   choose_wireframe: WRITE_IDEM,
   design_feedback: WRITE, // Canvas v2 — APPENDS uma entrada ao feedback[] do design (não idempotente por args)
   refine_card: WRITE,

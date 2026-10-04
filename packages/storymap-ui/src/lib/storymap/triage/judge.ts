@@ -14,7 +14,10 @@
 //   • descartar e juntar com confiança baixa viram ACEITAR (o reversível: o card segue visível e o dono veta);
 //   • o card que toca uma classe do DONO (ex.: propõe uma API paga) NÃO anda: fica na Triagem para ele, com a
 //     classe nomeada (`businessClasses`) — o veredito do juiz vira a recomendação;
-//   • ids de lugar e de duplicata são validados contra o board (um id inventado cai).
+//   • ids de lugar e de duplicata são validados contra o board (um id inventado cai);
+//   • o card que PERTENCE a outro board (o pacote/arquivos que ele toca, o escopo do PRD de lá) é MANDADO para lá
+//     (`route`) em vez de aceito aqui — o juiz de lá julga de novo. Mandar de volta a um board por onde o card já
+//     passou não acontece: os dois juízes discordam, e quem decide é o dono (`hold`).
 
 import { isBusinessOnly } from "../decision-class";
 import { ownerClassesOf } from "../owner-classes";
@@ -31,7 +34,9 @@ export const TRIAGE_JUDGE_MIN_CONFIDENCE = 0.7;
 
 /** O julgamento validado do modelo. */
 export interface TriageJudgement {
-  verdict: "accept" | "discard" | "duplicate";
+  verdict: "accept" | "discard" | "duplicate" | "route";
+  /** com `route`: o board (do mesmo alvo) a que o card pertence — validado contra os boards que existem. */
+  routeTo?: string;
   reason: string;
   prdAnchor?: string;
   duplicateOf?: string;
@@ -47,6 +52,9 @@ export type TriageJudgePlan =
   | { action: "accept"; to: string; card: Card }
   | { action: "discard"; to: string; card: Card }
   | { action: "duplicate"; to: string; card: Card }
+  /** o card pertence a outro board: o escritor o muda de board (card-transfer.ts) e o juiz de lá julga. Nada é carimbado
+   *  aqui — o card chega lá sem veredito. */
+  | { action: "route"; toBoard: string; reason: string; card: Card }
   | { action: "owner"; card: Card }
   | { action: "hold"; card: Card; reason: string };
 
@@ -67,9 +75,39 @@ const clip = (s: string | null | undefined, max: number) => {
 const PRD_MAX = 12_000;
 const BODY_MAX = 4_000;
 
+/** O que o juiz sabe dos OUTROS boards do alvo, para mandar um card ao board a que ele pertence. */
+export interface TriageOtherBoard {
+  id: string;
+  name: string;
+  package?: string;
+  sharedPackages?: string[];
+  ownsPaths?: string[];
+  /** um trecho do PRD de lá (o escopo) — cortado. */
+  scope?: string | null;
+}
+const SCOPE_MAX = 1_200;
+
 /** O prompt do juiz. Terceiros (PRD, corpo do card) entram CERCADOS como dado. PURA. */
-export function buildTriageJudgePrompt(input: { config: BoardConfig; prd: string | null; card: Card; cards: readonly Card[] }): string {
+export function buildTriageJudgePrompt(input: {
+  config: BoardConfig;
+  prd: string | null;
+  card: Card;
+  cards: readonly Card[];
+  /** os outros boards do alvo (vazio ⇒ sem roteamento: só aceitar/descartar/juntar). */
+  otherBoards?: readonly TriageOtherBoard[];
+}): string {
   const { config, prd, card, cards } = input;
+  const visited = new Set((card.transfers ?? []).map((t) => t.from));
+  const others = (input.otherBoards ?? []).filter((b) => b.id !== config.id && !visited.has(b.id));
+  const otherBlock = others
+    .map((b) =>
+      [
+        `### ${b.id} — ${b.name}`,
+        `- pacote: ${b.package ?? "—"}${b.ownsPaths?.length ? `; também possui: ${b.ownsPaths.join(", ")}` : ""}${b.sharedPackages?.length ? `; toca (compartilhado): ${b.sharedPackages.join(", ")}` : ""}`,
+        ...(b.scope?.trim() ? [`- escopo (do PRD de lá): ${clip(b.scope, SCOPE_MAX).replace(/\n+/g, " ")}`] : []),
+      ].join("\n"),
+    )
+    .join("\n");
   const classes = ownerClassesOf(config)
     .map((c) => `- ${c.id} — ${c.label}: ${c.description}`)
     .join("\n");
@@ -86,6 +124,15 @@ export function buildTriageJudgePrompt(input: { config: BoardConfig; prd: string
     "  dúvida entre aceitar e descartar, ACEITE — o dono vê a lista e pode vetar.",
     '- "discard": o PRD o põe em «Fora, por ora» ou em «Nunca», ou ele não é acionável (vago, spam, já resolvido).',
     '- "duplicate": é o MESMO pedido/problema de um card existente abaixo — diga qual em "duplicateOf".',
+    ...(others.length
+      ? [
+          '- "route": o card PERTENCE a OUTRO board da lista «Outros boards» — os arquivos/o pacote que ele toca são de lá,',
+          "  ou o PRD deste board diz que o assunto não é daqui e o escopo de lá o cobre. Diga qual em \"routeTo\". Quando o",
+          "  card claramente pertence a outro board, MANDE — não aceite aqui «por via das dúvidas»: aceitar no board errado",
+          "  gasta o orçamento deste board e esconde o trabalho de quem cuida do outro. A dúvida entre aceitar e descartar",
+          "  continua sendo resolvida aceitando; a dúvida entre aqui e outro board, pelo pacote dos arquivos.",
+        ]
+      : []),
     "",
     "## Decisões do DONO (classes de negócio)",
     classes,
@@ -105,11 +152,12 @@ export function buildTriageJudgePrompt(input: { config: BoardConfig; prd: string
     "## Cards existentes (para duplicata e para o lugar no mapa)",
     index || "(nenhum)",
     "",
+    ...(others.length ? ["## Outros boards (para \"route\")", otherBlock, ""] : []),
     'Lugar no mapa ("placement"): uma história de usuário mora sob um STEP ("parent"); uma entrega (technical/bug/',
     'chore/spike) SERVE uma história de usuário ("serves"). Use só ids da lista acima; sem certeza, null.',
     "",
     "Responda APENAS um objeto JSON, sem cercas de código:",
-    '{"verdict":"accept","duplicateOf":null,"reason":"<por que, em português simples>","prdAnchor":"<o trecho do PRD que pesou>",',
+    '{"verdict":"accept","duplicateOf":null,"routeTo":null,"reason":"<por que, em português simples>","prdAnchor":"<o trecho do PRD que pesou>",',
     ' "ownerClasses":[],"ownerReason":null,"placement":{"parent":null,"serves":null},"confidence":0.8}',
   ].join("\n");
 }
@@ -119,7 +167,12 @@ export function buildTriageJudgePrompt(input: { config: BoardConfig; prd: string
  * `duplicateOf` só se existir e não for o próprio card; o lugar só com ids reais do tipo certo; classes do dono
  * mantidas como vieram (uma desconhecida continua sendo do dono — errar para o lado humano). PURA.
  */
-export function parseTriageJudgement(raw: string, card: Card, cards: readonly Card[]): TriageJudgement | { error: string } {
+export function parseTriageJudgement(
+  raw: string,
+  card: Card,
+  cards: readonly Card[],
+  opts: { boards?: readonly string[] } = {},
+): TriageJudgement | { error: string } {
   let o: Record<string, unknown>;
   try {
     const doc = extractJsonObject(raw);
@@ -129,13 +182,15 @@ export function parseTriageJudgement(raw: string, card: Card, cards: readonly Ca
     return { error: `julgamento ilegível: ${String(err instanceof Error ? err.message : err).slice(0, 120)}` };
   }
   const verdict = o.verdict;
-  if (verdict !== "accept" && verdict !== "discard" && verdict !== "duplicate") return { error: "verdict fora do vocabulário" };
+  if (verdict !== "accept" && verdict !== "discard" && verdict !== "duplicate" && verdict !== "route") return { error: "verdict fora do vocabulário" };
   const reason = typeof o.reason === "string" ? o.reason.trim().slice(0, 600) : "";
   if (!reason) return { error: "julgamento sem o porquê" };
   const byId = new Map(cards.map((c) => [c.id, c]));
   const str = (v: unknown, max = 300) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : undefined);
   const dup = str(o.duplicateOf);
   const duplicateOf = dup && dup !== card.id && byId.has(dup) ? dup : undefined;
+  const route = str(o.routeTo, 120);
+  const routeTo = route && (opts.boards ?? []).includes(route) ? route : undefined;
   const ownerClasses = Array.isArray(o.ownerClasses)
     ? [...new Set(o.ownerClasses.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean))]
     : [];
@@ -153,6 +208,7 @@ export function parseTriageJudgement(raw: string, card: Card, cards: readonly Ca
     reason,
     ...(str(o.prdAnchor) ? { prdAnchor: str(o.prdAnchor) } : {}),
     ...(duplicateOf ? { duplicateOf } : {}),
+    ...(routeTo ? { routeTo } : {}),
     ownerClasses,
     ...(str(o.ownerReason, 600) ? { ownerReason: str(o.ownerReason, 600) } : {}),
     ...(Object.keys(placement).length ? { placement } : {}),
@@ -192,12 +248,29 @@ export function planTriageJudgement(
   const hold = (reason: string): TriageJudgePlan => ({
     action: "hold",
     reason,
-    card: { ...card, needsHumanReview: true, triageDecision: stamp({ verdict: "hold", reason, recommendation: j.verdict }) },
+    card: { ...card, needsHumanReview: true, triageDecision: stamp({ verdict: "hold", reason, ...(j.verdict !== "route" ? { recommendation: j.verdict } : {}) }) },
   });
 
-  // Descartar/juntar só com confiança — senão, o reversível: aceitar.
-  let verdict = j.verdict;
-  let reason = j.reason;
+  // Mandar ao board a que pertence: só para um board que existe, que não é este e por onde o card não passou. Voltar a um
+  // board de onde ele veio é desacordo entre os juízes — o dono decide.
+  if (j.verdict === "route") {
+    const visited = new Set((card.transfers ?? []).map((t) => t.from));
+    if (j.routeTo && visited.has(j.routeTo)) {
+      return hold(`o juiz quis mandar o card de volta ao board «${j.routeTo}», de onde ele veio — os juízes discordam; a decisão é sua`);
+    }
+    if (j.routeTo && j.routeTo !== config.id && j.confidence >= TRIAGE_JUDGE_MIN_CONFIDENCE) {
+      // As classes do DONO que este juiz marcou viajam com o card (gravadas ANTES da mudança — triage-judge-deps.ts): o
+      // juiz do board de destino é outro modelo e poderia aceitar sem marcá-las de novo.
+      const marked: Card = j.ownerClasses.length
+        ? { ...card, businessClasses: { ids: j.ownerClasses, reason: j.ownerReason ?? j.reason, by: opts.by, at: opts.today } }
+        : card;
+      return { action: "route", toBoard: j.routeTo, reason: j.reason, card: marked };
+    }
+  }
+
+  // Descartar/juntar só com confiança — senão, o reversível: aceitar. Mandar sem board válido ou sem confiança, idem.
+  let verdict: "accept" | "discard" | "duplicate" = j.verdict === "route" ? "accept" : j.verdict;
+  let reason = j.verdict === "route" ? `mandar a outro board sem ${j.routeTo ? "confiança" : "um board válido"} — aceito aqui (reversível). ${j.reason}` : j.reason;
   if (verdict !== "accept" && (j.confidence < TRIAGE_JUDGE_MIN_CONFIDENCE || (verdict === "duplicate" && !j.duplicateOf))) {
     reason = `${verdict === "duplicate" && !j.duplicateOf ? "duplicata sem o card canônico" : "baixa confiança para descartar/juntar"} — aceito (reversível). ${j.reason}`;
     verdict = "accept";

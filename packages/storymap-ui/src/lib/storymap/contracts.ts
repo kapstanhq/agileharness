@@ -364,6 +364,38 @@ export const CardSchema = z.object({
       note: z.string().optional(),
     })
     .optional(),
+  // a marca de cadeia de conserto de revisão (runner/review-rounds.ts) — sparse, escrita só pelo servidor.
+  reviewChain: z.object({ root: z.string().min(1), round: z.number().int().min(1), extra: z.boolean().optional() }).optional(),
+  // a trilha de boards por onde o card passou (card-transfer.ts) — sparse.
+  transfers: z
+    .array(
+      z.object({
+        from: z.string().min(1),
+        to: z.string().min(1),
+        at: z.string().min(1),
+        by: z.string().min(1),
+        reason: z.string().optional(),
+        fromStatus: z.string().nullable().optional(),
+        previousAnchor: z.object({ id: z.string().min(1), title: z.string().optional() }).optional(),
+        previousTriage: z.object({ verdict: z.string().min(1), reason: z.string() }).optional(),
+        forced: z.boolean().optional(),
+        previousEvidence: z
+          .object({
+            qaPassed: z.boolean().optional(),
+            qaRanAt: z.string().nullable().optional(),
+            qaCommit: z.string().nullable().optional(),
+            hadQaEvidence: z.boolean().optional(),
+            reviewedAt: z.string().nullable().optional(),
+            reviewCommit: z.string().nullable().optional(),
+            techPlanReady: z.boolean().optional(),
+            wireframeChosen: z.string().nullable().optional(),
+            hadBuildEvidence: z.boolean().optional(),
+            tasksDone: z.array(z.string()).optional(),
+          })
+          .optional(),
+      }),
+    )
+    .optional(),
   release: z.string().nullable(),
   unplaced: z.boolean().optional(),
   via: oneOf(CARD_PROVENANCES).optional(), // WS6 (F5) — creation provenance
@@ -695,6 +727,7 @@ export const BoardConfigSchema = z.object({
   name: z.string(),
   package: z.string().optional(),
   sharedPackages: z.array(z.string()).optional(),
+  ownsPaths: z.array(z.string()).optional(),
   // A ÚNICA declaração da política de release (ausente ⇒ `manual`, o default seguro). O `autorun` do
   // passo `deploy` deriva daqui — ver runner/release-policy.ts e BoardConfig.release.
   release: z.object({ mode: oneOf(RELEASE_MODES) }).optional(),

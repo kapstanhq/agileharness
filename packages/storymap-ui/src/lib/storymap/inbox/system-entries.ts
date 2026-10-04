@@ -68,14 +68,15 @@ export function systemDecisionEntry(d: FollowUpItem, ctx: SystemEntryCtx): Inbox
       bucket: "acompanhar",
       askVerb: null,
       ask: clip(d.what, 140),
-      happened: `${who} decidiu por você${d.why ? `: ${clip(d.why, 200)}` : "."}`,
+      // quem decidiu foi o próprio dono (uma mudança de board pela tela): «Você decidiu», nunca «Você decidiu por você»
+      happened: `${who} decidiu${d.agent === "human" ? "" : " por você"}${d.why ? `: ${clip(d.why, 200)}` : "."}`,
       options,
       ifIgnored: d.undoneAt ? "Você já desfez esta decisão." : "A decisão fica valendo.",
       more: d.cardId
         ? [{ id: "more:open-card", label: "Abrir card", consequence: "Abre o card inteiro. Não decide nada.", tone: "neutral", auditCls: "read", invoke: { kind: "link", href: cardHref(ctx.boardId, d.cardId) }, done: "Aberto." }]
         : [],
       details: [
-        { label: "Quem decidiu", value: d.agent },
+        { label: "Quem decidiu", value: who },
         ...(d.what.length > 140 ? [{ label: "O que decidiu", value: d.what }] : []),
         ...(d.alternatives?.length ? [{ label: "Opções que havia", value: d.alternatives.join(" · ") }] : []),
       ],

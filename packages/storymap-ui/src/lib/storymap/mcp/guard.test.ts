@@ -57,7 +57,7 @@ vi.mock("@/lib/storymap/runner/orchestrator-state", async (orig) => {
   };
 });
 
-import { guardToolCall, BRAKE_TOOLS } from "./guard";
+import { guardToolCall, BRAKE_TOOLS, stricterDisposition } from "./guard";
 import { runWithMcpActor } from "./actor";
 import { emptyOrchestratorState } from "@/lib/storymap/runner/orchestrator-state";
 import type { OrchestratorPolicy } from "@/lib/storymap/types";
@@ -392,5 +392,39 @@ describe("guardToolCall (F5.2) — per-call enforcement", () => {
     expect(createApprovalRequest).toHaveBeenCalledWith(
       expect.objectContaining({ reason: "risk-matrix", requestedBy: "mcp:write(AGILEHARNESS_MCP_TOKEN_ORCH)" }),
     );
+  });
+});
+
+// MUDAR UM CARD DE BOARD cruza boards: a matriz MAIS ESTRITA das duas governa — um board de destino que pede aprovação
+// para escrever não é atravessado por um board de origem que deixa.
+describe("guardToolCall — transfer_card responde à matriz mais estrita (origem × destino)", () => {
+  it("stricterDisposition: never > ask > auto", () => {
+    expect(stricterDisposition("auto", "ask")).toBe("ask");
+    expect(stricterDisposition("never", "auto")).toBe("never");
+    expect(stricterDisposition("ask", "ask")).toBe("ask");
+  });
+
+  it("origem libera escrita, destino pede aprovação ⇒ pede aprovação (não executa)", async () => {
+    readBoardConfig.mockImplementation(async (b: string) =>
+      b === "estufa" ? { orchestrator: policy({ riskMatrix: { "write-board": "auto" } }) } : { orchestrator: policy({ riskMatrix: { "write-board": "ask" } }) },
+    );
+    const r = await scoped(() => guardToolCall("transfer_card", "write-board", { board: "estufa", cardId: "story-x", toBoard: "galpao" }));
+    expect(r).not.toBeNull();
+    expect(createApprovalRequest).toHaveBeenCalledWith(expect.objectContaining({ board: "estufa", tool: "transfer_card" }));
+    expect(readBoardConfig).toHaveBeenCalledWith("galpao");
+  });
+
+  it("os dois liberam ⇒ executa", async () => {
+    readBoardConfig.mockResolvedValue({ orchestrator: policy({ riskMatrix: { "write-board": "auto" } }) });
+    const r = await scoped(() => guardToolCall("transfer_card", "write-board", { board: "estufa", cardId: "story-x", toBoard: "galpao" }));
+    expect(r).toBeNull();
+  });
+
+  it("uma tool que NÃO cruza boards ignora um `toBoard` no args", async () => {
+    readBoardConfig.mockImplementation(async (b: string) =>
+      b === "estufa" ? { orchestrator: policy({ riskMatrix: { "write-board": "auto" } }) } : { orchestrator: policy({ riskMatrix: { "write-board": "never" } }) },
+    );
+    const r = await scoped(() => guardToolCall("update_card", "write-board", { board: "estufa", cardId: "story-x", toBoard: "galpao" }));
+    expect(r).toBeNull();
   });
 });

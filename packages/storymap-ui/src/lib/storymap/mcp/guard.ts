@@ -159,6 +159,15 @@ export const BRAKE_TOOLS: ReadonlySet<string> = new Set(["pause_board"]);
  * The guard. `cls` is passed in (computed by defineTool via riskClassForTool) to avoid a register↔guard import
  * cycle. Returns null to ALLOW, or the guard's own CallToolResult to intercept.
  */
+/** As tools que CRUZAM boards (o `board` é a origem; `toBoard`, o destino): a matriz mais estrita das duas governa. */
+export const CROSS_BOARD_TOOLS: ReadonlySet<string> = new Set(["transfer_card"]);
+
+const DISPOSITION_RANK: Record<RiskDisposition, number> = { auto: 0, ask: 1, never: 2 };
+/** A disposição mais estrita de duas. PURA. */
+export function stricterDisposition(a: RiskDisposition, b: RiskDisposition): RiskDisposition {
+  return DISPOSITION_RANK[b] > DISPOSITION_RANK[a] ? b : a;
+}
+
 export async function guardToolCall(name: string, cls: RiskClass, args: unknown): Promise<CallToolResult | null> {
   const actor = currentMcpActor();
   if (!actor || actor.level === "full") return null; // operator token / internal call → never gated
@@ -198,7 +207,14 @@ export async function guardToolCall(name: string, cls: RiskClass, args: unknown)
 
   // 2) Resolve the disposition from the board's riskMatrix (re-read per call — never cached).
   const policy = board ? (await readBoardConfig(board).catch(() => null))?.orchestrator ?? null : null;
-  const disp = board ? dispositionFor(policy, cls) : defaultDisposition(cls);
+  let disp = board ? dispositionFor(policy, cls) : defaultDisposition(cls);
+  // Uma ação que CRUZA boards (mudar um card de board) responde à matriz MAIS ESTRITA dos dois: a do board de destino
+  // também governa o que entra nele. Destino ilegível ⇒ a disposição padrão da classe (conservadora).
+  const toBoard = CROSS_BOARD_TOOLS.has(name) ? (args as Record<string, unknown> | null | undefined)?.toBoard : undefined;
+  if (board && typeof toBoard === "string" && toBoard.trim() && toBoard !== board) {
+    const toPolicy = (await readBoardConfig(toBoard.trim()).catch(() => null))?.orchestrator ?? null;
+    disp = stricterDisposition(disp, toPolicy ? dispositionFor(toPolicy, cls) : defaultDisposition(cls));
+  }
 
   // O ledger (agent-actions) é a trilha de AUDITORIA; o diário (activity) é o que o operador LÊ no chat. As
   // duas escritas andam juntas em cada desfecho: sem o diário, uma ação autônoma — ou uma recusa — acontecia

@@ -23,7 +23,8 @@
 //
 // O INVARIANTE (ciclo de conserto): num board só-negócio, `owner` só sai daqui com uma classe do dono, ou num
 // ponto ESTRUTURAL nomeado (a pergunta que o próprio autor declarou do dono, a trava do núcleo, a captura e as amostras
-// do dono, a escolha de tela que ele pediu, a publicação cuja causa ainda não tem registro — fail-closed). E, em
+// do dono, a escolha de tela que ele pediu, a publicação cuja causa ainda não tem registro — fail-closed —, a entrega
+// parada em «Aprovar entrega» que nenhum ator do sistema vai mover). E, em
 // QUALQUER modo, uma falha cuja origem é a FERRAMENTA (runner/failure-origin.ts) ou o mesmo no-op de novo nunca é do
 // dono: nenhuma resposta dele muda o desfecho.
 
@@ -37,6 +38,10 @@ import type { BoardConfig, Card, CardQuestion, DeployCause, RiskClass } from "./
 export { DEFAULT_OWNER_CLASSES, MONEY_CLASS, ownerClassLabel, ownerClassesOf } from "./owner-classes";
 import type { CockpitItem, CockpitItemKind } from "./demands";
 
+/** O motivo da entrega parada em «Aprovar entrega» num board só-negócio (o ponto estrutural do `gate`). */
+export const DELIVERY_PARKED =
+  "a entrega parou esperando aprovação e ninguém do sistema vai seguir com ela — você aprova ou devolve";
+
 /** Este card roda em só-negócio? (o `ultra` efetivo: a exceção do card, senão o board). PURA. */
 export function isBusinessOnly(card: Pick<Card, "autonomyMode"> | null | undefined, config: Pick<BoardConfig, "autonomy"> | null | undefined): boolean {
   return effectiveAutonomy(card, config).mode === "ultra";
@@ -48,8 +53,11 @@ export type DecisionPoint =
   | { kind: "question"; question: Pick<CardQuestion, "category" | "text" | "context" | "proxy" | "ownerClass" | "classified"> }
   /** um card na quarentena da Triagem: aceitar, descartar ou juntar */
   | { kind: "triage-review" }
-  /** o gate / a aprovação para avançar um passo manual ("Aprovar entrega", "Publicar") */
-  | { kind: "gate" }
+  /**
+   * o gate / a aprovação para avançar um passo manual ("Aprovar entrega", "Publicar"). `deliveryApproval` = o passo é a
+   * aprovação da ENTREGA e o card está parado nele com trabalho pronto (demands.ts GateCockpitItem).
+   */
+  | { kind: "gate"; deliveryApproval?: boolean }
   /** escolher entre as variantes de tela */
   | { kind: "ui-choice" }
   /** um pedido de aprovação aberto pela matriz de risco */
@@ -192,7 +200,12 @@ export function whoDecides(
     case "triage-review":
       return touched ? owner(touched, touchedReason) : system("o juiz da triagem aceita, descarta ou junta pelo PRD");
     case "gate":
-      return touched ? owner(touched, touchedReason) : system("passo técnico: o pipeline, o verificador e o condutor avançam com prova");
+      if (touched) return owner(touched, touchedReason);
+      // Ponto ESTRUTURAL: em só-negócio o condutor atravessa «Aprovar entrega» sozinho, com a prova. Um card PARADO
+      // ali, com trabalho pronto, é uma entrega que nenhum ator do sistema vai mover — deixá-la em «o sistema decide»
+      // a esconderia do dono para sempre. Fica com o dono: aprovar ou devolver.
+      if (point.deliveryApproval) return owner(null, DELIVERY_PARKED);
+      return system("passo técnico: o pipeline, o verificador e o condutor avançam com prova");
     case "ui-choice":
       return uiAsked ? owner(null, UI_ASKED) : system("escolha de tela: o especialista de UX ou o orquestrador escolhe e registra as alternativas");
     case "approval":
@@ -277,7 +290,7 @@ const KIND_POINT: Record<CockpitItemKind, (item: CockpitItem, card: Card | undef
     return { kind: "question", question: question ?? { category: item.kind === "question" ? item.category : undefined, text: item.kind === "question" ? item.prompt : "" } };
   },
   review: () => ({ kind: "triage-review" }),
-  gate: () => ({ kind: "gate" }),
+  gate: (item) => ({ kind: "gate", ...(item.kind === "gate" && item.deliveryApproval ? { deliveryApproval: true } : {}) }),
   blocker: () => ({ kind: "gate" }),
   finding: () => ({ kind: "gate" }),
   design: () => ({ kind: "ui-choice" }),

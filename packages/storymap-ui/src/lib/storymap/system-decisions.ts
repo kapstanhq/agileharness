@@ -53,6 +53,10 @@ export type SystemDecisionKind =
   | "conductor-park"
   /** política só-negócio — com as provas produzidas, o produtor da prova republicou o card (o «Re-publicar» de sempre). */
   | "proof-republish"
+  /** um card mudou de board (card-transfer.ts) — registrado nos DOIS boards: o que saiu e o que recebeu. */
+  | "card-transfer"
+  /** o juiz da triagem mandou um card ao board a que ele pertence (o roteamento, triage/judge.ts). */
+  | "triage-route"
   | "undo";
 
 /** Como desfazer, quando dá. Cada variante é UMA ação com pré-condição (undoRefusal). */
@@ -216,6 +220,23 @@ export function publishEntry(board: string, card: Card, input: { sha: string; pr
   };
 }
 
+/**
+ * Um card mudou de board (card-transfer.ts): DUAS entradas, uma em cada board — o de origem diz para onde ele foi (sem
+ * `cardId`: o card não está mais lá), o de destino diz de onde veio. `agent`: `human` (o dono pela tela), `agent` (um
+ * agente pela tool) ou `triage-judge` (o roteamento da triagem). PURA.
+ */
+export function cardTransferEntries(
+  input: { fromBoard: string; fromName: string; toBoard: string; toName: string; cardId: string; title: string; agent: string; reason?: string | null; warnings?: readonly string[] },
+  opts: { at: string; idOf: (side: "from" | "to") => string },
+): [SystemDecision, SystemDecision] {
+  const kind: SystemDecisionKind = input.agent === "triage-judge" ? "triage-route" : "card-transfer";
+  const why = [input.reason?.trim() || (kind === "triage-route" ? "o card pertence a outro board" : "sem motivo informado"), ...(input.warnings ?? [])].join(" · ");
+  return [
+    { v: 1, id: opts.idOf("from"), at: opts.at, board: input.fromBoard, agent: input.agent, kind, what: `Mudou «${input.title}» para o board «${input.toName}»`, why },
+    { v: 1, id: opts.idOf("to"), at: opts.at, board: input.toBoard, cardId: input.cardId, agent: input.agent, kind, what: `Recebeu «${input.title}» do board «${input.fromName}»`, why },
+  ];
+}
+
 // ── a projeção para o «Acompanhar» ───────────────────────────────────────────────────────────────────────
 
 /** Quem decidiu, em português, para o dono. PURA. */
@@ -229,6 +250,8 @@ export function agentLabel(agent: string): string {
     verifier: "Verificador",
     // o produtor da prova de deploy (runner/deploy-proof-producer.ts `PRODUCER_AGENT`): republica e abre consertos
     "deploy-proof": "Produtor da prova de deploy",
+    // quem mudou um card de board por uma tool (card-transfer.ts) — um agente, sem o nível do token no texto do dono
+    agent: "Agente",
     system: "Sistema",
     human: "Você",
   };

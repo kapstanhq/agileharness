@@ -280,3 +280,25 @@ describe("«Adiado — não agora» tem a sua faixa", () => {
     expect(groupStoriesByLane([c("1", "triage")], lanes as never).lanes.map((l) => l.id)).toEqual(["a", "b"]);
   });
 });
+
+// A aprovação da entrega espera o dono: uma raia cujo rótulo promete o sistema não pode listá-la (o card parado ali
+// apareceria sob uma promessa de automação). Rótulo neutro não é acusado.
+describe("laneViewProblems — a raia cujo rótulo promete o sistema não lista a aprovação da entrega", () => {
+  const withDelivery = (lanes: LaneDef[]): BoardConfig => ({
+    ...withLanes(lanes),
+    statuses: base.statuses.map((s) => (s.id === "revisao" ? { ...s, gate: "hasQaPassed", autorun: false } : s)),
+  });
+  it("rótulo que promete o sistema + aprovação da entrega ⇒ acusado, nomeando o passo", () => {
+    const lanes = NEW_MAP.map((l) => (l.id === "prova" ? { ...l, label: "Bancada do sistema" } : l));
+    const problems = laneViewProblems(withDelivery(lanes));
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(/'Bancada do sistema' promete o sistema.*'revisao'.*espera o dono/);
+  });
+  it("rótulo neutro com a mesma lista ⇒ nada", () => {
+    expect(laneViewProblems(withDelivery(NEW_MAP))).toEqual([]);
+  });
+  it("rótulo que promete o sistema SEM a aprovação da entrega ⇒ nada", () => {
+    const lanes = NEW_MAP.map((l) => (l.id === "envio" ? { ...l, label: "Envio · automático" } : l));
+    expect(laneViewProblems(withDelivery(lanes))).toEqual([]);
+  });
+});

@@ -68,6 +68,7 @@ const fileSettings = (): RunnerSettings => ({
     },
     // DIFFERENT from the default (4) so "env wins over file" is observable for the session cap too.
     sessions: { maxWorktrees: 6 },
+    reviewRoundsCap: 2,
     stall: { afterMinutes: 15, retries: 1 },
     park: { afterMinutes: 10, nudgeAfterMinutes: 10, transportRetryAfterMinutes: 3, transportRetries: 2, declaredAfterMinutes: 30 },
     budgetRaise: { maxPct: 30, fiveHourMaxPct: 70 },

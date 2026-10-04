@@ -25,6 +25,7 @@ import { resolveDeclaredProgram } from "./product-deploy";
 import { produceDeployProofs, startDeployProofs, sweepDeployProofs, type DeployProofDeps, type ProofPending, type ReviewMaterial } from "./deploy-proof-producer";
 import { SECURITY_REVIEW_MODEL, agentRoleBody, spawnSecurityReviewer } from "./security-review-spawn";
 import { boardGateNow } from "./board-pace-store";
+import { fixCardBoard, originLine } from "./fix-card-board";
 
 const pexec = promisify(execFile);
 const GIT_MAX_BUFFER = 8 * 1024 * 1024;
@@ -158,21 +159,30 @@ export function defaultDeployProofDeps(): DeployProofDeps {
       await evaluateAutorunOnEntry(board, cardId).catch(() => {});
       return true;
     },
-    openFixCard: async (board, cardId, reason) => {
-      const [config, card] = await Promise.all([readBoardConfig(board), readCard(board, cardId)]);
+    openFixCard: async (board, cardId, reason, files) => {
+      // O conserto nasce no board dos arquivos do assunto (fix-card-board.ts); sem arquivos, no do card que publica.
+      const target = await fixCardBoard(board, files ?? []);
+      const routed = target.routed && target.board !== board;
+      const [config, card] = await Promise.all([readBoardConfig(target.board), readCard(board, cardId)]);
       const staging = config.statuses.find((s) => s.staging)?.id ?? null;
-      const serves = card && (card.storyType == null || card.storyType === "user") ? card.id : (card?.serves ?? card?.parent ?? undefined);
+      const serves = routed ? undefined : card && (card.storyType == null || card.storyType === "user") ? card.id : (card?.serves ?? card?.parent ?? undefined);
       const draft = makeDraftCard({ type: "story", title: `Conserto: a publicação de «${card?.title ?? cardId}» pede uma prova`, status: staging, cards: [] });
       const fix: Card = {
         ...draft,
         storyType: "technical",
         ...(serves ? { serves } : {}),
-        links: [{ rel: "relates-to", to: cardId }],
+        links: routed ? [] : [{ rel: "relates-to", to: cardId }],
         labels: ["prova-de-deploy"],
-        body: ["## A prova que faltou para publicar", "", `- Card: ${cardId} — ${card?.title ?? ""}`, `- ${reason}`, "- O dono não foi chamado: é trabalho técnico."].join("\n"),
+        body: [
+          "## A prova que faltou para publicar",
+          "",
+          ...(routed ? originLine(board, cardId, card?.title, target) : [`- Card: ${cardId} — ${card?.title ?? ""}`]),
+          `- ${reason}`,
+          "- O dono não foi chamado: é trabalho técnico.",
+        ].join("\n"),
       };
       const { createCardAction } = await import("@/app/actions");
-      const r = await createCardAction({ boardId: board, card: fix, via: "triage" });
+      const r = await createCardAction({ boardId: target.board, card: fix, via: "triage" });
       return r.ok ? (r.data?.card.id ?? null) : null;
     },
     record: appendSystemDecision,

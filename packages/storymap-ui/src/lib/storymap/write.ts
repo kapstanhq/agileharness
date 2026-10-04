@@ -138,6 +138,27 @@ export function cardToFrontmatter(card: Card): Record<string, unknown> {
           },
         }
       : {}),
+    // A marca de cadeia de conserto de revisão (runner/review-rounds.ts) — sparse. Sem ela o teto de rodadas perderia a
+    // conta na próxima escrita do card.
+    ...(card.reviewChain ? { reviewChain: { root: card.reviewChain.root, round: card.reviewChain.round, ...(card.reviewChain.extra ? { extra: true } : {}) } } : {}),
+    // A trilha de boards (card-transfer.ts) — sparse. Sem esta linha a próxima escrita apagaria de onde o card veio, e o
+    // juiz da triagem poderia devolvê-lo ao board de origem.
+    ...(card.transfers?.length
+      ? {
+          transfers: card.transfers.map((t) => ({
+            from: t.from,
+            to: t.to,
+            at: t.at,
+            by: t.by,
+            ...(t.reason ? { reason: t.reason } : {}),
+            ...(t.fromStatus !== undefined ? { fromStatus: t.fromStatus } : {}),
+            ...(t.previousAnchor ? { previousAnchor: { id: t.previousAnchor.id, ...(t.previousAnchor.title ? { title: t.previousAnchor.title } : {}) } } : {}),
+            ...(t.previousTriage ? { previousTriage: { verdict: t.previousTriage.verdict, reason: t.previousTriage.reason } } : {}),
+            ...(t.forced ? { forced: true } : {}),
+            ...(t.previousEvidence ? { previousEvidence: Object.fromEntries(Object.entries(t.previousEvidence).filter(([, v]) => v !== undefined)) } : {}),
+          })),
+        }
+      : {}),
     release: card.release ?? null,
     // SM-02: sparse — only emitted when the story was routed to the unmapped backlog.
     ...(card.unplaced ? { unplaced: true } : {}),

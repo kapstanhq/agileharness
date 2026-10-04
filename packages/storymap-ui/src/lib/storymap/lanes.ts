@@ -27,6 +27,7 @@
 // board's config, the owner's set from the Inbox.
 
 import { isDeployStep } from "./demands";
+import { isDeliveryApprovalStep } from "./delivery-audit";
 import { archivedKanbanStatusIds } from "./views";
 import type { CardLiveKind } from "./card-live-status";
 import type { OwnerDecisions } from "./inbox/decidir-set";
@@ -52,6 +53,9 @@ export interface ResolvedLane {
   /** the synthetic «Adiado — não agora» lane ({@link LANE_DEFERRED_ID}). */
   deferred?: true;
 }
+
+/** Um rótulo de raia que promete que o SISTEMA age (o lint da aprovação da entrega). */
+const SYSTEM_CLAIM = /\b(sistema|system|autom[aá]tic)/i;
 
 const declaresDemand = (l: { demand?: boolean | unknown[] }) => l.demand === true || (Array.isArray(l.demand) && l.demand.length > 0);
 
@@ -142,6 +146,20 @@ export function laneViewProblems(config: Pick<BoardConfig, "view" | "statuses" |
       const at = lanesOf.get(id) ?? [];
       if (!at.includes(l.label)) at.push(l.label);
       lanesOf.set(id, at);
+    }
+  }
+  // A aprovação da ENTREGA espera o dono. Uma raia cujo RÓTULO promete o sistema e que lista esse passo mente para quem
+  // lê: o card parado ali, esperando a aprovação, apareceria sob uma promessa de automação. Ele vai para a raia do dono
+  // (o Decidir — inbox/decision.ts), mas o rótulo continua prometendo o que o passo não é: o lint pede outro rótulo
+  // ou a aprovação numa raia própria. (Um rótulo neutro — «Prova», «Entrega» — não é acusado.)
+  for (const l of lanes) {
+    if (l === owner || !SYSTEM_CLAIM.test(l.label)) continue;
+    const delivery = l.statuses.map((id) => known.get(id)).filter((d): d is StatusDef => !!d && isDeliveryApprovalStep(d));
+    if (delivery.length) {
+      problems.push(
+        `a raia '${l.label}' promete o sistema, mas lista a aprovação da entrega (${delivery.map((d) => `'${d.id}' (${d.name})`).join(", ")}), ` +
+          "que espera o dono — troque o rótulo ou ponha a aprovação numa raia própria",
+      );
     }
   }
   for (const [id, at] of lanesOf) {

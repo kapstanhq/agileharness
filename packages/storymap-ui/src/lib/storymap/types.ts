@@ -626,6 +626,19 @@ export interface Card {
    * reopens the story from the Inbox. Sparse — absent on every card that was never sampled.
    */
   deliveryAudit?: DeliveryAuditRecord;
+  /**
+   * A TRILHA de boards por onde o card passou (card-transfer.ts): cada mudança de board, com quem, quando, por quê e a
+   * âncora que ficou para trás. Sparse — ausente num card que nunca mudou de board. Lida pelo juiz da triagem para não
+   * devolver um card ao board de onde ele veio.
+   */
+  transfers?: CardTransfer[];
+  /**
+   * A MARCA DE CADEIA de conserto de revisão (runner/review-rounds.ts): de qual raiz este card é rodada, e qual. Gravada
+   * pelo SERVIDOR na criação do conserto (uma escrita só), nunca por agente (`update_card` recusa) nem pelo drawer — é
+   * por ela que o teto de rodadas conta a ÁRVORE inteira da raiz, em qualquer board, sobrevivendo a roteamento e a
+   * mudança de board. Sparse — ausente em todo card que não é rodada de conserto.
+   */
+  reviewChain?: ReviewChainMark;
   /** release slice id (stories only); null = unscheduled */
   release: string | null;
   /**
@@ -2070,6 +2083,12 @@ export interface BoardConfig {
    */
   sharedPackages?: string[];
   /**
+   * Caminhos do repositório (prefixos relativos à raiz) que este board POSSUI além do `package` — o que fica fora de
+   * qualquer pacote (scripts de publicação, configuração da raiz). Só ROTEIA: diz a que board um card que mexe nesses
+   * arquivos pertence (a triagem e os cards de conserto automáticos, card-routing.ts). Não muda release nem deploy.
+   */
+  ownsPaths?: string[];
+  /**
    * A POLÍTICA DE RELEASE deste board — a ÚNICA declaração de "quem aperta o botão de publicar, e se
    * ele se aperta sozinho". Ausente ⇒ `manual` ({@link DEFAULT_RELEASE_MODE}), o default seguro.
    *
@@ -2395,6 +2414,57 @@ export function isAutonomyMode(v: unknown): v is AutonomyMode {
 }
 
 /** One sampled audit of an autonomous delivery ({@link Card.deliveryAudit}). */
+/** A marca de rodada de conserto de revisão ({@link Card.reviewChain}). */
+export interface ReviewChainMark {
+  /** a raiz da cadeia: `<board>/<cardId>` do card revisado de onde a cadeia começou. */
+  root: string;
+  /** a rodada que este card é (a raiz é a 1; o primeiro conserto, a 2). */
+  round: number;
+  /** a rodada que o dono PAGOU além do teto. */
+  extra?: boolean;
+}
+
+/** UMA mudança de board de um card ({@link Card.transfers}). */
+export interface CardTransfer {
+  /** o board de onde saiu. */
+  from: string;
+  /** o board para onde foi. */
+  to: string;
+  /** ISO. */
+  at: string;
+  /** quem mudou: `human`, um agente (`mcp:<nível>`) ou `triage-judge`. */
+  by: string;
+  reason?: string;
+  /** o status que ele tinha no board de origem. */
+  fromStatus?: string | null;
+  /** a âncora no mapa do board de origem que ficou para trás (o board novo pede uma). */
+  previousAnchor?: { id: string; title?: string };
+  /** o veredito do juiz da triagem que o card tinha (zerado ao entrar na Triagem do destino, para ser julgado de novo). */
+  previousTriage?: { verdict: string; reason: string };
+  /**
+   * a entrada na Triagem do destino foi FORÇADA (um agente ou o juiz mudou o card para um board mais permissivo): o
+   * card só sai dela pelo juiz do destino ou pelo operador — nunca pelo move_card de um agente.
+   */
+  forced?: boolean;
+  /** o retrato da evidência do pipeline que a entrada forçada zerou (o board novo a refaz). */
+  previousEvidence?: TransferEvidence;
+}
+
+/** A evidência do pipeline que os gates leem — o retrato que a entrada forçada na Triagem zera ({@link CardTransfer}). */
+export interface TransferEvidence {
+  qaPassed?: boolean;
+  qaRanAt?: string | null;
+  qaCommit?: string | null;
+  hadQaEvidence?: boolean;
+  reviewedAt?: string | null;
+  reviewCommit?: string | null;
+  techPlanReady?: boolean;
+  wireframeChosen?: string | null;
+  hadBuildEvidence?: boolean;
+  /** as tasks que estavam marcadas como feitas. */
+  tasksDone?: string[];
+}
+
 export interface DeliveryAuditRecord {
   /** when the delivery was sampled (YYYY-MM-DD) */
   sampledAt: string;
@@ -3083,6 +3153,13 @@ export interface RunnerSettings {
     sessions: {
       maxWorktrees: number;
     };
+    /**
+     * O TETO DE RODADAS de revisão (runner/review-rounds.ts): quantos cards da MESMA cadeia de conserto de uma revisão
+     * (o card revisado e os consertos que nasceram dos achados dele, um depois do outro) o sistema abre sozinho. Ao
+     * chegar ao teto, em vez de abrir mais um conserto, pergunta ao dono: aceitar o risco restante, pagar mais uma
+     * rodada ou parar. Ausente ⇒ 2.
+     */
+    reviewRoundsCap: number;
     /**
      * O VIGIA DE CARD PARADO (runner/stall-watch.ts). Um card num passo em que o
      * próximo ator é o SISTEMA (efeito de entrada, ou card conduzido), sem ninguém trabalhando e sem nada que

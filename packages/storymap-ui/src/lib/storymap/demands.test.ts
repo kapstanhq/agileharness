@@ -499,6 +499,35 @@ describe("cardCockpitItems — typed inbox items, each carrying the parent cardI
   // um card que cruzava um gate e parava no PRÓXIMO (progresso REAL) chegava lá com o streak anti-noop do gate
   // anterior — o Jido já tinha "desistido" de um item que acabara de nascer. Com o status no id, o item
   // velho some do actionable set (o rebuild-from-set o poda) e o novo nasce zerado.
+  // O passo de APROVAÇÃO DA ENTREGA (gate hasQaPassed, manual) marca o item: num board só-negócio ninguém do sistema
+  // move um card parado ali, e a régua de decision-class o entrega ao dono (ver decision-class.test.ts).
+  it("o gate da aprovação da ENTREGA (hasQaPassed, manual) marca deliveryApproval; outro gate manual não", () => {
+    const withDelivery: BoardConfig = {
+      ...config,
+      statuses: config.statuses.map((s) => (s.id === "revisao" ? { ...s, gate: "hasQaPassed" } : s)),
+    };
+    const parked = cardCockpitItems(card({ status: "revisao", qaPassed: true }), withDelivery, "b").find((i) => i.kind === "gate");
+    expect(parked).toMatchObject({ kind: "gate", deliveryApproval: true });
+    const publish = cardCockpitItems(card({ status: "release", qaPassed: true }), withDelivery, "b").find((i) => i.kind === "gate");
+    expect(publish && "deliveryApproval" in publish).toBe(false);
+  });
+
+  it("com um CONDUTOR no card, ou um agente trabalhando nele, a entrega parada não é pedido ao dono (ele vai mover)", () => {
+    const withDelivery: BoardConfig = {
+      ...config,
+      statuses: config.statuses.map((s) => (s.id === "revisao" ? { ...s, gate: "hasQaPassed" } : s)),
+    };
+    const conducted = card({ status: "revisao", qaPassed: true, routing: { skips: [], decidedBy: "rules", decidedAt: "2026-05-01", driver: "conductor" } });
+    const g1 = cardCockpitItems(conducted, withDelivery, "b").find((i) => i.kind === "gate");
+    expect(g1 && "deliveryApproval" in g1).toBe(false);
+    const worked = card({ status: "revisao", qaPassed: true });
+    const g2 = cardCockpitItems(worked, withDelivery, "b", { workedCardIds: new Set([worked.id]) }).find((i) => i.kind === "gate");
+    expect(g2 && "deliveryApproval" in g2).toBe(false);
+    // ninguém no card ⇒ continua sendo pedido ao dono
+    const g3 = cardCockpitItems(worked, withDelivery, "b", { workedCardIds: new Set() }).find((i) => i.kind === "gate");
+    expect(g3).toMatchObject({ deliveryApproval: true });
+  });
+
   it("o id do item de gate é escopado pelo STATUS — cruzar um gate gera um item NOVO (o streak não é herdado)", () => {
     const naRevisao = cardCockpitItems(card({ status: "revisao", qaPassed: true }), config, "b");
     const noRelease = cardCockpitItems(card({ status: "release", qaPassed: true }), config, "b");
@@ -1238,5 +1267,16 @@ describe("F9/B14 — o `since` de cada item e a ordem da raia", () => {
     const map = new Map([["story-old", "2026-07-01T00:00:00.000Z"], ["story-new", "2026-09-27T00:00:00.000Z"]]);
     const findings = boardCockpitItems([old, recent], config, "b", { stepEnteredAt: map }).filter((i) => i.kind === "finding");
     expect(findings.map((i) => i.cardId)).toEqual(["story-new", "story-old"]); // high antes de low, apesar da idade
+  });
+});
+
+describe("isWorkingSession — só sessão viva conta como trabalho no card", () => {
+  it("com batimento recente e sem óbito: sim; com óbito carimbado ou sem batimento: não", async () => {
+    const { isWorkingSession } = await import("./cockpit-collect");
+    const { isSessionAlive } = await import("./runner/session-liveness");
+    const now = Date.parse("2026-03-02T12:00:00Z");
+    expect(isWorkingSession({ heartbeatAt: "2026-03-02T11:59:00Z" }, now, isSessionAlive)).toBe(true);
+    expect(isWorkingSession({ heartbeatAt: "2026-03-02T11:59:00Z", endedAt: "2026-03-02T11:59:30Z" }, now, isSessionAlive)).toBe(false);
+    expect(isWorkingSession({ heartbeatAt: "2026-03-01T00:00:00Z" }, now, isSessionAlive)).toBe(false);
   });
 });

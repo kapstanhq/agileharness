@@ -185,3 +185,45 @@ describe("judgeTriageCard — com o escopo de tipos «só consertos», o juiz co
     expect(await judgeTriageCard(deps, "b", "story-feat")).toMatchObject({ action: "judged" });
   });
 });
+
+// O ROTEAMENTO: o juiz manda o card ao board a que ele pertence pela MESMA mudança de board da tela; se a mudança
+// recusa, o card fica com o dono, com o motivo — nunca aceito aqui «no lugar».
+describe("judgeTriageCard — route", () => {
+  const others = [{ id: "galpao", name: "Galpão", package: "apps/galpao" }];
+
+  it("o prompt recebe os outros boards; ROUTE chama a mudança de board e não carimba nada aqui", async () => {
+    const judge = vi.fn(async (_prompt: string) => answer({ verdict: "route", routeTo: "galpao", reason: "os arquivos são do galpão" }));
+    const { deps, state, after } = world(cfg(), judge);
+    const routed: string[] = [];
+    deps.otherBoards = async () => others;
+    deps.route = async (b, id, to, reason) => {
+      routed.push(`${b}/${id}>${to}:${reason}`);
+      return { ok: true };
+    };
+    const out = await judgeTriageCard(deps, "b", "story-t");
+    expect(out).toMatchObject({ action: "judged", verdict: "route" });
+    expect(judge.mock.calls[0][0]).toContain("### galpao — Galpão");
+    expect(routed).toEqual(["b/story-t>galpao:os arquivos são do galpão"]);
+    expect(state.cards[2].triageDecision).toBeUndefined();
+    expect(after).toHaveBeenCalledWith("b", "story-t", expect.objectContaining({ action: "route", toBoard: "galpao" }));
+  });
+
+  it("a mudança de board recusa ⇒ o card fica com o dono, com o motivo", async () => {
+    const judge = vi.fn(async (_prompt: string) => answer({ verdict: "route", routeTo: "galpao" }));
+    const { deps, state } = world(cfg(), judge);
+    deps.otherBoards = async () => others;
+    deps.route = async () => ({ ok: false, error: "há uma sessão de trabalho aberta neste card" });
+    const out = await judgeTriageCard(deps, "b", "story-t");
+    expect(out).toMatchObject({ action: "judged", verdict: "hold" });
+    expect(state.cards[2]).toMatchObject({ needsHumanReview: true, triageDecision: { verdict: "hold", reason: expect.stringMatching(/sessão de trabalho/) } });
+  });
+
+  it("sem a porta de roteamento (deps.route ausente) o juiz nem vê outros boards", async () => {
+    const judge = vi.fn(async (_prompt: string) => answer());
+    const { deps } = world(cfg(), judge);
+    deps.otherBoards = vi.fn(async () => others);
+    await judgeTriageCard(deps, "b", "story-t");
+    expect(deps.otherBoards).not.toHaveBeenCalled();
+    expect(judge.mock.calls[0][0]).not.toMatch(/"route"/);
+  });
+});

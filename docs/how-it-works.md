@@ -235,6 +235,50 @@ Every edge is validated on write: unknown relation, missing target, or an endpoi
 doesn't allow is **refused**, and nothing is saved. A dangling link is a lie the graph would
 repeat forever.
 
+### A card belongs to one board — and can move to the right one
+
+A target with several boards accumulates cards in the wrong one fast: triage could only accept or
+discard where a card landed, and automatic fix cards inherited the board of the card that triggered
+them. Three pieces keep each card where it belongs.
+
+**Moving a card between boards** (`transfer_card` in MCP, `transferCardAction` on screen) keeps the
+**same id** and carries everything: status history, findings, questions, the plan/wireframes/screenshot
+sidecars, and the card's AI spend. It refuses — with the reason — while anything works on the card
+(a run, a claim, an open session, the merge queue, a publish in flight — measured again under both card
+locks, right before the write), while a conductor drives it (even parked waiting for the owner), while
+the review-rounds question is open on it, when other cards anchor on it, or when the destination already
+has that id. The status stays when the destination has the same step; otherwise the card enters through
+the destination's entry. **An agent or the triage judge cannot use a move to escape the owner's rules:**
+the move is checked against the stricter risk matrix of the two boards, and when the destination is more
+permissive for this card (autonomy mode, release mode, pace, type scope or risk matrix) the card enters
+the destination's **Triagem** to be judged again instead of keeping its step. The operator, on screen,
+always keeps the step — it is their decision. Entering a Triagem by a move clears the old triage verdict
+(it stays in the trail) so that board's judge judges it fresh; in human mode it also asks for human
+review. Anchors and links are per board: a valid
+`anchor` in the destination is used; without one the card enters the destination's **Triagem** (the only
+place a card without a map position is representable) with a finding asking for an anchor, and links to
+cards left behind are recorded in the body instead of dangling. The card keeps a `transfers` trail
+(from, to, who, when, why, the anchor it left behind), and the move shows up in the follow-up of **both**
+boards.
+
+**Triage routes.** The triage judge sees the other boards (their `package`, `ownsPaths`,
+`sharedPackages` and the scope of their PRD) and has a fourth verdict, `route`: a card that clearly
+belongs to another board is sent there — not accepted here "just in case" — and that board's judge
+judges it fresh. Routing back to a board the card already came from never happens automatically: two
+judges disagree, so it goes to the owner.
+
+**Fix cards are born where the files are.** The technical audit, the deploy-proof producer and
+"send to fix" from a review finding pick the board by the **files** the fix touches: the board whose
+`package` (or declared `ownsPaths`) owns them wins; a board that only lists them in `sharedPackages`
+weighs less; no files or no clear winner keeps the origin board. A routed fix card points to its origin
+in text (an id from another board is not a link).
+
+```yaml
+# storymap/boards/galpao/board.yaml (invented)
+package: apps/galpao
+ownsPaths: [ops/, tarefas.toml]   # repo paths outside any package that this board owns — routing only
+```
+
 ### Questions: the agent asks, the human decides, the next skill reads
 
 The interesting part of an autonomous pipeline is what it does when it *doesn't know*. It does not
@@ -683,6 +727,36 @@ answer reopens a conductor for the card at the front of the queue. A wait declar
 slot, the service types a fixed line asking the session to turn the wait into that owner question
 and park. If it parks without asking, the card goes back to the queue *behind* the cards that were
 waiting, so it cannot take the slot right back.
+
+**A parked delivery is the owner's.** On a business-only board the conductor crosses the delivery
+approval step (the manual stop gated by `hasQaPassed`) on its own, with the proof. A card *parked*
+there with finished work is a delivery no system actor will move, so its Inbox item goes to Decide
+(approve or send back) instead of "the system decides", and the card shows in the owner's lane. The
+lane lint flags a lane whose label promises the system ("system", "sistema", "automático") while
+listing that step.
+
+**Review rounds have a ceiling.** A fix card born from a review's findings carries a server-written
+chain mark, `reviewChain: {root, round}`, set in the same write that creates it (the technical audit's
+fix card; an agent's `create_card` with `continuesFrom`; a fix the owner asked for from the Inbox). An
+agent cannot write that field, and the count is the **tree** of the root — the reviewed card plus every
+card marked with it, on any board — so sibling fixes add up and routing a fix or moving a card does not
+reset it. An agent's delivery created without `continuesFrom` inside a session whose card has open
+review findings inherits that card's chain. At `autorun.reviewRoundsCap` (2 by default) no new fix card
+is opened: the owner is asked, in plain words, to accept the remaining risk, pay for one more round, or
+stop. The owner's answer is read from a **server-side record** written by the answer action
+(`runnerStateDir()/review-rounds.jsonl`), never from the card's frontmatter, and the merge train never
+lands owner questions or the chain mark from a run's worktree (main's side always wins for them).
+"One more round" allows exactly one extra fix card. "Accept" and "Stop" hold for the **cycle** they were
+given in — the root's reviewed commit range and mode; new code or reopening the root asks again, and a
+critical finding asks again regardless. "Stop" defers every live card of the tree, on any board, so no
+agent spends on it or moves it toward production; only the operator's session lifts an owner's deferral.
+
+**Known limitation: the ceiling contains cost, it is not a security boundary.** It bounds what the normal
+flow spends — an honest agent opening fixes, the technical audit, a fix the owner asks for. An agent
+acting in bad faith can still open work outside the chain: point `continuesFrom` at an unrelated decoy
+card, create through other surfaces (`usm_capture`, `report_issue`) or delete and recreate a card, or
+declare a misleading session label. Those paths are governed by the risk matrix, the triage judge and
+the owner's Inbox, not by the round count.
 
 **Narrowing lets what is running finish.** Work already executing is not interrupted and live
 conductors are not parked; only the engine and conductor queues are cleared of the types that no

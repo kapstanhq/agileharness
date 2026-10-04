@@ -171,3 +171,72 @@ describe("Card.triageDecision — type · coerce · contract · serializer", () 
     expect(coerceCard("story-x", { type: "story", triageDecision: { verdict: "talvez", reason: "x" } }, "").triageDecision).toBeUndefined();
   });
 });
+
+// O ROTEAMENTO — o card que pertence a OUTRO board vai para lá (e o juiz de lá julga). Boards inventados: «Biblioteca»
+// (este) e «Oficina» (o conserto das prateleiras).
+describe("route — mandar o card ao board a que ele pertence", () => {
+  const opts = { today: "2026-09-28", by: "triage-judge" };
+  const others = [{ id: "oficina", name: "Oficina", package: "apps/oficina", ownsPaths: ["ferramentas/"], scope: "Conserto de prateleiras e móveis." }];
+  const parse = (over: Record<string, unknown>, c: Card = tech, boards: string[] = ["oficina"]) => {
+    const r = parseTriageJudgement(judgement(over), c, board, { boards });
+    if ("error" in r) throw new Error(r.error);
+    return r;
+  };
+
+  it("o prompt lista os outros boards (pacote, caminhos, escopo) e manda MANDAR quando o card claramente é de lá", () => {
+    const p = buildTriageJudgePrompt({ config: cfg(), prd: "## Apostas\n1. empréstimo", card: tech, cards: board, otherBoards: others });
+    expect(p).toMatch(/"route"/);
+    expect(p).toContain("### oficina — Oficina");
+    expect(p).toContain("apps/oficina");
+    expect(p).toContain("ferramentas/");
+    expect(p).toMatch(/Conserto de prateleiras/);
+    expect(p).toMatch(/não aceite aqui «por via das dúvidas»/);
+  });
+
+  it("sem outros boards o prompt nem oferece o roteamento; um board por onde o card já passou não é oferecido", () => {
+    expect(buildTriageJudgePrompt({ config: cfg(), prd: null, card: tech, cards: board })).not.toMatch(/"route"/);
+    const visitado = { ...tech, transfers: [{ from: "oficina", to: "b", at: "2026-09-27T00:00:00Z", by: "human" }] };
+    expect(buildTriageJudgePrompt({ config: cfg(), prd: null, card: visitado, cards: board, otherBoards: others })).not.toContain("### oficina");
+  });
+
+  it("o board de destino é validado: um board inventado cai (e o veredito vira aceitar, o reversível)", () => {
+    expect(parse({ verdict: "route", routeTo: "oficina" }).routeTo).toBe("oficina");
+    const inventado = parse({ verdict: "route", routeTo: "marte" });
+    expect(inventado.routeTo).toBeUndefined();
+    const plan = planTriageJudgement(tech, inventado, cfg(), board, opts);
+    expect(plan.action).toBe("accept");
+    expect(plan.card.triageDecision?.reason).toMatch(/sem um board válido — aceito aqui/);
+  });
+
+  it("ROUTE com confiança: nada é carimbado aqui (o card chega lá sem veredito)", () => {
+    const plan = planTriageJudgement(tech, parse({ verdict: "route", routeTo: "oficina", reason: "os arquivos são da oficina" }), cfg(), board, opts);
+    expect(plan).toMatchObject({ action: "route", toBoard: "oficina", reason: "os arquivos são da oficina" });
+    expect(plan.card.triageDecision).toBeUndefined();
+    expect(plan.card.status).toBe("triage");
+  });
+
+  it("ROUTE com classe do DONO marcada: a classe viaja com o card (o juiz de lá não precisa marcá-la de novo)", () => {
+    const plan = planTriageJudgement(tech, parse({ verdict: "route", routeTo: "oficina", ownerClasses: ["money"], ownerReason: "propõe gasto novo" }), cfg(), board, opts);
+    expect(plan).toMatchObject({ action: "route", toBoard: "oficina" });
+    expect(plan.card.businessClasses).toMatchObject({ ids: ["money"], reason: "propõe gasto novo" });
+    expect(plan.card.triageDecision).toBeUndefined();
+  });
+
+  it("baixa confiança para mandar ⇒ aceita aqui (reversível)", () => {
+    const plan = planTriageJudgement(tech, parse({ verdict: "route", routeTo: "oficina", confidence: 0.4 }), cfg(), board, opts);
+    expect(plan.action).toBe("accept");
+  });
+
+  it("mandar DE VOLTA a um board por onde o card passou ⇒ o dono decide (os juízes discordam)", () => {
+    const veio = { ...tech, transfers: [{ from: "oficina", to: "b", at: "2026-09-27T00:00:00Z", by: "triage-judge" }] };
+    const plan = planTriageJudgement(veio, parse({ verdict: "route", routeTo: "oficina" }, veio), cfg(), board, opts);
+    expect(plan.action).toBe("hold");
+    expect(plan.card.needsHumanReview).toBe(true);
+    expect(plan.card.triageDecision).toMatchObject({ verdict: "hold", reason: expect.stringMatching(/de volta ao board «oficina»/) });
+  });
+
+  it("mandar para o próprio board não é mandar: aceita aqui", () => {
+    const plan = planTriageJudgement(tech, parse({ verdict: "route", routeTo: "b" }, tech, ["b"]), cfg(), board, opts);
+    expect(plan.action).toBe("accept");
+  });
+});

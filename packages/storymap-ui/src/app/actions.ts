@@ -187,6 +187,7 @@ import type {
   CardDriver,
   CardCommitWarning,
   CardLink,
+  ReviewChainMark,
   CardMode,
   CardProvenance,
   CardRouting,
@@ -258,19 +259,51 @@ export async function answerQuestionAction(input: {
   const hasOptions = (input.selectedOptionIds?.length ?? 0) > 0;
   if (!hasText && !hasOptions) return { ok: false, error: "Resposta ou opção obrigatória." };
   try {
-    const card = await updateCardOnDisk(input.boardId, input.cardId, (prev) => ({
-      ...prev,
-      questions: answerQuestion(
-        prev.questions ?? [],
-        input.questionId,
-        input.answer,
-        today(),
-        input.selectedOptionIds,
-        input.answeredBy,
-      ),
-    }));
+    const { isStopAnswer } = await import("@/lib/storymap/runner/review-rounds");
+    const { deferralFor, CAP_STOP_DEFER_REASON } = await import("@/lib/storymap/deferral");
+    // Só uma PESSOA responde ao teto com efeito: um agente pelo MCP é recusado antes (pergunta do dono), e aqui a
+    // resposta de um token de agente nem adia nem entra no registro do servidor.
+    const caller = await resolveActionCaller();
+    const fromAgent = caller === "mcp-token";
+    const card = await updateCardOnDisk(input.boardId, input.cardId, (prev) => {
+      const questions = answerQuestion(prev.questions ?? [], input.questionId, input.answer, today(), input.selectedOptionIds, input.answeredBy);
+      // O TETO DE RODADAS (review-rounds.ts): «Parar» ADIA o card na mesma escrita — adiado, nenhum agente gasta mais nele
+      // (fora da fila do condutor, da cascata e do Inbox) nem o leva rumo ao ar (owner-waiting.ts segura o adiado).
+      const answered = questions.find((q) => q.id === input.questionId);
+      const stop = !fromAgent && answered && answered.status === "answered" && isStopAnswer(answered) && !prev.deferred;
+      return {
+        ...prev,
+        questions,
+        ...(stop
+          ? {
+              deferred: deferralFor({
+                reason: CAP_STOP_DEFER_REASON,
+                today: today(),
+                by: input.answeredBy ?? "human",
+                rootId: prev.id,
+                cardId: prev.id,
+              }),
+            }
+          : {}),
+      };
+    });
     if (!card) return { ok: false, error: `card não encontrado: ${input.cardId}` };
     revalidateBoard(input.boardId);
+
+    // O TETO DE RODADAS: a resposta do dono entra no REGISTRO DO SERVIDOR (é dele que o teto lê — nunca do frontmatter) e,
+    // com «Parar», os membros vivos da árvore são adiados também.
+    const capAnswer = card.questions?.find((q) => q.id === input.questionId);
+    if (!fromAgent && capAnswer?.status === "answered") {
+      const { recordRoundsCapAnswer } = await import("@/lib/storymap/runner/review-rounds-deps");
+      await recordRoundsCapAnswer({
+        board: input.boardId,
+        cardId: input.cardId,
+        questionId: input.questionId,
+        text: capAnswer.text,
+        selectedOptionIds: capAnswer.selectedOptionIds,
+        by: input.answeredBy ?? "human",
+      });
+    }
 
     // A resposta chega ao CONDUTOR sem ninguém digitar «continuar» (conductor-pause.ts): com a sessão viva a linha é
     // entregue no terminal dela; com o card estacionado e nada mais aberto, ele volta para a frente da fila. Só age
@@ -779,6 +812,12 @@ export async function commitProposalAction(input: {
    * ninguém olhar: texto livre da triagem (`report_issue`) e lote aplicado por agente.
    */
   humanReviewed?: boolean;
+  /**
+   * Marca de SERVIDOR aplicada a toda STORY que este commit cria, NA MESMA escrita: rótulos, vínculos com cards do board
+   * e a marca de cadeia de conserto de revisão (runner/review-rounds.ts). Quem passa é código do serviço (o `create_card`
+   * do MCP, depois do portão do teto) — nunca entrada de agente. Numa escrita só, uma falha não deixa um card sem marca.
+   */
+  stamp?: { labels?: string[]; links?: CardLink[]; reviewChain?: ReviewChainMark };
 }): Promise<Result<{ created: Card[]; extended: ExtendedCardOutcome[]; warnings: CardCommitWarning[] }>> {
   await requireSession("commitProposalAction");
   try {
@@ -1119,7 +1158,17 @@ export async function commitProposalAction(input: {
             ? { duplicateOf: duplicateSuspect, ...(input.humanReviewed ? {} : { needsHumanReview: true }) }
             : {}),
           ...(resolvedNeedsHumanReview ? { needsHumanReview: resolvedNeedsHumanReview } : {}),
+          ...(input.stamp && isStory
+            ? {
+                ...(input.stamp.labels?.length ? { labels: [...new Set(input.stamp.labels)] } : {}),
+                ...(input.stamp.reviewChain ? { reviewChain: input.stamp.reviewChain } : {}),
+              }
+            : {}),
         };
+        if (input.stamp?.links?.length && isStory) {
+          const have = new Set(card.links.map((l) => `${l.rel}:${l.to}`));
+          card.links = [...card.links, ...input.stamp.links.filter((l) => existing.has(l.to) && !have.has(`${l.rel}:${l.to}`))];
+        }
         await writeCard(input.boardId, card);
         existing.add(id);
         tempToReal.set(it.tempId, id);
@@ -2344,6 +2393,12 @@ export async function undeferCardAction(input: { boardId: string; cardId: string
   await requireSession("undeferCardAction");
   try {
     const cards = await readCards(input.boardId);
+    // Um adiamento do DONO (uma pessoa na tela, ou o «Parar» do teto de rodadas) só a sessão do operador levanta.
+    const { isOwnerHeldDeferral } = await import("@/lib/storymap/deferral");
+    const asked = cards.find((c) => c.id === input.cardId);
+    if (asked && isOwnerHeldDeferral(asked.deferred) && (await resolveActionCaller()) !== "operator-session") {
+      return { ok: false, error: "este adiamento é do dono — só ele traz o card de volta (pela tela)." };
+    }
     const targets = liftTargets(input.cardId, cards);
     if (!targets.length) return { ok: false, error: cards.some((c) => c.id === input.cardId) ? "este card não está adiado." : `card não encontrado: ${input.cardId}` };
     const lifted: string[] = [];
@@ -2513,6 +2568,40 @@ export async function deleteCardAction(input: {
     for (const id of order) await deleteProposal(input.boardId, id).catch(() => {});
     revalidateBoard(input.boardId);
     return { ok: true, data: { unlinked, trashed } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * Muda um card de board (card-transfer.ts): o MESMO id, levando histórico de status, achados, perguntas, anexos e custo.
+ * Recusa com o motivo quando alguém trabalha no card agora, quando ele ancora outros ou quando o destino já tem o id. A
+ * âncora no mapa do board novo é opcional: sem ela o card fica «sem lugar» com um achado pedindo uma. A mudança aparece no
+ * «Acompanhar» dos dois boards. Quem chama pela tela é o dono; pela tool, um agente.
+ */
+export async function transferCardAction(input: {
+  boardId: string;
+  cardId: string;
+  toBoardId: string;
+  anchor?: string | null;
+  reason?: string | null;
+}): Promise<Result<{ card: Card; toStatus: string | null; warnings: string[] }>> {
+  await requireSession("transferCardAction");
+  try {
+    const { transferCard, defaultCardTransferDeps } = await import("@/lib/storymap/runner/card-transfer-service");
+    const by = (await resolveActionCaller()) === "operator-session" ? "human" : "agent";
+    const r = await transferCard(defaultCardTransferDeps(), {
+      fromBoard: input.boardId,
+      toBoard: input.toBoardId,
+      cardId: input.cardId,
+      anchor: input.anchor ?? null,
+      reason: input.reason ?? null,
+      by,
+    });
+    if (!r.ok) return { ok: false, error: r.error };
+    revalidateBoard(input.boardId);
+    revalidateBoard(input.toBoardId);
+    return { ok: true, data: { card: r.card, toStatus: r.toStatus, warnings: r.warnings } };
   } catch (e) {
     return fail(e);
   }
@@ -3309,16 +3398,41 @@ export async function fixFindingAction(input: { boardId: string; cardId: string;
     const refusal = findingFixRefusal(origin, input.findingId);
     if (refusal) return { ok: false, error: refusal };
     const finding = origin.findings.find((f) => f.id === input.findingId)!;
+    // O conserto nasce no board do ARQUIVO do aviso (fix-card-board.ts); sem arquivo, no board do card de origem.
+    const { fixCardBoard } = await import("@/lib/storymap/runner/fix-card-board");
+    const target = await fixCardBoard(input.boardId, finding.file ? [finding.file] : []);
+    const routed = target.routed && target.board !== input.boardId;
+    const [destConfig, destCards] = routed ? await Promise.all([readBoardConfig(target.board), readCards(target.board)]) : [config, cards];
+    // O conserto que o DONO mandou abrir não passa pelo teto de rodadas (a decisão é dele), mas CONTA na árvore da origem.
+    const { reviewChainMarkFor } = await import("@/lib/storymap/runner/review-rounds-deps");
+    const reviewChain = await reviewChainMarkFor(input.boardId, origin.id);
     const created = await createCardAction({
-      boardId: input.boardId,
-      card: buildFindingFixCard({ origin, finding, entryStatus: entryStatusId(config), cards, today: today() }),
+      boardId: target.board,
+      card: buildFindingFixCard({
+        origin,
+        finding,
+        entryStatus: entryStatusId(destConfig),
+        cards: destCards,
+        today: today(),
+        ...(routed ? { routedFrom: { board: input.boardId, reason: target.reason } } : {}),
+        reviewChain,
+      }),
       via: "ui",
     });
     if (!created.ok || !created.data) return { ok: false, error: created.ok ? "o card de conserto não foi criado" : created.error };
     const fixCardId = created.data.card.id;
     const ack = await updateFindingStatusAction({ boardId: input.boardId, cardId: input.cardId, findingId: input.findingId, status: "acknowledged" });
     if (!ack.ok) return { ok: false, error: `O card de conserto foi criado (${fixCardId}), mas o aviso não pôde ser registrado na origem: ${ack.error}` };
-    return { ok: true, data: { outcome: { status: "done", message: "Card de conserto criado — o sistema o leva pelo fluxo do board. O aviso ficou registrado no card de origem." }, fixCardId } };
+    return {
+      ok: true,
+      data: {
+        outcome: {
+          status: "done",
+          message: `Card de conserto criado${routed ? ` no board «${target.board}» (o arquivo do aviso é de lá)` : ""} — o sistema o leva pelo fluxo do board. O aviso ficou registrado no card de origem.`,
+        },
+        fixCardId,
+      },
+    };
   } catch (e) {
     return fail(e);
   }

@@ -71,8 +71,9 @@ export interface DeployProofDeps {
   republish(board: string, cardId: string): Promise<{ ok: boolean; error?: string }>;
   /** veredito negativo: reabre o card por correção com os achados (deploy-proof.ts `securityReopen`). */
   reopen(board: string, cardId: string, verdict: SecurityVerdict): Promise<boolean>;
-  /** abre um card de conserto técnico na Triagem (o juiz o aceita) — o id, ou null. */
-  openFixCard(board: string, cardId: string, reason: string): Promise<string | null>;
+  /** abre um card de conserto técnico na Triagem (o juiz o aceita) — o id, ou null. `files`: o que o conserto toca (o board
+   *  dos arquivos recebe o card — fix-card-board.ts); ausente ⇒ o board do card de origem. */
+  openFixCard(board: string, cardId: string, reason: string, files?: readonly string[]): Promise<string | null>;
   record(entry: SystemDecision): Promise<void>;
   now?(): number;
   log?(line: string): void;
@@ -127,10 +128,10 @@ export async function produceDeployProofs(deps: DeployProofDeps, pending: ProofP
       why,
     });
     // um card de conserto por motivo (e por card) — nunca repetido.
-    const fixOnce = async (why: string, reason: string): Promise<ProofOutcome> => {
+    const fixOnce = async (why: string, reason: string, files?: readonly string[]): Promise<ProofOutcome> => {
       const key = fixKey(board, cardId, why);
       if (!rows.some((e) => e.key === key)) {
-        const fixId = await deps.openFixCard(board, cardId, reason).catch(() => null);
+        const fixId = await deps.openFixCard(board, cardId, reason, files).catch(() => null);
         rows = upsert(rows, { key, attempts: 1, lastAt: nowIso(), outcome: "answered", ...(fixId ? { detail: fixId } : {}) });
         await deps.ledger.persist(rows);
         await deps.record({ ...decision(`Abriu um card de conserto para «${card.title}»${fixId ? ` (${fixId})` : ""}`, reason), agent: "system", kind: "recovery-fix-card", ...(fixId ? { cardId: fixId, undo: { kind: "discard-card" as const, cardId: fixId } } : {}) }).catch(() => {});
@@ -149,7 +150,11 @@ export async function produceDeployProofs(deps: DeployProofDeps, pending: ProofP
       const prior = rows.find((e) => e.key === key);
       if (prior?.outcome === "answered") continue; // já aprovado (um restart no meio)
       if ((prior?.attempts ?? 0) >= MAX_REVIEW_ATTEMPTS) {
-        return fixOnce(`review:${hexOf(request.subject.hash).slice(0, 12)}`, `a revisão de segurança independente de ${subjectLabel(request.subject)} não saiu depois de ${MAX_REVIEW_ATTEMPTS} tentativas`);
+        return fixOnce(
+          `review:${hexOf(request.subject.hash).slice(0, 12)}`,
+          `a revisão de segurança independente de ${subjectLabel(request.subject)} não saiu depois de ${MAX_REVIEW_ATTEMPTS} tentativas`,
+          request.subject.files,
+        );
       }
       const attempts = (prior?.attempts ?? 0) + 1;
       rows = upsert(rows, { key, attempts, lastAt: nowIso(), outcome: "running" });

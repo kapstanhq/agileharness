@@ -97,6 +97,41 @@ export interface BoardCockpit {
   stepEnteredAt: ReadonlyMap<string, string>;
 }
 
+/**
+ * Os cards em que um agente trabalha AGORA (run em voo, reserva, sessão de trabalho) — cada fonte tolerante (sem ela,
+ * ninguém trabalhando). É o que impede o Inbox de pedir ao dono a aprovação de uma entrega que um agente vai mover.
+ */
+/** Uma sessão que ainda trabalha: batimento recente e sem óbito carimbado. PURA. */
+export function isWorkingSession(s: { heartbeatAt: string; endedAt?: string }, now: number, alive: (s: { heartbeatAt: string }, now: number) => boolean): boolean {
+  return !s.endedAt && alive(s, now);
+}
+
+async function workedCardIdsOf(boardId: string, cards: readonly Card[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  try {
+    const { getCardClaims } = await import("./runner/claims");
+    for (const id of await getCardClaims().claimedCardIds(boardId)) out.add(id);
+  } catch {
+    /* sem o registro de reservas */
+  }
+  try {
+    const { getRunnerEngine } = await import("./runner/engine");
+    const engine = getRunnerEngine();
+    for (const c of cards) if (engine.isInFlight(boardId, c.id)) out.add(c.id);
+  } catch {
+    /* sem o engine */
+  }
+  try {
+    // só as sessões VIVAS: uma morta (sem batimento, ou com o óbito carimbado) não vai mover a entrega
+    const { allSessions, isSessionAlive } = await import("./runner/session-worktree");
+    const now = Date.now();
+    for (const s of await allSessions()) if (s.board === boardId && s.cardId && isWorkingSession(s, now, isSessionAlive)) out.add(s.cardId);
+  } catch {
+    /* sem o registro de sessões */
+  }
+  return out;
+}
+
 /** {@link collectBoardCockpitItems} + the board it read (config and cards) — for a caller that must judge items BY
  *  their card (the tick's conducted-card guard, the Inbox's decision per item) without a second board read that could
  *  disagree with the first. `config` is null when the board does not exist. */
@@ -117,7 +152,7 @@ export async function collectBoardCockpit(boardId: string): Promise<BoardCockpit
   //     estado do último deploy dos alvos do card (o registry do serviço): terminado ⇒ o Inbox oferece re-publicar.
   const productDeploy = getProductDeploy();
   const cardItems: CockpitItem[] = foldLastDeploy(
-    boardCockpitItems(cards, config, boardId, { stepEnteredAt: ledger.stepEnteredAt }),
+    boardCockpitItems(cards, config, boardId, { stepEnteredAt: ledger.stepEnteredAt, workedCardIds: await workedCardIdsOf(boardId, cards) }),
     cardsById,
     (target) => productDeploy.get(target),
   );

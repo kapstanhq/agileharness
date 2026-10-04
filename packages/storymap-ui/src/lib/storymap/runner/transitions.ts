@@ -277,6 +277,49 @@ export async function reconcileLedgerWithCards(
   }
 }
 
+/**
+ * PURA — o card mudou de board (card-transfer.ts): os saltos dele no board antigo passam a ser do board novo, para o
+ * histórico do card acompanhá-lo. Byte a byte nas outras linhas (as de outros cards e as ilegíveis ficam como estão).
+ */
+export function rehomeTransitionsRaw(raw: string, fromBoard: string, cardId: string, toBoard: string): { raw: string; moved: number } {
+  let moved = 0;
+  const out = raw.split("\n").map((line) => {
+    const t = line.trim();
+    if (!t) return line;
+    try {
+      const rec = JSON.parse(t) as Transition;
+      if (rec && rec.board === fromBoard && rec.cardId === cardId) {
+        moved++;
+        return JSON.stringify({ ...rec, board: toBoard });
+      }
+    } catch {
+      /* linha ilegível: fica como está */
+    }
+    return line;
+  });
+  return { raw: out.join("\n"), moved };
+}
+
+/**
+ * O IO de {@link rehomeTransitionsRaw}: reescreve o ledger na MESMA fila das escritas (nenhum append intercala). Nunca
+ * lança (o card já mudou de board; um histórico não re-atribuído só fica no board antigo). No-op sob vitest, como o sink.
+ */
+export function rehomeCardTransitions(fromBoard: string, cardId: string, toBoard: string): Promise<void> {
+  if (process.env.VITEST) return Promise.resolve();
+  writeChain = writeChain
+    .then(async () => {
+      const file = transitionsPath();
+      const raw = await fsp.readFile(file, "utf8").catch(() => null);
+      if (raw == null) return;
+      const next = rehomeTransitionsRaw(raw, fromBoard, cardId, toBoard);
+      if (next.moved) await fsp.writeFile(file, next.raw, "utf8");
+    })
+    .catch((err) => {
+      console.warn("[transitions] re-atribuição de board falhou (não-fatal):", err instanceof Error ? err.message : err);
+    });
+  return writeChain;
+}
+
 /** PURE — parse a JSONL blob into transitions, tolerant (a corrupt line is skipped) + optionally filtered. */
 export function parseTransitionsLines(raw: string, filter?: { cardId?: string; board?: string }): Transition[] {
   const out: Transition[] = [];

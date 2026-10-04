@@ -12,7 +12,8 @@
 //     fila durável que a varredura do tick da frota retoma;
 //   • tudo entra no registro de decisões do sistema (kind `technical-audit`).
 
-import type { BoardConfig, Card, CommitRange } from "@/lib/storymap/types";
+import type { BoardConfig, Card, CommitRange, ReviewChainMark } from "@/lib/storymap/types";
+import type { ReviewRoundsDecision } from "./review-rounds-deps";
 import type { SystemDecision } from "@/lib/storymap/system-decisions";
 import { deliveryProofOf } from "@/lib/storymap/delivery-audit";
 import { gateOf, type BoardGatePort } from "./board-pace";
@@ -52,8 +53,17 @@ export interface TechnicalAuditDeps {
     output?: ReviewerOutput;
     error?: string;
   }>;
-  /** abre o card de conserto na Triagem com os achados — o id, ou null. */
-  openFixCard(board: string, cardId: string, output: ReviewerOutput): Promise<string | null>;
+  /**
+   * abre o card de conserto na Triagem com os achados — o id, ou null. `mark` = a marca de cadeia que o portão devolveu
+   * (o conserto nasce com ela, na mesma escrita); `extraRound` = a rodada que o dono pagou além do teto.
+   */
+  openFixCard(board: string, cardId: string, output: ReviewerOutput, opts?: { extraRound?: boolean; mark?: ReviewChainMark | null }): Promise<string | null>;
+  /**
+   * O teto de rodadas de revisão (review-rounds.ts): «open» abre o conserto; «open-extra» abre a rodada que o dono pagou;
+   * «asked» = a cadeia chegou ao teto e a pergunta foi ao dono; «accepted»/«stopped» = o dono já respondeu (aceitar o
+   * risco / parar) — nenhum card novo e nenhuma pergunta nova. Ausente ⇒ sempre «open».
+   */
+  roundsGate?(board: string, cardId: string, summary: string, severe?: boolean): Promise<ReviewRoundsDecision>;
   record(entry: SystemDecision): Promise<void>;
   now?(): number;
   log?(line: string): void;
@@ -65,7 +75,9 @@ export type TechnicalAuditOutcome =
   | { action: "failed"; reason: string }
   | { action: "gave-up"; reason: string }
   | { action: "passed" }
-  | { action: "fix-card"; fixId: string | null };
+  | { action: "fix-card"; fixId: string | null }
+  /** a cadeia de conserto chegou ao teto de rodadas: a pergunta foi ao dono, nenhum card novo */
+  | { action: "owner-asked" };
 
 /** O resultado encerra o pedido (sai da fila)? `waiting` e `failed` voltam na varredura. */
 export function isFinalAuditOutcome(o: TechnicalAuditOutcome): boolean {
@@ -139,7 +151,25 @@ export async function auditTechnicalDelivery(deps: TechnicalAuditDeps, pending: 
       await deps.record(entry(`O auditor independente conferiu a entrega técnica «${card.title}»: sem problema`, out.summary)).catch(() => {});
       return { action: "passed" };
     }
-    const fixId = await deps.openFixCard(board, cardId, out).catch(() => null);
+    // O teto de rodadas (decisão do dono): no teto, a pergunta vai ao dono em vez de mais um card de conserto. Um erro
+    // do portão abre o conserto como antes — nunca esconde um achado.
+    const rounds: ReviewRoundsDecision = deps.roundsGate
+      ? await deps
+          .roundsGate(board, cardId, out.summary, out.findings.some((f) => (f.severity as string) === "blocker" || (f.severity as string) === "critical"))
+          .catch(() => ({ gate: "open" as const, mark: null }))
+      : { gate: "open", mark: null };
+    if (rounds.gate === "asked" || rounds.gate === "accepted" || rounds.gate === "stopped") {
+      await settle("answered", res.runId);
+      const why =
+        rounds.gate === "asked"
+          ? "a cadeia de consertos chegou ao teto de rodadas — o dono decide"
+          : rounds.gate === "accepted"
+            ? "o dono já aceitou o risco restante desta cadeia — nenhum conserto novo"
+            : "o dono mandou parar esta cadeia — nenhum conserto novo";
+      await deps.record(entry(`A auditoria independente achou problema em «${card.title}» de novo e ${why}`, out.summary)).catch(() => {});
+      return { action: "owner-asked" };
+    }
+    const fixId = await deps.openFixCard(board, cardId, out, { extraRound: rounds.gate === "open-extra", mark: rounds.mark }).catch(() => null);
     await settle("answered", fixId ?? res.runId);
     await deps
       .record(

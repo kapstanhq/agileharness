@@ -6,6 +6,7 @@ import {
   ledgerCatchUp,
   parseTransitionsLines,
   reconcileLedgerWithCards,
+  rehomeTransitionsRaw,
   setTransitionSink,
   resetTransitionSink,
   statusMovedSince,
@@ -264,3 +265,24 @@ describe("commitInstantMs — o %ct do commit-base em ms", () => {
   });
 });
 
+
+describe("rehomeTransitionsRaw — o histórico de status acompanha o card que mudou de board", () => {
+  it("só as linhas daquele card naquele board mudam de board; as outras ficam byte a byte (inclusive as ilegíveis)", () => {
+    const lines = [
+      JSON.stringify({ v: 1, at: "2026-05-01T00:00:00Z", board: "estufa", cardId: "c1", from: null, to: "triage", actor: "human" }),
+      "linha torta",
+      JSON.stringify({ v: 1, at: "2026-05-02T00:00:00Z", board: "estufa", cardId: "c2", from: null, to: "triage", actor: "human" }),
+      JSON.stringify({ v: 1, at: "2026-05-03T00:00:00Z", board: "galpao", cardId: "c1", from: null, to: "triage", actor: "human" }),
+      JSON.stringify({ v: 1, at: "2026-05-04T00:00:00Z", board: "estufa", cardId: "c1", from: "triage", to: "enriquecer", actor: "cascade" }),
+      "",
+    ];
+    const out = rehomeTransitionsRaw(lines.join("\n"), "estufa", "c1", "galpao");
+    expect(out.moved).toBe(2);
+    const back = out.raw.split("\n");
+    expect(back[1]).toBe("linha torta");
+    expect(back[2]).toBe(lines[2]);
+    expect(back[3]).toBe(lines[3]);
+    expect(parseTransitionsLines(out.raw, { board: "galpao", cardId: "c1" }).map((t) => t.to)).toEqual(["triage", "triage", "enriquecer"]);
+    expect(parseTransitionsLines(out.raw, { board: "estufa", cardId: "c1" })).toEqual([]);
+  });
+});

@@ -1,4 +1,5 @@
-import type { Card } from "./types";
+import { isOwnerOnlyQuestion } from "./autonomy";
+import type { Card, CardQuestion } from "./types";
 
 /**
  * Pipeline-owned fields the editor drawer must NEVER clobber on save.
@@ -69,6 +70,12 @@ export const PIPELINE_OWNED_FIELDS = [
   // As decisões registradas dos dilemas (recorded-decisions.ts): escritas pelo condutor/proxy e desfeitas pelo dono
   // por ação própria — nunca pelo drawer.
   "decisions",
+  // A trilha de boards (card-transfer.ts): escrita só pela mudança de board, nunca pelo drawer — um rascunho anterior à
+  // mudança a apagaria no Save.
+  "transfers",
+  // A marca de cadeia de conserto de revisão (runner/review-rounds.ts): só o servidor a grava, na criação do conserto.
+  // O drawer não a mostra; o update_card do agente a recusa — sem isto um agente reescrevia a raiz e zerava o teto.
+  "reviewChain",
 ] as const satisfies readonly (keyof Card)[];
 
 /**
@@ -292,5 +299,42 @@ export function mergeCardThreeWay(base: Card, main: Card, run: Card, opts: { mai
       asRec(merged)[key] = runValue;
     }
   }
-  return merged;
+  return withOwnerStateFromMain(merged, main);
+}
+
+/**
+ * Uma pergunta que é ESTADO DO DONO: uma decisão dele (categoria dono/dinheiro, classe do dono, o marcador «[humano]»
+ * — inclusive a pergunta do teto de rodadas, que é dinheiro). PURA.
+ */
+export function isOwnerStateQuestion(q: Pick<CardQuestion, "category" | "text" | "context" | "ownerClass">): boolean {
+  return q.category === "owner" || q.category === "money" || !!q.ownerClass || isOwnerOnlyQuestion(q);
+}
+
+/**
+ * O ESTADO DO DONO não vem do run. O worktree é escrita de um agente: uma pergunta do dono que ele «responde», cria ou
+ * apaga no frontmatter, e a marca de cadeia de revisão (`reviewChain`) que ele muda, não podem aterrissar na main pelo
+ * merge — senão um agente forjava a resposta do dono (ou zerava o teto de rodadas) só editando o próprio card. Para
+ * esses, o lado da MAIN vence sempre: a marca é a de main; cada pergunta do dono é a versão de main (ausente em main ⇒
+ * não entra; presente em main e apagada no run ⇒ volta). As outras perguntas seguem o 3-way por elemento. PURA.
+ */
+export function withOwnerStateFromMain(merged: Card, main: Card): Card {
+  const out: Card = { ...merged };
+  if (main.reviewChain) out.reviewChain = main.reviewChain;
+  else delete out.reviewChain;
+  const mainQs = main.questions ?? [];
+  const mainById = new Map(mainQs.map((q) => [q.id, q] as const));
+  const questions: CardQuestion[] = [];
+  for (const q of merged.questions ?? []) {
+    const mq = mainById.get(q.id);
+    if (isOwnerStateQuestion(q) || (mq && isOwnerStateQuestion(mq))) {
+      if (mq) questions.push(mq);
+    } else {
+      questions.push(q);
+    }
+  }
+  for (const mq of mainQs) {
+    if (isOwnerStateQuestion(mq) && !questions.some((q) => q.id === mq.id)) questions.push(mq);
+  }
+  if (questions.length || main.questions || merged.questions) out.questions = questions;
+  return out;
 }

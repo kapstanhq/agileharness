@@ -70,6 +70,7 @@ import {
   submitDesignFeedbackAction,
   acceptTriageCardAction,
   moveCardAction,
+  transferCardAction,
   proposeCardsAction,
   proposeChangeAction,
   refineCardAction,
@@ -147,7 +148,7 @@ import type {
 import { FINDING_STATUSES } from "@/lib/storymap/types";
 import { ahHealth, defaultAhHealthDeps } from "@/lib/storymap/health/health-tool";
 import { resolvedClaudeBin } from "../runner/claude-bin";
-import type { Card, FindingStatus, Persona, StatusDef, SystemDef, TriggerId } from "@/lib/storymap/types";
+import type { Card, CardLink, FindingStatus, Persona, ReviewChainMark, StatusDef, SystemDef, TriggerId } from "@/lib/storymap/types";
 import { triggerForCard } from "@/lib/storymap/skip-routing";
 import { REOPEN_DESTINATIONS, type ReopenDestination } from "@/lib/storymap/reopen";
 import type { CaptureTurn, ProposedItem } from "@/lib/storymap/smart-capture/types";
@@ -303,6 +304,25 @@ const proposedItemShape = z.object({
  * `enqueue`/`enqueue_batch` tools and `run_skill` share ONE path (no duplicated logic). The
  * runner-enabled gate is checked by the caller (once per tool call, not per card).
  */
+/**
+ * A origem de cadeia de revisão HERDADA da sessão do agente (create_card sem `continuesFrom`): o card que a sessão
+ * conduz, se ele tem achados de revisão abertos — senão null. Best-effort: sem o registro de sessões, null.
+ */
+async function sessionReviewOrigin(): Promise<{ board: string; card: Card } | null> {
+  const actor = currentMcpActor();
+  if (actor?.caller?.kind !== "session") return null;
+  try {
+    const { allSessions } = await import("@/lib/storymap/runner/session-worktree");
+    const s = (await allSessions()).find((x) => x.sessionId === actor.caller!.id);
+    if (!s?.board || !s.cardId) return null;
+    const card = await readCard(s.board, s.cardId);
+    const { hasOpenReviewFindings } = await import("@/lib/storymap/runner/review-rounds");
+    return card && hasOpenReviewFindings(card) ? { board: s.board, card } : null;
+  } catch {
+    return null;
+  }
+}
+
 async function resolveEnqueueTarget(
   board: string,
   cardId: string,
@@ -756,9 +776,43 @@ export function registerStorymapTools(server: McpServer): void {
           ? ownerPublishHold(current, cfg.statuses.find((s) => s.id === current.status), cfg.statuses.find((s) => s.id === status), cfg)
           : null;
         if (hold) return fail(`${cardId} ${hold}. Um agente não publica por cima de uma decisão do dono: o card espera no Inbox dele; siga com os outros cards.`);
+        // Entrou na Triagem por uma mudança de board FORÇADA (card-transfer.ts): só o juiz da triagem daqui ou o operador o
+        // tiram de lá — senão a mudança para um board mais permissivo voltava a ser um atalho.
+        const { heldByForcedTransfer } = await import("@/lib/storymap/card-transfer");
+        if (current && isScopedActor() && status !== current.status && heldByForcedTransfer(current, cfg)) {
+          return fail(`${cardId} chegou a este board por uma mudança forçada e espera o juiz da triagem daqui (ou o operador) — um agente não o tira da Triagem.`);
+        }
       }
       const r = await moveCardAction({ boardId: board, cardId, status, parent, serves, release, order });
       return r.ok ? json({ ok: true, cardId, status: status ?? "(inalterado)" }) : fail(r.error);
+    },
+  );
+
+  defineTool(server,
+    "transfer_card",
+    {
+      title: "Mudar card de board",
+      description:
+        "Muda um card (história ou ideia) para OUTRO board do mesmo alvo, mantendo o id e levando junto o histórico de " +
+        "status, achados, perguntas, anexos (plano, telas, prints) e o custo. Use quando o card pertence a outro board " +
+        "(o pacote/os arquivos que ele toca, o escopo do PRD de lá). Recusa com o motivo quando alguém trabalha no card " +
+        "agora (run, reserva, sessão, fila de integração, publicação), quando ele ancora outros cards ou quando o destino " +
+        "já tem o id. `anchor` (opcional): o lugar no mapa do board novo — um passo para história de usuário; uma " +
+        "história, passo ou atividade para entrega. Sem âncora válida o card fica «sem lugar» com um achado pedindo uma. " +
+        "O status fica se o board novo tem o mesmo passo; senão o card entra pela porta de entrada dele.",
+      inputSchema: {
+        board: z.string().describe("o board onde o card está"),
+        cardId: z.string(),
+        toBoard: z.string().describe("o board para onde ele vai"),
+        anchor: z.string().nullable().optional().describe("id do lugar no mapa do board novo"),
+        reason: z.string().max(600).optional().describe("por que muda — aparece no card e no «Acompanhar» dos dois boards"),
+      },
+    },
+    async ({ board, cardId, toBoard, anchor, reason }) => {
+      const r = await transferCardAction({ boardId: board, cardId, toBoardId: toBoard, anchor: anchor ?? null, reason: reason ?? null });
+      return r.ok
+        ? json({ ok: true, cardId, board: toBoard, status: r.data?.toStatus ?? null, warnings: r.data?.warnings ?? [] })
+        : fail(r.error);
     },
   );
 
@@ -995,7 +1049,12 @@ export function registerStorymapTools(server: McpServer): void {
         "chamada e não resolve parents em lote, então N chamadas deixam N stubs órfãos sem hierarquia. " +
         "SM-02: uma STORY criada sem parent é roteada automaticamente para o Backlog não-mapeado (unplaced) — " +
         "fica visível nessa lane do mapa em vez de sumir do backbone; parenteie-a depois (arraste/update_card). " +
-        "O card descansa na Triagem (sem autorun) até ser roteado para Enriquecer, de onde a cascata segue; ou mova/rode as skills manualmente.",
+        "O card descansa na Triagem (sem autorun) até ser roteado para Enriquecer, de onde a cascata segue; ou mova/rode as skills manualmente. " +
+        "CONSERTO DE REVISÃO: ao abrir um card para os achados que uma revisão deixou abertos em outro card, passe `continuesFrom` " +
+        "(o card revisado) — o card nasce ligado a ele e conta como uma rodada da cadeia. Numa sessão cujo card tem achados de " +
+        "revisão abertos, uma ENTREGA criada sem `continuesFrom` herda a cadeia do card da sessão sozinha. No teto de rodadas, " +
+        "NENHUM card é criado: a pergunta vai ao dono no card revisado (aceitar o risco, pagar mais uma rodada ou parar) — espere " +
+        "a resposta; depois de o dono aceitar o risco ou mandar parar, nenhum conserto novo desta cadeia é criado.",
       inputSchema: {
         board: z.string(),
         title: z.string(),
@@ -1010,10 +1069,54 @@ export function registerStorymapTools(server: McpServer): void {
         release: z.string().optional(),
         personas: z.array(z.string()).optional(),
         systems: z.array(z.string()).optional(),
+        continuesFrom: z
+          .string()
+          .optional()
+          .describe("o card cuja REVISÃO deixou os achados que este card conserta — conta para o teto de rodadas"),
       },
     },
     async (a) => {
       const type = a.type ?? "story";
+      // O teto de rodadas de revisão (decisão do dono): no teto, a pergunta vai ao dono no card revisado e nada é criado.
+      // A ORIGEM: `continuesFrom` explícito (neste board); sem ele, uma ENTREGA criada numa sessão cujo card tem achados de
+      // revisão abertos herda a cadeia do card da sessão (em qualquer board) — omitir o campo não escapa do teto.
+      let roundStamp: { labels: string[]; links: CardLink[]; reviewChain?: ReviewChainMark } | null = null;
+      let origin: { board: string; card: Card } | null = null;
+      if (a.continuesFrom) {
+        const c = await readCard(a.board, a.continuesFrom);
+        if (!c) return fail(`continuesFrom: card não encontrado neste board: ${a.continuesFrom}`);
+        origin = { board: a.board, card: c };
+      } else if (type === "story" && a.storyType != null && a.storyType !== "user") {
+        origin = await sessionReviewOrigin();
+      }
+      if (origin) {
+        const { reviewRoundsGate } = await import("@/lib/storymap/runner/review-rounds-deps");
+        const { REVIEW_ROUND_LABEL, EXTRA_ROUND_LABEL } = await import("@/lib/storymap/runner/review-rounds");
+        const o = origin;
+        const decision = await reviewRoundsGate(o.board, o.card.id, a.body ?? a.title, undefined, async (board, cardId, q) => {
+          const r = await askQuestionsAction({ boardId: board, cardId, questions: [q], askedBy: "system:review-rounds" });
+          if (!r.ok) throw new Error(r.error);
+        });
+        if (decision.gate === "asked" || decision.gate === "accepted" || decision.gate === "stopped") {
+          const why =
+            decision.gate === "asked"
+              ? `chegou ao teto de rodadas de revisão: nenhum card foi criado e a pergunta foi ao dono no card ${o.card.id} (aceitar o risco restante, pagar mais uma rodada ou parar). Espere a resposta`
+              : decision.gate === "accepted"
+                ? "já teve a resposta do dono: ele aceitou o risco restante. Nenhum card foi criado"
+                : "já teve a resposta do dono: ele mandou parar. Nenhum card foi criado";
+          return json({
+            created: [],
+            ownerAsked: true,
+            nota: `A cadeia de consertos de «${o.card.title}» ${why}; não abra outro card para esta cadeia.`,
+          });
+        }
+        roundStamp = {
+          labels: [REVIEW_ROUND_LABEL, ...(decision.gate === "open-extra" ? [EXTRA_ROUND_LABEL] : [])],
+          // o vínculo só vale dentro do mesmo board; a marca de cadeia vale em qualquer um
+          links: o.board === a.board ? [{ rel: "relates-to", to: o.card.id }] : [],
+          ...(decision.mark ? { reviewChain: decision.mark } : {}),
+        };
+      }
       // Todo card nasce ANCORADO. O antigo `acceptUnplaced` (que criava a story sem lugar com um
       // `unplacedAck`) foi APOSENTADO — era a válvula por onde os órfãos entravam. Este pre-check é a
       // versão RICA do erro: recusa antes de tomar o lock e devolve os candidatos certos POR TIPO
@@ -1054,6 +1157,8 @@ export function registerStorymapTools(server: McpServer): void {
             rationale: "criado via MCP (celular)",
           },
         ],
+        // a rodada nasce LIGADA, rotulada e MARCADA na mesma escrita (review-rounds.ts) — uma falha não deixa card sem marca
+        ...(roundStamp ? { stamp: roundStamp } : {}),
       });
       if (!r.ok) return fail(r.error);
       const created = (r.data?.created ?? []).map((c) => slim(c));

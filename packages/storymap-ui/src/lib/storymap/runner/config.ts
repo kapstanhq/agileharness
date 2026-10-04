@@ -216,6 +216,8 @@ export const DEFAULT_RUNNER_SETTINGS: RunnerSettings = {
     sessions: { maxWorktrees: DEFAULT_MAX_SESSION_WORKTREES },
     // O vigia de card parado: 15 minutos sem dono, UMA nova tentativa.
     stall: { afterMinutes: 15, retries: 1 },
+    // O teto de rodadas de revisão: o card revisado e UM conserto; a terceira rodada pergunta ao dono.
+    reviewRoundsCap: 2,
     // Estacionar o condutor que espera o dono: «só se demorar» — 10 minutos de carência.
     // WP5-F2: a escada do condutor quieto — retomar após erro de transporte em 3 min (no máximo 2 por hora) e lembrar
     // o condutor quieto com fila esperando em 10 min (o caso real: um condutor parado depois de um «API Error»).
@@ -587,6 +589,8 @@ export function coerceRunnerSettings(raw: unknown): RunnerSettings {
       },
       // `afterMinutes` positivo (um 0 faria o vigia refazer passo no primeiro sweep); `retries` aceita 0 — é o
       // jeito declarado de dizer «só avise, não refaça».
+      // positivo: um 0 nunca abriria conserto nenhum, e isso é decisão de quem mexe no teto, não de um erro de digitação
+      reviewRoundsCap: asPosInt(a.reviewRoundsCap) ?? d.autorun.reviewRoundsCap,
       stall: {
         afterMinutes: asPosInt(stall.afterMinutes) ?? d.autorun.stall.afterMinutes,
         retries: asNonNegInt(stall.retries) ?? d.autorun.stall.retries,

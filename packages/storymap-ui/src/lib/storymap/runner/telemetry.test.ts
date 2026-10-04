@@ -407,3 +407,29 @@ describe("boardSummary — o fim e a etapa do último run (B7)", () => {
     expect((await t.boardSummary("storymap")).cards[0]).toMatchObject({ lastEndedAt: 5_000 });
   });
 });
+
+describe("TelemetryStore.reassignCard — o custo acompanha o card que mudou de board", () => {
+  it("re-atribui só os runs daquele card naquele board; persiste; o board novo passa a somar o gasto", async () => {
+    const { store, current } = makeMemStore([
+      rec({ id: "a1", board: "estufa", cardId: "card-m", costUSD: 1 }),
+      rec({ id: "a2", board: "estufa", cardId: "card-m", costUSD: 2, startedAt: 2000 }),
+      rec({ id: "b1", board: "estufa", cardId: "card-outro", costUSD: 5 }),
+      rec({ id: "c1", board: "galpao", cardId: "card-m", costUSD: 7 }),
+    ]);
+    const t = new TelemetryStore(store);
+    expect(await t.reassignCard("estufa", "card-m", "galpao")).toBe(2);
+    await t.flush();
+    expect((await t.listByCard("galpao", "card-m")).map((r) => r.id).sort()).toEqual(["a1", "a2", "c1"]);
+    expect(await t.listByCard("estufa", "card-m")).toEqual([]);
+    expect((await t.boardSummary("estufa")).cards.map((c) => c.cardId)).toEqual(["card-outro"]);
+    expect(current().filter((r) => r.board === "galpao").length).toBe(3);
+  });
+
+  it("nada a mover ⇒ 0 e não persiste", async () => {
+    const { store, persisted } = makeMemStore([rec({ id: "x" })]);
+    const t = new TelemetryStore(store);
+    expect(await t.reassignCard("estufa", "card-z", "galpao")).toBe(0);
+    await t.flush();
+    expect(persisted).toEqual([]);
+  });
+});

@@ -46,6 +46,9 @@ import type {
   CardLink,
   CardQuestion,
   CardRouting,
+  CardTransfer,
+  ReviewChainMark,
+  TransferEvidence,
   CardType,
   ColumnDef,
   AutonomyPolicy,
@@ -495,6 +498,63 @@ function coerceRouting(raw: unknown): CardRouting | null {
 
 /** WS6 (F5) — the explicit "sem lugar no mapa" acknowledgement ({by, at}). Tolerant: needs a non-empty
  *  `by` to be meaningful; `at` normalises a YAML Date. Returns undefined when absent/off-shape (sparse). */
+/** A trilha de boards (card-transfer.ts) — tolerante: uma entrada sem origem, destino ou autor cai. */
+function coerceReviewChain(raw: unknown): ReviewChainMark | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  const root = o.root != null ? String(o.root).trim() : "";
+  const round = typeof o.round === "number" ? o.round : Number(o.round);
+  if (!root.includes("/") || !Number.isInteger(round) || round < 1) return undefined;
+  return { root, round, ...(o.extra === true ? { extra: true } : {}) };
+}
+
+function coerceTransferEvidence(e: Record<string, unknown>): TransferEvidence {
+  const str = (v: unknown) => (v === null ? null : typeof v === "string" ? v : v != null ? String(v) : undefined);
+  const out: TransferEvidence = {};
+  if (typeof e.qaPassed === "boolean") out.qaPassed = e.qaPassed;
+  if (e.qaRanAt !== undefined) out.qaRanAt = str(e.qaRanAt);
+  if (e.qaCommit !== undefined) out.qaCommit = str(e.qaCommit);
+  if (e.hadQaEvidence === true) out.hadQaEvidence = true;
+  if (e.reviewedAt !== undefined) out.reviewedAt = str(e.reviewedAt);
+  if (e.reviewCommit !== undefined) out.reviewCommit = str(e.reviewCommit);
+  if (typeof e.techPlanReady === "boolean") out.techPlanReady = e.techPlanReady;
+  if (e.wireframeChosen !== undefined) out.wireframeChosen = str(e.wireframeChosen);
+  if (e.hadBuildEvidence === true) out.hadBuildEvidence = true;
+  if (Array.isArray(e.tasksDone)) out.tasksDone = e.tasksDone.map(String);
+  return out;
+}
+
+function coerceTransfers(raw: unknown): CardTransfer[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: CardTransfer[] = [];
+  for (const r of raw) {
+    if (!r || typeof r !== "object") continue;
+    const o = r as Record<string, unknown>;
+    const s = (v: unknown) => (v != null && String(v).trim() ? String(v).trim() : "");
+    const from = s(o.from);
+    const to = s(o.to);
+    const by = s(o.by);
+    if (!from || !to || !by) continue;
+    const anchor = o.previousAnchor && typeof o.previousAnchor === "object" ? (o.previousAnchor as Record<string, unknown>) : null;
+    const triage = o.previousTriage && typeof o.previousTriage === "object" ? (o.previousTriage as Record<string, unknown>) : null;
+    out.push({
+      from,
+      to,
+      at: toDateString(o.at) ?? s(o.at),
+      by,
+      ...(s(o.reason) ? { reason: s(o.reason) } : {}),
+      ...(o.fromStatus === null ? { fromStatus: null } : s(o.fromStatus) ? { fromStatus: s(o.fromStatus) } : {}),
+      ...(anchor && s(anchor.id) ? { previousAnchor: { id: s(anchor.id), ...(s(anchor.title) ? { title: s(anchor.title) } : {}) } } : {}),
+      ...(triage && s(triage.verdict) ? { previousTriage: { verdict: s(triage.verdict), reason: s(triage.reason) } } : {}),
+      ...(o.forced === true ? { forced: true } : {}),
+      ...(o.previousEvidence && typeof o.previousEvidence === "object" && !Array.isArray(o.previousEvidence)
+        ? { previousEvidence: coerceTransferEvidence(o.previousEvidence as Record<string, unknown>) }
+        : {}),
+    });
+  }
+  return out.length ? out : undefined;
+}
+
 function coerceUnplacedAck(raw: unknown): { by: string; at: string } | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const r = raw as Record<string, unknown>;
@@ -1428,6 +1488,8 @@ export function coerceCard(
     costImpact: coerceCostImpact(data.costImpact),
     // The owner's sampled audit of an autonomous delivery (sparse): a husk without `sampledAt` is dropped.
     deliveryAudit: coerceDeliveryAudit(data.deliveryAudit),
+    transfers: coerceTransfers(data.transfers),
+    reviewChain: coerceReviewChain(data.reviewChain),
     release: data.release != null ? String(data.release) : null,
     // SM-02: sparse flag — only retained when explicitly true on disk.
     unplaced: data.unplaced === true ? true : undefined,
@@ -2063,6 +2125,9 @@ async function resolveBoardConfigFromOwnRaw(
     // story-ex0121 — carry the board's extra shared-code packages through to the resolved config so
     // fireReleaseStaged can widen the release pathspec; dropped here it would be a silent no-op field.
     sharedPackages: parsed.sharedPackages,
+    // os caminhos fora de pacote que o board possui — só roteiam cards (card-routing.ts); sem esta linha, inerte.
+    // só quando declarado: um board sem a chave resolve byte a byte como antes (o snapshot dourado do _base).
+    ...(Array.isArray(parsed.ownsPaths) ? { ownsPaths: parsed.ownsPaths.filter((p): p is string => typeof p === "string" && p.trim().length > 0) } : {}),
     // A política de release — a ÚNICA declaração de "quem publica e se publica sozinho". Sem esta
     // linha o campo seria SILENCIOSAMENTE INERTE, o mesmo modo de falha que os três vizinhos aqui
     // já documentam (`deploy`, `sharedPackages`, `faceUrl`).
@@ -2202,6 +2267,7 @@ export async function deriveBoardConfigForPersist(
   const out: Record<string, unknown> = { id: config.id, name: config.name };
   if (config.package != null) out.package = config.package;
   if (config.sharedPackages != null) out.sharedPackages = config.sharedPackages; // story-ex0121 — round-trip the shared-code declaration
+  if (config.ownsPaths != null) out.ownsPaths = config.ownsPaths; // um save não pode apagar o roteamento declarado
   if (config.deploy != null) out.deploy = config.deploy; // deploy agnóstico (D-AG1) — a save must not strip the descriptor
   if (config.brandbook != null) out.brandbook = config.brandbook;
   if (config.faceUrl != null) out.faceUrl = config.faceUrl; // um save não pode apagar a superfície declarada

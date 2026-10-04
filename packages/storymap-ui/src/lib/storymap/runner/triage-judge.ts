@@ -11,7 +11,14 @@
 // tick da frota (`sweepTriageJudge`, no máximo a cada 5 min — pega o que um restart interrompeu).
 
 import { deferredAnchor } from "@/lib/storymap/deferral";
-import { buildTriageJudgePrompt, parseTriageJudgement, triageJudgeWork, type TriageJudgePlan, type TriageJudgement } from "@/lib/storymap/triage/judge";
+import {
+  buildTriageJudgePrompt,
+  parseTriageJudgement,
+  triageJudgeWork,
+  type TriageJudgePlan,
+  type TriageJudgement,
+  type TriageOtherBoard,
+} from "@/lib/storymap/triage/judge";
 import type { BoardConfig, Card } from "@/lib/storymap/types";
 import { gateOf, type BoardGatePort } from "./board-pace";
 import type { ProxyLedgerEntry, ProxyLedgerStore } from "./proxy";
@@ -33,6 +40,10 @@ export interface TriageJudgeDeps {
   readBoardConfig(board: string): Promise<BoardConfig | null>;
   readCards(board: string): Promise<Card[]>;
   readPrd(board: string): Promise<string | null>;
+  /** os OUTROS boards do alvo (pacote, caminhos, escopo do PRD) — para o juiz mandar um card ao board dele. Ausente ⇒ sem roteamento. */
+  otherBoards?(board: string): Promise<TriageOtherBoard[]>;
+  /** muda o card de board (card-transfer.ts) — `ok:false` com o motivo quando a mudança recusa. */
+  route?(board: string, cardId: string, toBoard: string, reason: string): Promise<{ ok: true } | { ok: false; error: string }>;
   masterEnabled(): boolean;
   /** o portão do board (desarmado, pausado, devagar) — board-pace.ts; ausente ⇒ só a configuração responde. */
   boardGate?: BoardGatePort;
@@ -117,13 +128,23 @@ export async function judgeTriageCard(deps: TriageJudgeDeps, board: string, card
       const attempts = (prior?.attempts ?? 0) + 1;
       await deps.ledger.persist(upsert(ledger, { key, attempts, lastAt: new Date((deps.now ?? Date.now)()).toISOString(), outcome: "running" }));
 
-      const prompt = buildTriageJudgePrompt({ config, prd: await deps.readPrd(board).catch(() => null), card, cards });
+      const otherBoards = deps.route && deps.otherBoards ? await deps.otherBoards(board).catch(() => [] as TriageOtherBoard[]) : [];
+      const prompt = buildTriageJudgePrompt({ config, prd: await deps.readPrd(board).catch(() => null), card, cards, otherBoards });
       let failure: string | null = null;
       let plan: TriageJudgePlan | null = null;
       try {
-        const parsed = parseTriageJudgement(await deps.judge(prompt), card, cards);
+        const parsed = parseTriageJudgement(await deps.judge(prompt), card, cards, { boards: otherBoards.map((b) => b.id) });
         if ("error" in parsed) failure = parsed.error;
         else plan = await deps.apply(board, cardId, parsed);
+        // Mandar ao board a que pertence: a mudança de board é o efeito (o escritor não grava nada aqui). Recusada ⇒ o card
+        // fica com o dono, com o motivo — nunca aceito «no lugar» do board certo.
+        if (plan?.action === "route") {
+          const moved = deps.route ? await deps.route(board, cardId, plan.toBoard, plan.reason) : { ok: false as const, error: "sem roteamento" };
+          if (!moved.ok) {
+            await deps.hold(board, cardId, `o juiz mandaria este card ao board «${plan.toBoard}», mas a mudança recusou: ${moved.error}`).catch(() => {});
+            plan = { action: "hold", reason: moved.error, card: plan.card };
+          }
+        }
       } catch (err) {
         failure = String(err instanceof Error ? err.message : err).slice(0, 200);
       }
@@ -140,7 +161,7 @@ export async function judgeTriageCard(deps: TriageJudgeDeps, board: string, card
         return { action: "failed", reason: failure };
       }
       if (!plan) return { action: "skipped", reason: "o card saiu da Triagem (ou já tem veredito) enquanto o juiz pensava" };
-      log(`${board}/${cardId}: juiz → ${plan.action}${"to" in plan ? ` (${plan.to})` : ""}`);
+      log(`${board}/${cardId}: juiz → ${plan.action}${"to" in plan ? ` (${plan.to})` : plan.action === "route" ? ` (board ${plan.toBoard})` : ""}`);
       await deps.after?.(board, cardId, plan).catch(() => {});
       return { action: "judged", verdict: plan.action };
     } finally {

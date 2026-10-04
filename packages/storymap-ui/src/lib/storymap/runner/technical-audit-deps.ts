@@ -20,6 +20,9 @@ import type { ReviewMaterial } from "./deploy-proof-producer";
 import { TECHNICAL_AUDIT_MODEL, agentRoleBody, spawnSecurityReviewer } from "./security-review-spawn";
 import { startTechnicalAudit, sweepTechnicalAudits, type TechnicalAuditDeps, type TechnicalAuditPending } from "./technical-audit";
 import { boardGateNow } from "./board-pace-store";
+import { EXTRA_ROUND_LABEL, TECHNICAL_AUDIT_LABEL } from "./review-rounds";
+import { reviewRoundsGate } from "./review-rounds-deps";
+import { fixCardBoard, originLine } from "./fix-card-board";
 
 const pexec = promisify(execFile);
 const GIT_MAX_BUFFER = 8 * 1024 * 1024;
@@ -108,22 +111,31 @@ export function defaultTechnicalAuditDeps(): TechnicalAuditDeps {
         { claudeBin },
       );
     },
-    openFixCard: async (board, cardId, output) => {
-      const [config, card] = await Promise.all([readBoardConfig(board), readCard(board, cardId)]);
+    openFixCard: async (board, cardId, output, opts) => {
+      // O conserto nasce no board dos ARQUIVOS que os achados apontam (fix-card-board.ts) — não no da entrega auditada.
+      const target = await fixCardBoard(
+        board,
+        output.findings.map((f) => f.file ?? "").filter(Boolean),
+      );
+      const routed = target.routed && target.board !== board;
+      const [config, card] = await Promise.all([readBoardConfig(target.board), readCard(board, cardId)]);
       const staging = config.statuses.find((s) => s.staging)?.id ?? null;
-      const serves = card && (card.storyType == null || card.storyType === "user") ? card.id : (card?.serves ?? card?.parent ?? undefined);
+      const serves = routed ? undefined : card && (card.storyType == null || card.storyType === "user") ? card.id : (card?.serves ?? card?.parent ?? undefined);
       const draft = makeDraftCard({ type: "story", title: `Conserto: a auditoria técnica achou problema em «${card?.title ?? cardId}»`, status: staging, cards: [] });
       const findings = output.findings.map((f) => `- [${f.severity}] ${f.title}${f.file ? ` (${f.file})` : ""}${f.detail ? ` — ${f.detail}` : ""}`);
       const fix: Card = {
         ...draft,
         storyType: "technical",
         ...(serves ? { serves } : {}),
-        links: [{ rel: "relates-to", to: cardId }],
-        labels: ["auditoria-tecnica"],
+        // um vínculo só vale dentro do mesmo board: no board dos arquivos, a origem vai por texto
+        links: routed ? [] : [{ rel: "relates-to", to: cardId }],
+        labels: opts?.extraRound ? [TECHNICAL_AUDIT_LABEL, EXTRA_ROUND_LABEL] : [TECHNICAL_AUDIT_LABEL],
+        // a marca de cadeia nasce NA MESMA escrita (review-rounds.ts): é por ela que o teto conta, em qualquer board
+        ...(opts?.mark ? { reviewChain: opts.mark } : {}),
         body: [
           "## O que o auditor independente achou",
           "",
-          `- Entrega: ${cardId} — ${card?.title ?? ""}`,
+          routed ? originLine(board, cardId, card?.title, target).join("\n") : `- Entrega: ${cardId} — ${card?.title ?? ""}`,
           `- ${output.summary}`,
           ...(findings.length ? ["", ...findings] : []),
           "",
@@ -131,9 +143,10 @@ export function defaultTechnicalAuditDeps(): TechnicalAuditDeps {
         ].join("\n"),
       };
       const { createCardAction } = await import("@/app/actions");
-      const r = await createCardAction({ boardId: board, card: fix, via: "triage" });
+      const r = await createCardAction({ boardId: target.board, card: fix, via: "triage" });
       return r.ok ? (r.data?.card.id ?? null) : null;
     },
+    roundsGate: (board, cardId, summary, severe) => reviewRoundsGate(board, cardId, summary, undefined, undefined, undefined, { severe }),
     record: appendSystemDecision,
   };
 }

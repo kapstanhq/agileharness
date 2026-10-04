@@ -1,6 +1,7 @@
 // A auditoria das entregas TÉCNICAS não vai para o dono: um auditor independente revê uma
 // amostra; com problema, abre um card de conserto; sem veredito, tenta de novo até o teto e desiste registrando.
-// Em nenhum caminho alguém pergunta ao dono (as deps nem têm como).
+// Até o teto de rodadas de revisão ninguém pergunta ao dono; no teto (review-rounds.ts), a pergunta vai a ele e nenhum
+// card de conserto nasce.
 
 import { describe, expect, it, vi } from "vitest";
 import { coerceCard } from "@/lib/storymap/repo";
@@ -55,11 +56,59 @@ describe("auditTechnicalDelivery", () => {
     const out = { verdict: "reject" as const, summary: "a leitura serve catálogo vencido", findings: [{ severity: "high" as const, title: "expiração do cache" }] };
     const { deps, state } = world({ audit: async () => ({ runId: "r2", model: "sonnet", output: out }) });
     expect(await auditTechnicalDelivery(deps, pending())).toEqual({ action: "fix-card", fixId: "story-fix" });
-    expect(deps.openFixCard).toHaveBeenCalledWith("b", "story-x", out);
+    expect(deps.openFixCard).toHaveBeenCalledWith("b", "story-x", out, { extraRound: false, mark: null });
     expect(state.decisions.at(-1)).toMatchObject({ kind: "technical-audit", undo: { kind: "discard-card", cardId: "story-fix" } });
     // a mesma entrega não é auditada de novo
     expect(await auditTechnicalDelivery(deps, pending())).toMatchObject({ action: "skipped" });
     expect(deps.audit).toHaveBeenCalledTimes(1);
+  });
+
+  it("no teto de rodadas: a pergunta foi ao dono e NENHUM card de conserto nasce — fica registrado", async () => {
+    const out = { verdict: "reject" as const, summary: "a expiração ainda vaza", findings: [{ severity: "high" as const, title: "expiração" }] };
+    const { deps, state } = world({ audit: async () => ({ runId: "r4", model: "sonnet", output: out }) });
+    deps.roundsGate = vi.fn(async () => ({ gate: "asked" as const, mark: null }));
+    expect(await auditTechnicalDelivery(deps, pending())).toEqual({ action: "owner-asked" });
+    expect(deps.roundsGate).toHaveBeenCalledWith("b", "story-x", "a expiração ainda vaza", false);
+    expect(deps.openFixCard).not.toHaveBeenCalled();
+    expect(state.decisions.at(-1)).toMatchObject({ kind: "technical-audit", what: expect.stringMatching(/teto de rodadas/) });
+  });
+
+  it("a rodada que o dono pagou: o conserto nasce marcado como rodada extra", async () => {
+    const out = { verdict: "reject" as const, summary: "x", findings: [] };
+    const { deps } = world({ audit: async () => ({ runId: "r5", model: "sonnet", output: out }) });
+    const mark = { root: "b/story-x", round: 3, extra: true };
+    deps.roundsGate = vi.fn(async () => ({ gate: "open-extra" as const, mark }));
+    expect(await auditTechnicalDelivery(deps, pending())).toEqual({ action: "fix-card", fixId: "story-fix" });
+    // a marca de cadeia vai junto para o conserto nascer marcado NA MESMA escrita
+    expect(deps.openFixCard).toHaveBeenCalledWith("b", "story-x", out, { extraRound: true, mark });
+  });
+
+  it("um achado CRÍTICO vai ao portão como grave (pergunta de novo mesmo depois de «aceitar»)", async () => {
+    const out = { verdict: "reject" as const, summary: "vaza a chave", findings: [{ severity: "critical" as const, title: "chave no log" }] };
+    const { deps } = world({ audit: async () => ({ runId: "r7", model: "sonnet", output: out }) });
+    deps.roundsGate = vi.fn(async () => ({ gate: "asked" as const, mark: null }));
+    await auditTechnicalDelivery(deps, pending());
+    expect(deps.roundsGate).toHaveBeenCalledWith("b", "story-x", "vaza a chave", true);
+  });
+
+  it("depois de o dono aceitar o risco ou mandar parar: nenhum conserto e nenhuma pergunta nova — fica registrado", async () => {
+    for (const gate of ["accepted", "stopped"] as const) {
+      const out = { verdict: "reject" as const, summary: "a expiração ainda vaza", findings: [] };
+      const { deps, state } = world({ audit: async () => ({ runId: `r-${gate}`, model: "sonnet", output: out }) });
+      deps.roundsGate = vi.fn(async () => ({ gate, mark: null }));
+      expect(await auditTechnicalDelivery(deps, pending())).toEqual({ action: "owner-asked" });
+      expect(deps.openFixCard).not.toHaveBeenCalled();
+      expect(state.decisions.at(-1)).toMatchObject({ what: expect.stringMatching(gate === "accepted" ? /aceitou o risco/ : /mandou parar/) });
+    }
+  });
+
+  it("o portão do teto falhando: o conserto abre como antes (nunca esconde um achado)", async () => {
+    const out = { verdict: "reject" as const, summary: "x", findings: [] };
+    const { deps } = world({ audit: async () => ({ runId: "r6", model: "sonnet", output: out }) });
+    deps.roundsGate = vi.fn(async () => {
+      throw new Error("disco");
+    });
+    expect(await auditTechnicalDelivery(deps, pending())).toEqual({ action: "fix-card", fixId: "story-fix" });
   });
 
   it("o auditor falhando: tenta até o teto e desiste registrando — ninguém é chamado", async () => {

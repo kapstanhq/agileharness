@@ -74,3 +74,15 @@ export function deferralText(d: Deferral): string {
   const day = (iso: string) => (/^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}` : iso);
   return `Adiado desde ${day(d.since)} — ${d.reason}${d.reviewOn ? ` (rever em ${day(d.reviewOn)})` : ""}`;
 }
+
+/** O motivo do adiamento que o «Parar» do teto de rodadas de revisão grava (runner/review-rounds.ts). */
+export const CAP_STOP_DEFER_REASON = "o dono mandou parar a cadeia de consertos de revisão no teto de rodadas";
+
+/**
+ * O adiamento é do DONO? (adiado por uma pessoa na tela, ou pelo «Parar» do teto de rodadas.) Esse só a sessão do
+ * operador levanta — um agente que o trouxesse de volta desfazia a decisão do dono. PURA.
+ */
+export function isOwnerHeldDeferral(d: Pick<Deferral, "by" | "reason"> | null | undefined): boolean {
+  if (!d) return false;
+  return d.by === "human" || d.by === "owner" || d.by === "operator" || d.reason === CAP_STOP_DEFER_REASON;
+}

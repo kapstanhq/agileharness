@@ -67,7 +67,7 @@ function heldTargets(statuses: readonly StatusDef[]): Set<string> {
  * aberta continua segurando em qualquer passo — ela é uma decisão que ele ainda não tomou.
  */
 export function ownerPublishHold(
-  card: Pick<Card, "autonomyMode" | "businessClasses" | "ownerReviewsUi" | "questions" | "status">,
+  card: Pick<Card, "autonomyMode" | "businessClasses" | "ownerReviewsUi" | "questions" | "status"> & Partial<Pick<Card, "deferred">>,
   from: Pick<StatusDef, "id"> | null | undefined,
   to: Pick<StatusDef, "id"> | null | undefined,
   config: Pick<BoardConfig, "autonomy" | "statuses">,
@@ -77,6 +77,9 @@ export function ownerPublishHold(
   // voltar (ou ficar) não publica nada
   const idx = (id: string) => config.statuses.findIndex((s) => s.id === id);
   if (from && idx(to.id) <= idx(from.id)) return null;
+  // Um card ADIADO (deferral.ts — inclusive o «Parar» do teto de rodadas) não vai ao ar pela mão de um agente, em
+  // qualquer modo: adiar é «não agora», e levar adiante rumo ao ar é exatamente o que o adiamento suspende.
+  if (card.deferred) return `o card está adiado (${card.deferred.reason}) — só o dono o leva adiante`;
   const decisions = ownerDecisionsOnCard(card, config, { questionsOnly: opts.ownerApproved === true });
   if (!decisions.length) return null;
   return `espera o dono antes de ir ao ar: ${decisions.join("; ")}`;

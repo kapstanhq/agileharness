@@ -16,7 +16,7 @@ import { openQuestions } from "./questions";
 import { effectiveQuestionCategory, isOwnerDecisionQuestion, isPendingProxyAudit, isProxiableQuestion } from "./autonomy";
 import { cardOwnerClass, isBusinessOnly } from "./decision-class";
 import { ownerClassLabel } from "./owner-classes";
-import { deliveryBeforeAfterOf, deliveryProofOf, isPendingDeliveryAudit } from "./delivery-audit";
+import { deliveryBeforeAfterOf, deliveryProofOf, isDeliveryApprovalStep, isPendingDeliveryAudit } from "./delivery-audit";
 import { draftTitle, isGovernanceDraftStale } from "./governance";
 import { hasCanvasContent } from "./design-canvas";
 // type-only: apagado em runtime, então não cria ciclo (copilot/tier.ts não importa demands.ts) e mantém este
@@ -121,6 +121,12 @@ export interface DemandTimingOpts {
    *  transições, lido pelo coletor). É o `since` dos itens que nascem de campos do card (revisão, bloqueio, aviso,
    *  gate, deploy falho, efeito falho, exclusão de dados). Sem registro ⇒ a criação do card. */
   stepEnteredAt?: ReadonlyMap<string, string>;
+  /**
+   * Os cards em que um agente TRABALHA agora (run, reserva, sessão — o coletor mede). Uma entrega parada em «Aprovar
+   * entrega» só vira pedido de aprovação ao dono quando ninguém do sistema vai seguir com ela: com um condutor ou um
+   * trabalho vivo no card, não é pedido falso.
+   */
+  workedCardIds?: ReadonlySet<string>;
 }
 
 /** SLA (hours) before staged-but-unpublished code raises release-aging. */
@@ -871,6 +877,13 @@ export interface GateCockpitItem extends CockpitItemBase {
   kind: "gate";
   /** the gate's label = the manual step name ("Aprovar entrega", "Publicar"). */
   gateLabel: string;
+  /**
+   * O passo é a APROVAÇÃO DA ENTREGA (a parada manual gatada por `hasQaPassed` — delivery-audit.ts). Num board
+   * só-negócio o condutor atravessa esse passo sozinho, com a prova; um card PARADO nele, com trabalho pronto, é uma
+   * entrega que ninguém do sistema vai mover (o condutor parou ali de propósito, ou acabou) — quem decide é o dono
+   * (decision-class.ts, ponto `gate`). Ausente/false = um gate qualquer.
+   */
+  deliveryApproval?: boolean;
 }
 
 /** 🟢 O copiloto PEDIU sua aprovação para uma ação `ask` da matriz de risco (approvals.ts). Espera VOCÊ. */
@@ -1575,6 +1588,9 @@ export function cardCockpitItems(card: Card, config: BoardConfig, boardId: strin
       severity: "medium",
       since: stepSince,
       gateLabel: def.name ?? "Decisão pendente",
+      // o pedido ao dono só quando NINGUÉM do sistema vai seguir: nem condutor (que move revisão → integrar ele mesmo no
+      // só-negócio), nem run/reserva/sessão vivos no card.
+      ...(isDeliveryApprovalStep(def) && card.routing?.driver !== "conductor" && !opts?.workedCardIds?.has(card.id) ? { deliveryApproval: true } : {}),
     });
   }
 

@@ -10,7 +10,7 @@
 // «por dentro» do card já entregue.
 
 import { makeDraftCard } from "./draft";
-import type { Card, Finding } from "./types";
+import type { Card, Finding, ReviewChainMark } from "./types";
 
 /** O rótulo que marca o card nascido de um aviso da revisão. */
 export const FINDING_FIX_LABEL = "aviso-da-revisao";
@@ -35,13 +35,24 @@ export function findingFixRefusal(card: Pick<Card, "findings"> | null | undefine
  * usuário do card de origem (a origem, quando ela é a própria história) e aponta para ela. O texto leva o aviso, o
  * detalhe e a sugestão da revisão — é o que o agente que especificar o conserto vai ler. PURA.
  */
-export function buildFindingFixCard(input: { origin: Card; finding: Finding; entryStatus: string | null; cards: Card[]; today: string }): Card {
-  const { origin, finding } = input;
-  const serves = origin.storyType == null || origin.storyType === "user" ? origin.id : (origin.serves ?? origin.parent ?? undefined);
+export function buildFindingFixCard(input: {
+  origin: Card;
+  finding: Finding;
+  entryStatus: string | null;
+  cards: Card[];
+  today: string;
+  /** o conserto nasce em OUTRO board (o do arquivo do aviso — fix-card-board.ts): a origem vai por texto, sem vínculo. */
+  routedFrom?: { board: string; reason: string };
+  /** a marca de cadeia de conserto (runner/review-rounds.ts) — o conserto conta na árvore da origem em qualquer board. */
+  reviewChain?: ReviewChainMark | null;
+}): Card {
+  const { origin, finding, routedFrom } = input;
+  const serves = routedFrom ? undefined : origin.storyType == null || origin.storyType === "user" ? origin.id : (origin.serves ?? origin.parent ?? undefined);
   const body = [
     "## O aviso da revisão que este card conserta",
     "",
-    `- Card de origem: ${origin.id} — ${origin.title}`,
+    `- Card de origem: ${origin.id} — ${origin.title}${routedFrom ? ` (board «${routedFrom.board}»)` : ""}`,
+    ...(routedFrom ? [`- Por que este board: ${routedFrom.reason}.`] : []),
     `- Aviso (${[finding.lens, severityWords(finding.severity)].filter(Boolean).join(", ")}): ${finding.title}`,
     ...(finding.detail?.trim() ? ["", finding.detail.trim()] : []),
     ...(finding.suggestion?.trim() ? ["", "## O que a revisão sugere", "", finding.suggestion.trim()] : []),
@@ -54,8 +65,9 @@ export function buildFindingFixCard(input: { origin: Card; finding: Finding; ent
     ...makeDraftCard({ type: "story", title: `Conserto: ${finding.title}`, status: input.entryStatus, parent: null, cards: input.cards }),
     storyType: "technical",
     ...(serves ? { serves } : {}),
-    links: [{ rel: "relates-to", to: origin.id }],
+    links: routedFrom ? [] : [{ rel: "relates-to", to: origin.id }],
     labels: [FINDING_FIX_LABEL],
+    ...(input.reviewChain ? { reviewChain: input.reviewChain } : {}),
     body,
   };
 }

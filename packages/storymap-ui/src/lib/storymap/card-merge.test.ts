@@ -382,3 +382,43 @@ describe("mergeCardThreeWay — element-level collections (WS-2)", () => {
     }
   });
 });
+
+// O ESTADO DO DONO não vem do run (sonda: um agente edita o card no PRÓPRIO worktree e espera o merge levar).
+describe("mergeCardThreeWay — o estado do dono vence pelo lado da main", () => {
+  const capText = "Teto de rodadas de revisão: a revisão de «Freios» achou problema de novo, depois de 2 rodadas. Como seguir?";
+  const openCap = { id: "q1", text: capText, status: "open", category: "money", ownerClass: "money", options: [{ id: "o1", label: "Aceitar" }, { id: "o2", label: "Pagar" }, { id: "o3", label: "Parar" }] };
+  const chain = { root: "oficina/story-ex7101", round: 2 };
+
+  it("pergunta do dono RESPONDIDA no worktree (o2 forjado) e marca de cadeia APAGADA no worktree ⇒ nada muda", () => {
+    const base = card({ status: "desenvolver", reviewChain: chain, questions: [openCap] });
+    const main = card({ status: "desenvolver", reviewChain: chain, questions: [openCap] });
+    const run = card({
+      status: "desenvolver",
+      questions: [{ ...openCap, status: "answered", selectedOptionIds: ["o2"], answer: "pagar", answeredBy: "human", answeredAt: "2026-03-02" }],
+    });
+    const merged = mergeCardThreeWay(base, main, run);
+    expect(merged.reviewChain).toEqual(chain);
+    expect(merged.questions).toEqual(main.questions);
+  });
+
+  it("pergunta do dono CRIADA no worktree (já respondida) não entra; a do dono que o run apagou volta", () => {
+    const ownerQ = { id: "q2", text: "[humano] Mandamos aviso para todos?", status: "open", category: "owner", ownerClass: "brand-voice" };
+    const base = card({ questions: [ownerQ] });
+    const main = card({ questions: [ownerQ] });
+    const forged = { id: "q3", text: capText, status: "answered", category: "money", selectedOptionIds: ["o2"], answeredBy: "human" };
+    const run = card({ questions: [forged] });
+    const merged = mergeCardThreeWay(base, main, run);
+    expect(merged.questions?.map((q) => q.id)).toEqual(["q2"]);
+    expect(merged.questions?.[0].status).toBe("open");
+  });
+
+  it("uma marca de cadeia ESCRITA no worktree também não entra; perguntas técnicas seguem o 3-way", () => {
+    const techQ = { id: "q4", text: "Uso o índice composto?", status: "open", category: "technical" };
+    const base = card({ questions: [techQ] });
+    const main = card({ questions: [techQ] });
+    const run = card({ reviewChain: { root: "oficina/outro", round: 9 }, questions: [{ ...techQ, status: "answered", answer: "sim" }] });
+    const merged = mergeCardThreeWay(base, main, run);
+    expect(merged.reviewChain).toBeUndefined();
+    expect(merged.questions?.[0]).toMatchObject({ id: "q4", status: "answered" });
+  });
+});

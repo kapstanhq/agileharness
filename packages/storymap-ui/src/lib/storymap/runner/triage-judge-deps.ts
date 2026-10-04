@@ -7,7 +7,7 @@ import { evaluateAutorunOnEntry } from "@/lib/notifications/server/channels/auto
 import { boardDocPath, runnerStateDir } from "@/lib/storymap/paths";
 import { listBoards, readBoardConfig, readCards } from "@/lib/storymap/repo";
 import { runClaudeJson } from "@/lib/storymap/smart-capture/claude";
-import { planTriageJudgement, type TriageJudgePlan } from "@/lib/storymap/triage/judge";
+import { planTriageJudgement, type TriageJudgePlan, type TriageOtherBoard } from "@/lib/storymap/triage/judge";
 import { updateCardOnDisk } from "@/lib/storymap/write";
 import type { Card } from "@/lib/storymap/types";
 import { loadRunnerConfig } from "./config";
@@ -50,9 +50,39 @@ export function defaultTriageJudgeDeps(): TriageJudgeDeps {
       await updateCardOnDisk(board, cardId, (fresh) => {
         if (!isStaging(fresh, config.statuses) || fresh.triageDecision) return null;
         plan = planTriageJudgement(fresh, judgement, config, cards, { today: today(), by: "triage-judge" });
+        // `route` só grava as classes do DONO que o juiz marcou (elas viajam com o card); o efeito é a mudança de board (o
+        // `route` abaixo).
+        if (plan.action === "route") return plan.card.businessClasses !== fresh.businessClasses ? plan.card : null;
         return plan.card;
       });
       return plan;
+    },
+    otherBoards: async (board) => {
+      const out: TriageOtherBoard[] = [];
+      for (const b of await listBoards()) {
+        if (b.id === board) continue;
+        const cfg = await readBoardConfig(b.id).catch(() => null);
+        if (!cfg) continue;
+        const prd = await fsp.readFile(boardDocPath(b.id, "prd"), "utf8").catch(() => null);
+        out.push({
+          id: b.id,
+          name: b.name,
+          ...(cfg.package ? { package: cfg.package } : {}),
+          ...(cfg.sharedPackages?.length ? { sharedPackages: cfg.sharedPackages } : {}),
+          ...(cfg.ownsPaths?.length ? { ownsPaths: cfg.ownsPaths } : {}),
+          scope: prd,
+        });
+      }
+      return out;
+    },
+    // Mandar ao board certo: a MESMA mudança de board da tela e da tool (card-transfer-service.ts), atribuída ao juiz; o
+    // juiz de lá é cutucado na hora (o card chegou sem veredito, na Triagem de lá).
+    route: async (board, cardId, toBoard, reason) => {
+      const { transferCard, defaultCardTransferDeps } = await import("./card-transfer-service");
+      const r = await transferCard(defaultCardTransferDeps(), { fromBoard: board, toBoard, cardId, reason, by: "triage-judge" });
+      if (!r.ok) return { ok: false, error: r.error };
+      void nudgeTriageJudge(toBoard, cardId).catch(() => {});
+      return { ok: true };
     },
     deferChild: async (board, cardId, anchor) => {
       const d = anchor.deferred!;

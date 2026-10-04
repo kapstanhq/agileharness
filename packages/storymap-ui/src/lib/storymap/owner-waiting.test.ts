@@ -40,7 +40,11 @@ describe("uma decisão do dono nunca vence", () => {
     const now = Date.parse("2026-09-28T12:00:00Z");
     const entries = itemEntries(cardCockpitItems(c, config(), "b"), { boardId: "b", boardName: "B", config: config(), cardsById: new Map([[c.id, c]]), now });
     const waiting = ownerDecisionsWaiting(entries, config(), now);
-    expect(waiting).toEqual([expect.objectContaining({ cardId: "story-x", kind: "question", what: ownerQ.text, days: expect.any(Number) })]);
+    // a pergunta do dono, e — o card está PARADO em «Aprovar entrega» — a aprovação da entrega, que também é dele
+    expect(waiting).toEqual([
+      expect.objectContaining({ cardId: "story-x", kind: "question", what: ownerQ.text, days: expect.any(Number) }),
+      expect.objectContaining({ cardId: "story-x", kind: "gate" }),
+    ]);
     expect(waiting[0].days).toBeGreaterThan(365);
   });
 
@@ -53,6 +57,14 @@ describe("ownerPublishHold — o card não vai ao ar por cima de uma decisão do
   it("pergunta do dono aberta: sair de «Aprovar entrega» para frente espera; a técnica não segura nada", () => {
     expect(ownerPublishHold(card({ questions: [ownerQ] }), def("aprovar"), def("integrar"), config())).toMatch(/mural da loja/);
     expect(ownerPublishHold(card({ questions: [techQ] }), def("aprovar"), def("integrar"), config())).toBeNull();
+  });
+
+  it("card ADIADO (inclusive o «Parar» do teto de rodadas): nenhum agente o leva rumo ao ar, em qualquer modo", () => {
+    const deferred = card({ deferred: { reason: "o dono mandou parar", since: "2026-03-02", by: "human" } });
+    expect(ownerPublishHold(deferred, def("aprovar"), def("integrar"), config())).toMatch(/adiado \(o dono mandou parar\)/);
+    expect(ownerPublishHold(deferred, def("aprovar"), def("integrar"), config("human"))).toMatch(/adiado/);
+    // voltar segue livre
+    expect(ownerPublishHold(deferred, def("integrar"), def("aprovar"), config())).toBeNull();
   });
 
   it("o card toca uma classe do dono: publicar é dele", () => {
@@ -102,6 +114,8 @@ describe("ownerPublishHold — o card não vai ao ar por cima de uma decisão do
 });
 
 describe("ownerDecisionsWaiting — o que espera o dono (o lembrete semanal lê daqui)", () => {
+  // A entrega técnica PARADA em «Aprovar entrega» (story-p) também é do dono: num board só-negócio nenhum ator do sistema
+  // move um card parado nesse passo (decision-class.ts, ponto `gate`) — antes ela ficava fora, «o sistema decide».
   it("só as decisões do dono, a mais antiga primeiro; o que o sistema decide e as amostras ficam de fora", () => {
     const now = Date.parse("2026-09-28T12:00:00Z");
     const a = card({ id: "story-a", questions: [ownerQ, techQ] });
@@ -117,6 +131,7 @@ describe("ownerDecisionsWaiting — o que espera o dono (o lembrete semanal lê 
       ["question", "story-x"],
       ["governance", ""],
       ["gate", "story-t"],
+      ["gate", "story-p"],
     ]);
     // a decisão como o dono a lê, com a classe dele
     expect(waiting[1]).toMatchObject({ what: expect.stringMatching(/^Aprovar .*PRD/), days: 7, ownerClass: expect.stringMatching(/PRD/) });

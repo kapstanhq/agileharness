@@ -345,6 +345,24 @@ export class TelemetryStore implements TelemetryPort {
     return { boardId: board, cards, totalCostUSD };
   }
 
+  /**
+   * O card mudou de board (card-transfer.ts): o custo e os runs dele vão junto. Re-atribui os registros do card
+   * `cardId` em `fromBoard` a `toBoard` — o histórico de gasto acompanha o card, nunca fica órfão no board que ele deixou.
+   * Devolve quantos registros mudaram.
+   */
+  async reassignCard(fromBoard: string, cardId: string, toBoard: string): Promise<number> {
+    await this.ensureLoaded();
+    let moved = 0;
+    for (const r of this.records) {
+      if (r.board === fromBoard && r.cardId === cardId) {
+        r.board = toBoard;
+        moved++;
+      }
+    }
+    if (moved) this.schedulePersist();
+    return moved;
+  }
+
   /** Await all pending writes (tests / graceful shutdown). */
   async flush(): Promise<void> {
     await this.writeChain;

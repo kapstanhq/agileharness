@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_OWNER_CLASSES,
+  DELIVERY_PARKED,
   cockpitItemDecision,
   isBusinessOnly,
   ownerClassesOf,
@@ -429,5 +430,47 @@ describe("a matriz kind × modo (exaustiva) e o invariante do só-negócio", () 
         expect(ok, `${kind}: ${v.reason}`).toBe(true);
       }
     }
+  });
+});
+
+// A entrega PARADA em «Aprovar entrega» num board só-negócio: o condutor atravessa esse passo sozinho, com a prova — um
+// card parado ali com trabalho pronto é uma entrega que nenhum ator do sistema vai mover, então é um ponto ESTRUTURAL do
+// dono (aprovar ou devolver) — classificada como «o sistema decide», ela não apareceria a ninguém.
+describe("gate da aprovação da ENTREGA parado em só-negócio ⇒ dono (ponto estrutural)", () => {
+  const parked = mk("gate", { gateLabel: "Aprovar entrega", deliveryApproval: true });
+
+  it("ultra: a entrega parada vai ao dono, sem classe, com o motivo estrutural", () => {
+    const v = cockpitItemDecision(parked, card(), ultra as BoardConfig);
+    expect(v).toMatchObject({ decider: "owner", ownerClass: null, reason: DELIVERY_PARKED });
+  });
+
+  it("ultra: um gate qualquer (sem ser a entrega) continua do sistema", () => {
+    expect(cockpitItemDecision(mk("gate", { gateLabel: "Publicar" }), card(), ultra as BoardConfig).decider).toBe("system");
+  });
+
+  it("a classe do dono que o card toca vence o motivo estrutural (diz a classe)", () => {
+    const money = card({ businessClasses: { ids: ["money"], reason: "cobrança", by: "triage-judge", at: "2026-06-01" } });
+    expect(cockpitItemDecision(parked, money, ultra as BoardConfig)).toMatchObject({ decider: "owner", ownerClass: "money" });
+  });
+
+  it("modo humano: dono, como todo ponto", () => {
+    expect(cockpitItemDecision(parked, card(), human as BoardConfig).decider).toBe("owner");
+  });
+
+  it("no Inbox de um board só-negócio, a entrega parada cai em DECIDIR com aprovar e devolver", () => {
+    const config = {
+      autonomy: { mode: "ultra" as const },
+      statuses: [
+        { id: "desenvolver", name: "Construir", trigger: "harness-do" },
+        { id: "revisao", name: "Aprovar entrega", gate: "hasQaPassed", autorun: false },
+        { id: "concluida", name: "No ar", terminal: true },
+      ],
+    } as unknown as BoardConfig;
+    const c = card({ status: "revisao", qaPassed: true, title: "Trocar a chave do cofre" });
+    const d = decideItem({ ...parked, status: "revisao", cardTitle: c.title } as CockpitItem, { config, card: c, now: Date.parse("2026-06-02T12:00:00Z"), tier: "autonomo" });
+    expect(d.bucket).toBe("decidir");
+    expect(d.next.who).toBe("voce");
+    expect(d.options.map((o) => o.id)).toContain("return");
+    expect(d.options.length).toBeGreaterThanOrEqual(2);
   });
 });

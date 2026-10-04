@@ -122,3 +122,48 @@ describe("answerQuestionAction — HITL auto-advance out of grill (story-ex0124)
     expect(runSkill).not.toHaveBeenCalled();
   });
 });
+
+// O TETO DE RODADAS de revisão (runner/review-rounds.ts): «Parar» ADIA o card na mesma escrita da resposta — adiado,
+// nenhum agente gasta mais nele nem o leva rumo ao ar. «Aceitar o risco» não adia (a verificação só não pergunta de novo).
+describe("answerQuestionAction — a resposta do dono ao teto de rodadas", () => {
+  const capQ = {
+    id: "q1",
+    text: "Teto de rodadas de revisão: a revisão de «Freios» achou problema de novo, depois de 2 rodadas. Como seguir?",
+    askedBy: "system:review-rounds",
+    askedAt: "2026-06-13",
+    status: "open" as const,
+    options: [
+      { id: "o1", label: "Aceitar o risco restante e seguir" },
+      { id: "o2", label: "Pagar mais uma rodada" },
+      { id: "o3", label: "Parar" },
+    ],
+    mode: "single" as const,
+  };
+
+  it("«Parar» adia o card (motivo dito), na mesma escrita", async () => {
+    cardOnDisk = coerceCard("story-x", { type: "story", storyType: "technical", status: "enriquecer", questions: [capQ] }, "");
+    const res = await answerQuestionAction({ boardId: "b", cardId: "story-x", questionId: "q1", answer: "", selectedOptionIds: ["o3"] });
+    expect(res.ok).toBe(true);
+    expect(cardOnDisk.deferred).toMatchObject({ reason: expect.stringMatching(/mandou parar/) });
+    expect(cardOnDisk.questions?.[0].status).toBe("answered");
+  });
+
+  it("a resposta de um TOKEN DE AGENTE não adia (e não entra no registro do servidor)", async () => {
+    cardOnDisk = coerceCard("story-x", { type: "story", storyType: "technical", status: "enriquecer", questions: [capQ] }, "");
+    const { runWithMcpActor } = await import("@/lib/storymap/mcp/actor");
+    await runWithMcpActor({ level: "full" }, () => answerQuestionAction({ boardId: "b", cardId: "story-x", questionId: "q1", answer: "", selectedOptionIds: ["o3"] }));
+    expect(cardOnDisk.deferred).toBeUndefined();
+  });
+
+  it("«Aceitar o risco» não adia", async () => {
+    cardOnDisk = coerceCard("story-x", { type: "story", storyType: "technical", status: "enriquecer", questions: [capQ] }, "");
+    await answerQuestionAction({ boardId: "b", cardId: "story-x", questionId: "q1", answer: "", selectedOptionIds: ["o1"] });
+    expect(cardOnDisk.deferred).toBeUndefined();
+  });
+
+  it("uma pergunta qualquer com uma opção «o3» não adia", async () => {
+    cardOnDisk = coerceCard("story-x", { type: "story", storyType: "technical", status: "enriquecer", questions: [{ ...capQ, text: "Qual cor?" }] }, "");
+    await answerQuestionAction({ boardId: "b", cardId: "story-x", questionId: "q1", answer: "", selectedOptionIds: ["o3"] });
+    expect(cardOnDisk.deferred).toBeUndefined();
+  });
+});

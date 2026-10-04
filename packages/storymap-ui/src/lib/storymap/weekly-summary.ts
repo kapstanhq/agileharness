@@ -143,6 +143,8 @@ export const DECISION_KIND_LABEL: Record<SystemDecisionKind, string> = {
   "extra-cycle": "Autorizou ciclos extras de verificação",
   "conductor-park": "Estacionou condutores parados",
   "proof-republish": "Republicou com a prova de segurança",
+  "card-transfer": "Mudou cards de board",
+  "triage-route": "Mandou cards da triagem para o board certo",
   undo: "Desfez decisões (a seu pedido)",
 };
 
