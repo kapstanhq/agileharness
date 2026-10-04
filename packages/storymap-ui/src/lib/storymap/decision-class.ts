@@ -58,6 +58,8 @@ export type DecisionPoint =
   | { kind: "governance" }
   /** a exclusão irreversível de dados de produção */
   | { kind: "data-deletion" }
+  /** um comando que a trava dura do host recusa a agentes, proposto para o dono aprovar (execução aprovada) */
+  | { kind: "locked-exec" }
   /** um dilema técnico que afeta o produto (ex.: cortar escopo para cumprir uma data) */
   | { kind: "dilemma"; ownerClass?: string | null }
   /**
@@ -202,6 +204,8 @@ export function whoDecides(
       return owner("prd", "mudar o PRD, as metas ou a estratégia do board é decisão sua");
     case "data-deletion":
       return owner("personal-data", "apagar dados de pessoas é decisão sua");
+    case "locked-exec":
+      return owner(null, "um comando que a trava do servidor proíbe a agentes — só roda com o seu clique, em qualquer modo");
     case "dilemma":
       return point.ownerClass
         ? owner(point.ownerClass, `o dilema toca «${ownerClassLabel(point.ownerClass, config)}»`)
@@ -280,6 +284,7 @@ const KIND_POINT: Record<CockpitItemKind, (item: CockpitItem, card: Card | undef
   approval: (item) => ({ kind: "approval", riskClass: item.kind === "approval" ? item.riskClass : undefined }),
   governance: () => ({ kind: "governance" }),
   "data-deletion": () => ({ kind: "data-deletion" }),
+  "locked-exec": () => ({ kind: "locked-exec" }),
   stuck: (item, card) => ({ kind: "recovery", failure: stuckFailure(item, card) }),
   conflict: () => ({ kind: "recovery" }),
   "merge-failed": () => ({ kind: "recovery" }),

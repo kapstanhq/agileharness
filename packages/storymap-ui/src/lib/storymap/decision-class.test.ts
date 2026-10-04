@@ -406,6 +406,7 @@ const MATRIX: Record<CockpitItemKind, Row> = {
   "data-deletion": { item: mk("data-deletion"), ultra: { decider: "owner", ownerClass: "personal-data" } },
   "effect-failed": { item: mk("effect-failed"), ultra: { decider: "system" } },
   stalled: { item: mk("stalled"), ultra: { decider: "system" } },
+  "locked-exec": { item: mk("locked-exec"), ultra: { decider: "owner", ownerClass: null }, structural: "um comando que a trava proíbe a agentes só roda com o clique do dono" },
 };
 
 describe("a matriz kind × modo (exaustiva) e o invariante do só-negócio", () => {

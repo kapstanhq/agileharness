@@ -42,6 +42,9 @@ const ALERT_TONES: Record<AgentAlertKind, Tone> = {
   "critical-signal": { freqs: [880.0, 880.0, 880.0], step: 0.15, duration: 0.1 },
   // duas notas ascendentes e macias — "o resumo chegou" (a política por modo o silencia com a tela aberta).
   "weekly-summary": { freqs: [523.25, 659.25], step: 0.14, duration: 0.14 },
+  // duas notas graves, a segunda MAIS ALTA e mais longa — «o que você aprovou não ficou como devia»: distinta da queda
+  // do deploy (que desce) e da trava da conta (duas longas descendo).
+  "locked-exec": { freqs: [311.13, 415.3], step: 0.22, duration: 0.24 },
 };
 
 export class SoundChannel implements NotificationChannel {

@@ -37,6 +37,8 @@ describe("quem chama uma tool — o rótulo que o agente declara de si", () => {
     expect(callerWords("copilot:acme")).toBe("O Jido");
     expect(callerWords("conductor:story-x")).toBe("O condutor do card story-x");
     expect(callerWords("session:agent-fix")).toBe("Uma sessão de agente (agent-fix)");
+    // o uuid que a ferramenta cunhou não diz nada a quem lê (story-ex9603)
+    expect(callerWords("session:00000000-0000-4000-8000-0000000000a1")).toBe("Uma sessão de trabalho");
     expect(callerWords("external:orq")).toBe("Um agente de fora (orq)");
     for (const other of [null, "", "run:orch", "mcp:write(TOKEN)", "handle:h1", "conductor:"]) expect(callerWords(other)).toBeNull();
     expect(toWhomWords("O condutor do card story-x")).toBe("ao condutor do card story-x");

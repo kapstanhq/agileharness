@@ -206,6 +206,12 @@ async function registerImpl(): Promise<void> {
   } catch (err) {
     console.error("[harness-boot] governador de capacidade não armou:", err instanceof Error ? err.message : err);
   }
+  // 0.6) A EXECUÇÃO APROVADA (runner/locked-exec-service.ts): o que o dono aprovou e o processo anterior não chegou a
+  //      rodar roda agora (dentro dos 15 minutos da autorização); o que passou do prazo expira; o que estava RODANDO
+  //      quando o serviço caiu vira falha para o dono conferir à mão (não se sabe até onde foi). Nunca lança.
+  void import("@/lib/storymap/runner/locked-exec-service")
+    .then((m) => m.getLockedExecService().recoverOnBoot())
+    .catch((err) => console.error("[harness-boot] execução aprovada: recuperação falhou:", err instanceof Error ? err.message : err));
   // Build the recovery deps FRESH each call so the periodic sweep (step 2.5) re-reads settings (cfg)
   // per tick — a `enabled`/`resumeOnBoot` toggle takes effect without a restart. Boot reuses it too.
   const makeRecoveryDeps = (): RecoveryDeps => {

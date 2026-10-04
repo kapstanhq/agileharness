@@ -71,6 +71,7 @@ export const INBOX_PRECEDENCE: readonly CockpitItemKind[] = [
   "merge-failed",
   "stuck",
   "data-deletion",
+  "locked-exec",
   "blocker",
   "question",
   "review",

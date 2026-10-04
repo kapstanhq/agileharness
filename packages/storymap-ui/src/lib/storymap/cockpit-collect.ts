@@ -25,6 +25,8 @@ import { checkGovernanceApproval } from "@/lib/storymap/governance-check";
 import { listGovernanceDrafts, readProposal, readWireframe } from "@/lib/storymap/sidecars";
 import { listApprovalRequests, type ApprovalRequest } from "@/lib/storymap/approvals";
 import { approvalRequesterText } from "@/lib/storymap/approval-requester";
+import { lockedExecItem } from "@/lib/storymap/locked-exec-item";
+import { getLockedExecService } from "@/lib/storymap/runner/locked-exec-service";
 import type { BoardConfig, Card, GovernanceDraft, WireframeDoc } from "@/lib/storymap/types";
 import type { ProposalDoc } from "@/lib/storymap/smart-capture/types";
 import { getTelemetryStore, type CardMetrics } from "@/lib/storymap/runner/telemetry";
@@ -236,6 +238,24 @@ export async function collectBoardCockpit(boardId: string): Promise<BoardCockpit
     })
     .catch(() => []);
 
+  // (7c) Execução aprovada — os pedidos de rodar um comando travado (e os desfechos que o dono ainda não arquivou). O
+  //      store é do serviço (runnerStateDir), lido aqui; uma falha de leitura só significa «sem item».
+  const cardById = new Map(board.cards.map((c) => [c.id, c]));
+  const lockedExecItems: CockpitItem[] = await getLockedExecService()
+    .listForBoard(boardId)
+    .then((recs) =>
+      recs
+        .map((r) => {
+          const card = cardById.get(r.cardId);
+          return lockedExecItem(r, card ? { title: card.title, status: card.status ?? null } : null);
+        })
+        .filter((i): i is NonNullable<typeof i> => !!i),
+    )
+    .catch((err) => {
+      console.error(`[cockpit ${boardId}] pedidos de execução aprovada não lidos:`, err instanceof Error ? err.message : err);
+      return [];
+    });
+
   // (8) WS-12.2 (D16) — stamp the items the autonomous copiloto GAVE UP on (per-item anti-noop backoff), so the
   //     cockpit can show the chip that makes the hand-off explicit ("this one is yours now"). Read-only over the
   //     durable orchestrator state; fail-open (an unreadable state just means no chips).
@@ -254,6 +274,7 @@ export async function collectBoardCockpit(boardId: string): Promise<BoardCockpit
     ...governanceItems,
     ...approvalItems,
     ...meterItems,
+    ...lockedExecItems,
   ];
   // B6 — o aviso de sistema sobre a morte de um run vira EVIDÊNCIA do travado do mesmo card (um fato, um item).
   const folded = foldRunDiagnostics(items0, cardsById);

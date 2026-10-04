@@ -23,7 +23,10 @@
 //
 // Verdict PURO + IO injetável (git/fs), para os testes provarem a lógica sem repo, sem rede e sem deploy.
 
-import { isBusinessOnly } from "@/lib/storymap/decision-class";
+import { cardOwnerClass, isBusinessOnly } from "@/lib/storymap/decision-class";
+import { isAutonomousDelivery } from "@/lib/storymap/delivery-audit";
+import { ownerPublishHold } from "@/lib/storymap/owner-waiting";
+import { releaseModeOf } from "@/lib/storymap/release-policy";
 import { publishEntry, type SystemDecision } from "@/lib/storymap/system-decisions";
 import { appendSystemDecision, newSystemDecisionId } from "./decision-log";
 import { promises as fs } from "node:fs";
@@ -38,7 +41,7 @@ import { readBoardConfig, readCards } from "@/lib/storymap/repo";
 import { updateCardOnDisk } from "@/lib/storymap/write";
 import { rangeLandedBySplit, shaContainedIn } from "./convergence";
 import { isLiveCardFile } from "./staging";
-import { appendTransition } from "./transitions";
+import { appendTransition, readTransitions } from "./transitions";
 import { tryGetPublishBreaker } from "./publish-breaker";
 import { defaultDeployBlocksSweepDeps, sweepDeployBlocks } from "./deploy-blocks";
 import { loadRunnerConfig } from "./config";
@@ -817,6 +820,108 @@ export async function settleDeploySuccess(
   }
 }
 
+// ── a quarta metade: o card que ESPERA em «Liberar» com o código JÁ no ar (story-ex9601) ──────────────────────
+//
+// O BURACO: a cascata é movida a EVENTO, e um deploy que termina sem nada a publicar não gera evento por card. Quem
+// chegou a «Liberar» enquanto a publicação estava segurada (o disjuntor, uma causa do dono, o board pausado) não recebe
+// outro evento — o recuo do disjuntor só re-aciona os cards da linha DELE, e a linha esgotada espera o botão. O código
+// desses cards pode já estar no ar (publicado junto com outro), e o card fica em «Liberar» indefinidamente.
+//
+// A SAÍDA é a mesma régua do resto deste módulo — ler o mundo, não esperar o evento: um card parado no passo ANTES do
+// de publicar cujo código está PROVADO no ar (a ancestralidade dos state files, a régua única) atravessa o passo de
+// publicar SEM disparar deploy nenhum (não há o que publicar) e o settle por evidência o leva ao terminal pelo caminho
+// gatado. Nada roda que já não rodou: por isso o RITMO do board não segura isto — pausado quer dizer «não comece
+// trabalho novo», e assentar o que já está no ar não é trabalho, é corrigir o registro. O que segura:
+//   · a decisão do DONO aberta no card (`ownerPublishHold`, a mesma régua que a cascata e o move_card do MCP leem): um
+//     card que toca uma classe do dono e que ele não aprovou fica onde está;
+//   · prova ausente (sem releasedSha, sem alvos, deploy anterior ao código, git ilegível): fica — fail-closed, como sempre;
+//   · card SEM código: só no board que libera sozinho (`release.mode: auto`) — no manual, o «Publicar» é do humano;
+//   · o settle que NÃO avançaria (um gate do terminal reprova): o card nem sai de «Liberar» — nunca fica parado no passo
+//     de publicar sem um deploy em voo e sem o vigia armado.
+
+/** O que a varredura decide para um card parado antes do passo de publicar. */
+export type ReleaseLiveVerdict = { forward: string } | { skip: string };
+
+/**
+ * PURA — o card parado no passo ANTES do de publicar pode atravessá-lo por evidência? `measurement` é a régua de
+ * ancestralidade (null = não medida: card sem código); `ownerHold` é o motivo da trava do dono (null = livre). O destino
+ * é o passo de publicar; o avanço ao terminal é do settle (que esta função SIMULA para não deixar o card a meio caminho).
+ */
+export function releaseAlreadyLiveVerdict(
+  card: Card,
+  config: BoardConfig,
+  measurement: DeployProofMeasurement | null,
+  ownerHold: string | null,
+): ReleaseLiveVerdict {
+  if (card.type !== "story") return { skip: "não é story" };
+  const def = config.statuses.find((s) => s.id === card.status);
+  if (!def || def.terminal || isDeployStep(def)) return { skip: "não está antes do passo de publicar" };
+  const dest = nextBuildStatus(config, def.id, card);
+  if (!dest || !isDeployStep(dest.status)) return { skip: "o próximo passo não é o de publicar" };
+  if (ownerHold) return { skip: ownerHold };
+  const noCode = !declaresCode(card);
+  if (noCode) {
+    if (releaseModeOf(config) !== "auto") return { skip: "card sem código num board que libera à mão — o «Publicar» é do humano" };
+  } else if (measurement?.proven !== true) {
+    return { skip: `código não provado no ar (${measurement && !measurement.proven ? measurement.reason : "sem medição"})` };
+  }
+  // simula o settle no passo de publicar: só atravessa se ele levaria o card ao terminal agora
+  const sim = applyDeploySettleSuccess({ ...card, status: dest.status.id }, config, measurement, {
+    source: "reconcile-evidence",
+    now: new Date(0).toISOString(),
+    today: "1970-01-01",
+    evidenceOnly: true,
+  });
+  if (!sim.advancedTo) return { skip: sim.heldReason ?? "o settle não avançaria" };
+  return { forward: dest.status.id };
+}
+
+/** DI da varredura de «Liberar» (os testes injetam tudo; produção usa os defaults de {@link reconcileBoardDeployFailures}). */
+export interface ReleaseLiveSweepDeps {
+  deployedShaFor(target: string): Promise<string | null>;
+  unitShasFor(target: string): Promise<Record<string, string> | null>;
+  contains(ancestor: string, descendant: string): Promise<boolean>;
+  /** o dono já atravessou o passo de aprovar a entrega deste card? (o ledger de transições — delivery-audit.ts). */
+  ownerApproved(board: string, card: Card, config: BoardConfig): Promise<boolean>;
+  write: typeof updateCardOnDisk;
+  transition: typeof appendTransition;
+  settle(board: string, cardId: string): Promise<DeploySettleSuccessDecision | null>;
+}
+
+/**
+ * A varredura: para cada card parado antes do passo de publicar com veredito `forward`, grava o passo de publicar sob o
+ * lock (só se o card ainda está onde estava), registra a transição (`system`, nota `deploy:already-live`) e chama o
+ * settle por evidência — que carimba a prova e avança ao terminal. NÃO dispara o efeito de entrada do passo de publicar
+ * (o deploy): o código já está no ar. Devolve os ids que atravessaram. Nunca lança.
+ */
+export async function settleReleasedLiveCards(board: string, config: BoardConfig, cards: readonly Card[], d: ReleaseLiveSweepDeps): Promise<string[]> {
+  const moved: string[] = [];
+  for (const card of cards) {
+    try {
+      const def = config.statuses.find((s) => s.id === card.status);
+      if (card.type !== "story" || !def || def.terminal || isDeployStep(def)) continue;
+      const dest = nextBuildStatus(config, def.id, card);
+      if (!dest || !isDeployStep(dest.status)) continue;
+      const approved = cardOwnerClass(card) ? await d.ownerApproved(board, card, config).catch(() => false) : false;
+      const hold = ownerPublishHold(card, def, dest.status, config, { ownerApproved: approved });
+      const measurement = declaresCode(card) ? await measureDeployAncestry(card, d.deployedShaFor, d.contains, d.unitShasFor) : null;
+      const verdict = releaseAlreadyLiveVerdict(card, config, measurement, hold);
+      if (!("forward" in verdict)) continue;
+      const written = await d.write(board, card.id, (fresh) => (fresh.status === card.status ? { ...fresh, status: verdict.forward } : null));
+      if (!written) continue; // mudou sob o lock: a próxima passada decide
+      void d.transition({ board, cardId: card.id, from: card.status ?? null, to: verdict.forward, actor: "system", note: "deploy:already-live" });
+      const settled = await d.settle(board, card.id);
+      moved.push(card.id);
+      console.log(
+        `[deploy-reconcile ${board}/${card.id}] esperava em ${card.status} com o código já no ar — ${settled?.advancedTo ? `assentado por evidência (${settled.advancedTo})` : `no passo de publicar, settle sem avanço: ${settled?.heldReason ?? "?"}`}`,
+      );
+    } catch (err) {
+      console.error(`[deploy-reconcile ${board}/${card.id}] liberar por evidência falhou:`, err instanceof Error ? err.message : err);
+    }
+  }
+  return moved;
+}
+
 /**
  * Varre um board e RESOLVE (open → fixed) todo `deploy-failure` cujo código está provadamente publicado.
  * Best-effort: loga e NUNCA lança (roda dentro do sweep e do settle de deploy — não pode derrubar nenhum dos dois).
@@ -889,6 +994,18 @@ export async function reconcileBoardDeployFailures(
           deps: { repoRoot, exec, deployedShaFor, unitShasFor, contains },
         }).catch(() => {});
       }
+      // A quarta metade (story-ex9601): quem ESPERA antes do passo de publicar com o código já no ar atravessa por
+      // evidência, sem deploy (ver {@link settleReleasedLiveCards}). Relê os cards: a metade acima pode ter movido alguns.
+      const fresh = await readCards(board).catch(() => [] as Card[]);
+      await settleReleasedLiveCards(board, config, fresh, {
+        deployedShaFor,
+        unitShasFor,
+        contains,
+        ownerApproved: (b, c, cfg) => readTransitions({ board: b, cardId: c.id }).then((ts) => !isAutonomousDelivery(ts, cfg)),
+        write: updateCardOnDisk,
+        transition: appendTransition,
+        settle: (b, id) => settleDeploySuccess(b, id, { source: "reconcile-evidence", deps: { repoRoot, exec, deployedShaFor, unitShasFor, contains } }),
+      });
       // A terceira metade: o carimbo de disparo que ficou para trás FORA do
       // passo de publicação (o legado de antes da chokepoint de escrita — a era otimista, os cards movidos à mão).
       // Terminal com prova ⇒ o carimbo sai; terminal sem prova ⇒ uma nota informativa (registrada, fora do Inbox);

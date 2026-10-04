@@ -219,7 +219,7 @@ export const DEFAULT_RUNNER_SETTINGS: RunnerSettings = {
     // Estacionar o condutor que espera o dono: «só se demorar» — 10 minutos de carência.
     // WP5-F2: a escada do condutor quieto — retomar após erro de transporte em 3 min (no máximo 2 por hora) e lembrar
     // o condutor quieto com fila esperando em 10 min (o caso real: um condutor parado depois de um «API Error»).
-    park: { afterMinutes: 10, nudgeAfterMinutes: 10, transportRetryAfterMinutes: 3, transportRetries: 2 },
+    park: { afterMinutes: 10, nudgeAfterMinutes: 10, transportRetryAfterMinutes: 3, transportRetries: 2, declaredAfterMinutes: 30 },
     // O aumento de teto que o sistema aprova sozinho: +30%, com a janela de 5 horas abaixo de 70%.
     budgetRaise: { maxPct: 30, fiveHourMaxPct: 70 },
     // A vaga extra de condutor, com travas conservadoras.
@@ -598,6 +598,7 @@ export function coerceRunnerSettings(raw: unknown): RunnerSettings {
         nudgeAfterMinutes: asPosInt(park.nudgeAfterMinutes) ?? d.autorun.park.nudgeAfterMinutes,
         transportRetryAfterMinutes: asPosInt(park.transportRetryAfterMinutes) ?? d.autorun.park.transportRetryAfterMinutes,
         transportRetries: (() => { const n = asNonNegInt(park.transportRetries); return n != null && n <= 5 ? n : d.autorun.park.transportRetries; })(),
+        declaredAfterMinutes: asPosInt(park.declaredAfterMinutes) ?? d.autorun.park.declaredAfterMinutes,
       },
       // `maxPct` aceita 0 (o jeito declarado de dizer «todo aumento é meu»); um teto acima de 100% é erro de digitação
       // de quem quis 30 e não pode virar «o sistema triplica o teto»: cai no default.

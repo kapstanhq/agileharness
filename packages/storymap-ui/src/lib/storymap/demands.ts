@@ -687,7 +687,11 @@ export type CockpitItemKind =
   /** paradas por recurso, fatia 1 — o card ficou num passo em que o próximo ator é o SISTEMA, sem ninguém trabalhando
    *  nele e sem nada que explique a espera; o vigia já refez o passo uma vez (quando era seguro) e abriu o card de
    *  conserto. Antes disto o card só ficava lá, com «Publicando» pulsando sobre nada. */
-  | "stalled";
+  | "stalled"
+  /** Execução aprovada — um agente propôs um comando que a TRAVA DURA do host recusa a agentes; o dono aprova (o
+   *  serviço roda uma vez, confere, desfaz se falhar), recusa, ou — depois — desfaz/mantém. Também os desfechos que
+   *  só informam (falhou, desfeito, expirou), até o dono dar «Ok». runner/locked-exec*. */
+  | "locked-exec";
 
 interface CockpitItemBase {
   /** stable id, unique within the board (e.g. `<cardId>:q:<questionId>`) */
@@ -1067,6 +1071,62 @@ export interface MergeFailedCockpitItem extends CockpitItemBase {
   failureReason?: string;
 }
 
+/** Uma conferência de um comando travado, como o Inbox a mostra. */
+export interface LockedExecCheckView {
+  label: string;
+  command: string;
+  /** o programa que de fato roda (caminho real, resolvido pelo serviço). */
+  program: string;
+  /** o critério, em português («passa se terminar com código 0 e a saída contiver “…”»). */
+  criterion: string;
+}
+
+/** Um passo já rodado, resumido para o Inbox. */
+export interface LockedExecStepView {
+  step: string;
+  ok: boolean;
+  exitCode: number | null;
+  /** a cauda curta da saída (stdout, senão stderr), para o dono ver o que o comando disse. */
+  output: string;
+  error?: string;
+}
+
+/**
+ * 🔴/🟢 Execução aprovada (runner/locked-exec*): um pedido de rodar UM comando travado, com tudo o que o dono precisa
+ * ver antes de decidir — o resumo do agente, o COMANDO EXATO (a linha que a trava julgou), o desfazer ou o plano B, e
+ * as conferências — e, depois, o desfecho passo a passo. `hash` é o que a aprovação devolve ao servidor: o pedido que o
+ * dono viu, byte a byte.
+ */
+export interface LockedExecCockpitItem extends CockpitItemBase {
+  kind: "locked-exec";
+  lockedExecId: string;
+  hash: string;
+  execStatus: "pending" | "approved" | "running" | "done" | "failed" | "undone" | "rejected" | "expired" | "stale" | "kept";
+  /** as palavras do AGENTE — a tela as mostra DEPOIS do bloco estruturado, rotuladas «Explicação do agente». */
+  summary: string;
+  why: string | null;
+  command: string;
+  /** o programa que de fato roda (caminho real). */
+  program: string;
+  undoCommand: string | null;
+  undoProgram: string | null;
+  noUndoPlan: string | null;
+  preflight: LockedExecCheckView[];
+  verify: LockedExecCheckView[];
+  timeoutSec: number;
+  proposedBy: string;
+  proposedAt: string;
+  /** o que a trava disse do comando (a regra), para os Detalhes. */
+  lockRule: string | null;
+  expiresAt: string | null;
+  finishedAt: string | null;
+  undoing: boolean;
+  autoUndone: boolean;
+  error: string | null;
+  rejectReason: string | null;
+  steps: LockedExecStepView[];
+}
+
 export type CockpitItem =
   | QuestionCockpitItem
   | BlockerCockpitItem
@@ -1088,7 +1148,8 @@ export type CockpitItem =
   | MeterStalledCockpitItem
   | DataDeletionCockpitItem
   | EffectFailedCockpitItem
-  | StalledCockpitItem;
+  | StalledCockpitItem
+  | LockedExecCockpitItem;
 
 /**
  * 6.4 — quem pode ACIONAR cada kind do cockpit, POR TIER do copiloto. O princípio (herdado da F8) é um só:
@@ -1169,6 +1230,10 @@ const KIND_AUTONOMY: Record<CockpitItemKind, KindAutonomy> = {
   // conserto — o trabalho que resolve é aquele card, que anda pela fila como qualquer outro. Acordar o tick por este
   // item seria refazer às cegas o que acabou de não dar certo. Mesma classe do `effect-failed`.
   stalled: "never",
+  // Execução aprovada — o comando travado só roda com o clique do DONO na sessão dele (a server action recusa qualquer
+  // outro chamador). Nenhum tier tem a alavanca, e acordar por um pedido que ele mesmo não pode aprovar é o laço de
+  // impotência desta tabela.
+  "locked-exec": "never",
   approval: "never", // é o pedido que o PRÓPRIO copiloto abriu — ele aguarda VOCÊ. Se fosse acionável, o tick
   // acordaria por causa de si mesmo, veria "trabalho", e re-acordaria: laço. O gate DO CARD (que ele PODE
   // empurrar) é o kind `gate` — outro item, outra semântica.

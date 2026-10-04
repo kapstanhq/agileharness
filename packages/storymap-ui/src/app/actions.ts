@@ -91,6 +91,8 @@ import { loadRunnerConfig, writeRunnerSettings } from "@/lib/storymap/runner/con
 import { declaredCodePrefixes, stagingBranchOf } from "@/lib/storymap/runner/staging";
 import { lensNamesOf } from "@/lib/storymap/inbox/entries";
 import { getCapacityGovernor, type KeepaliveNowResult } from "@/lib/storymap/runner/capacity-service";
+import { getLockedExecService } from "@/lib/storymap/runner/locked-exec-service";
+import type { LockedExecRecord } from "@/lib/storymap/runner/locked-exec";
 import type { GovernorSnapshot, LatchLevel } from "@/lib/storymap/runner/capacity-governor";
 import { findRepoRoot } from "@/lib/storymap/paths";
 import { buildRequeueEntry, isRequeueableStatus, requeueCandidates } from "@/lib/storymap/runner/requeue";
@@ -4845,6 +4847,59 @@ export async function engageCapacityLatchAction(input: { level: LatchLevel; reas
   } catch (e) {
     return fail(e);
   }
+}
+
+// ── A EXECUÇÃO APROVADA — as decisões do dono sobre um comando travado ─────────────────────────────────────
+
+/**
+ * As decisões do DONO sobre um comando travado que um agente propôs (propose_locked_command): aprovar (o pedido EXATO
+ * que ele viu, pelo hash), recusar, desfazer um que deu certo, manter, e dar «Ok» num desfecho. O guard comum deixa
+ * passar os três chamadores legítimos; aqui a régua é a do serviço (`mayDecideLockedExec`): só o operador com sessão —
+ * um agente pelo MCP (mesmo com o token `full`) e o próprio serviço são RECUSADOS. A execução nunca prende a action:
+ * aprovado, o serviço roda em segundo plano e o Inbox mostra o desfecho.
+ */
+async function lockedExecDecision(
+  boardId: string,
+  run: (caller: string | null) => Promise<{ ok: true; value: LockedExecRecord } | { ok: false; why: string }>,
+): Promise<Result<{ status: string }>> {
+  try {
+    const caller = await resolveActionCaller();
+    const r = await run(caller);
+    if (!r.ok) return { ok: false, error: r.why };
+    revalidateBoard(boardId);
+    return { ok: true, data: { status: r.value.status } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+export async function approveLockedCommandAction(input: { boardId: string; id: string; hash: string }): Promise<Result<{ status: string }>> {
+  await requireSession("approveLockedCommandAction");
+  return lockedExecDecision(input.boardId, (caller) =>
+    getLockedExecService().approve({ id: String(input?.id ?? ""), hash: String(input?.hash ?? ""), caller, via: "inbox" }),
+  );
+}
+
+export async function rejectLockedCommandAction(input: { boardId: string; id: string; reason?: string | null }): Promise<Result<{ status: string }>> {
+  await requireSession("rejectLockedCommandAction");
+  return lockedExecDecision(input.boardId, (caller) =>
+    getLockedExecService().reject({ id: String(input?.id ?? ""), caller, reason: input?.reason ?? null }),
+  );
+}
+
+export async function undoLockedCommandAction(input: { boardId: string; id: string }): Promise<Result<{ status: string }>> {
+  await requireSession("undoLockedCommandAction");
+  return lockedExecDecision(input.boardId, (caller) => getLockedExecService().undo({ id: String(input?.id ?? ""), caller }));
+}
+
+export async function keepLockedCommandAction(input: { boardId: string; id: string }): Promise<Result<{ status: string }>> {
+  await requireSession("keepLockedCommandAction");
+  return lockedExecDecision(input.boardId, (caller) => getLockedExecService().keep({ id: String(input?.id ?? ""), caller }));
+}
+
+export async function ackLockedCommandAction(input: { boardId: string; id: string }): Promise<Result<{ status: string }>> {
+  await requireSession("ackLockedCommandAction");
+  return lockedExecDecision(input.boardId, (caller) => getLockedExecService().ack({ id: String(input?.id ?? ""), caller }));
 }
 
 /**

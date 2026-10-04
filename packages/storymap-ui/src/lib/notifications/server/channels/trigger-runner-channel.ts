@@ -134,6 +134,13 @@ export function createTriggerRunnerChannel(): NotificationChannel {
     // propósito — é justamente o deploy SEM card que o caminho antigo ignorava.
     if (ev.ok) {
       void (async () => {
+        // story-ex9601: o deploy LIMPO do pacote (saída 0, e não o «~0s sem trabalho» que o revert trata como falha) fecha
+        // as causas do plano dele no livro ANTES da reconciliação — que então leva por evidência quem esperava em «Liberar».
+        const { deploySettledWithoutWork } = await import("@/lib/storymap/runner/product-deploy");
+        if (!deploySettledWithoutWork(ev)) {
+          const { closeCausesAfterCleanDeploy, defaultCleanDeployCloseDeps } = await import("@/lib/storymap/runner/deploy-blocks");
+          await closeCausesAfterCleanDeploy(ev.pkg, await defaultCleanDeployCloseDeps());
+        }
         const { reconcileBoardDeployFailures } = await import("@/lib/storymap/runner/deploy-reconcile");
         const { listBoards } = await import("@/lib/storymap/repo");
         for (const b of await listBoards()) await reconcileBoardDeployFailures(b.id);

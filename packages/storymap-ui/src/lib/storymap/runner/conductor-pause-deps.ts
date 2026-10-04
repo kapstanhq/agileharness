@@ -41,11 +41,11 @@ function paneDeps() {
 }
 
 /** Uma resposta foi gravada no card: entrega ao condutor vivo, ou retoma o card estacionado na frente da fila. */
-export async function wakeConductorNow(board: string, cardId: string, questionIds: readonly string[], by: WakeBy): Promise<WakeOutcome> {
+export async function wakeConductorNow(board: string, cardId: string, questionIds: readonly string[], by: WakeBy, line?: string): Promise<WakeOutcome> {
   const { base, pane } = paneDeps();
   const out = await wakeConductor(
     { ...pane, admitResume: (b, c) => admitConductorCard(base, b, c, { resume: true }) },
-    { board, cardId, questionIds, by },
+    { board, cardId, questionIds, by, ...(line ? { line } : {}) },
   );
   // a retomada não espera o próximo tick da frota (até 60 s) para tentar a vaga
   if (out === "resumed") void pumpConductorsNow().catch(() => {});

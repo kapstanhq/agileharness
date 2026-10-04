@@ -3105,13 +3105,16 @@ export interface RunnerSettings {
      *     `transportRetries` vezes por hora; depois, estaciona (sem isso, ficava parado até alguém digitar);
      *   • `nudgeAfterMinutes` — quieto há isto, sem espera declarada, com fila esperando vaga: UM lembrete; quieto mais
      *     `afterMinutes` depois dele: o pedido de estacionar.
-     * Ausente ⇒ 3 / 2 / 10.
+     *   • `declaredAfterMinutes` (story-ex9602) — a espera DECLARADA sem prazo segura a vaga, com fila esperando, no
+     *     máximo isto quieta; depois, o pedido de estacionar que a transforma numa pergunta do dono no card.
+     * Ausente ⇒ 3 / 2 / 10 / 30.
      */
     park: {
       afterMinutes: number;
       nudgeAfterMinutes: number;
       transportRetryAfterMinutes: number;
       transportRetries: number;
+      declaredAfterMinutes: number;
     };
     /**
      * O AUMENTO DO TETO de gasto de IA de um card que o sistema aprova SOZINHO (runner/card-budget.ts): até `maxPct` acima de `cardBudgetUSD`, uma vez por card, e só com a cota do Claude no ritmo

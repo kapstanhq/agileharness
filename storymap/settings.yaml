@@ -304,7 +304,7 @@ mcpTokens:
 #   weekly-summary (o resumo da semana, segunda às 9h no fuso de governor.timezone — o único que não é crítico)
 # notifications:
 #   push:
-#     critical: [capacity-latch, capacity-extra-usage, capacity-meter-stale, deploy-rollback, critical-signal, weekly-summary]
+#     critical: [capacity-latch, capacity-extra-usage, capacity-meter-stale, deploy-rollback, critical-signal, weekly-summary, locked-exec-failed]
 #
 
 # Publicação — o canário de FIDELIDADE que roda depois de um deploy de rosto bem-sucedido:

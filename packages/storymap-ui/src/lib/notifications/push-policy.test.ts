@@ -42,6 +42,7 @@ const EXPECTED: Record<PushEventKind, { push: boolean; slack: boolean }> = {
   "terminal-waiting": { push: false, slack: false }, // terminal no prompt — tela aberta
   "terminal-quiet": { push: true, slack: false }, // SÓ existe quando o operador armou o sininho: é o pedido dele
   "weekly-summary": { push: true, slack: true }, // o resumo de segunda — o único não-crítico
+  "locked-exec-failed": { push: true, slack: true }, // o comando travado que o DONO aprovou deu errado ou foi desfeito
 };
 
 describe("a política padrão, fato a fato (exaustiva)", () => {
@@ -58,13 +59,14 @@ describe("a política padrão, fato a fato (exaustiva)", () => {
     },
   );
 
-  it("o padrão empurra o crítico — trava de cota (e a de uso pago), medidor parado, deploy revertido e sinais do board — e o resumo da semana", () => {
+  it("o padrão empurra o crítico — trava de cota (e a de uso pago), medidor parado, deploy revertido, sinais do board, comando aprovado que deu errado — e o resumo da semana", () => {
     expect([...DEFAULT_CRITICAL_PUSH].sort()).toEqual([
       "capacity-extra-usage",
       "capacity-latch",
       "capacity-meter-stale",
       "critical-signal",
       "deploy-rollback",
+      "locked-exec-failed",
       "weekly-summary",
     ]);
   });
@@ -160,6 +162,7 @@ describe("coerência: o que empurra também toca na tela aberta, em todo modo", 
     "terminal-waiting": ["terminal-waiting"],
     "terminal-quiet": ["terminal-quiet"],
     "weekly-summary": ["weekly-summary"],
+    "locked-exec": ["locked-exec-failed"],
   };
 
   it("todo kind de aviso tem seus fatos mapeados", () => {
@@ -177,8 +180,8 @@ describe("coerência: o que empurra também toca na tela aberta, em todo modo", 
     expect(alertAllowed("autonomo", "weekly-summary")).toBe(false);
   });
 
-  it("os kinds que carregam fato crítico são exatamente estes três", () => {
-    expect(carriesCritical.map(([k]) => k).sort()).toEqual(["capacity-critical", "critical-signal", "deploy-failed"]);
+  it("os kinds que carregam fato crítico são exatamente estes quatro", () => {
+    expect(carriesCritical.map(([k]) => k).sort()).toEqual(["capacity-critical", "critical-signal", "deploy-failed", "locked-exec"]);
   });
 
   it.each(carriesCritical)("%s: bloqueante e permitido em todo modo", (kind) => {

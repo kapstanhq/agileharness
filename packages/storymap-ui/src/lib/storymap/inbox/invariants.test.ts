@@ -38,7 +38,8 @@ const VARIANTS: Array<{ name: string; item: CockpitItem; card: Card }> = [
 
 /** Os pontos de parada ESTRUTURAIS — o dono decide por eles sem classe nomeada (decision-class.ts, o invariante do WP1):
  *  a captura dele, a pergunta que o autor/o procurador/o [humano] pôs com ele, a tela que ele pediu, a trava do núcleo. */
-const STRUCTURAL: ReadonlySet<CockpitItemKind> = new Set(["proposal", "question", "design", "approval"]);
+// `locked-exec`: um comando que a trava proíbe a agentes só roda com o clique do dono — estrutural, em qualquer modo.
+const STRUCTURAL: ReadonlySet<CockpitItemKind> = new Set(["proposal", "question", "design", "approval", "locked-exec"]);
 
 describe("P1 — Decidir ⇒ ao menos uma opção que MUDA o desfecho (conversa, leitura e passo a passo não contam)", () => {
   it.each(MODES)("modo %s", (_m, config) => {

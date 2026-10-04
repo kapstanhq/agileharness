@@ -119,7 +119,13 @@ export type AgentAlertKind =
    * o link para /semana. O único aviso que não é crítico — e sai uma vez por semana. Produtor:
    * runner/weekly-summary-push (o tick da frota).
    */
-  | "weekly-summary";
+  | "weekly-summary"
+  /**
+   * um comando TRAVADO que o dono aprovou no Inbox deu errado: falhou, foi desfeito (sozinho, porque a conferência
+   * falhou), ou não pôde rodar (a situação mudou, o prazo de 15 min passou). Produtor: runner/locked-exec-service, uma
+   * vez por desfecho. O sucesso não avisa (fica no Inbox).
+   */
+  | "locked-exec";
 
 /**
  * O quanto isto pode interromper. É o eixo que a política por modo do Jido lê (copilot/alert-policy):
@@ -141,6 +147,7 @@ export const ALERT_URGENCY: Record<AgentAlertKind, AlertUrgency> = {
   "deploy-failed": "blocking", // o trabalho aprovado não está no ar até alguém resolver a causa e republicar
   "critical-signal": "blocking", // o board declarou este sinal crítico — é o que ele existe para dizer
   "weekly-summary": "pending", // um resumo: nada trava, nada espera por ele
+  "locked-exec": "blocking", // o que o dono mandou rodar não ficou como devia — ele precisa saber
 };
 
 export interface AgentAlert {

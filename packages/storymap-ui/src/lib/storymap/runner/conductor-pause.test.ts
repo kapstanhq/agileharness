@@ -8,6 +8,8 @@ import type { BoardConfig, Card } from "@/lib/storymap/types";
 import { compareConductorQueue, admitConductorCard, memoryConductorQueueStore, type ConductorDeps } from "./conductor";
 import {
   CHILD_WORK_WINDOW_FACTOR,
+  DECLARED_PARK_LINE,
+  ladderLine,
   DEFAULT_PARK_SETTINGS,
   ladderGraceMs,
   NUDGE_LINE,
@@ -278,7 +280,8 @@ describe("quietLadderStep — a escada (pura)", () => {
   it("sem fila, com pausa declarada, com prompt desenhado, trabalhando (quietForMs null) ou já pedido ⇒ nada", () => {
     const long = 60 * MIN;
     expect(quietLadderStep(f({ quietForMs: long, slotWaiters: 0 }), undefined, S, NOW)).toEqual({ kind: "none" });
-    expect(quietLadderStep(f({ quietForMs: long, slotWaiters: 2, declaredWaiting: true }), undefined, S, NOW)).toEqual({ kind: "none" });
+    // a pausa declarada segura a vaga enquanto dentro do prazo dela (story-ex9602 — o caso de mais de 30 min está abaixo)
+    expect(quietLadderStep(f({ quietForMs: 20 * MIN, slotWaiters: 2, declaredWaiting: true }), undefined, S, NOW)).toEqual({ kind: "none" });
     expect(quietLadderStep(f({ quietForMs: long, slotWaiters: 2, asking: true }), undefined, S, NOW)).toEqual({ kind: "none" });
     expect(quietLadderStep(f({ quietForMs: null, slotWaiters: 2, transportError: "API Error" }), undefined, S, NOW)).toEqual({ kind: "none" });
     expect(quietLadderStep(f({ quietForMs: long, slotWaiters: 2 }), memo({ askedAt: NOW - MIN }), S, NOW)).toEqual({ kind: "none" });
@@ -297,6 +300,32 @@ describe("quietLadderStep — a escada (pura)", () => {
     expect(quietLadderStep(busy(60), memo({ nudgedAt: NOW - 15 * MIN }), S, NOW)).toEqual({ kind: "park", cause: "quiet" });
     // depois do lembrete, quieto de novo com o filho vivo: a janela vale de novo antes de estacionar
     expect(quietLadderStep(busy(12), memo({ nudgedAt: NOW - 15 * MIN }), S, NOW)).toEqual({ kind: "none" });
+  });
+
+  // story-ex9602 — a espera declarada (report_progress waiting) que fica parada no terminal: nenhum item no Inbox e a
+  // vaga presa enquanto há fila.
+  it("espera DECLARADA sem prazo, quieta além de declaredAfterMinutes com fila ⇒ estacionar «declared»; sem fila, nada", () => {
+    const declared = (min: number, over: Partial<QuietLadderFacts> = {}) => f({ quietForMs: min * MIN, slotWaiters: 1, declaredWaiting: true, ...over });
+    expect(quietLadderStep(declared(S.declaredAfterMinutes - 1), undefined, S, NOW)).toEqual({ kind: "none" });
+    expect(quietLadderStep(declared(S.declaredAfterMinutes), undefined, S, NOW)).toEqual({ kind: "park", cause: "declared" });
+    expect(quietLadderStep(declared(120, { slotWaiters: 0 }), undefined, S, NOW)).toEqual({ kind: "none" });
+    // nunca o lembrete: a espera foi declarada — o próximo degrau é estacionar
+    expect(quietLadderStep(declared(S.declaredAfterMinutes), memo({ nudgedAt: NOW - MIN }), S, NOW)).toEqual({ kind: "park", cause: "declared" });
+  });
+
+  it("espera declarada COM prazo no futuro é respeitada até o prazo; vencido, segue a régua", () => {
+    const withUntil = (until: number) => f({ quietForMs: 90 * MIN, slotWaiters: 2, declaredWaiting: true, declaredUntilMs: until });
+    expect(quietLadderStep(withUntil(NOW + 5 * MIN), undefined, S, NOW)).toEqual({ kind: "none" });
+    expect(quietLadderStep(withUntil(NOW - MIN), undefined, S, NOW)).toEqual({ kind: "park", cause: "declared" });
+  });
+
+  it("a linha do estacionar declarado manda transformar a espera numa pergunta do dono e não carrega texto de quem chamou", () => {
+    const line = ladderLine({ kind: "park", cause: "declared" });
+    expect(line).toBe(DECLARED_PARK_LINE);
+    expect(line).toContain("ask_question");
+    expect(line).toContain("[humano]");
+    expect(line).toContain("worktree_discard");
+    expect(line).not.toContain("${");
   });
 
   it("filho vivo NÃO segura o estacionar por espera do dono (como antes do F2) nem a retomada de um turno cortado", () => {
@@ -422,6 +451,33 @@ describe("parkWaitingConductors — a escada no passe do tick (sem tocar sessão
     owner.sessions.length = 0;
     await parkWaitingConductors(owner.deps);
     expect(owner.requeued).toEqual([]);
+  });
+
+  // story-ex9602 — de ponta a ponta: espera declarada sem pergunta do dono, a vaga presa com fila. O passe pede para estacionar com a linha que manda virar pergunta do dono; se o condutor a fez,
+  // o card volta pelo acordar (a resposta); se não fez, volta à fila CEDENDO a vez (nunca na frente — senão re-segura a vaga).
+  it("espera declarada longa com fila ⇒ estacionar «declared»; virou pergunta do dono ⇒ volta pelo acordar; não virou ⇒ fila, cedendo a vez", async () => {
+    const card = cardOf("desenvolver");
+    const w = ladderWorld({ card, quietMin: () => DEFAULT_PARK_SETTINGS.declaredAfterMinutes, waiters: 1 });
+    w.sessions[0] = { ...w.sessions[0], progress: { phase: "moldar", at: "2026-10-01T19:00:00Z", phaseSince: "2026-10-01T19:00:00Z", waiting: "o operador renovar uma credencial no painel do provedor" } };
+    expect((await parkWaitingConductors(w.deps)).asked).toMatchObject([{ cause: "declared" }]);
+    expect(w.delivered).toEqual([DECLARED_PARK_LINE]);
+    expect(w.decisions.map((d) => d.kind)).toEqual(["conductor-park"]);
+    expect(w.decisions[0].why).toMatch(/pergunta sua no card/);
+
+    // o condutor transformou a espera numa pergunta do dono e saiu: não volta à fila — volta quando o dono responder
+    const asked = cardOf("desenvolver", [q("q1", "owner")]);
+    w.deps.readCard = async () => asked;
+    w.sessions.length = 0;
+    await parkWaitingConductors(w.deps);
+    expect(w.requeued).toEqual([]);
+
+    // outro condutor, que estacionou SEM fazer a pergunta: volta à fila cedendo a vez
+    const bare = ladderWorld({ card: cardOf("desenvolver"), quietMin: () => DEFAULT_PARK_SETTINGS.declaredAfterMinutes, waiters: 1 });
+    bare.sessions[0] = { ...bare.sessions[0], progress: { phase: "construir", at: "2026-10-01T19:00:00Z", phaseSince: "2026-10-01T19:00:00Z", waiting: "algo" } };
+    await parkWaitingConductors(bare.deps);
+    bare.sessions.length = 0;
+    await parkWaitingConductors(bare.deps);
+    expect(bare.requeued).toEqual([["b", "story-x", "yield"]]);
   });
 
   it("o processo esquecido (filho vivo há 1 h, transcript parado há 1 h) não segura a vaga: com fila, o lembrete sai", async () => {

@@ -2,8 +2,8 @@
 // implementação: cada caso é uma forma em que uma credencial entra no repositório e passava batido.
 //
 // Por que este arquivo mora aqui e não ao lado do script: `scan-secrets.mjs` é um script de raiz, e a
-// ÚNICA suíte que o cobre é a do storymap-ui (`vitest.config.ts` inclui só `src/**/*.test.ts`). Um teste
-// em `scripts/git-hooks/__tests__/` não seria executado por nenhum gate — logo não provaria nada.
+// ÚNICA suíte que o cobre é a do storymap-ui (`vitest.config.ts` inclui só `src/**/*.test.ts`). Posto ao lado
+// do script, nenhum gate o rodaria — e um teste que nunca roda não prova nada.
 //
 // As DUAS cegueiras medidas no card:
 //   Forma 1 — `PREFIXO_API_KEY`: o `\b` da regra de keyword nunca casa depois de `_`, então

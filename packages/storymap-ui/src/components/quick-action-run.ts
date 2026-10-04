@@ -7,6 +7,11 @@
 // e abrir o status da publicação são gestos de tela — quem desenha o botão os trata.
 
 import {
+  ackLockedCommandAction,
+  approveLockedCommandAction,
+  keepLockedCommandAction,
+  rejectLockedCommandAction,
+  undoLockedCommandAction,
   acceptProposalAction,
   acceptTriageCardAction,
   answerQuestionAction,
@@ -88,6 +93,11 @@ export const TOOL_OF: Record<OptionInvoke["kind"], string> = {
   "show-publish-status": "getPublishStatusAction",
   "authorize-publish": "authorizePublishAction",
   "fix-finding": "fixFindingAction",
+  "approve-locked-exec": "approveLockedCommandAction",
+  "reject-locked-exec": "rejectLockedCommandAction",
+  "undo-locked-exec": "undoLockedCommandAction",
+  "keep-locked-exec": "keepLockedCommandAction",
+  "ack-locked-exec": "ackLockedCommandAction",
   howto: "howto",
 };
 
@@ -168,6 +178,16 @@ export async function runServerInvoke(invoke: ServerInvoke, payload: InvokePaylo
         return await fixFindingAction({ boardId: invoke.boardId, cardId: invoke.cardId, findingId: invoke.findingId });
       case "authorize-publish":
         return await authorizePublishAction({ boardId: invoke.boardId, causeKey: invoke.causeKey });
+      case "approve-locked-exec":
+        return await approveLockedCommandAction({ boardId: invoke.boardId, id: invoke.id, hash: invoke.hash });
+      case "reject-locked-exec":
+        return await rejectLockedCommandAction({ boardId: invoke.boardId, id: invoke.id, reason: payload.note?.trim() || null });
+      case "undo-locked-exec":
+        return await undoLockedCommandAction({ boardId: invoke.boardId, id: invoke.id });
+      case "keep-locked-exec":
+        return await keepLockedCommandAction({ boardId: invoke.boardId, id: invoke.id });
+      case "ack-locked-exec":
+        return await ackLockedCommandAction({ boardId: invoke.boardId, id: invoke.id });
       case "undo-system-decision":
         return await undoSystemDecisionAction({ boardId: invoke.boardId, decisionId: invoke.decisionId, note: payload.note?.trim() || null });
       default: {

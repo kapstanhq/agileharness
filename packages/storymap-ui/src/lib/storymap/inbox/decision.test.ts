@@ -100,10 +100,10 @@ describe("quem decide — Decidir é só do dono; o técnico vai para Acompanhar
     expect(acompanhar).toEqual(["delivery-audit", "finding", "meter-stalled", "proxy-audit", "stalled"]);
   });
 
-  it("só-negócio: PRD, dados de pessoas e a captura do dono ficam em Decidir; o técnico sai", () => {
+  it("só-negócio: PRD, dados de pessoas, a captura do dono e o comando travado ficam em Decidir; o técnico sai", () => {
     const decidir = KINDS.filter((k) => decide(k, ULTRA).bucket === "decidir").sort();
     // a pergunta do fixture não tem categoria: fica com o dono até ser classificada (fail-closed, questionVerdict)
-    expect(decidir).toEqual(["data-deletion", "governance", "proposal", "question"]);
+    expect(decidir).toEqual(["data-deletion", "governance", "locked-exec", "proposal", "question"]);
     const technical = decideItem({ ...FIXTURES.question.item, category: "technical" } as CockpitItem, ctx(ULTRA, FIXTURES.question.card));
     expect(technical.bucket).toBe("acompanhar");
   });
@@ -588,6 +588,11 @@ describe("F6 — toda opção com pré-condição avaliável no cliente aparece 
     "show-publish-status": { serverStateOnly: "só leitura — não muda nada" },
     "fix-finding": { serverStateOnly: "o item do aviso só existe enquanto o aviso está aberto; a recusa por aviso já tratado é coberta no teste do item do dono" },
     "authorize-publish": { serverStateOnly: "o pedido de autorização mora no livro de causas do servidor; a opção só existe enquanto o plano o pede" },
+    "approve-locked-exec": { serverStateOnly: "a recusa é do serviço: pedido já decidido, hash que mudou, ou chamador que não é o dono na sessão dele" },
+    "reject-locked-exec": { serverStateOnly: "recusa só o pedido já decidido (estado do serviço)" },
+    "undo-locked-exec": { serverStateOnly: "o desfazer só é oferecido para o comando que deu certo e tem desfazer; o resto é estado do serviço" },
+    "keep-locked-exec": { serverStateOnly: "só é oferecido para o comando que deu certo (estado do serviço)" },
+    "ack-locked-exec": { serverStateOnly: "só é oferecido para um desfecho final (estado do serviço)" },
     howto: { serverStateOnly: "passo a passo na tela — não chama ação de servidor" },
     link: { serverStateOnly: "navegação — não chama ação de servidor" },
     escalate: { serverStateOnly: "navegação — abre o Jido, não chama ação de servidor" },

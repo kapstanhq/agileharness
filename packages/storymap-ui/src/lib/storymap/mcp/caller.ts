@@ -89,7 +89,8 @@ export function callerWords(attribution: string | null | undefined): string | nu
   if (!id) return null;
   if (kind === "copilot") return "O Jido";
   if (kind === "conductor") return `O condutor do card ${id}`;
-  if (kind === "session") return `Uma sessão de agente (${id})`;
+  // o id cru da sessão (um uuid que a ferramenta cunhou) não diz nada a quem lê: só «uma sessão de trabalho»
+  if (kind === "session") return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ? "Uma sessão de trabalho" : `Uma sessão de agente (${id})`;
   if (kind === "external") return `Um agente de fora (${id})`;
   return null;
 }

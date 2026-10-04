@@ -349,6 +349,8 @@ export const KIND_CONTRACT: { [K in CockpitItemKind]: KindContract<K> } = {
   "data-deletion": { causeKey: byCard, alive: always },
   "effect-failed": { causeKey: byCard, alive: always },
   stalled: { causeKey: byCard, alive: always },
+  // cada pedido de comando travado é a causa dele mesmo: dois pedidos do mesmo card são duas decisões (dois comandos)
+  "locked-exec": { causeKey: (item) => `item:${item.id}`, alive: always },
 };
 
 /** A chave da causa de um item (o contrato do kind dele). PURA. */

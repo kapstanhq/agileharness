@@ -56,7 +56,9 @@ export type PushEventKind =
   /** um terminal cujo sininho o operador armou ficou quieto. lib/terminal/attention-watch. */
   | "terminal-quiet"
   /** o resumo da semana, segunda às 9h no fuso do dono. runner/weekly-summary-push. */
-  | "weekly-summary";
+  | "weekly-summary"
+  /** um comando travado que o DONO aprovou falhou, foi desfeito ou não rodou. runner/locked-exec-notify. */
+  | "locked-exec-failed";
 
 /**
  * O padrão, fato a fato — exaustivo por construção (`Record<PushEventKind, …>`). `true` = empurra.
@@ -92,6 +94,9 @@ export const PUSH_EVENT_DEFAULTS: Record<PushEventKind, boolean> = {
   // da semana com o link. É também o lembrete das decisões dele que seguem esperando (elas nunca vencem, e nada
   // mais insiste por push).
   "weekly-summary": true,
+  // decisão do dono (execução aprovada): o celular só toca quando o comando que ele aprovou deu errado — o sucesso
+  // fica no Inbox.
+  "locked-exec-failed": true,
 };
 
 /** Todo fato que existe — derivado da tabela, para nenhuma lista paralela envelhecer sozinha. */

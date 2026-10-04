@@ -57,6 +57,8 @@ export function InboxBody({
       return item.resolutionAnalysis ? <ResolutionAnalysisPanel analysis={item.resolutionAnalysis} /> : null;
     case "approval":
       return item.args ? <ApprovalArgs item={item} /> : null;
+    case "locked-exec":
+      return <LockedExecBody item={item} />;
     default:
       return null;
   }
@@ -321,6 +323,75 @@ function ApprovalArgs({ item }: { item: Extract<CockpitItem, { kind: "approval" 
       <summary className="flex min-h-11 cursor-pointer items-center text-[12.5px] font-semibold text-fg-subtle">O que exatamente foi pedido</summary>
       <pre className="mt-1 max-h-48 overflow-auto font-mono text-[11.5px] leading-snug text-fg-muted">{prettyCanonicalArgs(item.args ?? "")}</pre>
     </details>
+  );
+}
+
+// ── execução aprovada: o comando exato, o desfazer e as conferências ─────────────────────────────────
+
+/**
+ * O que o dono precisa VER antes de aprovar um comando travado — e depois, o que aconteceu. O comando aparece EXATO (a
+ * linha que a trava julgou e que o servidor roda), sem quebrar e sem nada para copiar: ninguém cola nada no terminal.
+ */
+function LockedExecBody({ item }: { item: Extract<CockpitItem, { kind: "locked-exec" }> }) {
+  const mono = "mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded border border-line bg-surface px-2 py-1.5 font-mono text-[11.5px] leading-snug text-fg";
+  const check = (c: (typeof item.verify)[number], key: string) => (
+    <li key={key} className="text-[12.5px] text-fg">
+      {c.label} <span className="break-all font-mono text-[11px] text-fg-muted">({c.command})</span>
+      <span className="block text-[11.5px] text-fg-subtle">{c.criterion}</span>
+    </li>
+  );
+  return (
+    <div className="space-y-2">
+      {/* o BLOCO ESTRUTURADO primeiro: o que roda de fato, o desfazer, as conferências com o critério */}
+      <div className="rounded-lg border border-line bg-inset px-3 py-2">
+        <p className="text-[12.5px] font-semibold text-fg-subtle">O que o servidor roda</p>
+        <p className="mt-1 break-all font-mono text-[11px] text-fg-muted">Programa: {item.program}</p>
+        <pre className={mono}>{item.command}</pre>
+        {item.undoCommand ? (
+          <>
+            <p className="mt-2 text-[12.5px] font-semibold text-fg-subtle">Como desfazer</p>
+            <p className="mt-1 break-all font-mono text-[11px] text-fg-muted">Programa: {item.undoProgram ?? "?"}</p>
+            <pre className={mono}>{item.undoCommand}</pre>
+          </>
+        ) : (
+          <p className="mt-2 rounded bg-rose-500/10 px-2 py-1.5 text-[12.5px] font-semibold text-rose-700 dark:text-rose-300">
+            Sem desfazer. Plano B: {item.noUndoPlan ?? "—"}
+          </p>
+        )}
+        {item.preflight.length > 0 && (
+          <>
+            <p className="mt-2 text-[12.5px] font-semibold text-fg-subtle">Antes de rodar, o servidor confere</p>
+            <ul className="mt-1 space-y-1">{item.preflight.map((c, i) => check(c, `p${i}`))}</ul>
+          </>
+        )}
+        <p className="mt-2 text-[12.5px] font-semibold text-fg-subtle">Depois de rodar, o servidor confere</p>
+        <ul className="mt-1 space-y-1">{item.verify.map((c, i) => check(c, `v${i}`))}</ul>
+        <p className="mt-2 text-[11.5px] text-fg-subtle">Conferências: só comandos que o servidor liberou para conferir.</p>
+      </div>
+      {/* as palavras do agente por último, rotuladas: elas explicam, não descrevem o que roda */}
+      <div className="rounded-lg border border-dashed border-line px-3 py-2">
+        <p className="text-[12.5px] font-semibold text-fg-subtle">Explicação do agente</p>
+        <p className="mt-1 whitespace-pre-line break-words text-[12.5px] text-fg">{item.summary}</p>
+        {item.why && <p className="mt-1 whitespace-pre-line break-words text-[12px] text-fg-muted">Por que agora: {item.why}</p>}
+      </div>
+      {item.steps.length > 0 && (
+        <details className="rounded-lg border border-line bg-inset px-3 py-2" open={item.execStatus !== "done"}>
+          <summary className="flex min-h-11 cursor-pointer items-center text-[12.5px] font-semibold text-fg-subtle">O que aconteceu, passo a passo</summary>
+          <ul className="mt-1 space-y-1.5">
+            {item.steps.map((st, i) => (
+              <li key={`${st.step}:${i}`} className="rounded border border-line bg-surface p-1.5">
+                <span className={cn("rounded px-1.5 py-0.5 text-[10.5px] font-bold uppercase tracking-wide", st.ok ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : "bg-rose-500/10 text-rose-700 dark:text-rose-300")}>
+                  {st.ok ? "ok" : "falhou"}
+                </span>{" "}
+                <span className="font-mono text-[11px] text-fg-muted">{st.step}</span>
+                {st.error && <p className="mt-1 text-[12px] text-fg">{st.error}</p>}
+                {st.output && <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-all font-mono text-[10.5px] text-fg-muted">{st.output}</pre>}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
   );
 }
 

@@ -69,7 +69,7 @@ const fileSettings = (): RunnerSettings => ({
     // DIFFERENT from the default (4) so "env wins over file" is observable for the session cap too.
     sessions: { maxWorktrees: 6 },
     stall: { afterMinutes: 15, retries: 1 },
-    park: { afterMinutes: 10, nudgeAfterMinutes: 10, transportRetryAfterMinutes: 3, transportRetries: 2 },
+    park: { afterMinutes: 10, nudgeAfterMinutes: 10, transportRetryAfterMinutes: 3, transportRetries: 2, declaredAfterMinutes: 30 },
     budgetRaise: { maxPct: 30, fiveHourMaxPct: 70 },
     extraSlot: { max: 1, loadPerCore: 0.5, ramFreeMb: 5000, fiveHourMaxPct: 60 },
   },
@@ -873,7 +873,7 @@ describe("coerceRunnerSettings — autorun.stall (o vigia de card parado)", () =
 describe("coerceRunnerSettings — autorun.park (estacionar o condutor que espera o dono)", () => {
   const park = (raw: unknown) => coerceRunnerSettings({ autorun: { park: raw } }).autorun.park;
   it("ausente ⇒ 10 minutos; o valor declarado chega ao motor; lixo cai no default", () => {
-    const d = { afterMinutes: 10, nudgeAfterMinutes: 10, transportRetryAfterMinutes: 3, transportRetries: 2 };
+    const d = { afterMinutes: 10, nudgeAfterMinutes: 10, transportRetryAfterMinutes: 3, transportRetries: 2, declaredAfterMinutes: 30 };
     expect(coerceRunnerSettings({}).autorun.park).toEqual(d);
     expect(park({ afterMinutes: 30 })).toEqual({ ...d, afterMinutes: 30 });
     expect(park({ afterMinutes: 0 })).toEqual(d);
@@ -886,6 +886,13 @@ describe("coerceRunnerSettings — autorun.park (estacionar o condutor que esper
     expect(park({ transportRetries: 0 }).transportRetries).toBe(0);
     expect(park({ transportRetries: 50 }).transportRetries).toBe(2);
     expect(park({ nudgeAfterMinutes: 0, transportRetryAfterMinutes: -3 })).toMatchObject({ nudgeAfterMinutes: 10, transportRetryAfterMinutes: 3 });
+  });
+
+  // story-ex9602: a espera declarada segura a vaga só por um tempo (com fila esperando).
+  it("declaredAfterMinutes: o valor declarado chega ao motor; 0 ou lixo cai no default (30)", () => {
+    expect(park({ declaredAfterMinutes: 45 }).declaredAfterMinutes).toBe(45);
+    expect(park({ declaredAfterMinutes: 0 }).declaredAfterMinutes).toBe(30);
+    expect(park({ declaredAfterMinutes: "meia hora" }).declaredAfterMinutes).toBe(30);
   });
 });
 

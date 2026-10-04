@@ -58,7 +58,7 @@ export function ConfirmDialog({
           )}
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold text-fg">{title}</p>
-            {description && <p className="mt-0.5 text-[12px] leading-snug text-fg-muted">{description}</p>}
+            {description && <p className="mt-0.5 max-h-[50vh] overflow-auto whitespace-pre-line break-words text-[12px] leading-snug text-fg-muted">{description}</p>}
           </div>
         </div>
 

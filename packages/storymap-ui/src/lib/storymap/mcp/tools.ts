@@ -13,7 +13,8 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { defineTool } from "./register";
-import { currentMcpActor, isScopedActor } from "./actor";
+import { currentMcpActor, isScopedActor, mcpActorAttribution } from "./actor";
+import { getLockedExecService } from "@/lib/storymap/runner/locked-exec-service";
 import { callerTag } from "./caller";
 import { effectiveScope, SCOPE_TYPE_ORDER, scopeCardOf, scopeTypesOf, storyTypeChangeLine, storyTypeChangeRefusal, type BoardPaceView, type ScopeCard } from "@/lib/storymap/runner/board-pace";
 import { boardPaceRow } from "@/lib/storymap/runner/board-pace-store";
@@ -2306,6 +2307,131 @@ export function registerStorymapTools(server: McpServer): void {
       } catch (e) {
         return fail(e instanceof Error ? e.message : String(e));
       }
+    },
+  );
+
+  // A EXECUÇÃO APROVADA — o agente PROPÕE um comando que a trava dura do host recusa a agentes; o DONO aprova no Inbox
+  // (clique + confirmação, na sessão dele); e o SERVIÇO roda uma vez, confere, e desfaz sozinho se a conferência falhar.
+  // Esta tool só propõe: não roda NADA (nem as conferências) e não aprova — aprovar é uma server action que exige o
+  // operador com sessão (locked-exec.ts mayDecideLockedExec). Nenhuma tool MCP chama approve/undo do serviço.
+  const lockedCheck = z.object({
+    label: z.string().min(1).max(160).describe("o que a conferência prova, em português curto, numa linha"),
+    argv: z.array(z.string()).min(1).max(64).describe("comando que o servidor liberou para conferir (a lista do host), sem shell"),
+    expectExit: z.number().int().min(0).max(255).optional().describe("código de saída esperado (padrão 0)"),
+    expectStdoutIncludes: z.string().min(1).max(200).optional().describe("trecho LITERAL que a saída padrão tem de conter"),
+  });
+  defineTool(server,
+    "propose_locked_command",
+    {
+      title: "Propor um comando travado para o dono aprovar (execução aprovada)",
+      description:
+        "Propõe ao DONO um comando que a trava dura do host recusa a agentes. Ele vê no " +
+        "Inbox o resumo, o comando exato, o desfazer e as conferências; se aprovar, o SERVIÇO roda o comando UMA vez " +
+        "(a autorização vale 15 minutos e é presa a este pedido exato), refaz o preflight, roda as conferências e, se " +
+        "alguma falhar, roda o desfazer sozinho. Só aceita o que a trava classifica como TRAVADO e APROVÁVEL — o que não " +
+        "é travado você roda; o que não é aprovável continua só do dono, no terminal. Antes de propor, confira a " +
+        "situação na sua jaula — nada que você manda roda antes do clique. " +
+        "preflight e verify: só comandos que o servidor liberou para conferir (prefixos declarados pelo host); verify é " +
+        "obrigatório. Nenhum argumento pode ter forma de caminho de arquivo (/…, ./…, ../…, ~…, @…, também depois de " +
+        "«--opção=»): o conteúdo do arquivo não estaria no que o dono aprova; os passos rodam num diretório vazio. " +
+        "Sem desfazer, mande " +
+        "noUndoPlan (o plano B em português). Todo argv vai SEM shell: nada de $(, crase, ; | & < >, quebra de linha, " +
+        "e o programa não pode ser interpretador nem invólucro (sh, python, node, env, sudo…) — use a CLI direto; " +
+        "caminho de programa só absoluto e fora do repositório. Texto (summary, rótulos) numa linha só. Até 2 pedidos " +
+        "pendentes por card e 10 por board; um agente escopado só propõe para o card que conduz. O mesmo pedido " +
+        "pendente volta o mesmo id. Se o card tem condutor, ele é acordado com o desfecho; senão consulte " +
+        "locked_command_status.",
+      inputSchema: {
+        board: z.string(),
+        cardId: z.string().describe("o card que pede (o item do Inbox mora nele)"),
+        summary: z.string().min(10).max(600).describe("o que acontece, em português simples, sem jargão — é o que o dono lê"),
+        why: z.string().max(1200).optional().describe("por que é preciso agora"),
+        argv: z.array(z.string()).min(1).max(64).describe("o comando EXATO, como argv (o serviço roda sem shell)"),
+        undoArgv: z.array(z.string()).min(1).max(64).nullable().describe("o comando que desfaz, ou null se não há volta"),
+        noUndoPlan: z.string().max(1200).optional().describe("obrigatório quando undoArgv é null: o plano B, em português"),
+        preflight: z.array(lockedCheck).max(5).optional().describe("conferências refeitas logo antes de rodar; falhou ⇒ não roda"),
+        verify: z.array(lockedCheck).min(1).max(5).describe("conferências depois de rodar; falhou ⇒ desfaz sozinho"),
+        timeoutSec: z.number().int().min(10).max(900).optional().describe("teto do comando e do desfazer (padrão 300)"),
+      },
+    },
+    async (args) => {
+      // um agente escopado só propõe para o card que ELE conduz: o card da sessão que se declarou no cabeçalho
+      const actor = currentMcpActor();
+      const scoped = isScopedActor();
+      let scopeCardId: string | null = null;
+      // quem pede, em palavras que o dono entende: o condutor do card, ou a sessão pela tarefa que ela declarou ao abrir
+      // (uma linha, sem controle/bidi, curta) — nunca o uuid cru (story-ex9603)
+      let facts: { driver?: string | null; cardId?: string | null; name?: string | null } | null = null;
+      if (actor?.caller?.kind === "session") {
+        try {
+          const { allSessions } = await import("@/lib/storymap/runner/session-worktree");
+          const s = (await allSessions()).find((x) => x.sessionId === actor.caller!.id);
+          if (scoped) scopeCardId = s?.cardId ?? null;
+          if (s) {
+            // eslint-disable-next-line no-control-regex
+            const task = String(s.task ?? "").replace(/[\u0000-\u001f\u007f‎‏‪-‮⁦-⁩]/g, " ").replace(/\s+/g, " ").trim();
+            facts = { driver: s.driver ?? null, cardId: s.cardId ?? null, name: task ? (task.length > 60 ? `${task.slice(0, 59)}…` : task) : null };
+          }
+        } catch {
+          scopeCardId = null;
+        }
+      }
+      const r = await getLockedExecService().propose(
+        {
+          board: args.board,
+          cardId: args.cardId,
+          summary: args.summary,
+          why: args.why ?? null,
+          argv: args.argv,
+          undoArgv: args.undoArgv,
+          noUndoPlan: args.noUndoPlan ?? null,
+          preflight: args.preflight ?? [],
+          verify: args.verify,
+          ...(args.timeoutSec !== undefined ? { timeoutSec: args.timeoutSec } : {}),
+        },
+        { by: mcpActorAttribution(actor, facts), scoped, scopeCardId },
+      );
+      if (!r.ok) return fail(r.why);
+      return json({
+        ok: true,
+        id: r.value.id,
+        status: r.value.status,
+        hash: r.value.hash,
+        programas: r.value.programs,
+        nota: "pedido no Inbox do dono — nada roda até ele aprovar; se o card tem condutor ele é acordado, senão consulte locked_command_status",
+      });
+    },
+  );
+
+  defineTool(server,
+    "locked_command_status",
+    {
+      title: "Ler o desfecho de um comando travado proposto",
+      description:
+        "Lê um pedido de execução aprovada (propose_locked_command): o estado (pending, approved, running, done, failed, " +
+        "undone, rejected, expired, stale, kept), o motivo quando falhou e, por passo, se passou e o código de saída. " +
+        "A SAÍDA dos comandos não volta por aqui (ela pode carregar credencial): o dono a vê no Inbox, redigida. Só leitura.",
+      inputSchema: { id: z.string().regex(/^lx-[0-9a-f]{10}$/) },
+    },
+    async ({ id }) => {
+      const r = await getLockedExecService().get(id);
+      if (!r) return fail(`pedido não encontrado: ${id}`);
+      return json({
+        id: r.id,
+        board: r.board,
+        cardId: r.cardId,
+        status: r.status,
+        summary: r.summary,
+        proposedAt: r.proposedAt,
+        ...(r.decidedAt ? { decidedAt: r.decidedAt } : {}),
+        ...(r.expiresAt ? { expiresAt: r.expiresAt } : {}),
+        ...(r.finishedAt ? { finishedAt: r.finishedAt } : {}),
+        ...(r.error ? { error: r.error } : {}),
+        ...(r.rejectReason ? { rejectReason: r.rejectReason } : {}),
+        ...(r.autoUndone ? { autoUndone: true } : {}),
+        // sem stdout/stderr: o que o comando imprimiu não volta ao agente (pode ser credencial)
+        results: r.results.map((x) => ({ step: x.step, ok: x.ok, exitCode: x.exitCode, ...(x.error ? { error: x.error.slice(0, 160) } : {}) })),
+      });
     },
   );
 

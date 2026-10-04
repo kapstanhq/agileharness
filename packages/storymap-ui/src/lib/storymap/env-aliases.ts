@@ -154,6 +154,13 @@ export const SUFIXOS_NATIVOS: readonly string[] = [
   "DEPLOY_RECIPES",
   "DEPLOY_RECIPE_RUNNERS",
   "DEV",
+  // a trava do host para a execução aprovada (runner/locked-exec-classifier.ts) — argv em JSON; SÓ do ambiente do host,
+  // nunca do settings.yaml (o agente edita dado de board). Nasceu AGILEHARNESS_, sem grafia legada.
+  "EXEC_CLASSIFIER",
+  // as conferências que o host libera para a execução aprovada (prefixos de argv, JSON) — SÓ do ambiente do host.
+  "EXEC_CHECK_PREFIXES",
+  // a configuração da trava da execução aprovada (caminho absoluto FORA do alvo) — SÓ do ambiente do host.
+  "EXEC_LOCK_CONFIG",
   // o governador de capacidade (runner/capacity-governor.ts + capacity-service.ts): o kill switch e o caminho
   // do HALT do host — nasceram AGILEHARNESS_, sem grafia legada.
   "GOVERNOR",

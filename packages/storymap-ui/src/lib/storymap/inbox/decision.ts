@@ -82,6 +82,13 @@ export type OptionInvoke =
   | { kind: "authorize-publish"; boardId: string; causeKey: string }
   // «Mandar corrigir» um aviso da revisão: cria o card de conserto e registra o aviso na origem (finding-fix.ts).
   | { kind: "fix-finding"; boardId: string; cardId: string; findingId: string }
+  // Execução aprovada (runner/locked-exec*): as decisões do dono sobre um comando travado. `hash` = o pedido exato que ele
+  // viu — o servidor recusa se ele mudou.
+  | { kind: "approve-locked-exec"; boardId: string; id: string; hash: string }
+  | { kind: "reject-locked-exec"; boardId: string; id: string }
+  | { kind: "undo-locked-exec"; boardId: string; id: string }
+  | { kind: "keep-locked-exec"; boardId: string; id: string }
+  | { kind: "ack-locked-exec"; boardId: string; id: string }
   | { kind: "howto"; title: string; steps: string[] };
 
 export type OptionInvokeKind = OptionInvoke["kind"];
@@ -1683,6 +1690,172 @@ const DECIDE: DecideMap = {
       ],
       dot: "red",
     };
+  },
+
+  "locked-exec": (item, c) => {
+    const who = approvalRequesterText(item.proposedBy);
+    // no meio da frase: «Rodar o comando que o condutor do card … pede» (nunca «que O condutor»)
+    const whoMid = who.charAt(0).toLowerCase() + who.slice(1);
+    // O BLOCO ESTRUTURADO vem antes das palavras do agente: o que roda (programa real + comando exato), como desfazer,
+    // e cada conferência com o critério. O texto do agente entra por último, rotulado — ele não forja a tela.
+    const checkLine = (v: (typeof item.verify)[number]) => `• ${v.label}: ${v.command} — ${v.criterion}`;
+    const structured = [
+      `Programa: ${item.program}`,
+      `Comando: ${item.command}`,
+      item.undoCommand ? `Para desfazer: ${item.undoCommand} (programa: ${item.undoProgram ?? "?"})` : `SEM DESFAZER — plano B: ${item.noUndoPlan ?? "—"}`,
+      ...(item.preflight.length ? ["Antes de rodar, confere:", ...item.preflight.map(checkLine)] : []),
+      "Depois de rodar, confere:",
+      ...item.verify.map(checkLine),
+      "Conferências: só comandos que o servidor liberou para conferir.",
+    ].join("\n");
+    const agentText = `Explicação do agente: ${item.summary}${item.why ? `\nPor que agora (agente): ${item.why}` : ""}`;
+    const details = [
+      { label: "Programa", value: item.program },
+      { label: "Comando", value: item.command },
+      item.undoCommand ? { label: "Desfazer", value: `${item.undoCommand} (programa: ${item.undoProgram ?? "?"})` } : { label: "Sem desfazer — plano B", value: item.noUndoPlan ?? "—" },
+      ...item.preflight.map((v) => ({ label: `Confere antes: ${v.label}`, value: `${v.command} — ${v.criterion}` })),
+      ...item.verify.map((v) => ({ label: `Confere depois: ${v.label}`, value: `${v.command} — ${v.criterion}` })),
+      { label: "Explicação do agente", value: item.summary },
+      ...(item.why ? [{ label: "Por que agora (agente)", value: item.why }] : []),
+      { label: "Quem pediu", value: item.proposedBy },
+      ...(item.lockRule ? [{ label: "Regra da trava", value: item.lockRule }] : []),
+      { label: "Tempo máximo", value: `${item.timeoutSec} s` },
+      ...item.steps.map((st) => ({
+        label: `Passo ${st.step}`,
+        value: `${st.ok ? "ok" : "falhou"}${st.exitCode !== null ? ` (saída ${st.exitCode})` : ""}${st.error ? ` — ${st.error}` : ""}${st.output ? `\n${st.output}` : ""}`,
+      })),
+      ...(item.error ? [{ label: "Motivo", value: item.error }] : []),
+      { label: "Pedido", value: item.lockedExecId },
+    ];
+    const ack: DecisionOption = {
+      id: "ack",
+      label: "Ok, entendi",
+      consequence: "Tira este aviso do Inbox. Não roda nada.",
+      tone: "neutral",
+      auditCls: "write-board",
+      invoke: { kind: "ack-locked-exec", boardId: item.boardId, id: item.lockedExecId },
+      done: "Aviso arquivado.",
+    };
+    switch (item.execStatus) {
+      case "pending":
+        return {
+          askVerb: "Rodar",
+          ask: clampAsk(`Rodar o comando que ${whoMid} pede em ${c.title}?`),
+          // só palavras do sistema aqui: o que o agente escreveu entra DEPOIS do bloco do que roda, rotulado (story-ex9603)
+          happened: `${capitalize(who)} pede para rodar ${item.program.split("/").pop() ?? item.program}, um comando que a trava do servidor proíbe a agentes. Abaixo, o que o servidor roda exatamente; a explicação do agente vem por último.`,
+          options: [
+            {
+              id: "approve",
+              label: item.undoCommand ? "Aprovar e rodar" : "Aprovar e rodar (sem desfazer)",
+              consequence: item.undoCommand
+                ? "O servidor roda este comando uma vez, nos próximos 15 minutos, confere e desfaz sozinho se a conferência falhar."
+                : "O servidor roda este comando uma vez, nos próximos 15 minutos, e confere. Não há como desfazer: se der errado, vale o plano B.",
+              tone: item.undoCommand ? "primary" : "danger",
+              confirm: {
+                title: item.undoCommand ? "Rodar este comando no servidor?" : "Rodar este comando no servidor? Não tem desfazer.",
+                body: `${structured}\n\n${agentText}`,
+              },
+              auditCls: "destructive",
+              invoke: { kind: "approve-locked-exec", boardId: item.boardId, id: item.lockedExecId, hash: item.hash },
+              done: "Aprovado — o servidor está rodando o comando; o resultado aparece aqui.",
+            },
+            {
+              id: "reject",
+              label: "Não rodar",
+              consequence: "Nada roda. O agente fica sabendo que você não aprovou.",
+              tone: "neutral",
+              auditCls: "write-board",
+              invoke: { kind: "reject-locked-exec", boardId: item.boardId, id: item.lockedExecId },
+              done: "Recusado — nada rodou.",
+            },
+          ],
+          ifIgnored: "Nada roda. O pedido espera aqui; o agente segue no que não depende dele.",
+          more: cardMore(item, null),
+          details,
+          dot: "red",
+        };
+      case "approved":
+      case "running":
+        return {
+          bucket: "acompanhar",
+          askVerb: null,
+          ask: item.undoing ? `Desfazendo o comando aprovado em ${c.title}` : `Rodando o comando que você aprovou em ${c.title}`,
+          happened: item.undoing ? "O servidor está rodando o comando de desfazer; o resultado aparece aqui." : "O servidor está rodando o comando que você aprovou e depois faz as conferências; o resultado aparece aqui.",
+          options: [],
+          ifIgnored: "O servidor termina sozinho; o resultado aparece aqui.",
+          next: { who: "sistema", label: item.undoing ? "O servidor está desfazendo" : "O servidor está rodando" },
+          more: cardMore(item, null),
+          details,
+          dot: "amber",
+        };
+      case "done":
+        return {
+          bucket: "acompanhar",
+          askVerb: null,
+          ask: `O comando que você aprovou em ${c.title} rodou e passou nas conferências`,
+          happened: item.undoCommand
+            ? "Rodou uma vez e passou em todas as conferências. Se mudar de ideia, «Desfazer» roda o comando de volta."
+            : "Rodou uma vez e passou em todas as conferências. Este comando não tem desfazer.",
+          options: [
+            {
+              id: "keep",
+              label: "Manter",
+              consequence: "Fica como está e o aviso sai do Inbox; o desfazer deixa de ser oferecido.",
+              tone: "primary",
+              auditCls: "write-board",
+              invoke: { kind: "keep-locked-exec", boardId: item.boardId, id: item.lockedExecId },
+              done: "Mantido.",
+            },
+            ...(item.undoCommand
+              ? [
+                  {
+                    id: "undo",
+                    label: "Desfazer",
+                    consequence: "O servidor roda o comando de desfazer uma vez.",
+                    tone: "danger" as const,
+                    confirm: { title: "Desfazer o comando?", body: `O servidor roda:\nPrograma: ${item.undoProgram ?? "?"}\nComando: ${item.undoCommand}` },
+                    auditCls: "destructive" as const,
+                    invoke: { kind: "undo-locked-exec" as const, boardId: item.boardId, id: item.lockedExecId },
+                    done: "Desfazendo — o resultado aparece aqui.",
+                  },
+                ]
+              : []),
+          ],
+          ifIgnored: "Fica como está.",
+          next: { who: "ninguem", label: "Pronto" },
+          more: cardMore(item, null),
+          details,
+          dot: "green",
+        };
+      default: {
+        const happenedByStatus: Record<string, string> = {
+          failed: `O comando aprovado falhou: ${item.error ?? "sem detalhe"}`,
+          undone: item.autoUndone ? `A conferência falhou e o comando foi desfeito sozinho. ${item.error ?? ""}`.trim() : "Você desfez o comando.",
+          stale: `Não rodou: ${item.error ?? "a situação mudou desde o pedido"}`,
+          expired: `Não rodou: ${item.error ?? "a autorização de 15 minutos passou"}`,
+          rejected: `Você não aprovou${item.rejectReason ? `: ${item.rejectReason}` : ""}. Nada rodou.`,
+        };
+        const bad = item.execStatus !== "rejected" && !(item.execStatus === "undone" && !item.autoUndone);
+        return {
+          bucket: "acompanhar",
+          askVerb: null,
+          ask: clampAsk(
+            item.execStatus === "rejected"
+              ? `Comando recusado em ${c.title}`
+              : item.execStatus === "undone"
+                ? `Comando desfeito em ${c.title}`
+                : `O comando aprovado em ${c.title} não ficou como devia`,
+          ),
+          happened: clip(happenedByStatus[item.execStatus] ?? item.error ?? "", 280),
+          options: [ack],
+          ifIgnored: "O aviso fica aqui até você dar «Ok».",
+          next: { who: bad ? "voce" : "ninguem", label: bad ? "Confira o estado" : "Encerrado" },
+          more: cardMore(item, null),
+          details,
+          dot: bad ? "red" : "grey",
+        };
+      }
+    }
   },
 };
 

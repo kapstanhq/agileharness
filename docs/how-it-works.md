@@ -514,6 +514,83 @@ impossible rather than merely discouraged. `liveShaCommand` goes through the sam
 other declared commands. The escape hatch is for humans only: `AGILEHARNESS_DEPLOY_FRESHNESS=off` in
 the service's environment. It is read on every deploy and logs a warning each time it's used.
 
+**What is already live leaves *Release* on its own.** The cascade moves on events, so a card that
+reached *Release* while publishing was held (the backoff, an owner cause, a paused board) gets no
+event when the hold clears. The deploy reconciliation, which runs on every pass of the fleet and
+after every package deploy that ends with exit 0, reads the world instead: a card waiting right
+before the publish step whose code is **proven** live (its main sha is contained in the last deploy
+of every target, the same ancestry rule the settle uses) crosses the publish step **without a new
+deploy**, and the evidence settle takes it to the terminal through the gated path. The owner's open
+decision on the card holds it (the same rule the cascade and `move_card` read); missing or unproven
+evidence holds it; a card without code moves only on a board that releases by itself; and a card
+whose terminal gate would refuse never leaves *Release*. The board's pace does not hold this:
+paused means "start nothing new", and recording what is already live is not new work. The same exit
+0 closes the plan causes (the owner and system ones) that the package's blocks ledger still kept,
+with the reason on each card's finding, so the ledger heals even without a declared `planCommand`.
+
+### A locked command runs only on the owner's click, once
+
+Some commands are refused to every agent by the host's hard lock, yet the work behind them is still
+needed. Without a path of their own, the owner would have to reproduce the request by hand, outside
+the tool: nothing recorded, no proof that exactly that ran, no undo at hand. Instead, an agent can
+**propose** one with `propose_locked_command`: the exact `argv`, the command that undoes it (or, if
+there is none, a plan B in plain language), the checks to run before (`preflight`) and
+after (`verify`), and a one-paragraph summary for the owner.
+
+The host turns it on with three variables in the **service's** environment, never in board data:
+`AGILEHARNESS_EXEC_CLASSIFIER` (the lock's classifier, a JSON argv), `AGILEHARNESS_EXEC_LOCK_CONFIG`
+(the lock's configuration file, passed on to the classifier under the same name) and
+`AGILEHARNESS_EXEC_CHECK_PREFIXES` (which commands may serve as checks). Without all three, the
+feature is off and says why.
+
+- **The host's lock decides what is eligible.** The service asks the same lock that refuses the
+  agents, through a classifier declared in the service's environment
+  (`AGILEHARNESS_EXEC_CLASSIFIER`, a JSON argv). It answers whether the command is locked and
+  whether the lock's own configuration lets it get the button. Anything not locked, the agent runs
+  itself; anything locked but not approvable stays with the owner, in the terminal. The lock's
+  configuration must come from the service's environment too (`AGILEHARNESS_EXEC_LOCK_CONFIG`: absolute,
+  readable JSON, and outside the target repository by real path), and the classifier runs without
+  the project variable and outside the repository. Missing any of these, the feature is off. Board
+  data can never declare them, because an agent edits board data.
+- **The argv is not a decoy.** The lock judges a shell line; the service runs the argv without a
+  shell. They agree only when no argument carries shell syntax (`$(`, backtick, `; | & < >`, line
+  breaks, control or bidi characters) and no program is an interpreter or wrapper (`sh`, `python`,
+  `node`, `env`, `sudo`, …). Both are refused, for the command, the undo and every check. Each
+  program is resolved to its real absolute path (outside the repository), shown to the owner and
+  bound into the hash; before running, it must resolve to the same path.
+- **No argument reads a file.** An option such as `--from-file=…` would put the file's content, which an agent can
+  write and swap, into the command without the owner seeing it. Any argument shaped like a path
+  (`/…`, `./…`, `../…`, `~…`, `@…`, a `..` segment, also after `--option=`) is refused. Every step
+  runs in a new, empty directory that is removed afterwards, and before each step the service checks
+  that no argument names something that exists there (*stale* otherwise).
+- **Checks are only what the host allows.** "Not locked" is not "read-only", and checks run as the
+  service. A check is accepted only if its argv starts exactly with one of the host's prefixes in
+  `AGILEHARNESS_EXEC_CHECK_PREFIXES` (a JSON list of argv lists; the program compared by real path),
+  and it must still be unlocked.
+- **Nothing runs on proposal.** Not the command, not the checks: the service has no agent sandbox,
+  so every command it runs is part of what the owner approved. A scoped agent may propose only for
+  the card it drives, with at most 2 pending requests per card and 10 per board.
+- **Only the owner, in their session, decides.** The Inbox and the confirmation screen show the
+  structured part first (program, exact command, the undo or *no undo* in red, each check with its
+  pass rule in words) and the agent's own text last, labelled as such. Text fields take no line
+  breaks, so the agent can't fake that structure. The server action refuses an MCP agent, even with
+  the `full` token, and refuses the service itself.
+- **Bound, single-use, short.** The approval carries the SHA-256 of the canonical request and lives
+  in the memory of the process that received it: the record on disk tells the state but never
+  authorizes a run, and after a restart an approved request expires (approve it again). The service
+  runs the command once (an exclusive claim file settles races between processes), only if it
+  starts within 15 minutes. Before running it re-asks the lock about every command, re-resolves the
+  programs and re-runs the preflight (*stale* if anything changed). After running, it runs the
+  checks, which match the exit code and a literal piece of output (no agent regex); if one fails,
+  it runs the undo by itself. A timeout kills the whole process group.
+- **Output stays with the owner.** `locked_command_status` returns to the agent only the step,
+  pass/fail and exit code. What a command prints is stored only as a 1 KB tail and shown in the
+  Inbox, with credential-shaped content redacted, line by line and with lines joined. The redaction
+  is defense in depth: the agent never receives the output in the first place.
+- **The phone rings only when something went wrong** (failed, undone, didn't run). Success stays in
+  the Inbox, with *Keep* and *Undo* (confirmed). The card's agent is woken with the outcome and reads
+  it with `locked_command_status`.
+
 ### A board has a pace, and — separately — a scope
 
 Two independent brakes sit in front of everything the board starts by itself, and the owner can
@@ -556,6 +633,16 @@ the stage leaves with the next publication; the pace panel counts how many will 
 copilot follows the same line: it neither queues nor moves a card of an excluded type *while that
 card still waits to be built*, but a feature that is already in delivery stays actionable, so a
 merge block, a failed deploy or a pending proof on built work is still handled.
+
+**A declared wait does not hold a slot forever.** A conductor that waits on something only a person
+can do (an edit to a control path such as `settings.yaml`, a permission, a decision) must ask it as
+an owner question on the card and park: the question is what puts the request in the Inbox, and its
+answer reopens a conductor for the card at the front of the queue. A wait declared only with
+`report_progress` keeps the slot while it has a deadline (`until`) or for
+`autorun.park.declaredAfterMinutes` (30 by default) of quiet; after that, with cards waiting for a
+slot, the service types a fixed line asking the session to turn the wait into that owner question
+and park. If it parks without asking, the card goes back to the queue *behind* the cards that were
+waiting, so it cannot take the slot right back.
 
 **Narrowing lets what is running finish.** Work already executing is not interrupted and live
 conductors are not parked; only the engine and conductor queues are cleared of the types that no

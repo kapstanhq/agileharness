@@ -37,6 +37,8 @@ const ALERTS_BY_TIER: Record<CopilotTier, Record<AgentAlertKind, boolean>> = {
     "critical-signal": true,
     // o resumo da semana (segunda, 9h): nos modos em que você acompanha, uma nota macia com a tela aberta.
     "weekly-summary": true,
+    // um comando que VOCÊ aprovou deu errado (ou foi desfeito): é sobre uma decisão sua, em qualquer modo.
+    "locked-exec": true,
   },
   copiloto: {
     "terminal-waiting": true,
@@ -46,6 +48,7 @@ const ALERTS_BY_TIER: Record<CopilotTier, Record<AgentAlertKind, boolean>> = {
     "deploy-failed": true,
     "critical-signal": true,
     "weekly-summary": true,
+    "locked-exec": true,
   },
   autonomo: {
     "terminal-waiting": true,
@@ -66,6 +69,8 @@ const ALERTS_BY_TIER: Record<CopilotTier, Record<AgentAlertKind, boolean>> = {
     "critical-signal": true,
     // O resumo não trava nada: com a tela aberta no modo autônomo, é rotina — ele chega pelo push.
     "weekly-summary": false,
+    // O comando travado que o DONO aprovou deu errado: a decisão foi dele, o desfecho também — passa em todo modo.
+    "locked-exec": true,
   },
 };
 

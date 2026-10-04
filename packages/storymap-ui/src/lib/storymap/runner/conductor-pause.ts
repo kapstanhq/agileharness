@@ -43,8 +43,14 @@ export interface ParkSettings {
   transportRetryAfterMinutes: number;
   /** quantas retomadas por hora antes de estacionar (0 = estaciona direto). */
   transportRetries: number;
+  /**
+   * story-ex9602 — a espera DECLARADA (report_progress waiting) segura a vaga, com fila esperando, no máximo isto (quieto);
+   * depois, o pedido de estacionar que transforma a espera numa pergunta do dono. Uma espera com prazo (`until` no futuro)
+   * é respeitada até o prazo.
+   */
+  declaredAfterMinutes: number;
 }
-export const DEFAULT_PARK_SETTINGS: ParkSettings = { afterMinutes: 10, nudgeAfterMinutes: 10, transportRetryAfterMinutes: 3, transportRetries: 2 };
+export const DEFAULT_PARK_SETTINGS: ParkSettings = { afterMinutes: 10, nudgeAfterMinutes: 10, transportRetryAfterMinutes: 3, transportRetries: 2, declaredAfterMinutes: 30 };
 
 const SAFE_ID = /^[A-Za-z0-9_-]{1,32}$/;
 
@@ -94,7 +100,10 @@ export function wakeLine(by: WakeBy, questionIds: readonly string[], ownerLeft: 
 }
 
 /** Uma resposta acabou de ser gravada no card: acorda o condutor vivo, ou retoma o card estacionado. Nunca lança. */
-export async function wakeConductor(deps: ConductorWakeDeps, input: { board: string; cardId: string; questionIds: readonly string[]; by: WakeBy }): Promise<WakeOutcome> {
+export async function wakeConductor(
+  deps: ConductorWakeDeps,
+  input: { board: string; cardId: string; questionIds: readonly string[]; by: WakeBy; /** a linha a entregar no lugar da de resposta (ex.: o desfecho de um comando aprovado) */ line?: string },
+): Promise<WakeOutcome> {
   const log = deps.log ?? ((l: string) => console.log(`[conductor] ${l}`));
   const { board, cardId, by } = input;
   try {
@@ -106,7 +115,7 @@ export async function wakeConductor(deps: ConductorWakeDeps, input: { board: str
     const session = (await deps.sessions()).find((s) => s.board === board && s.cardId === cardId && !!s.tmuxSession && isLiveConductor(s, live, deps.heartbeatAlive, deps.treeGone));
     if (session?.tmuxSession) {
       if (!(await deps.runsClaude(session.tmuxSession))) return "undeliverable";
-      const ok = await deps.deliver(session.tmuxSession, wakeLine(by, input.questionIds, ownerOnlyOpenQuestions(card).length));
+      const ok = await deps.deliver(session.tmuxSession, input.line ?? wakeLine(by, input.questionIds, ownerOnlyOpenQuestions(card).length));
       if (ok) log(`${board}/${cardId}: resposta entregue ao condutor (${session.tmuxSession})`);
       return ok ? "delivered" : "undeliverable";
     }
@@ -168,11 +177,28 @@ export const NUDGE_LINE =
   "Releia o card (get_card) e siga do ponto em que parou; se você está esperando algo (uma decisão, a integração), declare a espera " +
   "com report_progress (campo waiting). Se continuar parada, o serviço vai pedir para estacionar.";
 
+/**
+ * story-ex9602 — a linha do estacionar quando a espera foi DECLARADA mas não é uma pergunta do dono: a sessão disse que
+ * espera algo (report_progress waiting) e ficou parada segurando a vaga com fila esperando. Uma espera declarada no
+ * terminal não chega a ninguém — nenhum item no Inbox — e, num board com uma vaga só, trava a fila inteira. Palavras
+ * fixas: se a espera é por algo que só uma pessoa faz, ela vira uma pergunta do dono no card (é o que põe o pedido no Inbox e acorda o card
+ * com a resposta); depois, os mesmos passos do {@link PARK_LINE}.
+ */
+export const DECLARED_PARK_LINE =
+  "estacionar — esta sessão declarou uma espera e está parada há tempo demais segurando uma vaga de condutor, com card na fila. " +
+  "Se o que você espera é algo que só o operador ou o dono faz (editar um caminho de controle, uma permissão, uma decisão), " +
+  "transforme a espera numa pergunta do dono neste card ANTES de estacionar: ask_question com o marcador [humano] no texto, " +
+  "o que exatamente fazer no contexto (o diff, quando houver) e as opções «Feito» e «Não fazer». " +
+  "Depois, nesta ordem: (1) atualize no card a seção «Estado do condutor» (bloco e passo atuais, o que já está pronto, o que falta, " +
+  "as perguntas abertas e o nome do branch); (2) commite tudo o que há no worktree; (3) release_claim; " +
+  "(4) worktree_discard — o branch com commits não integrados fica preservado; (5) NÃO limpe o driver do card; " +
+  "(6) encerre o turno sem pedir mais nada. Quando a pergunta for respondida, o serviço reabre um condutor para este card na frente da fila.";
+
 /** As retomadas por erro de transporte são contadas nesta janela: duas falhas seguidas são infraestrutura, não acaso. */
 export const TRANSPORT_RETRY_WINDOW_MS = 60 * 60_000;
 
 /** Por que a sessão foi estacionada — decide a linha e o que acontece com o card depois. */
-export type ParkCause = "owner" | "transport" | "quiet";
+export type ParkCause = "owner" | "transport" | "quiet" | "declared";
 
 /**
  * A linha do estacionar quando o BOARD foi pausado com «parar agora» (board-pace.ts). Palavras fixas, os mesmos passos
@@ -209,6 +235,8 @@ export interface QuietLadderFacts {
   transportError: string | null;
   /** a sessão declarou a espera (report_progress waiting). */
   declaredWaiting: boolean;
+  /** o prazo que a espera declarada trouxe (`until`, epoch ms), ou null. Ausente ⇒ sem prazo. */
+  declaredUntilMs?: number | null;
   /** a espera é do dono ({@link waitsForOwner}). */
   ownerWait: boolean;
   /** cards do MESMO board na fila do condutor esperando uma vaga. */
@@ -271,7 +299,13 @@ export function quietLadderStep(f: QuietLadderFacts, memo: ConductorParkMemo | u
     return recent.length < s.transportRetries ? { kind: "transport-retry", attempt: recent.length + 1 } : { kind: "park", cause: "transport" };
   }
   if (f.ownerWait) return f.quietForMs >= min(s.afterMinutes) ? { kind: "park", cause: "owner" } : { kind: "none" };
-  if (f.declaredWaiting || f.slotWaiters <= 0) return { kind: "none" };
+  if (f.slotWaiters <= 0) return { kind: "none" };
+  // story-ex9602: a espera declarada segura a vaga, mas não para sempre — com prazo, até o prazo; sem prazo, até
+  // `declaredAfterMinutes` quieta. Depois, o pedido de estacionar que a transforma numa pergunta do dono.
+  if (f.declaredWaiting) {
+    if (f.declaredUntilMs != null && f.declaredUntilMs > now) return { kind: "none" };
+    return f.quietForMs >= min(s.declaredAfterMinutes) ? { kind: "park", cause: "declared" } : { kind: "none" };
+  }
   if (f.childBusy && f.quietForMs < childWorkWindowMs(s)) return { kind: "none" };
   if (memo?.nudgedAt === undefined) return f.quietForMs >= min(s.nudgeAfterMinutes) ? { kind: "nudge" } : { kind: "none" };
   return f.quietForMs >= min(s.afterMinutes) && now - memo.nudgedAt >= min(s.afterMinutes) ? { kind: "park", cause: "quiet" } : { kind: "none" };
@@ -281,7 +315,7 @@ export function quietLadderStep(f: QuietLadderFacts, memo: ConductorParkMemo | u
 export function ladderLine(step: Exclude<QuietLadderStep, { kind: "none" }>): string {
   if (step.kind === "transport-retry") return TRANSPORT_RETRY_LINE;
   if (step.kind === "nudge") return NUDGE_LINE;
-  return step.cause === "owner" ? PARK_LINE : QUIET_PARK_LINE;
+  return step.cause === "owner" ? PARK_LINE : step.cause === "declared" ? DECLARED_PARK_LINE : QUIET_PARK_LINE;
 }
 
 /** O que cada degrau deixa no registro de decisões do sistema (o dono lê no Inbox/registro). PURA. */
@@ -310,7 +344,9 @@ export function ladderDecision(
   const why =
     step.cause === "owner"
       ? `a sessão espera uma decisão sua há ${ctx.quietMin} min — o trabalho fica guardado e o card volta para a frente da fila quando você decidir`
-      : step.cause === "transport"
+      : step.cause === "declared"
+        ? `a sessão declarou uma espera e ficou parada há ${ctx.quietMin} min com ${fila} — o pedido vira uma pergunta sua no card, o trabalho fica guardado e o card volta quando você responder`
+        : step.cause === "transport"
         ? `o erro de API se repetiu depois de ${ctx.retries} retomada(s) («${(ctx.transportError ?? "API Error").slice(0, 120)}») — o trabalho fica guardado e o card volta para a fila`
         : `a sessão seguiu quieta depois do lembrete, sem pausa declarada, com ${fila} — o trabalho fica guardado e o card volta para a fila`;
   return { ...base, kind: "conductor-park", what: `Estacionou o condutor de «${ctx.card.title}»`, why, undo: { kind: "resume-conductor", cardId: ctx.card.id } };
@@ -371,8 +407,9 @@ export async function parkWaitingConductors(deps: ConductorParkDeps): Promise<Co
         const [card, config] = await Promise.all([deps.readCard(memo.board, memo.cardId).catch(() => null), deps.readBoardConfig(memo.board).catch(() => null)]);
         const back = !!card && !!config && isConducted(card) && !config.statuses.find((x) => x.id === card.status)?.terminal && openQuestions(card).length === 0;
         if (back) {
-          // Quem parou por QUIETUDE cedeu a vaga; o erro de API e a pausa do board INTERROMPERAM trabalho: voltam na frente.
-          const ok = await deps.requeue(memo.board, memo.cardId, memo.parkCause === "quiet" ? "yield" : "resume").then(() => true, () => false);
+          // Quem parou por QUIETUDE (ou por uma espera declarada sem pergunta do dono) cedeu a vaga; o erro de API e a pausa
+          // do board INTERROMPERAM trabalho: voltam na frente. A espera que virou pergunta do dono volta pelo acordar (a resposta).
+          const ok = await deps.requeue(memo.board, memo.cardId, memo.parkCause === "quiet" || memo.parkCause === "declared" ? "yield" : "resume").then(() => true, () => false);
           if (!ok) continue; // tenta de novo no próximo passe
           report.requeued.push({ board: memo.board, cardId: memo.cardId });
           log(`${memo.board}/${memo.cardId}: o condutor estacionou (${memo.parkCause}) — o card voltou para a fila`);
@@ -396,6 +433,7 @@ export async function parkWaitingConductors(deps: ConductorParkDeps): Promise<Co
         asking: false,
         transportError: deps.transportError?.(tmux) ?? null,
         declaredWaiting: !!s.progress?.waiting,
+        declaredUntilMs: s.progress?.until ? Date.parse(s.progress.until) || null : null,
         ownerWait: waitsForOwner(card, config),
         slotWaiters: deps.slotWaiters?.(board) ?? 0,
         childBusy: deps.childBusy?.(tmux) ?? false,
@@ -418,7 +456,7 @@ export async function parkWaitingConductors(deps: ConductorParkDeps): Promise<Co
         next.askedAt = now;
         next.parkCause = step.cause;
         report.asked.push({ board, cardId, tmuxSession: tmux, cause: step.cause });
-        log(`${board}/${cardId}: condutor quieto há ${quietMin}min (${step.cause === "owner" ? "esperando o dono" : step.cause === "transport" ? "erro de API repetido" : "depois do lembrete, com fila esperando"}) — pedido de estacionar enviado (${tmux})`);
+        log(`${board}/${cardId}: condutor quieto há ${quietMin}min (${step.cause === "owner" ? "esperando o dono" : step.cause === "transport" ? "erro de API repetido" : step.cause === "declared" ? "espera declarada longa, com fila esperando" : "depois do lembrete, com fila esperando"}) — pedido de estacionar enviado (${tmux})`);
       }
       deps.state.set(s.sessionId, next);
       if (deps.record) {

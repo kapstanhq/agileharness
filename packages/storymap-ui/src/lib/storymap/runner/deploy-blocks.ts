@@ -988,6 +988,68 @@ export async function sweepDeployBlocks(board: string, deps: DeployBlocksSweepDe
   return report;
 }
 
+// ── o deploy LIMPO fecha as causas do plano (story-ex9601) ───────────────────────────────────────────────────
+//
+// A re-medição (acima) só fecha uma causa do plano quando o alvo declara `deploy.planCommand` — sem ele, uma causa do
+// dono (`needs-human`) ficava no livro depois de o deploy do mesmo pacote ter passado com saída 0 («nada a publicar»
+// ou publicado). Mas saída 0 do deploy declarado É a resposta que o plano daria: nada segura a publicação agora (a saída
+// 3 é o contrato de «segurado»). Então o deploy limpo do pacote fecha as causas do plano dele — a mesma sequência da
+// re-medição: o disjuntor solta primeiro (recusou ⇒ nada fecha), os findings dela fecham com o porquê, a linha some.
+// A causa da PROVA (needs-proof) não: é do produtor da prova (ver `isPlanCause`). Um deploy de outro pacote não fecha nada.
+
+/** As causas do plano que um deploy LIMPO do pacote `pkg` encerra. PURA. */
+export function causesClosedByCleanDeploy(rows: readonly DeployBlockRow[], pkg: string): DeployBlockRow[] {
+  return rows.filter((r) => isPlanCause(r) && r.pkg === pkg);
+}
+
+export interface CleanDeployCloseDeps {
+  readRows(): Promise<DeployBlockRow[]>;
+  write: DeployBlocksSweepDeps["write"];
+  breaker: Pick<NonNullable<DeployBlocksSweepDeps["breaker"]>, "releaseCause"> | null;
+  mutateBlocks(fn: (rows: DeployBlockRow[]) => DeployBlockRow[]): Promise<DeployBlockRow[]>;
+  now(): number;
+}
+
+/**
+ * O deploy do pacote `pkg` terminou LIMPO (saída 0, e não o «terminou em ~0s sem fazer nada» que o revert trata como
+ * falha): fecha as causas do plano dele. Devolve as chaves fechadas. Nunca lança.
+ */
+export async function closeCausesAfterCleanDeploy(pkg: string, deps: CleanDeployCloseDeps): Promise<string[]> {
+  const closed: string[] = [];
+  try {
+    const today = new Date(deps.now()).toISOString().slice(0, 10);
+    for (const row of causesClosedByCleanDeploy(await deps.readRows(), pkg)) {
+      const released = deps.breaker ? await deps.breaker.releaseCause(row.board, row.causeKey).catch(() => [] as string[]) : [];
+      if (released === null) continue; // o disjuntor recusa soltar: segue aberta, como na re-medição
+      for (const cardId of row.cardIds) {
+        await deps.write(row.board, cardId, (c) =>
+          openDeployFailure(c)?.deployCause?.causeKey === row.causeKey
+            ? resolveOpenDeployFailure(c, `o deploy de ${pkg} terminou bem (saída 0): nada mais segura a publicação — a causa foi encerrada.`, today)
+            : null,
+        );
+      }
+      await deps.mutateBlocks((all) => dropDeployBlock(all, row.board, row.causeKey));
+      closed.push(row.causeKey);
+      console.log(`[deploy-blocks ${row.board}] causa ${row.causeKey} encerrada: o deploy de ${pkg} terminou bem (saída 0) — ${row.cardIds.length} card(s) soltos`);
+    }
+  } catch (err) {
+    console.error(`[deploy-blocks] encerrar causas após o deploy limpo de ${pkg} falhou:`, err instanceof Error ? err.message : err);
+  }
+  return closed;
+}
+
+/** As dependências de produção do {@link closeCausesAfterCleanDeploy}. */
+export async function defaultCleanDeployCloseDeps(): Promise<CleanDeployCloseDeps> {
+  const [{ updateCardOnDisk }, { tryGetPublishBreaker }] = await Promise.all([import("@/lib/storymap/write"), import("./publish-breaker")]);
+  return {
+    readRows: () => readDeployBlocks(),
+    write: (b, c, fn) => updateCardOnDisk(b, c, fn).catch((err) => console.error(`[deploy-blocks ${b}/${c}] escrita falhou:`, err instanceof Error ? err.message : err)),
+    breaker: tryGetPublishBreaker(),
+    mutateBlocks: (fn) => mutateDeployBlocks(fn),
+    now: Date.now,
+  };
+}
+
 /** As dependências de produção da varredura (imports dinâmicos onde há ciclo: o revert e a cascata importam o mundo). */
 export async function defaultDeployBlocksSweepDeps(io?: { exec?: ExecFn; repoRoot?: string }): Promise<DeployBlocksSweepDeps> {
   const [{ readBoardConfig, readCards }, { updateCardOnDisk }, { tryGetPublishBreaker }, { readDeployExit3Report }, { defaultExec }] = await Promise.all([
