@@ -1,4 +1,4 @@
-// Item 9 — o PRODUTOR da prova que falta: para cada revisão de segurança pedida pelo deploy-auto, um revisor
+// Item 9 — o PRODUTOR da prova que falta: para cada revisão de segurança pedida pelo deploy automático do alvo, um revisor
 // INDEPENDENTE (contexto limpo, não quem escreveu o código) julga o assunto; o veredito é gravado pela receita do alvo
 // (que recalcula o hash e recusa assunto velho) e o card é republicado pelo mesmo caminho do «Re-publicar». Veredito
 // negativo reabre o card com os achados; esgotadas as tentativas, um card de conserto. Nunca pergunta ao dono.
@@ -16,6 +16,7 @@ import { settleFailureDetail } from "./deploy-needs-human";
 import {
   MAX_PROOF_ROUNDS,
   MAX_REVIEW_ATTEMPTS,
+  PRODUCER_AGENT,
   produceDeployProofs,
   startDeployProofs,
   sweepDeployProofs,
@@ -23,7 +24,7 @@ import {
   type ProofPending,
 } from "./deploy-proof-producer";
 
-const LOG = readFileSync(fileURLToPath(new URL("./__fixtures__/deploy-auto-needs-proof.txt", import.meta.url)), "utf8");
+const LOG = readFileSync(fileURLToPath(new URL("./__fixtures__/publish-needs-proof.txt", import.meta.url)), "utf8");
 const FULL = parseDeployExit3Report(LOG);
 const ONLY_DIFF: DeployExit3Report = { ...FULL, security: [FULL.security[0]], other: [] };
 
@@ -89,8 +90,17 @@ describe("produceDeployProofs", () => {
     // o laço inteiro no registro: a revisão aprovada e a republicação
     expect(state.decisions).toEqual([
       expect.objectContaining({ kind: "security-review", agent: "security-reviewer", cardId: "story-x", what: expect.stringMatching(/aprovou/) }),
-      expect.objectContaining({ kind: "security-review", cardId: "story-x", what: expect.stringMatching(/Republicou/) }),
+      expect.objectContaining({ kind: "proof-republish", agent: PRODUCER_AGENT, cardId: "story-x", what: expect.stringMatching(/Republicou/) }),
     ]);
+  });
+
+  it("quem decidiu é o revisor que o ALVO pediu — a ferramenta não supõe o nome do agente; a republicação é do produtor", async () => {
+    const { deps, state } = world();
+    const pedido = { ...ONLY_DIFF.security[0], reviewer: "revisor-de-cofre" };
+    expect(await produceDeployProofs(deps, pending({ ...ONLY_DIFF, security: [pedido] }))).toMatchObject({ action: "republished" });
+    expect((deps.recordVerdict as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({ reviewer: { agent: "revisor-de-cofre" } });
+    expect(state.decisions.map((d) => d.agent)).toEqual(["revisor-de-cofre", PRODUCER_AGENT]);
+    expect(state.decisions.some((d) => d.agent === "security-reviewer")).toBe(false);
   });
 
   it("duas revisões pedidas (a mudança e o conteúdo das regras): duas revisões, UMA republicação", async () => {

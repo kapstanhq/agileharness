@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyFailure, type FailureRules } from "./findings";
+import { classifyFailure, failureScanWindows, QA_FAILURE_SCAN_BUDGET_MS, QA_FAILURE_SCAN_CAP, requiredLiteral, type FailureRules } from "./findings";
 import { coerceTargetProfileDetailed, QA_FAILURE_TEXT_TAIL_BYTES, qaOf } from "../target-profile";
 
 // The deterministic failure taxonomy. The classifier is a PURE function of observable
@@ -168,12 +168,77 @@ describe("regras declaradas — compilação defensiva e custo", () => {
     expect(classifyFailure({ message: `labvm pod evicted ${meio}` }, rules)).toBe("infra");
     // no FIM
     expect(classifyFailure({ message: `${meio} depot unreachable` }, rules)).toBe("app");
-    // no MEIO de um log gigante (fora das duas pontas) segue sem casar
+    // no MEIO de um log longo (fora das duas pontas) também casa: o log inteiro é lido, em janelas
     const gigante = `${"a".repeat(QA_FAILURE_TEXT_TAIL_BYTES + 10)} labvm pod evicted ${"a".repeat(QA_FAILURE_TEXT_TAIL_BYTES + 10)}`;
-    expect(classifyFailure({ message: gigante }, rules)).toBe("app");
+    expect(classifyFailure({ message: gigante }, rules)).toBe("infra");
     // a ORDEM das regras vale entre as pontas: a regra 1 casa na CABEÇA e a 2 no RABO — vence a 1 (a primeira do arquivo)
     expect(classifyFailure({ message: `labvm node lost ${meio} depot unreachable` }, rules)).toBe("infra");
     // …e invertendo a ordem das regras, vence a que passou a ser a 1ª
     expect(classifyFailure({ message: `labvm node lost ${meio} depot unreachable` }, { failureClasses: [...(rules.failureClasses ?? [])].reverse() })).toBe("app");
+  });
+
+  it("janelas: o casamento que cruza a borda de uma janela ainda é visto; acima do teto entram as duas metades", () => {
+    const rules: FailureRules = { failureClasses: [{ pattern: "labvm pod evicted", class: "infra" }] };
+    // o trecho começa 5 caracteres antes do fim da 1ª janela — só a sobreposição o enxerga inteiro
+    const borda = `${"b".repeat(QA_FAILURE_TEXT_TAIL_BYTES - 5)}labvm pod evicted${"b".repeat(QA_FAILURE_TEXT_TAIL_BYTES * 3)}`;
+    expect(classifyFailure({ message: borda }, rules)).toBe("infra");
+    expect(failureScanWindows(borda).every((w) => w.length <= QA_FAILURE_TEXT_TAIL_BYTES)).toBe(true);
+    // acima do teto: o miolo além das duas metades não é lido (custo com teto), as metades sim
+    const alem = `${"c".repeat(QA_FAILURE_SCAN_CAP)}labvm pod evicted${"c".repeat(QA_FAILURE_SCAN_CAP)}`;
+    expect(classifyFailure({ message: alem }, rules)).toBe("app");
+    expect(classifyFailure({ message: `${"c".repeat(QA_FAILURE_SCAN_CAP / 4)}labvm pod evicted${"c".repeat(QA_FAILURE_SCAN_CAP * 2)}` }, rules)).toBe("infra");
+    expect(failureScanWindows(alem).length).toBeLessThanOrEqual(Math.ceil(QA_FAILURE_SCAN_CAP / (QA_FAILURE_TEXT_TAIL_BYTES - 2048)) + 1);
+  });
+
+  it("custo com teto: 256 KiB com muitos «pod » e sem «evicted» — o pré-filtro literal pula a regra", () => {
+    // UMA linha só (sem quebra): sem o pré-filtro, `.*` varre até o fim da janela a partir de cada «pod» — quadrático
+    const log = "pod restarting ok ".repeat(Math.ceil((256 * 1024) / 18));
+    const rules: FailureRules = { failureClasses: [{ pattern: "pod.*evicted", class: "infra" }] };
+    const t0 = performance.now();
+    expect(classifyFailure({ message: log }, rules)).toBe("app");
+    // sem o pré-filtro, a mesma regra varre as janelas até o orçamento (~150 ms); com ele, nem uma janela é lida
+    expect(performance.now() - t0).toBeLessThan(50);
+  });
+
+  it("custo com teto também SEM literal a pré-filtrar (alternância): o orçamento corta a leitura", () => {
+    const log = "pod pod pod node pod ".repeat(Math.ceil((256 * 1024) / 21));
+    const rules: FailureRules = { failureClasses: [{ pattern: "(pod|node).*evicted", class: "infra" }] };
+    const t0 = performance.now();
+    classifyFailure({ message: log }, rules);
+    expect(performance.now() - t0).toBeLessThan(QA_FAILURE_SCAN_BUDGET_MS + 400);
+  });
+
+  it("o literal exigido: o maior trecho fixo, e null quando não dá para afirmar um", () => {
+    expect(requiredLiteral("pod.*evicted")).toBe("evicted");
+    expect(requiredLiteral("depot\\s+unreachable")).toBe("unreachable");
+    expect(requiredLiteral("labvms? down")).toBe("labvm"); // o «s» opcional sai do trecho
+    expect(requiredLiteral("ledger shard \\d+ offline")).toBe("ledger shard ");
+    expect(requiredLiteral("(pod|node) lost")).toBeNull();
+    expect(requiredLiteral("a(bcdef)?g")).toBeNull();
+    expect(requiredLiteral("[a-z]+x")).toBeNull();
+  });
+
+  it("âncoras sem flag m: `^` só no início do TEXTO, `$` só no fim — nunca no início/fim de uma janela do miolo", () => {
+    const SIZE = QA_FAILURE_TEXT_TAIL_BYTES;
+    const STEP = SIZE - 2048; // a sobreposição das janelas
+    const start: FailureRules = { failureClasses: [{ pattern: "^kiosk halted", class: "infra" }] };
+    const end: FailureRules = { failureClasses: [{ pattern: "kiosk halted$", class: "infra" }] };
+    const resto = "q".repeat(SIZE * 3);
+    // no texto inteiro, as âncoras valem
+    expect(classifyFailure({ message: `kiosk halted ${resto}` }, start)).toBe("infra");
+    expect(classifyFailure({ message: `${resto} kiosk halted` }, end)).toBe("infra");
+    // a 1ª janela do miolo começa logo depois do espaço que fica a 10 caracteres de STEP: ela COMEÇA em «kiosk halted»
+    const noInicioDaJanela = `${"q".repeat(STEP + 10)} kiosk halted ${resto}`;
+    expect(classifyFailure({ message: noInicioDaJanela }, start)).toBe("app");
+    // …e TERMINA em «kiosk halted» quando o trecho fecha exatamente SIZE caracteres depois desse início
+    const noFimDaJanela = `${"q".repeat(STEP + 10)} ${"z".repeat(SIZE - 13)} kiosk halted ${resto}`;
+    expect(classifyFailure({ message: noFimDaJanela }, end)).toBe("app");
+  });
+
+  it("acima do teto, as duas metades são textos SEPARADOS: o corte não vira adjacência", () => {
+    const half = QA_FAILURE_SCAN_CAP / 2;
+    const msg = `${"q".repeat(half - 5)}alpha${"z".repeat(QA_FAILURE_SCAN_CAP)}omega${"q".repeat(half - 5)}`;
+    expect(classifyFailure({ message: msg }, { failureClasses: [{ pattern: "alpha\\s*omega", class: "infra" }] })).toBe("app");
+    expect(classifyFailure({ message: msg }, { failureClasses: [{ pattern: "alpha", class: "infra" }] })).toBe("infra");
   });
 });

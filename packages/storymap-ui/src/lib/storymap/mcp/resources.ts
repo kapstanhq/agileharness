@@ -252,30 +252,11 @@ export function registerResources(server: McpServer): void {
       } catch {
         toolRoot = null;
       }
-      // O QUE O ALVO DECLAROU DE DEPLOY: aqui a config existe (o boot empacotado não a importa de propósito — ver
-      // preflight.ts), então este resource carrega os dois checks que dependem dela (`host.just` e
-      // `deploy.declared-commands`). `null` = a config ou os boards não puderam ser lidos ("não medi").
-      const deploy = await (async () => {
-        try {
-          const [{ declaredDeployPolicy }, { deployPolicyFromSettings }, { deployDeclarationsProbe }] = await Promise.all([
-            import("@/lib/storymap/runner/product-deploy"),
-            import("@/lib/storymap/runner/deploy-command-guard"),
-            import("@/lib/storymap/preflight"),
-          ]);
-          const declared = declaredDeployPolicy();
-          const boards = await Promise.all((await listBoards()).map(async (b) => readBoardConfig(b.id).catch(() => null)));
-          return deployDeclarationsProbe(
-            {
-              policy: deployPolicyFromSettings(declared),
-              canaryCommand: declared.canaryCommand,
-              argvs: [declared.legacy.command, declared.legacy.plan, declared.composedFace?.command, declared.proof.record.securityReview, declared.proof.record.ownerApproval],
-            },
-            boards.filter((c): c is NonNullable<typeof c> => c !== null),
-          );
-        } catch {
-          return null;
-        }
-      })();
+      // O QUE O ALVO DECLAROU DE DEPLOY: a MESMA medição que o boot do serviço loga (deploy-declarations-boot.ts) — os
+      // dois checks que dependem da config (`host.just`, `deploy.declared-commands`). `null` = a config ou os boards não
+      // puderam ser lidos ("não medi").
+      const { measureDeployDeclarations } = await import("@/lib/storymap/deploy-declarations-boot");
+      const deploy = await measureDeployDeclarations();
       let toolPackageDir: string | null = null;
       try {
         toolPackageDir = findToolPackageDir();

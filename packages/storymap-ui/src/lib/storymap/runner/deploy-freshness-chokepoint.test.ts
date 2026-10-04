@@ -3,7 +3,7 @@
 // Três camadas, porque cada uma sozinha é teatro:
 //   1. o REGISTRY (`ProductDeployRegistry.start`) — onde todo deploy de produto vira processo — não lança sem
 //      uma autorização que só o preflight cunha (um WeakSet privado: `as DeployClearance` não forja);
-//   2. cada CAMINHO que lança (pipeline declarado command/agent, `orch-deploy` legado, face encadeada, tool MCP)
+//   2. cada CAMINHO que lança (pipeline declarado command/agent, comando legado declarado, face encadeada, tool MCP)
 //      RECUSA quando o preflight recusa, sem lançar nada — e a recusa sai com o motivo (e, com card, reverte);
 //   3. o CENSO de fonte: toda superfície de produção que lança pelo registry está registrada aqui e passa a
 //      autorização do preflight em CADA `start` — uma superfície nova reprova até ser registrada, e o
@@ -200,7 +200,7 @@ describe("deployBoard — cada caminho de deploy de produto passa pelo preflight
     const reg = new ProductDeployRegistry(f.launcher);
     const r = recusar();
     const res = await deployBoard({ ...base, exec: execGravador().exec, boardPackage: "packages/app", productDeploy: reg, freshness: r.gate });
-    expect(res).toMatchObject({ fired: false, tool: "orch-deploy", pkg: "app", freshnessRefused: { code: "behind" } });
+    expect(res).toMatchObject({ fired: false, tool: "legacy-command", pkg: "app", freshnessRefused: { code: "behind" } });
     expect(f.started).toEqual([]);
     expect(r.pedidos[0]).toMatchObject({ target: "app", scope: ESCOPO });
 
@@ -294,7 +294,7 @@ describe("deployBoard — cada caminho de deploy de produto passa pelo preflight
       freshness: liberar,
     };
     const recusado = await deployBoard({ ...pedido, deployPolicy: semComando });
-    expect(recusado).toMatchObject({ fired: false, tool: "orch-deploy", pkg: "app" });
+    expect(recusado).toMatchObject({ fired: false, tool: "legacy-command", pkg: "app" });
     expect(recusado.refused).toMatch(/settings\.yaml → deploy\.composedFace\.command/);
     expect(f.started, "nada foi lançado — nem o backend").toEqual([]);
     // CONTRAPROVA: com o comando da face declarado, o MESMO disparo sobe
@@ -394,7 +394,7 @@ function argsDeTopo(args: string): string[] {
  */
 const SUPERFICIES_DE_DEPLOY: Record<string, string> = {
   "src/lib/storymap/runner/deploy.ts":
-    "o deploy do board (pipeline e fila de publicação): kind command/agent, orch-deploy legado, face encadeada",
+    "o deploy do board (pipeline e fila de publicação): kind command/agent, comando legado declarado, face encadeada",
   "src/lib/storymap/mcp/dev-tools.ts": "a tool MCP `deploy` — deploy cru de um alvo, sem card",
 };
 

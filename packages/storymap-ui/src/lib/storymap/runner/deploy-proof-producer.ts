@@ -34,6 +34,8 @@ export const MAX_REVIEW_ATTEMPTS = 2;
 /** Republicações pelo produtor, por card — um HEAD que não para de andar não vira laço de deploys. */
 export const MAX_PROOF_ROUNDS = 3;
 const LEDGER_MAX_ROWS = 500;
+/** O agente das decisões que não são de uma revisão (a republicação, o card de conserto): o próprio produtor. */
+export const PRODUCER_AGENT = "deploy-proof";
 
 /** Um pedido de prova esperando o produtor (a fila durável). */
 export interface ProofPending {
@@ -111,13 +113,15 @@ export async function produceDeployProofs(deps: DeployProofDeps, pending: ProofP
     if (refused) return { action: "waiting", reason: `máquina/janela saturada: ${refused}` };
 
     let rows = await deps.ledger.load();
-    const decision = (what: string, why: string): SystemDecision => ({
+    // Quem decidiu é o revisor que o ALVO pediu (`request.reviewer` do relatório do deploy) — a ferramenta não supõe o
+    // nome do agente de segurança do alvo. Fora de uma revisão (a republicação), a decisão é do produtor da prova.
+    const decision = (what: string, why: string, agent: string = PRODUCER_AGENT): SystemDecision => ({
       v: 1,
       id: newSystemDecisionId(),
       at: nowIso(),
       board,
       cardId,
-      agent: "security-reviewer",
+      agent,
       kind: "security-review",
       what,
       why,
@@ -178,11 +182,11 @@ export async function produceDeployProofs(deps: DeployProofDeps, pending: ProofP
       if (!isVerdictApproval(verdict)) {
         await deps.reopen(board, cardId, verdict).catch(() => false);
         await deps
-          .record(decision(`Revisão de segurança independente reprovou «${card.title}» (${subjectLabel(request.subject)}) — o card voltou para correção com os achados`, verdict.summary))
+          .record(decision(`Revisão de segurança independente reprovou «${card.title}» (${subjectLabel(request.subject)}) — o card voltou para correção com os achados`, verdict.summary, request.reviewer))
           .catch(() => {});
         return { action: "reopened" };
       }
-      await deps.record(decision(`Revisão de segurança independente aprovou ${subjectLabel(request.subject)} de «${card.title}»`, verdict.summary)).catch(() => {});
+      await deps.record(decision(`Revisão de segurança independente aprovou ${subjectLabel(request.subject)} de «${card.title}»`, verdict.summary, request.reviewer)).catch(() => {});
     }
 
     if (report.other.length) {
@@ -208,7 +212,10 @@ export async function produceDeployProofs(deps: DeployProofDeps, pending: ProofP
     // é final e o pedido sai da fila). O finding que sobrar aberto é fechado pelo settle do próprio deploy.
     await deps.resolveFinding(board, cardId).catch((err) => log(`${board}/${cardId}: republicado, mas o finding de prova não fechou: ${err instanceof Error ? err.message : String(err)}`));
     await deps
-      .record(decision(`Republicou «${card.title}»${stale ? " para receber o pedido do código de agora" : " com a prova de segurança"}`, stale ? "o assunto revisado ficou velho (o código andou)" : "todas as provas que faltavam foram produzidas"))
+      .record({
+        ...decision(`Republicou «${card.title}»${stale ? " para receber o pedido do código de agora" : " com a prova de segurança"}`, stale ? "o assunto revisado ficou velho (o código andou)" : "todas as provas que faltavam foram produzidas"),
+        kind: "proof-republish",
+      })
       .catch(() => {});
     log(`${board}/${cardId}: prova ${stale ? "velha — " : ""}republicado`);
     return { action: "republished" };

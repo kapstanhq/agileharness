@@ -2,7 +2,7 @@
 // code was ACTUALLY promoted to main AND the deploy did real work. Two chained bugs let it lie:
 //   (1) fireReleaseStaged only console.log'd a no-op release (promoted:false) — it never propagated the
 //       failure, so firePromoteAndDeploy fired the deploy + autoEnterTerminal claimed "No Ar" regardless.
-//   (2) a diff-aware orch-deploy of un-promoted code exits 0 in ~0s (no drift) → ev.ok===true → the onDone
+//   (2) a diff-aware declared deploy command of un-promoted code exits 0 in ~0s (no drift) → ev.ok===true → the onDone
 //       revert (which only fired on ev.ok===false) never ran.
 // These tests drive firePromoteAndDeploy over a MOCKED release/deploy/revert seam and assert the gate:
 // a real promotion FAILURE suppresses the deploy and REVERTS the card instead of shipping a lie.
@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Mock every collaborator of entry-effects so firePromoteAndDeploy runs without real git / deploy / disk.
 vi.mock("./release", () => ({ promoteStageToMain: vi.fn() }));
-vi.mock("./deploy", () => ({ deployBoard: vi.fn(async () => ({ fired: true, tool: "orch-deploy", pkg: "acmeapp" })) }));
+vi.mock("./deploy", () => ({ deployBoard: vi.fn(async () => ({ fired: true, tool: "legacy-command", pkg: "acmeapp" })) }));
 vi.mock("./deploy-revert", () => ({ revertCardOnDeployFailure: vi.fn(async () => {}) }));
 vi.mock("./commit-serializer", () => ({ serialCommit: (_root: string, fn: () => unknown) => fn() }));
 vi.mock("./worktree", () => ({ defaultExec: vi.fn() }));
@@ -484,7 +484,7 @@ describe("fireDeployBoard — deploy-truth: watchdog em todo disparo + settle im
   };
 
   it("PRODUCT deploy fired + cardId ⇒ stamps deployFiredAt (not only the self-deploy settleArmed case)", async () => {
-    mockDeploy.mockResolvedValueOnce({ fired: true, tool: "orch-deploy", pkg: "acmeapp" } as DeployResult);
+    mockDeploy.mockResolvedValueOnce({ fired: true, tool: "legacy-command", pkg: "acmeapp" } as DeployResult);
     await fireDeployBoard("acme", "s1");
     expect(applyWrites().deployFiredAt).toBeTruthy();
     expect(vi.mocked(settleDeploySuccess)).not.toHaveBeenCalled(); // a real fire waits for its real settle
@@ -535,7 +535,7 @@ describe("fireDeployBoard — deploy-truth: watchdog em todo disparo + settle im
 describe("fireDeployBoard — recusa do preflight de frescor segue o caminho de FALHA de deploy", () => {
   const recusado = {
     fired: false,
-    tool: "orch-deploy",
+    tool: "legacy-command",
     pkg: "acmeapp",
     reason: "deploy RECUSADO pelo preflight de frescor (nada foi executado) — 4 commit(s) ATRÁS de origin/main",
     freshnessRefused: { code: "behind", reason: "o checkout está 4 commit(s) ATRÁS de origin/main" },
@@ -559,7 +559,7 @@ describe("fireDeployBoard — recusa do preflight de frescor segue o caminho de 
       sharedPackages: ["packages/acme-shared"],
       statuses: [],
     } as never);
-    mockDeploy.mockResolvedValueOnce({ fired: true, tool: "orch-deploy", pkg: "acmeapp" } as DeployResult);
+    mockDeploy.mockResolvedValueOnce({ fired: true, tool: "legacy-command", pkg: "acmeapp" } as DeployResult);
     await fireDeployBoard("acme", "s1");
     expect(mockDeploy).toHaveBeenCalledWith(
       expect.objectContaining({ deployScope: ["packages/acmeapp/", "packages/acme-shared/"] }),
@@ -684,7 +684,7 @@ describe("card sem código / já no ar por unidade — assenta por evidência, s
   it("recibo do train de código pousado conta como código (o stagedAt se perde): segue o caminho de sempre", async () => {
     vi.mocked(readCards).mockResolvedValue([{ id: "story-r", type: "story", status: "deploy" } as never]);
     vi.mocked(readLandings).mockResolvedValueOnce([{ board: "acme", cardId: "story-r", half: "code", sha: "abc", at: "t" } as unknown as LandingReceipt]);
-    mockDeploy.mockResolvedValueOnce({ fired: true, tool: "orch-deploy", pkg: "acmeapp" } as DeployResult);
+    mockDeploy.mockResolvedValueOnce({ fired: true, tool: "legacy-command", pkg: "acmeapp" } as DeployResult);
     await fireDeployBoard("acme", "story-r");
     expect(mockDeploy).toHaveBeenCalledTimes(1);
   });
@@ -702,7 +702,7 @@ describe("card sem código / já no ar por unidade — assenta por evidência, s
     expect(await fireDeployBoard("acme", "story-u")).toMatchObject({ fired: false, reason: expect.stringContaining("já está no ar") });
     expect(mockDeploy).not.toHaveBeenCalled();
     vi.mocked(settleDeploySuccess).mockResolvedValueOnce({ advancedTo: null } as never);
-    mockDeploy.mockResolvedValueOnce({ fired: true, tool: "orch-deploy", pkg: "acmeapp" } as DeployResult);
+    mockDeploy.mockResolvedValueOnce({ fired: true, tool: "legacy-command", pkg: "acmeapp" } as DeployResult);
     await fireDeployBoard("acme", "story-u");
     expect(mockDeploy).toHaveBeenCalledTimes(1);
   });
@@ -731,7 +731,7 @@ describe("fireDeployBoard — threads o descritor deploy do board (deploy-agnós
   it("board SEM descritor ⇒ boardDeploy/releasedSha undefined — o roteamento legado segue byte-a-byte", async () => {
     mockReadBoardConfig.mockResolvedValueOnce({ package: "packages/acmeapp", statuses: [] } as never);
     vi.mocked(readCards).mockResolvedValue([]);
-    mockDeploy.mockResolvedValueOnce({ fired: true, tool: "orch-deploy", pkg: "acmeapp" } as DeployResult);
+    mockDeploy.mockResolvedValueOnce({ fired: true, tool: "legacy-command", pkg: "acmeapp" } as DeployResult);
 
     await fireDeployBoard("acme", "s1");
 

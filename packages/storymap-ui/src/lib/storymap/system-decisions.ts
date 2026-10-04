@@ -51,6 +51,8 @@ export type SystemDecisionKind =
   /** WP5-F2 — o sistema pediu a um condutor que ESTACIONASSE (quieto com fila esperando vaga, erro de transporte que não
    *  passou, ou espera do dono): o trabalho fica guardado e a vaga volta para a fila. Desfazer = reabrir o condutor já. */
   | "conductor-park"
+  /** política só-negócio — com as provas produzidas, o produtor da prova republicou o card (o «Re-publicar» de sempre). */
+  | "proof-republish"
   | "undo";
 
 /** Como desfazer, quando dá. Cada variante é UMA ação com pré-condição (undoRefusal). */
@@ -225,6 +227,8 @@ export function agentLabel(agent: string): string {
     "harness-conductor": "Agente",
     jido: "Jido",
     verifier: "Verificador",
+    // o produtor da prova de deploy (runner/deploy-proof-producer.ts `PRODUCER_AGENT`): republica e abre consertos
+    "deploy-proof": "Produtor da prova de deploy",
     system: "Sistema",
     human: "Você",
   };

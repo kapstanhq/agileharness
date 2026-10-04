@@ -130,9 +130,9 @@ export interface DeployResult {
   fired: boolean;
   /** D-AG2/D-AG3 add the board-DECLARED mechanisms: "board-command" (deploy.command via bash -lc) and
    *  "deploy-agent" (deploy.description via a bounded headless claude).
-   *  "orch-deploy" is an OPAQUE, observable identity (events, tests, deploy_status) of the legacy diff-aware path — kept
-   *  as is; what stopped being assumed is the COMMAND (it is `deploy.legacy.command`, declared by the target). */
-  tool?: "systemd-restart" | "orch-deploy" | "board-command" | "deploy-agent";
+   *  "legacy-command" is the observable identity (events, tests, deploy_status) of the path that runs the target's
+   *  DECLARED `deploy.legacy.command` — a neutral name of the tool, never the name of the target's launcher. */
+  tool?: "systemd-restart" | "legacy-command" | "board-command" | "deploy-agent";
   /** the product app deployed (the legacy-command target), when a product board fired */
   pkg?: string;
   /** story-ex0071: the deployment's declared face recipe is ARMED to fire once this backend deploy
@@ -776,7 +776,7 @@ export async function deployBoard(opts: {
     const registry = opts.productDeploy ?? getProductDeploy();
     const legacyCommand = deployCommandFor(pkg, policy());
     if (!legacyCommand.ok) {
-      return refuse({ tool: "orch-deploy", pkg }, `deploy NÃO disparado: ${legacyCommand.refusal}`);
+      return refuse({ tool: "legacy-command", pkg }, `deploy NÃO disparado: ${legacyCommand.refusal}`);
     }
     // Card cujo diff toca a face composta precisa dela publicada também — o job em curso só a encadeia para o
     // card que o disparou. A carona mede a prova contra os DOIS alvos: sem a face, ela não prova e o card ganha
@@ -785,7 +785,7 @@ export async function deployBoard(opts: {
       const face = composedFaceTarget();
       return [pkg, ...(face && touchesComposedFace(opts.changedFiles ?? []) ? [face] : [])];
     };
-    const riding = ride(registry, pkg, { tool: "orch-deploy", pkg }, alvosDaCarona);
+    const riding = ride(registry, pkg, { tool: "legacy-command", pkg }, alvosDaCarona);
     if (riding) return riding;
     // O PREFLIGHT, antes de assinar o encadeamento da face abaixo (uma recusa não deixa assinante órfão).
     const fresh = await freshness({
@@ -796,8 +796,8 @@ export async function deployBoard(opts: {
       policy: commandPolicy(),
       label: opts.board ? `board ${opts.board}` : `alvo ${pkg}`,
     });
-    if (!fresh.ok) return refusedByFreshness({ tool: "orch-deploy", pkg }, fresh);
-    const meanwhile = ride(registry, pkg, { tool: "orch-deploy", pkg }, alvosDaCarona);
+    if (!fresh.ok) return refusedByFreshness({ tool: "legacy-command", pkg }, fresh);
+    const meanwhile = ride(registry, pkg, { tool: "legacy-command", pkg }, alvosDaCarona);
     if (meanwhile) return meanwhile;
     // story-ex0071 — the legacy deploy command of `<target>` ships the backend but NOT the merged web face (no hosting unit
     // in any manifest, by design). When the release promoted a diff that touched a face path (its
@@ -821,7 +821,7 @@ export async function deployBoard(opts: {
     const faceDecl = policy().composedFace;
     if (chainComposedFace && faceDecl?.target === alvoDaFace && !faceDecl.command) {
       return refuse(
-        { tool: "orch-deploy", pkg },
+        { tool: "legacy-command", pkg },
         "deploy NÃO disparado: o diff toca a superfície composta, mas o alvo não declarou como publicá-la — declare em settings.yaml → deploy.composedFace.command (um argv, sem shell).",
       );
     }
@@ -873,7 +873,7 @@ export async function deployBoard(opts: {
         unsub();
       };
     }
-    const started = startOrRefuse({ tool: "orch-deploy", pkg }, () =>
+    const started = startOrRefuse({ tool: "legacy-command", pkg }, () =>
       registry.start(
         pkg,
         fresh.clearance,
@@ -887,7 +887,7 @@ export async function deployBoard(opts: {
     const job = started;
     return {
       fired: true,
-      tool: "orch-deploy",
+      tool: "legacy-command",
       pkg,
       chainedComposedFace: chainComposedFace,
       // Os alvos que ESTE deploy publica — a evidência que a reconciliação lê depois (deploy-reconcile.ts).
@@ -898,7 +898,7 @@ export async function deployBoard(opts: {
   if (boardPackage) {
     return {
       fired: false,
-      tool: "orch-deploy",
+      tool: "legacy-command",
       // A mensagem tem de apontar para onde o operador CONSERTA. Ela citava o nome de uma constante de
       // código que não existe mais — e, num produto usado por outros repositórios, citar um símbolo
       // interno manda o leitor procurar no lugar errado.

@@ -180,6 +180,7 @@ describe("a superfície provisória «Acompanhar» (a onda 2 do Inbox a absorve)
   it("nomeia quem decidiu e o que o desfazer faz, em português", () => {
     expect(agentLabel("triage-judge")).toBe("Juiz da triagem");
     expect(agentLabel("proxy")).toBe("Procurador");
+    expect(agentLabel("deploy-proof")).toBe("Produtor da prova de deploy");
     expect(undoLabel({ kind: "reopen-card", cardId: "c", deliveredIn: "x" })).toMatch(/motivo/);
     expect(undoLabel({ kind: "return-to-triage", cardId: "c", from: "x" })).toMatch(/Triagem/);
   });

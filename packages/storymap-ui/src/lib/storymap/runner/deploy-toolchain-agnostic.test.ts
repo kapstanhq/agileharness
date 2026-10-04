@@ -1,16 +1,16 @@
-// O RATCHET DO DEPLOY AGNÓSTICO — o motor de publicação não supõe o ferramental do repositório onde a ferramenta nasceu.
+// O RATCHET DO DEPLOY AGNÓSTICO — o motor de publicação não supõe o ferramental de publicação de nenhum alvo.
 //
-// POR QUE EXISTE. O deploy carregava defaults daquele repositório: o executor de tarefas (`just`), o verbo do orquestrador
-// de deploy, a receita de publicar um app, o caminho do arquivo de estado (`scripts/deploy/state/…`), o prefixo `packages/`.
-// Tudo isso agora é DECLARAÇÃO do alvo (settings.yaml → `deploy:`, ver deploy-policy.ts), e sem declaração o motor RECUSA
-// dizendo a chave. Este teste varre o CÓDIGO (comentários não contam: prosa não publica nada) e reprova se um desses
-// literais voltar — é a catraca que impede o suposto de crescer de novo por acréscimo.
-//
-// A varredura é por LINHA DE CÓDIGO e a lista de exceções é NOMEADA e mínima: cada uma diz por que continua.
+// POR QUE EXISTE. Um motor de deploy escrito ao lado de UM alvo tende a herdar os defaults dele: o executor de tarefas, o
+// verbo do orquestrador, a receita de publicar um app, o caminho do arquivo de estado, o prefixo de pasta de pacotes. Tudo
+// isso é DECLARAÇÃO do alvo (settings.yaml → `deploy:`, ver deploy-policy.ts), e sem declaração o motor RECUSA dizendo a
+// chave. Duas varreduras: o CÓDIGO do motor (por linha, comentários fora) contra literais de ferramental, com exceções
+// NOMEADAS; e TODO o `src` (código, comentário, título de teste, fixture) contra os nomes de um ferramental alheio —
+// comparados por sha256 (__fixtures__/origin-toolchain-words.ts — a lista não traz os nomes), com exceções VAZIA.
 
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { ORIGIN_STATE_PATH_HASHES, ORIGIN_TOOLCHAIN_HASHES, adjacentPairs, hitsHashed } from "./__fixtures__/origin-toolchain-words";
 
 /** o código SEM comentários de bloco, de linha inteira nem de fim de linha (`  // …`). */
 function codeLines(abs: string): { n: number; text: string }[] {
@@ -36,25 +36,22 @@ const ARQUIVOS = [
   "deploy-blocks.ts",
   "face-probe.ts",
   "entry-effects.ts",
-  // As mensagens ao operador também são código que publica: duas delas ainda mandavam «harness-ship / just orch-deploy»
-  // (a receita do repositório de origem) em vez de «o comando de deploy do alvo».
+  // As mensagens ao operador também são código que publica: elas mandam rodar «o comando de deploy do alvo», nunca uma
+  // receita de um alvo em particular.
   "pending-effects.ts",
   "findings.ts",
 ];
 
 /** O que nenhuma linha de código dos arquivos acima pode conter. */
-const PROIBIDOS: { nome: string; re: RegExp }[] = [
-  { nome: "o verbo do orquestrador de deploy do repositório de origem", re: /orch-deploy/ },
-  { nome: "o verbo do plano do orquestrador de origem", re: /orch-plan/ },
-  { nome: "o caminho do estado do orquestrador de origem", re: /scripts\/deploy/ },
-  { nome: "o executor de tarefas do repositório de origem como literal", re: /["'`]just["'`]/ },
-  { nome: "o prefixo de pasta de pacotes do repositório de origem", re: /["'`]packages\// },
+const PROIBIDOS: { nome: string; hit: (line: string) => boolean }[] = [
+  { nome: "o nome de um ferramental de publicação alheio", hit: (l) => hitsHashed(l, ORIGIN_TOOLCHAIN_HASHES) },
+  { nome: "um caminho de estado de orquestrador como literal", hit: (l) => hitsHashed(l, ORIGIN_STATE_PATH_HASHES) },
+  { nome: "um executor de tarefas como literal", hit: (l) => /["'`]just["'`]/.test(l) },
+  { nome: "um prefixo de pasta de pacotes como literal", hit: (l) => /["'`]packages\//.test(l) },
 ];
 
 /**
  * As EXCEÇÕES, por arquivo e por padrão de linha — cada uma com o porquê:
- *  - `tool: "orch-deploy"` / a união de `tool?:` em deploy.ts: é uma IDENTIDADE OPACA e observável (eventos, testes,
- *    deploy_status), não um comando; renomeá-la é um card à parte. O que deixou de ser suposto é o COMANDO.
  *  - `KNOWN_TASK_RUNNERS` (deploy-command-guard.ts): a lista de NOMES que alimenta só o LINT de segurança (aviso alto quando
  *    um lançador declarado é task runner conhecido e não está em `recipeRunners`). Não é default nem allow-list: nenhum
  *    lançador entra na política por estar nela — a ferramenta continua sem supor o executor do alvo.
@@ -63,27 +60,27 @@ const PROIBIDOS: { nome: string; re: RegExp }[] = [
  */
 const EXCECOES: Record<string, RegExp[]> = {
   "deploy-command-guard.ts": [/KNOWN_TASK_RUNNERS: ReadonlySet<string> = new Set\(/],
-  "deploy.ts": [/tool\??: .*"orch-deploy"/, /\{ tool: "orch-deploy"/, /^\s*tool: "orch-deploy",?\s*$/, /TOOL_PACKAGE_REL = "packages\/storymap-ui"/],
+  "deploy.ts": [/TOOL_PACKAGE_REL = "packages\/storymap-ui"/],
 };
 
 describe("deploy agnóstico: nenhum literal do ferramental de origem no CÓDIGO do motor", () => {
   it("a varredura enxerga código (não é vácua)", () => {
     for (const f of ARQUIVOS) expect(codeLines(RUNNER(f)).length, f).toBeGreaterThan(20);
-    // a prova de que o filtro de comentário funciona e a exceção nomeada é a única presença: a identidade opaca existe
-    const deploy = codeLines(RUNNER("deploy.ts")).filter((l) => /orch-deploy/.test(l.text));
-    expect(deploy.length, "a identidade opaca `tool: \"orch-deploy\"` some do deploy.ts ⇒ atualize as exceções").toBeGreaterThan(0);
+    // a identidade observável do caminho do comando declarado é um nome NEUTRO da ferramenta — nunca o lançador do alvo
+    const deploy = codeLines(RUNNER("deploy.ts")).filter((l) => /tool: "legacy-command"/.test(l.text));
+    expect(deploy.length, "a identidade `tool: \"legacy-command\"` sumiu do deploy.ts ⇒ a varredura perdeu a âncora").toBeGreaterThan(0);
   });
 
   it("a varredura cobre as mensagens ao operador (pending-effects.ts e findings.ts) — tirá-los da lista reabre o buraco", () => {
     expect(ARQUIVOS).toEqual(expect.arrayContaining(["pending-effects.ts", "findings.ts"]));
   });
 
-  for (const { nome, re } of PROIBIDOS) {
+  for (const { nome, hit } of PROIBIDOS) {
     it(`proíbe ${nome}`, () => {
       const achados: string[] = [];
       for (const f of ARQUIVOS) {
         for (const l of codeLines(RUNNER(f))) {
-          if (!re.test(l.text)) continue;
+          if (!hit(l.text)) continue;
           if ((EXCECOES[f] ?? []).some((ex) => ex.test(l.text))) continue;
           achados.push(`${f}:${l.n}: ${l.text.trim().slice(0, 120)}`);
         }
@@ -102,7 +99,44 @@ describe("deploy agnóstico: nenhum literal do ferramental de origem no CÓDIGO 
     expect(fim).toBeGreaterThan(ini);
     const secao = todas.filter((l) => l.n > ini && l.n <= fim);
     expect(secao.length, "a seção de deploy sumiu da varredura").toBeGreaterThan(40);
-    const achados = secao.flatMap((l) => PROIBIDOS.filter((p) => p.re.test(l.text)).map((p) => `dev-tools.ts:${l.n}: ${p.nome}`));
+    const achados = secao.flatMap((l) => PROIBIDOS.filter((p) => p.hit(l.text)).map((p) => `dev-tools.ts:${l.n}: ${p.nome}`));
     expect(achados).toEqual([]);
+  });
+});
+
+// TODO o src — código, comentário, título de teste, fixture: um nome de ferramental alheio não entra em lugar nenhum.
+describe("deploy agnóstico: nenhum nome de ferramental alheio em TODO o src (comentários e testes inclusive)", () => {
+  const SRC = path.join(__dirname, "..", "..", "..");
+  /** os arquivos de texto do src (o módulo dos hashes não contém os nomes, então não é exceção). */
+  function arquivos(dir: string): string[] {
+    return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) return e.name === "node_modules" ? [] : arquivos(p);
+      return /\.(ts|tsx|js|mjs|json|txt|md|jsonl|yaml|yml)$/.test(e.name) ? [p] : [];
+    });
+  }
+  const EXCECOES_SRC: readonly string[] = [];
+
+  it("a varredura enxerga o src inteiro e o comparador funciona (não é vácua)", () => {
+    expect(arquivos(SRC).length).toBeGreaterThan(500);
+    expect(ORIGIN_TOOLCHAIN_HASHES.size).toBe(3);
+    // os pares adjacentes saem de tokens compostos, em qualquer posição do token
+    expect(adjacentPairs("rode ship-cli push-app agora; ops/estado/x")).toEqual(["ship-cli", "push-app", "ops/estado", "estado/x"]);
+    expect(adjacentPairs("a-b-c")).toEqual(["a-b", "b-c"]);
+    // um par inventado não casa; o comparador é por hash exato do par
+    expect(hitsHashed("deploy-autonomy e relay-push", ORIGIN_TOOLCHAIN_HASHES)).toBe(false);
+  });
+
+  it("nenhum arquivo do src contém um desses nomes — e a lista de exceções está vazia", () => {
+    expect(EXCECOES_SRC).toEqual([]);
+    const achados: string[] = [];
+    for (const f of arquivos(SRC)) {
+      readFileSync(f, "utf8")
+        .split("\n")
+        .forEach((l, i) => {
+          if (hitsHashed(l, ORIGIN_TOOLCHAIN_HASHES)) achados.push(`${path.relative(SRC, f)}:${i + 1}`);
+        });
+    }
+    expect(achados, "troque por «o comando de deploy declarado» (ou um nome inventado de fixture)").toEqual([]);
   });
 });

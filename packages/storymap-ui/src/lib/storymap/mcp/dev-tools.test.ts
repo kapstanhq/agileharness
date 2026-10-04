@@ -163,7 +163,7 @@ describe("isAllowedCheck — allowlist de targets just (run_check)", () => {
     }
   });
   it("BLOQUEIA deploy/dev/orch e metachars de shell", () => {
-    for (const t of ["deploy-orbit", "dev-storymap", "orch-deploy", "test && rm -rf /", "test;deploy", "validate-all ", "chat-orbit"]) {
+    for (const t of ["deploy-orbit", "dev-storymap", "ship-everything", "test && rm -rf /", "test;deploy", "validate-all ", "chat-orbit"]) {
       expect(isAllowedCheck(t)).toBe(false);
     }
   });

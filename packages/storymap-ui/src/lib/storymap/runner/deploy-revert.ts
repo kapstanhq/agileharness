@@ -44,7 +44,7 @@ export interface DeployFailureDetail {
    *   - "deploy-noop" → the deploy settled exit-0 but did NO work (~0s, no drift) → code not actually live.
    *   - "face-stale"  → the face deploy REPORTED success but the canary saw example.com still serving an OLD
    *                     x-build-sha (silent-CDN class): the shipped bundle is not actually live (P0/VERIFY).
-   *   - "deploy" (default) → the orch-deploy exited non-zero.
+   *   - "deploy" (default) → the declared deploy command exited non-zero.
    *   - "freshness"   → o PREFLIGHT DE FRESCOR (deploy-freshness.ts) recusou o deploy ANTES de executá-lo: o
    *                     checkout de onde ele rodaria não carrega o que está no ar (atrás do upstream, sujo no
    *                     escopo, sem upstream, sha no ar não-ancestral…). Nada foi publicado.

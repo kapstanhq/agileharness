@@ -430,6 +430,6 @@ async function runHarnessEntryEffect(
     }
   }
   // deploy-board (and the deploy half of promote-and-deploy) is a board publish (rebuild+restart /
-  // orch-deploy) — out of scope for the harness (it shells out to systemd/just). The journeys assert the
+  // the declared deploy command) — out of scope for the harness (it shells out to systemd/just). The journeys assert the
   // promote + the auto-advance to concluida, not the real restart.
 }

@@ -50,7 +50,7 @@ describe("deploy-revert — redeploy revert transform (P0/story-ex0017: deploy f
         units: ["edge-api", "datastore"],
         ownerClass: "Dinheiro e preço",
         cause,
-        commandSays: "✋ NADA foi publicado:\n  • edge-api → `just orch-deploy acmeapp --service=edge-api`",
+        commandSays: "✋ NADA foi publicado:\n  • edge-api → `relay push-app acmeapp --unit=edge-api`",
       },
       "2026-09-28",
     );
@@ -68,7 +68,7 @@ describe("deploy-revert — redeploy revert transform (P0/story-ex0017: deploy f
     expect(f.detail).not.toContain("só você publica");
     expect(f.detail).toContain("Publicar"); // o atalho: publicar o card de novo sem esperar o sistema perceber
     // a receita que o COMANDO imprimiu é a sugestão — é ela que o Inbox mostra sem abrir nada
-    expect(f.suggestion).toContain("just orch-deploy acmeapp --service=edge-api");
+    expect(f.suggestion).toContain("relay push-app acmeapp --unit=edge-api");
     // e o card volta para a parada de onde se republica (não vira conserto de código)
     const card = { id: "s1", type: "story", status: "deploy", deployFiredAt: "x" } as unknown as Card;
     const next = applyDeployFailureRevert(card, f, DEPLOY_REVERT_DESTINATION);

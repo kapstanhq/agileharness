@@ -724,17 +724,151 @@ function portsPattern(ports: readonly number[]): RegExp | null {
 }
 
 /**
- * A classe das regras DECLARADAS para o texto. Até {@link QA_FAILURE_TEXT_TAIL_BYTES} o texto vai inteiro; passando disso
- * `matchDeclaredFailureClass` só lê o RABO (custo de regex com teto), e aqui a CABEÇA entra também — o baseline sempre
- * olhou o texto todo, e o erro que explica a falha costuma estar no começo OU no fim de um log longo. Por regra, na ordem
- * do arquivo (a primeira que casar vence, em qualquer das duas pontas). PURA.
+ * Quanto de um log as regras DECLARADAS leem, no máximo: acima disso entram a primeira e a última metade do teto, lidas
+ * como dois TEXTOS SEPARADOS (nunca coladas: o ponto de corte não vira adjacência que uma regra pudesse casar).
  */
-function declaredFailureClassOf(msg: string, rules: readonly TargetFailureRule[] | undefined): FailureClass | undefined {
-  if (msg.length <= QA_FAILURE_TEXT_TAIL_BYTES) return matchDeclaredFailureClass(msg, rules);
-  const head = msg.slice(0, QA_FAILURE_TEXT_TAIL_BYTES);
-  for (const rule of rules ?? []) {
-    const hit = matchDeclaredFailureClass(msg, [rule]) ?? matchDeclaredFailureClass(head, [rule]);
-    if (hit) return hit;
+export const QA_FAILURE_SCAN_CAP = 128 * 1024;
+/** Sobreposição entre janelas: um casamento de até este tamanho que cruza a borda de uma janela cabe inteiro na seguinte. */
+const QA_FAILURE_WINDOW_OVERLAP = 2 * 1024;
+/** Janelas do MIOLO lidas por regra, além da cabeça e da cauda de cada metade (o resto do miolo fica de fora). */
+export const QA_FAILURE_MIDDLE_WINDOWS = 6;
+/** Orçamento de tempo de UMA classificação (todas as regras); estourado, as janelas que faltam não são lidas. */
+export const QA_FAILURE_SCAN_BUDGET_MS = 150;
+/** Quanto o início de uma janela do miolo pode andar até um espaço (para não cortar uma palavra ao meio e forjar um `\b`). */
+const WORD_ALIGN = 256;
+
+/** Os segmentos lidos: o texto inteiro, ou as duas metades do teto separadas. PURA. */
+function scanSegments(msg: string): string[] {
+  return msg.length > QA_FAILURE_SCAN_CAP ? [msg.slice(0, QA_FAILURE_SCAN_CAP / 2), msg.slice(-QA_FAILURE_SCAN_CAP / 2)] : [msg];
+}
+
+/**
+ * As janelas de UM segmento, na ordem de leitura: cabeça, cauda, e então até {@link QA_FAILURE_MIDDLE_WINDOWS} do miolo.
+ * Cada janela tem até {@link QA_FAILURE_TEXT_TAIL_BYTES}, com {@link QA_FAILURE_WINDOW_OVERLAP} de sobreposição; o início
+ * de uma janela do miolo anda até o próximo espaço (≤ {@link WORD_ALIGN}) para não forjar uma fronteira de palavra. PURA.
+ */
+function segmentWindows(text: string): string[] {
+  const size = QA_FAILURE_TEXT_TAIL_BYTES;
+  if (text.length <= size) return [text];
+  const head = text.slice(0, size);
+  const tail = text.slice(-size);
+  const step = size - QA_FAILURE_WINDOW_OVERLAP;
+  const middle: string[] = [];
+  for (let i = step; i + size < text.length && middle.length < QA_FAILURE_MIDDLE_WINDOWS; i += step) {
+    const near = text.slice(i, i + WORD_ALIGN).search(/\s/);
+    const start = near > 0 ? i + near + 1 : i;
+    middle.push(text.slice(start, start + size));
+  }
+  return [head, tail, ...middle];
+}
+
+/** Todas as janelas que as regras leem (as dos dois segmentos, quando o texto passa do teto). PURA. */
+export function failureScanWindows(msg: string): string[] {
+  return scanSegments(msg).flatMap(segmentWindows);
+}
+
+/**
+ * O maior trecho LITERAL que todo casamento da regra contém (≥ 3 caracteres), ou null quando não dá para afirmar um —
+ * alternância `|`, grupo, classe, quantificador sobre o caractere. É o pré-filtro: se o texto não contém esse trecho, a
+ * regra não casa e nenhuma janela é lida. Conservador: na dúvida, null (a regra roda). PURA.
+ */
+export function requiredLiteral(pattern: string): string | null {
+  if (pattern.includes("|")) return null;
+  const runs: string[] = [];
+  let cur = "";
+  let depth = 0;
+  const flush = () => {
+    if (depth === 0 && cur.length >= 3) runs.push(cur);
+    cur = "";
+  };
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === "\\") {
+      const n = pattern[i + 1] ?? "";
+      i++;
+      if (/[A-Za-z0-9]/.test(n)) flush(); // \d, \w, \b, \s, \1… não são literais
+      else cur += n; // \. \( \[ … são
+      continue;
+    }
+    if (c === "[") {
+      flush();
+      const close = pattern.indexOf("]", i + 2);
+      if (close < 0) return null;
+      i = close;
+      continue;
+    }
+    if (c === "(") { flush(); depth++; continue; }
+    if (c === ")") { flush(); depth = Math.max(0, depth - 1); continue; }
+    if (c === "*" || c === "?" || c === "{") {
+      cur = cur.slice(0, -1); // o caractere anterior pode faltar
+      flush();
+      if (c === "{") { const close = pattern.indexOf("}", i); if (close > 0) i = close; }
+      continue;
+    }
+    if (c === "+" || c === "." || c === "^" || c === "$") { flush(); continue; }
+    cur += c;
+  }
+  flush();
+  return runs.length ? runs.reduce((a, b) => (b.length > a.length ? b : a)) : null;
+}
+
+/** A regra usa `^`/`$` como âncora do TEXTO (sem a flag `m`): só a cabeça/cauda do texto inteiro podem casá-la. PURA. */
+function textAnchors(pattern: string, flags: string): { start: boolean; end: boolean } {
+  if (flags.includes("m")) return { start: false, end: false };
+  let start = false;
+  let end = false;
+  let inClass = false;
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === "\\") { i++; continue; }
+    if (inClass) { if (c === "]") inClass = false; continue; }
+    if (c === "[") { inClass = true; continue; }
+    if (c === "^") start = true;
+    if (c === "$") end = true;
+  }
+  return { start, end };
+}
+
+/**
+ * A classe das regras DECLARADAS para o texto. Por regra, na ordem do arquivo (a primeira que casar vence):
+ *   1. PRÉ-FILTRO: se a regra exige um literal ({@link requiredLiteral}) que o texto não contém, ela nem roda;
+ *   2. ÂNCORAS: `^` sem flag `m` só casa no início do TEXTO (lido na cabeça), `$` só no fim (lido na cauda) — nunca no
+ *      início/fim de uma janela, que não é o do texto;
+ *   3. JANELAS ({@link failureScanWindows}): cabeça, cauda e até {@link QA_FAILURE_MIDDLE_WINDOWS} do miolo de cada
+ *      segmento. Um casamento MAIOR que a sobreposição que cruze uma borda pode se perder, e o miolo além dessas janelas
+ *      não é lido — o custo síncrono tem teto;
+ *   4. ORÇAMENTO: a classificação inteira para de ler janelas depois de {@link QA_FAILURE_SCAN_BUDGET_MS} ms.
+ * PURA (o relógio é injetável).
+ */
+function declaredFailureClassOf(msg: string, rules: readonly TargetFailureRule[] | undefined, clock: () => number = () => performance.now()): FailureClass | undefined {
+  if (!rules?.length || !msg) return undefined;
+  const deadline = clock() + QA_FAILURE_SCAN_BUDGET_MS;
+  const segments = scanSegments(msg);
+  let windows: string[] | null = null;
+  let lowered: string[] | null = null;
+  for (const rule of rules) {
+    const flags = rule.flags ?? "i";
+    const literal = requiredLiteral(rule.pattern);
+    if (literal) {
+      const fold = flags.includes("i");
+      const hay = fold ? (lowered ??= segments.map((seg) => seg.toLowerCase())) : segments;
+      const needle = fold ? literal.toLowerCase() : literal;
+      if (!hay.some((seg) => seg.includes(needle))) continue;
+    }
+    const anchors = textAnchors(rule.pattern, flags);
+    let candidates: string[];
+    if (anchors.start || anchors.end) {
+      const first = segments[0].slice(0, QA_FAILURE_TEXT_TAIL_BYTES);
+      const last = segments[segments.length - 1].slice(-QA_FAILURE_TEXT_TAIL_BYTES);
+      candidates = msg.length <= QA_FAILURE_TEXT_TAIL_BYTES ? [msg] : anchors.start && anchors.end ? [first, last] : anchors.start ? [first] : [last];
+    } else {
+      windows ??= failureScanWindows(msg);
+      candidates = windows;
+    }
+    for (const w of candidates) {
+      if (clock() > deadline) return undefined;
+      if (matchDeclaredFailureClass(w, [rule]) !== undefined) return rule.class;
+    }
   }
   return undefined;
 }

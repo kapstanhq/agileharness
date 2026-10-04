@@ -71,8 +71,8 @@ export interface SweepTickDeps {
   runBranchGc?: () => Promise<unknown>;
   /** RECONCILIAÇÃO de deploy-failure (deploy-reconcile.ts): retira o alarme dos cards cujo código já está
    *  provadamente publicado. Precisa ser PERIÓDICO — e não só reativo ao settle — porque a publicação pode
-   *  acontecer FORA do serviço (`just orch-deploy` no shell não passa pelo registry, logo não emite onDone).
-   *  Foi exatamente esse caminho que deixou cards travados por dias com o código no ar.
+   *  acontecer FORA do serviço (o comando de deploy declarado rodado à mão não passa pelo registry, logo não emite onDone).
+   *  Sem a passada periódica, o card de um deploy feito à mão nunca sairia do alarme.
    *  Best-effort: sua falha nunca rebaixa um tick de recovery bem-sucedido. */
   runDeployReconcile?: () => Promise<unknown>;
   /** story-ex9528 M2 — optional idle-gated trash GC (prune soft-deleted board data older than 7d).

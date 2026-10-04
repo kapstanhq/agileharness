@@ -12,9 +12,21 @@ const src = (rel: string) => {
 
 describe("o chip de ritmo — não mostra nível antes de ler", () => {
   const chip = src("./nav/BoardPaceChip.tsx");
-  it("o rosto do chip vem de paceChipFace, e o nível padrão «normal» não vira texto", () => {
-    expect(chip).toContain("paceChipFace(");
-    expect(chip).not.toMatch(/view \? paceChipValue\(view\) : paceLabel\(level\)/);
+  it("o rosto do chip vem INTEIRO de paceChipFace: texto, dica e rótulo — nada de nível escrito à parte", () => {
+    expect(chip).toMatch(/const face = paceChipFace\(view, failed, Date\.now\(\)\);/);
+    // o bloco do <NavChip …/> do cabeçalho: tudo o que ele DIZ é `face.*`
+    const ini = chip.indexOf("<NavChip");
+    const navChip = chip.slice(ini, chip.indexOf("{open && (", ini));
+    expect(navChip.length).toBeGreaterThan(50);
+    expect(navChip).toMatch(/value=\{reading \? <span[^>]*>\{face\.value\}<\/span> : face\.value\}/);
+    expect(navChip).toMatch(/title=\{face\.title\}/);
+    expect(navChip).toMatch(/ariaLabel=\{face\.ariaLabel\}/);
+    // nenhum texto de nível montado fora da função pura (era assim que «Normal» aparecia antes de ler)
+    expect(navChip).not.toMatch(/paceLabel\(|paceChipValue\(|"Normal"|'Normal'/);
+  });
+  it("o painel do celular diz no título o MESMO texto do chip pronto (paceChipValue é o value do rosto «ready»)", () => {
+    expect(chip).toMatch(/<NavPopoverTitle meta=\{view \? paceChipValue\(view\) : undefined\}>Ritmo do board<\/NavPopoverTitle>/);
+    expect(chip).toMatch(/<NavPopoverTitle meta=\{view \? face\.value : undefined\}>Ritmo do board<\/NavPopoverTitle>/);
   });
   it("a leitura que falha é lembrada (o painel diz «indisponível»)", () => {
     expect(chip).toMatch(/setFailed\(true\)/);

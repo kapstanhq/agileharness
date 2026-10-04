@@ -1,5 +1,5 @@
 // Item 9 — a saída 3 do deploy declarado, DIVIDIDA: `needs-proof` (falta uma prova — trabalho do SISTEMA) × `needs-human`
-// (dinheiro — do dono, como hoje). As fixtures têm a FORMA do `--json` do deploy-auto de um alvo (pacote inventado
+// (dinheiro — do dono, como hoje). As fixtures têm a FORMA do `--json` do deploy automático de um alvo (pacote inventado
 // `loja`, caminhos, shas e hashes sorteados): a linha de needs-proof usa as mesmas chaves de
 // `evaluateRequirement`/`missingProofs` que o alvo escreve, e `edge-config-proof-status.json` guarda SÓ o assunto de
 // conteúdo (`request.subject`) que a revisão pedida tem de repetir. São `.txt` de propósito: `*.log` é ignorado pelo git — a guarda
@@ -40,13 +40,13 @@ import {
 } from "./deploy-proof";
 
 const fixture = (name: string) => readFileSync(fileURLToPath(new URL(`./__fixtures__/${name}`, import.meta.url)), "utf8");
-const NEEDS_PROOF = fixture("deploy-auto-needs-proof.txt");
-const NEEDS_HUMAN = fixture("deploy-auto-needs-human.txt");
+const NEEDS_PROOF = fixture("publish-needs-proof.txt");
+const NEEDS_HUMAN = fixture("publish-needs-human.txt");
 const FS_STATUS = JSON.parse(fixture("edge-config-proof-status.json")) as { request: { subject: { hash: string; files: string[] } } };
 
 const exit3 = { ok: false, exitCode: 3, declaredKind: "command" as const, pkg: "loja" };
 
-describe("parseDeployExit3Report — a última linha JSON do deploy-auto", () => {
+describe("parseDeployExit3Report — a última linha JSON do deploy automático", () => {
   it("needs-proof: as revisões de segurança pedidas (diff e conteúdo) e as outras provas que faltam", () => {
     const r = parseDeployExit3Report(NEEDS_PROOF);
     expect(r.status).toBe("needs-proof");
@@ -55,7 +55,7 @@ describe("parseDeployExit3Report — a última linha JSON do deploy-auto", () =>
     expect(r.security[0]).toMatchObject({ reviewer: "security-reviewer", units: ["web-edge"], guards: ["session-code"], subject: { files: ["packages/loja/web/lib/session-guard.ts", "packages/loja/web/app/api/carrinho/route.ts"] } });
     expect(r.security[1].subject).toEqual(FS_STATUS.request.subject);
     expect(r.security[0].record).toContain("<verdict.json>");
-    expect(r.other).toEqual([expect.objectContaining({ proof: "drill", run: "just rollback-drill loja jobs" })]);
+    expect(r.other).toEqual([expect.objectContaining({ proof: "drill", run: "relay drill loja jobs" })]);
   });
 
   it("needs-human: as unidades e as regras do dono (o arquivo que monta a cobrança é dinheiro)", () => {

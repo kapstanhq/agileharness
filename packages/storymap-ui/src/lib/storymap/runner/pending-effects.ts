@@ -178,7 +178,7 @@ export interface PendingEffectRecoveryDeps {
   /**
    * Is this effect safe to AUTO-fire on boot for this board? Optional — absent ⇒ everything is boot-safe
    * (legacy/test behavior). A `promote-stage` is always safe (idempotent code promote, no deploy) and a
-   * storymap self-deploy is safe (idempotent rebuild+restart); a PRODUCT deploy (orch-deploy) is NOT — a
+   * storymap self-deploy is safe (idempotent rebuild+restart); a PRODUCT deploy (the declared deploy command) is NOT — a
    * production deploy must be human-initiated, never auto-fired after a restart. Un-safe effects are
    * deferred (logged + cleared one-shot), never re-fired.
    */

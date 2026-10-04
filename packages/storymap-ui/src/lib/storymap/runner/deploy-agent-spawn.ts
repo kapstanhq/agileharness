@@ -37,7 +37,7 @@ import { resolvedClaudeBin } from "./claude-bin";
 
 /** Default wall-clock budget (minutes) when the board's descriptor declares none. Generous for a deploy
  *  (build + upload + provider propagation) yet bounded: an overrun is a FAILED deploy ⇒ revert + finding,
- *  which is exactly what a hung `orch-deploy` child would eventually earn from the operator. */
+ *  which is exactly what a hung declared deploy command would eventually earn from the operator. */
 export const DEPLOY_AGENT_TIMEOUT_MINUTES_DEFAULT = 15;
 
 /** `--max-turns` for the deploy agent. Conservative on purpose: the agent FOLLOWS a declared recipe (run
@@ -189,7 +189,7 @@ export interface DeployAgentLaunchDeps {
 
 /**
  * Launch the deploy agent as a {@link DeployLaunch} — the SAME shape the registry's default launcher
- * returns for `just orch-deploy`, so ProductDeployRegistry.start tracks it with zero special-casing.
+ * returns for the declared deploy command, so ProductDeployRegistry.start tracks it with zero special-casing.
  * Completion semantics (all fail-closed, D-AG3):
  *   - exit 0 + parsable verdict `ok:true`  ⇒ whenDone(0) — a successful deploy settle;
  *   - exit 0 + verdict `ok:false`          ⇒ whenDone(1) — the agent honestly failed;

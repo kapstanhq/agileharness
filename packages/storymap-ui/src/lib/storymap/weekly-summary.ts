@@ -142,6 +142,7 @@ export const DECISION_KIND_LABEL: Record<SystemDecisionKind, string> = {
   "card-missing": "Registrou cards que sumiram do disco",
   "extra-cycle": "Autorizou ciclos extras de verificação",
   "conductor-park": "Estacionou condutores parados",
+  "proof-republish": "Republicou com a prova de segurança",
   undo: "Desfez decisões (a seu pedido)",
 };
 

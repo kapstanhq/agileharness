@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ORIGIN_TOOLCHAIN_HASHES, hitsHashed } from "./__fixtures__/origin-toolchain-words";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -164,7 +165,7 @@ describe("recoverPendingEffects — one-shot boot re-fire", () => {
   it("DEFERS (no re-fire) a NOT-boot-safe product deploy but still clears it one-shot", async () => {
     const { base, runEffect, resolve } = deps({
       loadPending: async () => [entry({ board: "acme", effect: "promote-and-deploy" as EntryEffect })],
-      // acme's deploy is a production orch-deploy → not boot-safe.
+      // acme's deploy is a production declared deploy command → not boot-safe.
       isBootSafe: async () => false,
     });
     const summary = await recoverPendingEffects(base);
@@ -184,7 +185,8 @@ describe("recoverPendingEffects — one-shot boot re-fire", () => {
       const text = warn.mock.calls.map((c) => String(c[0])).join("\n");
       expect(text).toContain("DEFERIDO no boot");
       expect(text).toContain("o comando de deploy do alvo");
-      expect(text).not.toMatch(/orch-deploy|harness-ship/);
+      expect(hitsHashed(text, ORIGIN_TOOLCHAIN_HASHES)).toBe(false);
+      expect(text).not.toContain("harness-ship");
     } finally {
       warn.mockRestore();
     }

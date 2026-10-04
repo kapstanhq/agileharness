@@ -4,6 +4,7 @@ import {
   latchSealWords,
   LATCH_SEAL_HEADLINE,
   PACE_LOADING_VALUE,
+  PACE_PANEL_LOADING,
   PACE_PANEL_UNAVAILABLE,
   PACE_UNAVAILABLE_VALUE,
   paceChipFace,
@@ -167,6 +168,28 @@ describe("o botão do cabeçalho e o painel do escopo", () => {
   it("desarmado e ilegível não levam escopo: seguram tudo antes de olhar tipo", () => {
     expect(paceChipValue(view(ownerFixes(), { autorunDisabled: true }))).toBe("Desligado");
     expect(paceChipValue(view(ownerFixes(), {}, true))).toBe("Pausado");
+  });
+
+  it("o rosto do chip, estado a estado: lendo, indisponível e pronto (pausado/devagar/normal × sem e com escopo)", () => {
+    expect(paceChipFace(null, false, NOW)).toEqual({ state: "loading", value: PACE_LOADING_VALUE, title: PACE_PANEL_LOADING, ariaLabel: "Ritmo do board — lendo" });
+    expect(paceChipFace(null, true, NOW)).toEqual({ state: "unavailable", value: PACE_UNAVAILABLE_VALUE, title: PACE_PANEL_UNAVAILABLE, ariaLabel: "Ritmo do board — indisponível" });
+    const at = iso(NOW - 60_000);
+    const casos: Array<[BoardPaceRow, string]> = [
+      [{ board: "acme" }, "Normal"],
+      [{ board: "acme", agent: { level: "slow", by: { kind: "agent" }, at } }, "Devagar"],
+      [{ board: "acme", owner: { level: "paused", by: { kind: "owner" }, at } }, "Pausado"],
+      [ownerFixes(), "Normal · só consertos"],
+      [{ ...ownerFixes(), agent: { level: "slow", by: { kind: "agent" }, at } }, "Devagar · só consertos"],
+      [{ ...ownerFixes(), owner: { level: "paused", by: { kind: "owner" }, at } }, "Pausado · só consertos"],
+    ];
+    for (const [row, rotulo] of casos) {
+      const face = paceChipFace(view(row), false, NOW);
+      expect(face, rotulo).toMatchObject({ state: "ready", value: rotulo, ariaLabel: `Ritmo do board — ${rotulo}` });
+      // uma leitura boa anterior vale mais que um erro novo
+      expect(paceChipFace(view(row), true, NOW).value, rotulo).toBe(rotulo);
+    }
+    // o valor de leitura nunca é um nível (o chip não afirma «Normal» antes de ler)
+    for (const v of [PACE_LOADING_VALUE, PACE_UNAVAILABLE_VALUE]) expect(["Normal", "Devagar", "Pausado"]).not.toContain(v);
   });
 
   it("escopo vencido some do chip junto com o prazo", () => {

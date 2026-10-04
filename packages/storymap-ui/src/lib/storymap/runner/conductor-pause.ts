@@ -17,7 +17,7 @@
 // commitar o que tem e escrever de onde retomar. O terminal que sobra é fechado pelo passe de órfãos (conductor.ts).
 //
 // WP5-F2 — a ESCADA ÚNICA ({@link quietLadderStep}): estacionar só quando a espera era do dono deixava duas vagas presas
-// por horas num caso real — um condutor cujo turno morreu num «API Error» (horas até o dono digitar «continue»)
+// por horas — por exemplo, um condutor cujo turno morreu num erro de transporte (até alguém digitar «continue» à mão)
 // e um condutor quieto sem pedir nada com vários cards na fila. Agora: erro de transporte ⇒ retomar (linha
 // fixa, até 2 por hora) e depois estacionar; quieto com fila esperando vaga ⇒ um lembrete e depois estacionar. Cada
 // degrau fica no registro de decisões do sistema; o estacionar tem «Desfazer» (reabrir o condutor já).
@@ -166,7 +166,7 @@ export const QUIET_PARK_LINE =
   "(4) worktree_discard — o branch com commits não integrados fica preservado; (5) NÃO limpe o driver do card; " +
   "(6) encerre o turno sem pedir mais nada. O serviço devolve o card à fila e um condutor novo retoma do «Estado do condutor».";
 
-/** A linha de RETOMAR depois de um erro de transporte — o «continue» que o dono digitava à mão. */
+/** A linha de RETOMAR depois de um erro de transporte — o «continue» que alguém digitaria à mão. */
 export const TRANSPORT_RETRY_LINE =
   "continuar — sua resposta anterior foi cortada por um erro de API (a conexão parou no meio). " +
   "Retome exatamente de onde parou: releia o card (get_card) se precisar e siga.";
@@ -279,7 +279,7 @@ export type QuietLadderStep =
  *   1. já pedido para estacionar, trabalhando ou com um prompt desenhado ⇒ nada;
  *   2. ERRO DE TRANSPORTE no último turno e quieto há `transportRetryAfterMinutes` ⇒ a linha fixa de retomar, até
  *      `transportRetries` vezes por hora (e nunca duas no mesmo intervalo); esgotadas ⇒ estacionar. Não depende de fila
- *      nem de filho vivo: um turno cortado não volta sozinho (num caso real, horas parado até o dono digitar «continue»);
+ *      nem de filho vivo: um turno cortado não volta sozinho (ficaria parado até alguém digitar «continue» à mão);
  *   3. espera do DONO quieta há `afterMinutes` ⇒ estacionar (fatia 2 das paradas por recurso), com filho vivo ou não —
  *      como antes do F2;
  *   4. QUIETO sem pausa declarada, com fila esperando vaga no board, há `nudgeAfterMinutes` ⇒ UM lembrete; quieto de novo

@@ -59,12 +59,87 @@ function ago(ms: number, now: number): string {
   return `há ${Math.floor(h / 24)}d`;
 }
 
-/** O modelo do painel, ou null quando não há retrato (governador ilegível). PURO. */
-export function capacityView(s: GovernorSnapshot | null | undefined, now: number): CapacityView | null {
+/**
+ * O número da cota que TODA superfície mostra. Há duas leituras da MESMA janela da conta: a do proxy de uso (a barra de
+ * topo) e a que o governador guardou no último tick dele. Lidas em momentos diferentes, elas divergiam na tela — o chip
+ * dizia uma porcentagem e o painel, logo abaixo, outra. A regra, POR CAMPO (semana e sessão separadas): vale a leitura
+ * MAIS RECENTE que tem aquele campo (por `polledAt`; `0` e ausente são «desconhecido», iguais entre si; empate, a do
+ * proxy), e a defasagem, o instante da leitura e o reset vêm junto com ela. Sem nenhuma, null. PURA.
+ */
+export interface QuotaField {
+  pct: number;
+  /** quando ESTA leitura foi feita (epoch ms), ou null se desconhecido */
+  polledAt: number | null;
+  stale: boolean;
+  /** o instante absoluto do reset desta janela, quando a fonte o diz */
+  resetsAt: number | null;
+  source: "proxy" | "governor";
+}
+
+export interface QuotaReading {
+  week: QuotaField | null;
+  session: QuotaField | null;
+  /** atalhos do campo da SEMANA (o número do chip) — e da sessão */
+  weekPct: number | null;
+  sessionPct: number | null;
+  polledAt: number | null;
+  stale: boolean;
+  source: "proxy" | "governor";
+}
+
+type ProxyBucket = { usedPct?: number | null; resetsAt?: number | null } | null | undefined;
+type ProxyUsage = { week?: ProxyBucket; session?: ProxyBucket; polledAt?: number | null; stale?: boolean } | null | undefined;
+
+const known = (t: number | null | undefined): number | null => (typeof t === "number" && Number.isFinite(t) && t > 0 ? t : null);
+
+/** O mais recente dos dois (empate ou ambos desconhecidos ⇒ o do proxy). PURA. */
+function newest(p: QuotaField | null, g: QuotaField | null): QuotaField | null {
+  if (!p || !g) return p ?? g;
+  return (g.polledAt ?? -Infinity) > (p.polledAt ?? -Infinity) ? g : p;
+}
+
+export function unifiedQuota(proxy: ProxyUsage, governor: GovernorSnapshot | null | undefined): QuotaReading | null {
+  const pAt = known(proxy?.polledAt);
+  const pField = (b: ProxyBucket): QuotaField | null =>
+    b && typeof b.usedPct === "number" ? { pct: b.usedPct, polledAt: pAt, stale: !!proxy?.stale, resetsAt: known(b.resetsAt), source: "proxy" } : null;
+  const r = governor?.reading;
+  const gAt = known(r?.polledAt);
+  const gField = (pct: number | null | undefined, resetsAt: number | null | undefined): QuotaField | null =>
+    r && typeof pct === "number" ? { pct, polledAt: gAt, stale: !!r.stale, resetsAt: known(resetsAt), source: "governor" } : null;
+  const week = newest(pField(proxy?.week), gField(r?.usage7dPct, r?.resetsAt7d));
+  const session = newest(pField(proxy?.session), gField(r?.usage5hPct, r?.resetsAt5h));
+  if (!week && !session) return null;
+  const head = (week ?? session)!;
+  return { week, session, weekPct: week?.pct ?? null, sessionPct: session?.pct ?? null, polledAt: head.polledAt, stale: head.stale, source: head.source };
+}
+
+/**
+ * A barra de uma janela com o número UNIFICADO: o percentual e o reset da fonte que venceu; o reset do proxy só quando é
+ * ele que venceu (ou quando o vencedor não diz o reset). Sem número nenhum, null. PURA.
+ */
+export function quotaBucket(
+  proxyBucket: { usedPct: number; resetsInMinutes: number } | null | undefined,
+  field: QuotaField | null | undefined,
+  now: number,
+): { usedPct: number; resetsInMinutes: number } | null {
+  if (!field) return proxyBucket ?? null;
+  const resetsInMinutes = field.resetsAt != null ? Math.max(0, (field.resetsAt - now) / 60_000) : (proxyBucket?.resetsInMinutes ?? 0);
+  return { usedPct: field.pct, resetsInMinutes };
+}
+
+/**
+ * O modelo do painel, ou null quando não há retrato (governador ilegível). `quota` é o número unificado
+ * ({@link unifiedQuota}) quando quem desenha também tem a leitura do proxy — sem ele, vale a do governador. PURO.
+ */
+export function capacityView(s: GovernorSnapshot | null | undefined, now: number, quota?: QuotaReading | null): CapacityView | null {
   if (!s) return null;
   const rows: CapacityRow[] = [];
-  const reading = s.reading;
+  const q = quota ?? unifiedQuota(null, s);
+  const reading = q && q.weekPct != null ? { usage7dPct: q.weekPct, usage5hPct: q.sessionPct, stale: q.stale } : null;
   const muted = !!reading?.stale;
+  // «Hoje» e «No reset» são contas do GOVERNADOR sobre a leitura DELE; quando o número da semana mostrado é outro (o do
+  // proxy, mais recente), essas linhas dizem de onde vêm em vez de parecer contas sobre o número de cima.
+  const fromGovernor = q?.week && q.week.source !== "governor" && s.reading ? " · pela leitura do governador" : "";
 
   if (reading) {
     const ceiling = s.pacing?.ceilingPct ?? s.caps.weekCapPct;
@@ -74,21 +149,21 @@ export function capacityView(s: GovernorSnapshot | null | undefined, now: number
       label: "Sessão (5h)",
       value: reading.usage5hPct == null ? "—" : `${r1(reading.usage5hPct)}% · teto ${r1(s.caps.fiveHourCapPct)}%`,
       pct: reading.usage5hPct,
-      muted,
+      muted: q?.session ? q.session.stale : muted,
     });
   }
   if (s.pacing) {
     const { usedTodayPct, allowancePct } = s.pacing;
     rows.push({
       key: "today",
-      label: "Hoje (cota)",
+      label: `Hoje (cota)${fromGovernor}`,
       value: `${r1(usedTodayPct)} de ${r1(allowancePct)} pp`,
       pct: allowancePct > 0 ? Math.min(100, (usedTodayPct / allowancePct) * 100) : 100,
       muted,
     });
   }
   if (s.projectionAtResetPct != null) {
-    rows.push({ key: "projection", label: "No reset (≈)", value: `${r1(s.projectionAtResetPct)}%`, pct: Math.min(100, s.projectionAtResetPct), muted });
+    rows.push({ key: "projection", label: `No reset (≈)${fromGovernor}`, value: `${r1(s.projectionAtResetPct)}%`, pct: Math.min(100, s.projectionAtResetPct), muted });
   }
   rows.push({
     key: "held",

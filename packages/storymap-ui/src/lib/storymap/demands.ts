@@ -480,7 +480,7 @@ export function cardDemands(card: Card, config: BoardConfig, boardId: string, op
 
   // WS1.1 + deploy-truth (D-DT7) — deploy-unsettled: a card STUCK in the deploy step ("Publicando"): since
   // deploy-truth the terminal is only entered on a PROVEN settle, so a settle that never arrives (dead restart,
-  // killed orch-deploy) — or one that arrived without proof — leaves the card parked there with deployFiredAt
+  // killed declared deploy command) — or one that arrived without proof — leaves the card parked there with deployFiredAt
   // uncleared. SÓ nesse passo. O predicado era independente de status para pegar o card da era
   // otimista que chegou ao terminal com o carimbo — e assim o carimbo seguia QUALQUER card movido para fora de
   // Publicar, para sempre. O legado é da varredura do serviço (staleDeliveryStampSweep); a saída do passo, da

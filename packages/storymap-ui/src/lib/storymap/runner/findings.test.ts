@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { ORIGIN_TOOLCHAIN_HASHES, hitsHashed } from "./__fixtures__/origin-toolchain-words";
 import {
   cardBudgetFindingId,
   codeNotLandedFindingId,
@@ -534,6 +535,7 @@ describe("withPendingEffectFailureFinding — a orientação ao operador é a do
   it("manda rodar o comando de deploy do ALVO (sem o verbo do orquestrador de ninguém)", () => {
     const [f] = withPendingEffectFailureFinding([], "story-ex9985", "promote-and-deploy", "falhou ao publicar");
     expect(f.detail).toContain("comando de deploy do alvo");
-    expect(f.detail).not.toMatch(/orch-deploy|harness-ship/);
+    expect(hitsHashed(f.detail ?? "", ORIGIN_TOOLCHAIN_HASHES)).toBe(false);
+    expect(f.detail).not.toContain("harness-ship");
   });
 });

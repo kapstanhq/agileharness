@@ -52,11 +52,11 @@ describe("isDeployNeedsHuman — a saída 3 do deploy DECLARADO é «precisa de 
     expect(isDeployNeedsHuman(ev({ exitCode: 3, declaredKind: "command" }))).toBe(true);
   });
 
-  it("qualquer outra coisa segue falha: outro código, agente, orch-deploy legado, sucesso", () => {
+  it("qualquer outra coisa segue falha: outro código, agente, comando legado declarado, sucesso", () => {
     expect(isDeployNeedsHuman(ev({ exitCode: 1, declaredKind: "command" }))).toBe(false);
     expect(isDeployNeedsHuman(ev({ exitCode: 4, declaredKind: "command" }))).toBe(false);
     expect(isDeployNeedsHuman(ev({ exitCode: 3, declaredKind: "agent" }))).toBe(false); // o contrato é do comando
-    expect(isDeployNeedsHuman(ev({ exitCode: 3 }))).toBe(false); // orch-deploy: 3 não tem esse sentido
+    expect(isDeployNeedsHuman(ev({ exitCode: 3 }))).toBe(false); // comando legado: 3 não tem esse sentido
     expect(isDeployNeedsHuman(ev({ ok: true, exitCode: 0, declaredKind: "command" }))).toBe(false);
   });
 });

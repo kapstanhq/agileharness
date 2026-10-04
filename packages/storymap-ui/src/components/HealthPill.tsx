@@ -15,6 +15,7 @@ import { AlertTriangle, Lock, Zap } from "lucide-react";
 import { CapacityPanel } from "@/components/CapacityPanel";
 import { cn } from "@/lib/cn";
 import { latchSealWords, quotaUsageWords } from "@/lib/storymap/board-pace-words";
+import { quotaBucket, unifiedQuota, type QuotaReading } from "@/lib/vps/capacity-view";
 import { useVpsMetrics } from "@/components/RunnerStatusProvider";
 import {
   NavChip,
@@ -65,9 +66,9 @@ function formatAge(polledAt: number | null): string {
  * we still surface it (a slightly-old real figure beats the undercounting ccusage estimate) but
  * the UI marks it as defasado instead of color-coding it as authoritative.
  */
-function headline(metrics: VpsMetrics): { pct: number | null; estimate: boolean; stale: boolean } {
-  const week = metrics.usage?.week?.usedPct;
-  if (week != null) return { pct: week, estimate: false, stale: !!metrics.usage?.stale };
+function headline(metrics: VpsMetrics, quota: QuotaReading | null): { pct: number | null; estimate: boolean; stale: boolean } {
+  // O número da janela é o UNIFICADO (capacity-view.ts `unifiedQuota`): o mesmo que o painel da frota mostra logo abaixo.
+  if (quota?.weekPct != null) return { pct: quota.weekPct, estimate: false, stale: quota.stale };
   const cc = metrics.tokens?.usedPct;
   if (cc != null) return { pct: cc, estimate: true, stale: false };
   return { pct: null, estimate: false, stale: false };
@@ -129,14 +130,15 @@ export function HealthPill() {
     return <span className="h-8 w-12 shrink-0 animate-pulse rounded-md bg-surface-hover/60" aria-hidden />;
   }
 
-  const { pct, estimate, stale } = headline(metrics);
+  const quota = unifiedQuota(metrics.usage, metrics.governor);
+  const { pct, estimate, stale } = headline(metrics, quota);
   const { usage } = metrics;
   // A TRAVA do governador de capacidade é o único estado da cota que PARA a frota, e não pode depender de o operador
   // abrir o painel para ser vista — mas é OUTRA coisa que o uso: ganha selo próprio, ao lado do medidor, e o medidor de
   // uso fica na régua de uso (vermelho só se o USO for alto). Antes o chip dizia «Cota 7d 4%» em vermelho com cadeado, e
   // o 4% parecia cota crítica quando era a trava.
-  const seal = latchSealWords(metrics.governor, usage?.week?.usedPct ?? null);
-  const words = quotaUsageWords({ pct, estimate, stale, ageWords: formatAge(usage?.polledAt ?? null) });
+  const seal = latchSealWords(metrics.governor, quota?.weekPct ?? null);
+  const words = quotaUsageWords({ pct, estimate, stale, ageWords: formatAge(quota?.week?.polledAt ?? usage?.polledAt ?? null) });
 
   return (
     <div ref={ref} className="relative inline-flex shrink-0 items-center gap-1" onMouseEnter={openNow} onMouseLeave={closeSoon}>
@@ -185,17 +187,27 @@ export function HealthPill() {
           <NavPopoverTitle>Uso Claude</NavPopoverTitle>
           {usage ? (
             <NavPopoverBlock className="gap-2.5">
-              {usage.stale && (
+              {/* a defasagem é a da FONTE que deu o número (o proxy ou a leitura do governador), nunca a do outro */}
+              {quota?.week?.stale && (
                 <div className="flex items-start gap-1.5 rounded-md bg-amber-500/10 px-2 py-1.5 text-[10px] leading-snug text-amber-700 dark:text-amber-300">
                   <AlertTriangle className="mt-px h-3 w-3 shrink-0" />
                   <span>
-                    Número defasado — o proxy de uso atualizou {formatAge(usage.polledAt)}. O poller travou; os
-                    valores abaixo podem não bater com o <code>/usage</code> atual.
+                    {quota.week.source === "proxy" ? (
+                      <>
+                        Número defasado — o proxy de uso atualizou {formatAge(quota.week.polledAt)}. O poller travou; os
+                        valores abaixo podem não bater com o <code>/usage</code> atual.
+                      </>
+                    ) : (
+                      <>
+                        Número defasado — a última leitura da janela é de {formatAge(quota.week.polledAt)}; os valores abaixo
+                        podem não bater com o <code>/usage</code> atual.
+                      </>
+                    )}
                   </span>
                 </div>
               )}
-              <UsageRow label="Sessão (5h)" bucket={usage.session} muted={usage.stale} />
-              <UsageRow label="Semana (7d)" bucket={usage.week} muted={usage.stale} />
+              <UsageRow label="Sessão (5h)" bucket={quotaBucket(usage.session, quota?.session, Date.now())} muted={quota?.session?.stale ?? usage.stale} />
+              <UsageRow label="Semana (7d)" bucket={quotaBucket(usage.week, quota?.week, Date.now())} muted={quota?.week?.stale ?? usage.stale} />
               <UsageRow label="Sonnet (7d)" bucket={usage.weekSonnet} muted={usage.stale} />
             </NavPopoverBlock>
           ) : metrics.tokens ? (
@@ -217,7 +229,7 @@ export function HealthPill() {
           <NavPopoverDivider />
           <NavPopoverTitle>Capacidade da frota</NavPopoverTitle>
           <NavPopoverBlock>
-            <CapacityPanel snapshot={metrics.governor} omit={usage ? ["week", "session"] : []} />
+            <CapacityPanel snapshot={metrics.governor} quota={quota} omit={usage ? ["week", "session"] : []} />
           </NavPopoverBlock>
           {/* Sem rodapé de propósito: este painel RESPONDE (quanto da cota já foi), não encaminha. A
               porta para Processos vive no medidor ao lado — repeti-la aqui só punha uma saída para

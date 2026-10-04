@@ -13,7 +13,8 @@ import { Lock, ShieldAlert, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { NavPopoverMeter } from "@/components/nav/NavShell";
 import { clearCapacityLatchAction } from "@/app/actions";
-import { capacityView, type CapacityRow } from "@/lib/vps/capacity-view";
+import { capacityView, unifiedQuota, type CapacityRow, type QuotaReading } from "@/lib/vps/capacity-view";
+import { useVpsMetrics } from "@/components/RunnerStatusProvider";
 import { latchSealWords } from "@/lib/storymap/board-pace-words";
 import type { GovernorSnapshot } from "@/lib/storymap/runner/capacity-governor";
 
@@ -25,10 +26,14 @@ const TONE_INK = {
 
 export function CapacityPanel({
   snapshot,
+  quota,
   omit = [],
   className,
 }: {
   snapshot: GovernorSnapshot | null | undefined;
+  /** o número UNIFICADO da cota (capacity-view.ts `unifiedQuota`) quando quem desenha também tem a leitura do proxy —
+   *  assim o painel e o chip ao lado nunca dizem porcentagens diferentes. Ausente ⇒ a leitura do governador. */
+  quota?: QuotaReading | null;
   /** linhas que o contêiner já mostra (o popover de uso já desenha 7d e 5h) */
   omit?: CapacityRow["key"][];
   className?: string;
@@ -41,7 +46,11 @@ export function CapacityPanel({
   const [error, setError] = useState<string | null>(null);
 
   const current = override && snapshot && override.at >= snapshot.at ? override : snapshot;
-  const view = capacityView(current, Date.now());
+  // Sem `quota` de quem desenha (a página de Métricas), o painel unifica SOZINHO com a leitura viva do proxy — a mesma
+  // fonte da barra de topo. Fora do provedor de métricas, só a do governador.
+  const live = useVpsMetrics();
+  const q = quota !== undefined ? quota : unifiedQuota(live?.usage, current);
+  const view = capacityView(current, Date.now(), q);
   if (!view) {
     return <p className={cn("text-[11px] text-fg-subtle", className)}>Governador de capacidade indisponível.</p>;
   }
@@ -58,7 +67,7 @@ export function CapacityPanel({
   };
 
   // a frase da trava (e, se o uso já baixou, o porquê de ela seguir) — o mesmo texto do selo da barra
-  const seal = latchSealWords(current);
+  const seal = latchSealWords(current, q?.weekPct ?? null);
   const Icon = view.latch ? Lock : view.tone === "idle" ? ShieldCheck : ShieldAlert;
   return (
     <div className={cn("flex flex-col gap-2", className)}>

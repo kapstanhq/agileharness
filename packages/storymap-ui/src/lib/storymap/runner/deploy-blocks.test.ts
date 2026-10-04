@@ -198,7 +198,7 @@ const legacyNeedsHuman = (cls: string | null, units: string[]): Finding => ({
   detail:
     `A publicação de armazem não aconteceu (saída 3): produção segue como estava. ` +
     `Unidade(s) que só você publica: ${units.join(", ")}. O comando disse:\n✋ …`,
-  suggestion: "✋ deploy-auto … há mudança que só você publica",
+  suggestion: "✋ publicação automática … há mudança que só você publica",
 });
 const legacyPhase = (phase: "freshness" | "release"): Finding => ({ id: DEPLOY_FAILURE_FINDING_ID, lens: "general", severity: "high", status: "open", deployPhase: phase, title: phase, detail: phase });
 const code = { commitRange: { base: "b0", head: "h0" }, stagedAt: "2026-05-14", deployTargets: ["armazem"] };
@@ -251,7 +251,7 @@ describe("o livro (deploy-blocks.json)", () => {
 
   it("3 reverts da MESMA causa ⇒ 1 linha, com os 3 cards", () => {
     let rows: DeployBlockRow[] = [];
-    for (let i = 1; i <= 3; i++) rows = upsertDeployBlock(rows, { board: "armazem", cardId: `story-${i}`, cause: money, at, command: "just deploy-auto-x" });
+    for (let i = 1; i <= 3; i++) rows = upsertDeployBlock(rows, { board: "armazem", cardId: `story-${i}`, cause: money, at, command: "relay publish-x" });
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ causeKey: "armazem:owner:money", decider: "owner", ownerClass: "money", cardIds: ["story-1", "story-2", "story-3"], firstAt: at, planHead: LIVE_PLAN.head });
   });
@@ -270,7 +270,7 @@ describe("o livro (deploy-blocks.json)", () => {
       cardId: c.id,
       cause: backfillDeployCause(c.findings[0], { board: "armazem", cardId: c.id, deployTargets: c.deployTargets, config, lastPlan: LIVE_PLAN }),
     }));
-    const rows = syncDeployBlocks([], "armazem", open, { at, command: "just deploy-auto-x" });
+    const rows = syncDeployBlocks([], "armazem", open, { at, command: "relay publish-x" });
     expect(rows).toHaveLength(4);
     expect(rows.filter((r) => r.decider === "owner")).toEqual([expect.objectContaining({ causeKey: "armazem:owner:money", rules: expect.arrayContaining(["bills-customer"]) })]);
     expect(rows.find((r) => r.causeKey === "armazem:system")?.cardIds).toEqual(["story-ex9657", "story-ex9661"]);

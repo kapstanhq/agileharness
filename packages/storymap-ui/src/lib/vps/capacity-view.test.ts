@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { capacityView } from "./capacity-view";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { capacityView, quotaBucket, unifiedQuota } from "./capacity-view";
 import type { GovernorSnapshot } from "@/lib/storymap/runner/capacity-governor";
 
 // O PAINEL de capacidade: o que ele diz em cada estado — liberado, retido (com o porquê e quando volta),
@@ -103,5 +105,82 @@ describe("capacityView", () => {
     // a trava, quando existe, continua vencendo (é ela que o operador precisa soltar)
     const locked = capacityView(snap({ meterStall: { since: 0, detectedAt: 0, detail }, latch: { level: "soft", reason: "7d ≥ 92%", at: NOW, trippedBy: "auto:week", source: "file" } }), NOW)!;
     expect(locked.headline).toBe("Travado (mole)");
+  });
+});
+
+// UMA fonte para o número da cota: o chip da barra de topo e o painel da frota liam leituras diferentes da mesma janela
+// (a do proxy e a que o governador guardou) e mostravam porcentagens diferentes lado a lado.
+describe("unifiedQuota — o mesmo número no chip e no painel", () => {
+  const proxy = (week: number, polledAt: number, stale = false) => ({ week: { usedPct: week }, session: { usedPct: 11 }, polledAt, stale });
+
+  it("vale a leitura MAIS RECENTE; empate ⇒ a do proxy; a defasagem vem junto", () => {
+    const s = snap(); // governador: 42.3% lido em NOW - 60s
+    expect(unifiedQuota(proxy(44, NOW - 10_000), s)).toMatchObject({ weekPct: 44, source: "proxy" });
+    expect(unifiedQuota(proxy(40, NOW - 600_000, true), s)).toMatchObject({ weekPct: 42.3, source: "governor", stale: false });
+    expect(unifiedQuota(proxy(41, NOW - 60_000), s)).toMatchObject({ weekPct: 41, source: "proxy" });
+    expect(unifiedQuota(null, s)).toMatchObject({ weekPct: 42.3, source: "governor" });
+    expect(unifiedQuota(proxy(44, NOW), null)).toMatchObject({ weekPct: 44, source: "proxy" });
+    expect(unifiedQuota(null, null)).toBeNull();
+  });
+
+  it("o painel desenha o MESMO número que o chip: linha da semana e o «agora» da trava", () => {
+    const s = snap({ latch: { level: "soft", reason: "janela de 7 dias em 93%", at: NOW - 600_000, trippedBy: "auto:week", source: "file" } });
+    const q = unifiedQuota(proxy(7, NOW - 5_000), s)!;
+    const v = capacityView(s, NOW, q)!;
+    expect(v.rows.find((r) => r.key === "week")).toMatchObject({ pct: 7, value: expect.stringMatching(/^7% /) });
+    expect(v.detail).toContain("agora: semana em 7%, sessão em 11%");
+    // sem o número unificado, o painel cai na leitura do governador (quem não tem o proxy, como a página de Métricas)
+    expect(capacityView(s, NOW)!.rows.find((r) => r.key === "week")?.pct).toBe(42.3);
+  });
+
+  it("a barra de topo usa o número unificado no chip, nas barras e no painel (uma fonte, não duas)", () => {
+    const pill = readFileSync(path.join(__dirname, "..", "..", "components", "HealthPill.tsx"), "utf8");
+    expect(pill).toMatch(/const quota = unifiedQuota\(metrics\.usage, metrics\.governor\)/);
+    expect(pill).toMatch(/<CapacityPanel snapshot=\{metrics\.governor\} quota=\{quota\}/);
+    expect(pill).toMatch(/latchSealWords\(metrics\.governor, quota\?\.weekPct/);
+    expect(pill).toMatch(/bucket=\{quotaBucket\(usage\.week, quota\?\.week, Date\.now\(\)\)\}/);
+    // a defasagem do aviso é a da fonte vencedora, com o texto dela
+    expect(pill).toMatch(/\{quota\?\.week\?\.stale && \(/);
+    expect(pill).not.toMatch(/\{usage\.stale && \(/);
+    // a página de Métricas: o painel unifica sozinho com a leitura viva quando quem desenha não passa o número
+    expect(readFileSync(path.join(__dirname, "..", "..", "components", "CapacityPanel.tsx"), "utf8")).toMatch(/quota !== undefined \? quota : unifiedQuota\(live\?\.usage, current\)/);
+  });
+});
+
+describe("unifiedQuota — por campo, «desconhecido» igual, e o reset da fonte vencedora", () => {
+  it("semana e sessão escolhem a fonte SEPARADAMENTE", () => {
+    const s = snap(); // governador: 42.3% / 20%, lido em NOW - 60s
+    const proxy = { week: { usedPct: 50 }, session: null, polledAt: NOW - 1_000, stale: false };
+    const q = unifiedQuota(proxy, s)!;
+    expect(q.week).toMatchObject({ pct: 50, source: "proxy" });
+    expect(q.session).toMatchObject({ pct: 20, source: "governor" }); // o proxy não tinha sessão
+    expect(q).toMatchObject({ weekPct: 50, sessionPct: 20, source: "proxy" });
+  });
+
+  it("polledAt 0 e ausente são «desconhecido», iguais entre si — empate ⇒ proxy", () => {
+    const base = snap();
+    const g0 = snap({ reading: { ...base.reading!, polledAt: 0 } });
+    expect(unifiedQuota({ week: { usedPct: 9 }, polledAt: null }, g0)!.week?.source).toBe("proxy");
+    expect(unifiedQuota({ week: { usedPct: 9 }, polledAt: 0 }, g0)!.week?.source).toBe("proxy");
+    // uma leitura CONHECIDA vence uma desconhecida
+    expect(unifiedQuota({ week: { usedPct: 9 }, polledAt: 0 }, base)!.week?.source).toBe("governor");
+  });
+
+  it("a barra usa o reset da fonte vencedora; o do proxy só quando ele venceu ou o vencedor não diz", () => {
+    const s = snap(); // resetsAt7d = NOW + 3 dias
+    const q = unifiedQuota({ week: { usedPct: 9 }, polledAt: NOW - 600_000 }, s)!; // governador mais recente
+    expect(quotaBucket({ usedPct: 9, resetsInMinutes: 5 }, q.week, NOW)).toEqual({ usedPct: 42.3, resetsInMinutes: 3 * 24 * 60 });
+    const qp = unifiedQuota({ week: { usedPct: 9 }, polledAt: NOW }, s)!; // proxy mais recente, sem resetsAt
+    expect(quotaBucket({ usedPct: 9, resetsInMinutes: 5 }, qp.week, NOW)).toEqual({ usedPct: 9, resetsInMinutes: 5 });
+    expect(quotaBucket(null, null, NOW)).toBeNull();
+  });
+
+  it("«Hoje» e «No reset» dizem que são do governador quando o número da semana mostrado é o do proxy", () => {
+    const s = snap();
+    const label = (k: string, q: ReturnType<typeof unifiedQuota>) => capacityView(s, NOW, q)!.rows.find((r) => r.key === k)?.label;
+    const doProxy = unifiedQuota({ week: { usedPct: 50 }, polledAt: NOW }, s);
+    expect(label("today", doProxy)).toBe("Hoje (cota) · pela leitura do governador");
+    expect(label("projection", doProxy)).toBe("No reset (≈) · pela leitura do governador");
+    expect(label("today", unifiedQuota(null, s))).toBe("Hoje (cota)");
   });
 });

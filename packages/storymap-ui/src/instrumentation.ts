@@ -140,6 +140,12 @@ async function registerImpl(): Promise<void> {
   if (serviceLock) console.log(`[harness-boot] service.lock: pid=${serviceLock.pid} port=${serviceLock.port}`);
   else console.warn("[harness-boot] service.lock: não foi possível escrever (hook de board-data ficará inerte)");
 
+  // 0) O PREFLIGHT DO DEPLOY DECLARADO — os checks que o boot empacotado (main.ts) não mede porque dependem da config
+  //    (`host.just`, `deploy.declared-commands`). Em segundo plano: diagnóstico nunca atrasa nem derruba o boot.
+  void import("@/lib/storymap/deploy-declarations-boot")
+    .then((m) => m.startDeployPreflightInBackground())
+    .catch((err) => console.warn("[harness-boot] preflight do deploy declarado falhou:", err instanceof Error ? err.message : err));
+
   const [
     { ensureWatching },
     recovery,
@@ -590,9 +596,9 @@ async function registerImpl(): Promise<void> {
           });
         },
         // Reconcilia os `deploy-failure` contra a realidade publicada, em TODO board. É o backstop que cobre a
-        // publicação feita FORA do serviço (`just orch-deploy` no shell não passa pelo ProductDeployRegistry,
+        // publicação feita FORA do serviço (o comando de deploy declarado rodado à mão não passa pelo ProductDeployRegistry,
         // logo não dispara onDone): sem ele o card fica com o alarme aberto para sempre, mesmo com o código no
-        // ar — o deadlock que travou cards por dias. Barato: só cards COM o
+        // ar. Barato: só cards COM o
         // finding aberto chegam a tocar git (o caso normal é zero e nem abre subprocesso).
         runDeployReconcile: async () => {
           const [{ reconcileBoardDeployFailures }, { listBoards }] = await Promise.all([

@@ -489,6 +489,46 @@ deploy:
   open for real (a run could edit the human-owned fields); checking that the libraries are reachable is a job
   for the service preflight, not for the hook.
 
+**The `deploy:` keys, one by one.** Everything the publish path needs from the target lives in the top-level
+`deploy:` block of `storymap/settings.yaml`. Each key is optional; an absent key means "not declared", and the
+code that needs it refuses with the key's name.
+
+```yaml
+# an invented greenhouse monorepo
+deploy:
+  launchers: [relay]               # which programs a command written in board.yaml may start with
+  recipeRunners: [relay]           # which of those are task runners (their 2nd word is a recipe name)
+  recipes: [push-app, push-face]   # the recipes board.yaml may name
+  legacy:                          # the diff-aware path for the `targets`
+    packageRoot: apps/             # board.yaml `package: apps/estufa` → target id `estufa`
+    command: [relay, push-app, "{target}"]        # publish one target
+    plan:    [relay, diff, "{target}"]            # read-only: what would be published
+    scope:   ["apps/{target}/"]                   # dirt that blocks a target with no owning board
+    state:   var/releases/{target}.state          # where the last published sha is read from
+  composedFace: { target: vitrine, recipe: push-face, manifest: ops/face.json, command: [relay, push-face] }
+  proof:
+    record:                        # how a proof is written down by the target's own recorder
+      securityReview: [auditlog, verdict, "{file}"]
+      ownerApproval:  [auditlog, approval, "{file}"]
+    staleMarkers: ["stale subject"]  # phrases in the recorder's refusal that mean "the subject moved on"
+```
+
+| Key | What it answers | Without it |
+|---|---|---|
+| `launchers` | which programs may start a command that comes from board data | no board-data command runs in the privileged step |
+| `recipeRunners` | which launchers resolve `<runner> <recipe> <arg>` | a launcher is treated as a plain program |
+| `recipes` | which recipe names board data may use | none may be named |
+| `legacy.command` / `.plan` | how one target is published / previewed | publishing a target refuses, naming the key |
+| `legacy.scope` | which paths count as a target's own uncommitted work | the whole repository (the conservative answer) |
+| `legacy.state` | where the sha that is live is recorded | no evidence: nothing is ever "live" by accident |
+| `composedFace` | the face merged from several apps, and the `command` that publishes it | no face: nothing chains. A face declared WITHOUT `command`: a publish whose diff touches the face is **refused** before anything starts |
+| `proof.record.*` | the command that records a security verdict / an owner approval | proofs are never written from log text |
+| `proof.staleMarkers` | which refusal phrases mean "that proof is for another change" | a refusal is never read as stale |
+
+The environment can only add to the three lists (`AGILEHARNESS_DEPLOY_LAUNCHERS`, `_RECIPE_RUNNERS`,
+`_RECIPES`); it never removes what the file declared. The result of a run on the legacy path is reported under
+the neutral identity `legacy-command`, whatever program the target declared.
+
 ### A deploy can't roll production back
 
 The service publishes from its own checkout of your repository. If you also deploy by hand from

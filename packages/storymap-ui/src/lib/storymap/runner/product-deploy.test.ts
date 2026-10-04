@@ -342,7 +342,7 @@ describe("ProductDeployRegistry — job lifecycle (injected launcher, no real sp
 });
 
 // D-AG2/D-AG3 — the registry gains a LAUNCH SPEC (the board's declared deploy) threaded to the launcher;
-// the done event then carries `diffAware:false` (the declared paths are NOT the diff-aware orch-deploy)
+// the done event then carries `diffAware:false` (the declared paths are NOT the diff-aware declared command)
 // and, for an agent verdict that claimed one, `liveSha` — read at close time via the launch's verdict().
 describe("ProductDeployRegistry — launch spec do deploy declarado (D-AG2/D-AG3)", async () => {
   function specLauncher(verdict: (() => { ok: boolean; liveSha?: string } | null) | undefined) {
@@ -368,7 +368,7 @@ describe("ProductDeployRegistry — launch spec do deploy declarado (D-AG2/D-AG3
     // qual MECANISMO declarado rodou — é a ele que o contrato da saída 3 («precisa de você») pertence
     expect(events[0]?.declaredKind).toBe("command");
     // O CERNE do D-AG2: um comando arbitrário RÁPIDO (ok, expectWork, ~0s) NÃO pode ser revertido como
-    // no-op — a inferência "~0s ⇒ nada shipou" é propriedade do orch-deploy diff-aware, não dele.
+    // no-op — a inferência "~0s ⇒ nada shipou" é propriedade do comando declarado diff-aware, não dele.
     expect(deploySettledWithoutWork(events[0])).toBe(false);
   });
 
@@ -395,7 +395,7 @@ describe("ProductDeployRegistry — launch spec do deploy declarado (D-AG2/D-AG3
   });
 });
 
-// story-ex0034 (t5) — a diff-aware orch-deploy of code that never reached main sees no drift → exits exit-0
+// story-ex0034 (t5) — a diff-aware declared deploy command of code that never reached main sees no drift → exits exit-0
 // in ~0s. That instant no-work settle is NOT confirmation the code is live: when the release EXPECTED work
 // (it promoted new code) it must be treated as a failed publish (revert), never a green "No Ar".
 describe("deploySettledWithoutWork — the instant no-drift deploy is not a real ship (story-ex0034 t5)", () => {
@@ -426,7 +426,7 @@ describe("deploySettledWithoutWork — the instant no-drift deploy is not a real
   });
 
   it("D-AG2: does NOT flag a board-DECLARED deploy (diffAware:false) — a fast arbitrary command can be a real ship", () => {
-    // The ~0s inference is a property of the diff-aware orch-deploy (no drift ⇒ instant exit). A declared
+    // The ~0s inference is a property of the diff-aware declared command (no drift ⇒ instant exit). A declared
     // shell/agent deploy answers via its exit code + the settle's proof measurement instead.
     expect(deploySettledWithoutWork(ev({ ok: true, expectWork: true, durationMs: 3, diffAware: false }))).toBe(false);
     // …and the legacy semantics are untouched (absent/true ⇒ diff-aware ⇒ the guard still bites).

