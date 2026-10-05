@@ -1036,6 +1036,13 @@ function coerceDeploySettings(raw: unknown): RunnerSettings["deploy"] {
   const cmd = r.canaryCommand;
   if (typeof cmd === "string" && cmd.trim()) out.canaryCommand = cmd.trim();
 
+  // inteiro de 0 (desligada) a um dia; fora disso ⇒ descartado com aviso (fica o padrão)
+  const every = r.autoRerequestEveryMinutes;
+  if (every !== undefined) {
+    if (typeof every === "number" && Number.isInteger(every) && every >= 0 && every <= 1440) out.autoRerequestEveryMinutes = every;
+    else console.warn(`[storymap] settings deploy.autoRerequestEveryMinutes: DESCARTADO — deveria ser um inteiro de 0 a 1440 (minutos). Recebido: ${JSON.stringify(every)}.`);
+  }
+
   if (Array.isArray(r.targets)) {
     const aceitos: string[] = [];
     const recusados: unknown[] = [];
@@ -1153,7 +1160,8 @@ export function applyEnvOverrides(s: RunnerSettings): RunnerSettings {
   // The fidelity canary is a deployment concern, so it gets the same ENV escape hatch as the rest:
   // set it empty to DISABLE the check on a box that cannot reach the published surface.
   if (typeof env.AGILEHARNESS_DEPLOY_CANARY_COMMAND === "string") {
-    next.deploy = { ...next.deploy, canaryCommand: env.AGILEHARNESS_DEPLOY_CANARY_COMMAND };
+    // marcado: só ESTE canal roda sem a régua (face-probe.ts `resolveCanaryVerdict`); o do settings.yaml passa por ela.
+    next.deploy = { ...next.deploy, canaryCommand: env.AGILEHARNESS_DEPLOY_CANARY_COMMAND, canaryFromEnv: true };
   }
   if (env.AGILEHARNESS_ORCH_ENABLED === "1" && next.orchestrator) next.orchestrator.enabled = true;
   // O kill switch do governador de capacidade. `off` desliga a governança (o HALT do host continua valendo —

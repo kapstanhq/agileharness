@@ -1475,3 +1475,78 @@ describePosix("promoteStageToMain — release bloqueado pelo scan desfaz SÓ o p
   });
 });
 
+
+// A MAIN À FRENTE num arquivo do escopo — o «Publicar» nunca reverte na main conteúdo mais novo que o da stage. Dois jeitos
+// de a main estar à frente: ela mudou o arquivo DE NOVO depois de receber o da stage, ou DESFEZ o que recebeu. O segundo
+// o 3-way sozinho não pega: contra a base velha (o merge-base congelado, porque a promoção re-commita o delta), o patch da
+// stage aplica «limpo» por cima do desfazer. A régua por conteúdo (stage-content.ts) o tira do conjunto a promover.
+describePosix("promoteStageToMain — stage ATRÁS da main num caminho do escopo", () => {
+  let tmpRoot: string;
+  let repo: string;
+  let main: string;
+  const read = (rel: string) => fsp.readFile(path.join(repo, rel), "utf8");
+  const commit = async (msg: string) => {
+    await exec(`git add -A`, { cwd: repo });
+    await exec(`git commit -q --no-verify -m ${JSON.stringify(msg)}`, { cwd: repo });
+  };
+
+  beforeAll(async () => {
+    tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "sm-release-behind-"));
+    exec = isolatedGitExec(promisify(nodeExec) as unknown as ExecFn, tmpRoot);
+    await ensureRunnerStateDir();
+    repo = path.join(tmpRoot, "repo");
+    await fsp.mkdir(path.join(repo, "packages", "vitrine"), { recursive: true });
+    await fsp.mkdir(path.join(repo, "scripts", "git-hooks"), { recursive: true });
+    await fsp.copyFile(path.join(findRepoRoot(), "scripts", "git-hooks", "scan-secrets.mjs"), path.join(repo, "scripts", "git-hooks", "scan-secrets.mjs"));
+    await fsp.writeFile(path.join(repo, "packages", "vitrine", "preco.ts"), "export const preco = 1;\n");
+    await fsp.writeFile(path.join(repo, "packages", "vitrine", "selo.ts"), "export const selo = 'a';\n");
+    await fsp.writeFile(path.join(repo, "packages", "vitrine", "nota.ts"), "export const nota = 'x';\n");
+    await exec(`git init -q`, { cwd: repo });
+    await exec(`git config user.email t@example.test`, { cwd: repo });
+    await exec(`git config user.name tester`, { cwd: repo });
+    await commit("base");
+    main = (await exec(`git rev-parse --abbrev-ref HEAD`, { cwd: repo })).stdout.trim();
+    // a stage muda preco e selo; a promoção RE-COMMITA as duas mudanças na main (commits novos, não os da stage)
+    await exec(`git checkout -q -b stage`, { cwd: repo });
+    await fsp.writeFile(path.join(repo, "packages", "vitrine", "preco.ts"), "export const preco = 2;\n");
+    await fsp.writeFile(path.join(repo, "packages", "vitrine", "selo.ts"), "export const selo = 'b';\n");
+    await commit("usm(card): preco 2, selo b");
+    await exec(`git checkout -q ${main}`, { cwd: repo });
+    await fsp.writeFile(path.join(repo, "packages", "vitrine", "preco.ts"), "export const preco = 2;\n");
+    await fsp.writeFile(path.join(repo, "packages", "vitrine", "selo.ts"), "export const selo = 'b';\n");
+    await commit("release: promove preco 2, selo b");
+    // depois, a MAIN anda: o preco muda de novo, e o selo é DESFEITO (volta ao de antes) — os dois mais novos que a stage
+    await fsp.writeFile(path.join(repo, "packages", "vitrine", "preco.ts"), "export const preco = 3;\n");
+    await fsp.writeFile(path.join(repo, "packages", "vitrine", "selo.ts"), "export const selo = 'a';\n");
+    await commit("conserto direto na main: preco 3, selo desfeito");
+  });
+
+  afterAll(async () => {
+    await fsp.rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("nada da stage é mais novo ⇒ nada a aplicar, e a main fica INTACTA (o selo desfeito não volta)", async () => {
+    const head = (await exec(`git rev-parse HEAD`, { cwd: repo })).stdout.trim();
+    const res = await promoteStageToMain({ exec, repoRoot: repo, stageBranch: "stage", codePrefixes: ["packages/vitrine/"] });
+    expect(res.promoted).toBe(false);
+    expect(res.outcome).toBe("already-promoted");
+    expect((await exec(`git rev-parse HEAD`, { cwd: repo })).stdout.trim()).toBe(head);
+    expect(await read("packages/vitrine/preco.ts")).toBe("export const preco = 3;\n");
+    expect(await read("packages/vitrine/selo.ts")).toBe("export const selo = 'a';\n");
+  });
+
+  it("com uma entrega NOVA na stage, só ela sobe — preco e selo da main seguem os da main", async () => {
+    await exec(`git checkout -q stage`, { cwd: repo });
+    await fsp.writeFile(path.join(repo, "packages", "vitrine", "nota.ts"), "export const nota = 'y';\n");
+    await commit("usm(card): nota y");
+    await exec(`git checkout -q ${main}`, { cwd: repo });
+
+    const res = await promoteStageToMain({ exec, repoRoot: repo, stageBranch: "stage", codePrefixes: ["packages/vitrine/"] });
+    expect(res.promoted).toBe(true);
+    const files = (await exec(`git show --name-only --format= HEAD`, { cwd: repo })).stdout.trim().split("\n");
+    expect(files).toEqual(["packages/vitrine/nota.ts"]);
+    expect(await read("packages/vitrine/nota.ts")).toBe("export const nota = 'y';\n");
+    expect(await read("packages/vitrine/preco.ts")).toBe("export const preco = 3;\n");
+    expect(await read("packages/vitrine/selo.ts")).toBe("export const selo = 'a';\n");
+  });
+});

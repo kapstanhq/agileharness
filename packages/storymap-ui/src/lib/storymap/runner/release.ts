@@ -21,6 +21,7 @@ import { secretScanCommand, type ExecFn } from "./worktree";
 // duplicado é o começo de duas verdades sobre "o que é dado".
 import { BOARD_DATA_PATHSPEC } from "./config";
 import { isCodePath } from "./staging";
+import { stageContentAhead } from "./stage-content";
 
 const GIT_TIMEOUT_MS = 60_000;
 
@@ -577,7 +578,16 @@ export async function promoteStageToMain(opts: {
       .filter(Boolean),
   );
   const changedFiles = changed.split("\n").map((f) => f.trim()).filter(Boolean);
-  const toPromote = changedFiles.filter((f) => divergent.has(f));
+  // A MAIN À FRENTE num arquivo do escopo: o conteúdo que a stage tem dele JÁ esteve na main (desde o ancestral comum) e
+  // a main andou depois — inclusive desfazendo-o. Levar o da stage reverteria o mais novo; o 3-way contra uma base velha
+  // não pega o caso em que a main desfez a mudança (o merge sai «limpo»). Fica de fora, pela MESMA régua da contagem da
+  // Esteira (stage-content.ts). Sem resposta do git ⇒ o conjunto de sempre, protegido pelo 3-way.
+  const ahead = await stageContentAhead(async (args) => {
+    const r = await git(args);
+    return r.ok ? r.stdout : null;
+  }, { live: branch, stage: stageBranch, base: diffBase, pathspec: codePrefixes });
+  const stageNewer = ahead ? new Set(ahead) : null;
+  const toPromote = changedFiles.filter((f) => divergent.has(f) && (!stageNewer || stageNewer.has(f)));
   if (toPromote.length === 0) {
     await advanceFrontier(); // `branch` already holds every staged file → this board is caught up to stageHead
     // LIVE outcome ⇒ reporta o sha de main que contém o código (evidência p/ Card.releasedSha).
@@ -587,7 +597,7 @@ export async function promoteStageToMain(opts: {
       branch,
       pushed: false,
       mainSha: await headSha(),
-      reason: `código staged já promovido — ${changedFiles.length} arquivo(s) idênticos entre ${stageBranch} e ${branch}, nada a aplicar`,
+      reason: `código staged já promovido — ${changedFiles.length} arquivo(s) idênticos entre ${stageBranch} e ${branch}, ou com ${branch} À FRENTE (o conteúdo de ${stageBranch} já esteve lá), nada a aplicar`,
     };
   }
 

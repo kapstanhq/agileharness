@@ -15,7 +15,7 @@ import { readSystemDecisions } from "@/lib/storymap/runner/decision-log";
 import { readInboxReceipts } from "@/lib/storymap/runner/receipts-log";
 import { readAgentActions } from "@/lib/storymap/runner/agent-actions";
 import { loadRunnerConfig } from "@/lib/storymap/runner/config";
-import { backfillDeployCause, deployBlocksFile, openDeployFailure, parseDeployBlocks, type DeployBlockRow } from "@/lib/storymap/runner/deploy-blocks";
+import { backfillDeployCause, cardBoardOf, deployBlocksFile, freshApprovals, isRerequesting, openDeployFailure, parseDeployBlocks, type DeployBlockRow } from "@/lib/storymap/runner/deploy-blocks";
 import { tryGetPublishBreaker } from "@/lib/storymap/runner/publish-breaker";
 import { followUpItems, type SystemDecision } from "@/lib/storymap/system-decisions";
 import type { ApprovalRequest } from "@/lib/storymap/approvals";
@@ -58,9 +58,17 @@ export async function collectBoardInbox(
     readSystemDecisions({ board: boardId }).catch(() => []),
     preloaded?.receipts ? Promise.resolve(preloaded.receipts.filter((r) => r.board === boardId)) : readInboxReceipts({ board: boardId }).catch(() => []),
   ]);
-  const { items, cards, config, approvals, governanceDrafts } = cockpit;
+  const { approvals, governanceDrafts } = cockpit;
+  const config = cockpit.config;
   if (!config) return null;
-  const facts = await readInboxFacts({ boardId, config, cards, items, approvals, lastTransitionAt: cockpit.lastTransitionAt, stepEnteredAt: cockpit.stepEnteredAt, now });
+  // O livro de bloqueios de deploy: as linhas moram no board que PUBLICA o pacote, e seguram cards de qualquer board. Os
+  // cards de OUTROS boards que uma linha deste segura entram aqui (o item da causa é deste Inbox, com a lista de cards e
+  // os boards deles); o card deste board cuja linha mora em outro board leva a decisão para lá.
+  const ledger = await readDeployLedger(undefined, boardId);
+  const foreign = ledger ? await foreignDeployItems(boardId, ledger) : { items: [], cards: [], boards: new Map<string, string>() };
+  const items = [...cockpit.items, ...foreign.items];
+  const cards = [...cockpit.cards, ...foreign.cards];
+  const facts = await readInboxFacts({ boardId, config, cards, items, approvals, lastTransitionAt: cockpit.lastTransitionAt, stepEnteredAt: cockpit.stepEnteredAt, now, ledger, boardNames: foreign.boards });
   // O nome humano das lentes vem do settings do alvo, que só o servidor lê (o cliente não o recebe).
   const built = boardEntries({ boardId, config, cards, items, decisions, now, facts, lensNames: lensNamesOf(loadRunnerConfig().target) });
   return {
@@ -74,6 +82,43 @@ export async function collectBoardInbox(
     receipts,
     decisions,
   };
+}
+
+/**
+ * Os itens de publicação dos cards de OUTROS boards que as linhas DESTE board seguram (a linha mora no board que publica
+ * o pacote; um card movido de board leva o aviso dele, não a linha), e o nome de cada board envolvido. Um board ilegível
+ * fica de fora. Nunca lança.
+ */
+async function foreignDeployItems(
+  boardId: string,
+  ledger: readonly DeployBlockRow[],
+): Promise<{ items: CockpitItem[]; cards: Card[]; boards: Map<string, string> }> {
+  const out = { items: [] as CockpitItem[], cards: [] as Card[], boards: new Map<string, string>() };
+  const wanted = new Map<string, Set<string>>();
+  for (const r of ledger) {
+    for (const id of r.cardIds) {
+      const home = cardBoardOf(r, id);
+      if (r.board === boardId && home !== boardId) (wanted.get(home) ?? wanted.set(home, new Set()).get(home)!).add(id);
+    }
+  }
+  // os boards que publicam os pacotes dos cards DESTE board (só o nome: a decisão mora lá)
+  const publishers = new Set(ledger.filter((r) => r.board !== boardId && r.cardIds.some((id) => cardBoardOf(r, id) === boardId)).map((r) => r.board));
+  if (wanted.size === 0 && publishers.size === 0) return out;
+  const { getBoard, readBoardConfig } = await import("@/lib/storymap/repo");
+  const { boardCockpitItems } = await import("@/lib/storymap/demands");
+  for (const home of publishers) {
+    const config = await readBoardConfig(home).catch(() => null);
+    if (config) out.boards.set(home, config.name);
+  }
+  for (const [home, ids] of wanted) {
+    const board = await getBoard(home).catch(() => null);
+    if (!board) continue;
+    out.boards.set(home, board.config.name);
+    const held = board.cards.filter((c) => ids.has(c.id));
+    out.cards.push(...held);
+    out.items.push(...boardCockpitItems(held, board.config, home).filter((i) => i.kind === "deploy-failed"));
+  }
+  return out;
 }
 
 // ── os fatos (IO na borda; a montagem é pura) ────────────────────────────────────────────────────────────
@@ -106,16 +151,31 @@ export function inboxFactsOf(input: {
   lastTransitionAt?: ReadonlyMap<string, string>;
   stepEnteredAt?: ReadonlyMap<string, string>;
   actions?: readonly ExecutedAction[];
+  /** o nome de cada board envolvido nas linhas (id → nome) — o Inbox diz de que board é cada card. */
+  boardNames?: ReadonlyMap<string, string>;
+  now?: number;
 }): InboxFacts {
   const base = emptyFacts(input.cards);
   const deployCauseOf = cardDeployCauses(input.cards, input.boardId, input.config);
   const rows = input.ledger?.filter((r) => r.board === input.boardId) ?? null;
+  // as linhas de OUTROS boards (os que publicam o pacote) que seguram cards DESTE board: a causa está viva — a decisão
+  // dela mora no Inbox do board que publica
+  const elsewhere = input.ledger?.filter((r) => r.board !== input.boardId && r.cardIds.some((id) => cardBoardOf(r, id) === input.boardId)) ?? [];
+  const name = (b: string) => input.boardNames?.get(b) ?? b;
+  const now = input.now ?? Date.now();
   return {
     ...base,
     deployCauseOf,
-    deployLedger: rows ? new Set(rows.map((r) => r.causeKey)) : null,
+    deployLedger: rows ? new Set([...rows, ...elsewhere].map((r) => r.causeKey)) : null,
+    deployHeldOn: new Map(
+      elsewhere.flatMap((r) => r.cardIds.filter((id) => cardBoardOf(r, id) === input.boardId).map((id) => [id, { id: r.board, name: name(r.board) }] as const)),
+    ),
+    deployCardBoard: new Map((rows ?? []).flatMap((r) => r.cardIds.map((id) => [id, { id: cardBoardOf(r, id), name: name(cardBoardOf(r, id)) }] as const))),
+    deployRerequesting: new Set((rows ?? []).filter((r) => isRerequesting(r, now)).map((r) => r.causeKey)),
     deployAnchor: deployAnchors(deployCauseOf.values(), new Map((rows ?? []).map((r) => [r.causeKey, r.attributedCard])), base.cardsById, input.config),
-    deployApprovals: new Map((rows ?? []).filter((r) => r.decider === "owner" && r.approvals?.length).map((r) => [r.causeKey, r.approvals ?? []])),
+    // só os pedidos que ainda valem viram botão: o que o sistema já sabe velho autorizaria o que mudou (auto-rerequest.ts)
+    deployApprovals: new Map((rows ?? []).filter((r) => r.decider === "owner" && freshApprovals(r).length).map((r) => [r.causeKey, freshApprovals(r)])),
+    deployStale: new Set((rows ?? []).filter((r) => r.decider === "owner" && r.staleApprovals?.length && !isRerequesting(r, now)).map((r) => r.causeKey)),
     gateOf: new Map((input.items ?? []).filter((i) => i.kind === "gate" && i.cardId).map((i) => [i.cardId, i])),
     publishRetryAt: input.publishRetryAt ?? new Map(),
     lastTransitionAt: input.lastTransitionAt ?? new Map(),
@@ -142,10 +202,13 @@ async function readInboxFacts(input: {
   lastTransitionAt: ReadonlyMap<string, string>;
   stepEnteredAt: ReadonlyMap<string, string>;
   now: number;
+  /** o livro já lido pelo coletor (null = sem livro que se possa julgar). */
+  ledger: DeployBlockRow[] | null;
+  boardNames: ReadonlyMap<string, string>;
 }): Promise<InboxFacts> {
   const deploys = input.items.filter((i) => i.kind === "deploy-failed").map((i) => i.cardId);
   const [ledger, publishRetryAt, actions] = await Promise.all([
-    deploys.length ? readDeployLedger(undefined, input.boardId) : Promise.resolve(null),
+    deploys.length ? Promise.resolve(input.ledger) : Promise.resolve(null),
     deploys.length ? readRetries(input.boardId, deploys, input.now) : Promise.resolve(new Map<string, number>()),
     needsActions(input.items) ? readAgentActions({ board: input.boardId, since: input.now - 14 * 86_400_000 }).catch(() => []) : Promise.resolve([]),
   ]);

@@ -3286,6 +3286,18 @@ export interface RunnerSettings {
   deploy?: {
     canaryCommand?: string;
     /**
+     * `canaryCommand` veio do ENV do serviço (`AGILEHARNESS_DEPLOY_CANARY_COMMAND`), o único canal do operador que roda
+     * sem a régua dos comandos declarados. Só o carregador da config o liga (o settings.yaml não o declara: o coercer
+     * descarta a chave) — o canário escrito no settings.yaml passa pela régua como qualquer comando declarado.
+     */
+    canaryFromEnv?: boolean;
+    /**
+     * A RE-MEDIÇÃO AUTOMÁTICA dos pedidos de autorização do dono que envelheceram (runner/auto-rerequest.ts): no máximo
+     * uma por pacote a cada N minutos. Ausente ⇒ 15 min (`AUTO_REREQUEST_EVERY_MIN_DEFAULT`); 0 ⇒ desligada (o pedido velho
+     * só é refeito pelo botão da Esteira ou pelo clique recusado do dono).
+     */
+    autoRerequestEveryMinutes?: number;
+    /**
      * ONDE OS NOMES DOS APPS DO DEPLOYMENT MORAM — e por que aqui, e não no código.
      *
      * Estes são os alvos que o caminho diff-aware legado publica (`deploy.legacy.command` com `{target}`): o motor

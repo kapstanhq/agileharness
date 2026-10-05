@@ -78,6 +78,8 @@ export async function recordLanding(receipt: Omit<LandingReceipt, "v" | "at"> & 
     const line: LandingReceipt = { v: 1, at: receipt.at ?? new Date().toISOString(), ...receipt };
     await fsp.mkdir(runnerStateDir(), { recursive: true });
     await fsp.appendFile(ledgerPath(), JSON.stringify(line) + "\n", "utf8");
+    // a main andou: um pedido de autorização do dono pode ter ficado velho (auto-rerequest.ts junta os avisos de perto)
+    if (line.ref === "main" && line.sha) void import("./auto-rerequest").then((m) => m.nudgeAutoRerequest()).catch(() => {});
   } catch (err) {
     console.warn("[harness-landings] append falhou (não-fatal):", err instanceof Error ? err.message : err);
   }

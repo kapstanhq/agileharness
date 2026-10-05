@@ -33,7 +33,7 @@ import { ToastProvider, useToast } from "./Toast";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { RunSubstateBadge, useCardLiveSources, useMergeQueue, useRunnerSnapshot } from "./RunnerStatusProvider";
 import { reduceAgentPresence } from "@/lib/storymap/agent-presence";
-import { cancelPublishAction, getDeliveryOverviewAction, publishStagedAction } from "@/app/delivery-actions";
+import { cancelPublishAction, getDeliveryOverviewAction, publishStagedAction, rerequestPublishRequestsAction } from "@/app/delivery-actions";
 import {
   belongsToBoard,
   headOfStaged,
@@ -155,6 +155,13 @@ function EntregaBody({
       overrideEmbargo ? "Publicação enfileirada com o embargo dispensado." : "Publicação enfileirada.",
     );
   const cancel = (id: string, b: string) => act(() => cancelPublishAction({ id, board: b }), "Pedido cancelado.");
+  // o botão do operador: refaz NA HORA os pedidos de publicação parados (a mesma re-medição do pedido recusado por velho)
+  const rerequest = (b: string) =>
+    startTransition(async () => {
+      const r = await rerequestPublishRequestsAction({ board: b });
+      toast(r.ok ? (r.data?.message ?? "Refazendo os pedidos.") : (r.error ?? "Não deu certo."), r.ok ? "success" : "error");
+      await refresh();
+    });
 
   const held = heldRequests(data.publish);
   const published = useMemo(() => data.publish.filter((r) => r.status === "published"), [data.publish]);
@@ -220,6 +227,10 @@ function EntregaBody({
           onPublish={() => publish(f.board)}
         />
       ))}
+
+      {data.publishRequests && data.publishRequests.pending > 0 && (
+        <PublishRequestsStrip requests={data.publishRequests} busy={pending} onRerequest={() => rerequest(data.publishRequests!.board)} />
+      )}
 
       {held.map((req) => (
         <HeldBanner
@@ -409,6 +420,47 @@ function EntregaBody({
 
 // ── A fronteira: o que está no ar × o que está no stage ──────────────────────────────────────────
 
+/**
+ * Os pedidos de publicação do board que esperam alguém (o livro de bloqueios de deploy), com o botão do operador que os
+ * refaz na hora — a medição/o deploy do pacote roda de novo e o pedido volta ao Inbox com a mudança de agora.
+ */
+function PublishRequestsStrip({
+  requests,
+  busy,
+  onRerequest,
+}: {
+  requests: NonNullable<DeliveryOverview["publishRequests"]>;
+  busy: boolean;
+  onRerequest: () => void;
+}) {
+  const n = requests.pending;
+  return (
+    <section className={cn(cardSurfaceSm, "flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between")}>
+      <div className="flex min-w-0 items-baseline gap-2">
+        <span className={cardEyebrow}>Pedidos de publicação</span>
+        <span className="text-[12px] text-fg-muted">
+          {n === 1 ? "1 pedido espera alguém" : `${n} pedidos esperam alguém`} — a decisão está no Inbox deste board
+        </span>
+      </div>
+      {requests.rerequesting ? (
+        <span className="text-[12px] font-medium text-fg-muted" title="A medição da publicação está rodando; o pedido novo volta ao Inbox.">
+          refazendo o pedido…
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={onRerequest}
+          disabled={busy}
+          title="Roda agora a medição/o deploy do pacote no board que o publica (sem publicar nada enquanto houver o que só o dono autoriza) e refaz os pedidos com a mudança de agora."
+          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line px-3 text-[12.5px] font-semibold text-fg transition hover:bg-surface-hover disabled:opacity-60"
+        >
+          Refazer os pedidos de publicação
+        </button>
+      )}
+    </section>
+  );
+}
+
 function FrontierStrip({
   frontier,
   request,
@@ -465,7 +517,10 @@ function FrontierStrip({
           {short(frontier.stageSha)}
         </span>
         {ahead > 0 ? (
-          <span className="text-[12px] font-semibold text-accent">
+          <span
+            className="text-[12px] font-semibold text-accent"
+            title={frontier.pendingFiles != null ? `${frontier.pendingFiles} arquivo(s) do board com conteúdo mais novo no stage que no ar` : undefined}
+          >
             {ahead} {ahead === 1 ? "entrega ainda não no ar" : "entregas ainda não no ar"}
           </span>
         ) : (

@@ -115,6 +115,11 @@ export interface DeclaredDeploySettings {
   policy: DeployCommandPolicy;
   /** `deploy.canaryCommand` do settings: o canário DEFAULT, que também é board-data-like e passa pela régua. */
   canaryCommand?: string;
+  /**
+   * o canário veio do env do serviço (`AGILEHARNESS_DEPLOY_CANARY_COMMAND`): o canal do operador, que o runtime roda SEM
+   * a régua (face-probe.ts `resolveCanaryVerdict`) — então o relatório não o julga por ela (diria uma recusa que não acontece).
+   */
+  canaryFromEnv?: boolean;
   /** os argvs declarados em settings (legacy.command/plan, composedFace.command, proof.record.*) — só o `argv[0]` conta. */
   argvs: readonly (readonly string[] | undefined)[];
 }
@@ -135,7 +140,8 @@ export function deployDeclarationsProbe(settings: DeclaredDeploySettings, boards
     const c = command?.trim();
     if (c) boardCommands.push({ where, command: c });
   };
-  add("settings.yaml → deploy.canaryCommand", settings.canaryCommand);
+  // A MESMA régua do runtime (face-probe.ts `resolveCanaryVerdict`): o canário do settings.yaml passa por ela; o do env não.
+  if (!settings.canaryFromEnv) add("settings.yaml → deploy.canaryCommand", settings.canaryCommand);
   for (const b of boards) {
     const d = b.deploy;
     if (!d) continue;
@@ -356,7 +362,8 @@ export function runPreflight(probes: PreflightProbes = {}): PreflightReport {
         id: "deploy.declared-commands",
         title: titulo,
         status: "degraded",
-        observed: recusados.map((c) => `${c.where}: ${c.refusal}`).join(" | ").slice(0, 600),
+        // o canário recusado não para o deploy: o runtime simplesmente não o roda (face-probe.ts) — dito como o runtime fará.
+        observed: recusados.map((c) => `${c.where}: ${c.refusal}${/canaryCommand$/.test(c.where) ? " (o canário NÃO roda: a fidelidade da publicação não é checada)" : ""}`).join(" | ").slice(0, 600),
         remedy:
           "o passo privilegiado vai RECUSAR cada comando acima na hora do deploy (e o board fica parado sem o deploy rodar). " +
           "Declare em storymap/settings.yaml → `deploy.launchers` o programa que ele chama, `deploy.recipes` as receitas que " +

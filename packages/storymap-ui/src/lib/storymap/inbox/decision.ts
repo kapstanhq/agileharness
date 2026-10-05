@@ -42,7 +42,7 @@ import { isConducted } from "../driver";
 import { GOVERNANCE_DRAFT_TTL_DAYS } from "../governance";
 import { unresolvedChanges } from "../design-canvas";
 import { isRemovalScope, REMOVAL_SCOPE_BY_ID } from "../frameworks";
-import { cardHref, processesMergeHref, processesServiceHref, runServiceId } from "../deep-links";
+import { cardHref, inboxListItemHref, processesMergeHref, processesServiceHref, runServiceId } from "../deep-links";
 import { acceptTriageRefusal, dataDeletionRefusal, designApproveRefusal, moveRefusal, republishRefusal, runSkillRefusal } from "../preconditions";
 import type { DeployCause, DeployFailurePhase } from "../types";
 import { actionHappened, cardsOfCause, changesOutcome, deployCauseOfItem, hasOutcomeAction, isDiscard, isOwnerAdvisory, type InboxFacts } from "./contract";
@@ -693,10 +693,34 @@ const DECIDE: DecideMap = {
     // motivo segura N cards, e o item fala da causa (num caso real, vários itens «Publicar a parte de «<card>» que só você publica?»
     // para poucas causas, e o dono lia o nome do card-vítima, nunca o do código que segurava).
     const cause = deployCauseOfItem(item, c.card, c.facts);
-    const n = cause ? Math.max(1, cardsOfCause(cause.causeKey, c.facts).length) : 1;
+    const held = cause ? cardsOfCause(cause.causeKey, c.facts) : [];
+    const n = Math.max(1, held.length);
     const affects = n > 1 ? ` — afeta ${plural(n, "card", "cards")}` : "";
     const why = cause ? causeWords(cause, c.config) : null;
-    const details = [{ label: "Motivo", value: item.title }, ...(item.suggestion ? [{ label: "O que resolve", value: item.suggestion }] : []), ...causeDetails(cause)];
+    // o board de cada card que a causa segura: a linha mora no board que PUBLICA o pacote, e os cards podem ser de outros
+    const boardOfCard = (id: string) => c.facts?.deployCardBoard.get(id)?.id ?? item.boardId;
+    const foreign = held.some((id) => boardOfCard(id) !== c.config.id);
+    const cardList = held.length > 1 || foreign
+      ? [{ label: "Cards", value: held.map((id) => `${quoted(c.facts?.cardsById.get(id)?.title ?? id)} (${c.facts?.deployCardBoard.get(id)?.name ?? c.config.name})`).join(", ") }]
+      : [];
+    const details = [{ label: "Motivo", value: item.title }, ...(item.suggestion ? [{ label: "O que resolve", value: item.suggestion }] : []), ...causeDetails(cause), ...cardList];
+    // A causa deste card mora no livro de OUTRO board — o que publica o pacote (um card movido de board leva o aviso dele,
+    // não a linha). A decisão é do Inbox de lá, com a lista de cards; aqui o item só diz onde, sem botão que não muda nada.
+    const heldOn = c.facts?.deployHeldOn.get(item.cardId);
+    if (heldOn) {
+      return {
+        bucket: "acompanhar",
+        askVerb: null,
+        ask: `A publicação de ${c.title} espera no board «${heldOn.name}», que publica o pacote dela`,
+        happened: `O que segura a publicação é do pacote que o board «${heldOn.name}» publica. A decisão (e o pedido de autorização, quando houver) está no Inbox desse board, junto com os outros cards que a mesma causa segura.`,
+        options: [],
+        ifIgnored: `Nada muda daqui: decida no Inbox do board «${heldOn.name}».`,
+        next: { who: "voce", label: `Decida no board «${heldOn.name}»` },
+        more: [{ ...openCard(heldOn.id, item.cardId), id: "more:open-publisher", label: `Abrir o Inbox de «${heldOn.name}»`, consequence: "Abre o Inbox do board que publica o pacote. Não decide nada.", invoke: { kind: "link", href: inboxListItemHref(heldOn.id, item.id) } }, status],
+        details,
+        dot: "grey",
+      };
+    }
     if (item.needsProof) {
       return {
         bucket: "acompanhar",
@@ -733,7 +757,53 @@ const DECIDE: DecideMap = {
       // O PLANO PEDE A AUTORIZAÇÃO DO DONO (o livro de causas guarda o pedido: a mudança exata e o comando do alvo que a
       // grava). É a ação que muda o desfecho — e ela é da CAUSA, não do passo em que o card âncora está: o dono pode já
       // ter aprovado a entrega do card (num caso real, aprovada, e o plano seguia parado porque ninguém tinha onde dizer este sim).
+      // O PEDIDO SENDO REFEITO: a autorização do dono foi recusada por ser de outra mudança (ou o operador pediu na
+      // Esteira), e o sistema está rodando a medição/o deploy do pacote agora para ler os pedidos de agora. Até o plano
+      // novo chegar, o botão de antes autorizaria o que já mudou — então não há botão, há o estado.
+      if (cause && c.facts?.deployRerequesting.has(cause.causeKey)) {
+        return {
+          bucket: "acompanhar",
+          askVerb: null,
+          ask: `Refazendo o pedido de publicação…${affects}`,
+          happened: "O código guardado mudou desde o último pedido, e o sistema está medindo de novo a publicação do pacote para pedir a sua autorização com a mudança de agora. Nada foi publicado.",
+          options: [],
+          ifIgnored: "Quando a medição terminar, o pedido novo volta a Decidir (ou some, se nada mais precisar de você).",
+          next: { who: "sistema", label: "refazendo o pedido…" },
+          more: [status],
+          details,
+          dot: "grey",
+        };
+      }
       const approvals = cause ? (c.facts?.deployApprovals.get(cause.causeKey) ?? []) : [];
+      // O PEDIDO VELHO QUE O SISTEMA NÃO PÔDE REFAZER SOZINHO (auto-rerequest.ts): a main mexeu nos arquivos do pedido, e
+      // refazê-lo daqui exigiria rodar o deploy sem a garantia de que nada publica (o board que publica não declara a
+      // medição que só lê). Sem botão de autorizar — autorizaria o que mudou —, a saída é a Esteira.
+      if (cause && !approvals.length && c.facts?.deployStale.has(cause.causeKey)) {
+        const esteira = c.config.id || item.boardId;
+        return {
+          bucket: "acompanhar",
+          askVerb: null,
+          ask: `O pedido de publicação envelheceu — refaça pela Esteira${affects}`,
+          happened: "O código guardado mudou na main desde o pedido de autorização, então ele já não vale. O sistema não refaz este pedido sozinho porque o board não declara uma medição que só lê, e o deploy poderia publicar. Nada foi publicado.",
+          options: [],
+          ifIgnored: `A publicação segue parada${affects}; nada vai ao ar.`,
+          next: { who: "voce", label: "Refazer pela Esteira" },
+          more: [
+            {
+              id: "more:open-esteira",
+              label: "Abrir a Esteira",
+              consequence: "Abre a Esteira do board, onde «Refazer os pedidos de publicação» pede a autorização com a mudança de agora. Não decide nada.",
+              tone: "neutral",
+              auditCls: "read",
+              invoke: { kind: "link", href: `/board/${encodeURIComponent(esteira)}/entrega` },
+              done: "Aberto.",
+            },
+            status,
+          ],
+          details,
+          dot: "grey",
+        };
+      }
       if (cause && approvals.length) {
         const classText = cause.ownerClass ? `«${ownerClassLabel(cause.ownerClass, c.config)}»` : "negócio";
         const files = [...new Set(approvals.flatMap((a) => a.subject.files))];
@@ -761,12 +831,13 @@ const DECIDE: DecideMap = {
                 body: `Você autoriza publicar ${plural(files.length, "arquivo", "arquivos")} de código de ${classText}${of}${where}. A autorização vale só para esta mudança.`,
               },
               auditCls: "deploy",
-              invoke: { kind: "authorize-publish", boardId: item.boardId, causeKey: cause.causeKey },
+              // a linha da causa mora no livro DESTE Inbox (o board que publica o pacote) — o card pode ser de outro board
+              invoke: { kind: "authorize-publish", boardId: c.config.id || item.boardId, causeKey: cause.causeKey },
               done: "Autorização gravada — a publicação foi disparada de novo. Se outra coisa ainda segurar, o Inbox diz o quê.",
             },
           ],
           ifIgnored: `A publicação segue parada${affects}; nada vai ao ar.`,
-          more: [...(anchor ? [openCard(item.boardId, anchor.id)] : cardMore(item, ref)), status],
+          more: [...(anchor ? [openCard(boardOfCard(anchor.id), anchor.id)] : cardMore(item, ref)), status],
           details: [
             ...details,
             { label: "O que você autoriza", value: `${plural(files.length, "arquivo", "arquivos")}${where}` },
@@ -790,7 +861,7 @@ const DECIDE: DecideMap = {
             happened: story,
             options: [route.decide.option],
             ifIgnored: `A publicação segue parada${affects}; nada vai ao ar.`,
-            more: [openCard(item.boardId, anchor.id), status],
+            more: [openCard(boardOfCard(anchor.id), anchor.id), status],
             details,
             dot: "red",
           };
@@ -803,7 +874,7 @@ const DECIDE: DecideMap = {
           options: [],
           ifIgnored: route.ifIgnored,
           next: route.next,
-          more: [openCard(item.boardId, anchor.id), status],
+          more: [openCard(boardOfCard(anchor.id), anchor.id), status],
           details,
           dot: "grey",
         };

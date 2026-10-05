@@ -146,6 +146,12 @@ async function registerImpl(): Promise<void> {
     .then((m) => m.startDeployPreflightInBackground())
     .catch((err) => console.warn("[harness-boot] preflight do deploy declarado falhou:", err instanceof Error ? err.message : err));
 
+  // 0b) O LIVRO DE BLOQUEIOS DE DEPLOY: a linha que vive num board que não publica o pacote dela (nasceu no board de um
+  //     card movido) volta para o board que o publica — com uma linha no log por linha movida. Em segundo plano.
+  void import("@/lib/storymap/runner/deploy-blocks")
+    .then((m) => m.migrateDeployBlocksToPublishers())
+    .catch((err) => console.warn("[harness-boot] migração do livro de bloqueios de deploy falhou:", err instanceof Error ? err.message : err));
+
   const [
     { ensureWatching },
     recovery,
@@ -606,6 +612,9 @@ async function registerImpl(): Promise<void> {
             import("@/lib/storymap/repo"),
           ]);
           for (const b of await listBoards()) await reconcileBoardDeployFailures(b.id);
+          // o pedido de autorização do dono que a main deixou velho é refeito aqui, sem ninguém clicar (auto-rerequest.ts)
+          const { runAutoRerequest } = await import("@/lib/storymap/runner/auto-rerequest");
+          await runAutoRerequest();
         },
         // Card × histórico: o card cujo arquivo e cujo histórico discordam do status ganha um aviso que pede a decisão.
         // Board «só organização»: o que ainda estava em voo quando o modo foi ligado é desligado (runs e condutores).

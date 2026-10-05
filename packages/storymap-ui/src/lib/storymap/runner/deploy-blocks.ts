@@ -355,6 +355,164 @@ export interface DeployBlockRow {
    * botão para o que ele já respondeu (a varredura lê o último log do disco, e ele pode ser de antes do clique).
    */
   granted?: string[];
+  /**
+   * O board de cada card da linha que NÃO mora no board da linha. A linha vive no board que PUBLICA o pacote
+   * ({@link publishingBoardOf}), e os cards que ela segura podem morar em qualquer board (um card movido de board leva o
+   * aviso dele, não a linha). Ausente para o card do próprio board. Ver {@link cardBoardOf}.
+   */
+  cardBoards?: Record<string, string>;
+  /**
+   * Quando o sistema começou a REFAZER os pedidos desta causa (a autorização do dono foi recusada por ser de outra
+   * mudança, ou o operador pediu na Esteira): o Inbox mostra «refazendo o pedido…» até o plano novo chegar — a próxima
+   * leitura do plano ou do deploy do pacote o apaga, com os pedidos de agora. Ver {@link REREQUEST_WINDOW_MS}.
+   */
+  rerequestedAt?: string;
+  /**
+   * Os pedidos (hash do assunto) que o sistema JÁ SABE velhos — algum arquivo do assunto mudou na main desde o `head` do
+   * pedido (auto-rerequest.ts) — e que ele não pôde refazer sozinho (o board que publica não declara `deploy.planCommand`
+   * e o deploy sem card poderia publicar). Eles não viram botão «Autorizar» (autorizariam o que já mudou): o Inbox diz
+   * «use Refazer os pedidos de publicação». Qualquer pedido novo (plano relido, deploy, refazer) apaga a marca.
+   */
+  staleApprovals?: string[];
+}
+
+/** Os pedidos da linha que ainda valem: os que o sistema não sabe velhos ({@link DeployBlockRow.staleApprovals}). PURA. */
+export function freshApprovals(row: Pick<DeployBlockRow, "approvals" | "staleApprovals">): OwnerApprovalRequest[] {
+  const stale = new Set(row.staleApprovals ?? []);
+  return (row.approvals ?? []).filter((a) => !stale.has(a.subject.hash));
+}
+
+/** O board em que um card da linha mora (o da linha, salvo o que veio de outro board). PURA. */
+export function cardBoardOf(row: Pick<DeployBlockRow, "board" | "cardBoards">, cardId: string): string {
+  return row.cardBoards?.[cardId] ?? row.board;
+}
+
+/** Os boards que contribuem cards para a linha (o dela primeiro). PURA. */
+export function contributorBoardsOf(row: Pick<DeployBlockRow, "board" | "cardBoards" | "cardIds">): string[] {
+  return uniq([row.board, ...row.cardIds.map((id) => cardBoardOf(row, id))]);
+}
+
+/** Até quando «refazendo o pedido…» vale sem resposta: depois disso o Inbox volta a mostrar a causa como ela está. */
+export const REREQUEST_WINDOW_MS = 30 * 60_000;
+
+/** A causa está refazendo o pedido AGORA (dentro da janela)? PURA. */
+export function isRerequesting(row: Pick<DeployBlockRow, "rerequestedAt">, now: number): boolean {
+  const at = row.rerequestedAt ? Date.parse(row.rerequestedAt) : Number.NaN;
+  return Number.isFinite(at) && now - at < REREQUEST_WINDOW_MS;
+}
+
+// ── o board que PUBLICA um pacote ───────────────────────────────────────────────────────────────────
+
+/** O que se lê de um board para saber o que ele publica (estrutural: sem importar o roteamento do deploy). */
+export interface PublisherCandidate {
+  id: string;
+  /** o descritor de deploy do board.yaml, se houver. */
+  deploy?: { kind?: string; command?: string; description?: string } | null;
+  /** o alvo do caminho legado que o `package` do board resolve (settings.yaml → deploy.targets), ou null. */
+  legacyPkg?: string | null;
+}
+
+/** O board DECLARA o próprio deploy (comando ou agente) — o pacote dele é o id do board. PURA. */
+export function declaresDeploy(d: PublisherCandidate["deploy"]): boolean {
+  if (!d) return false;
+  if (d.kind === "command" || d.kind === "agent") return true;
+  return !d.kind && !!(d.command?.trim() || d.description?.trim());
+}
+
+/** O pacote que um board publica: o id (deploy declarado), o alvo legado do `package`, ou nenhum. PURA. */
+export function publishedPkgOf(b: PublisherCandidate): string | null {
+  if (declaresDeploy(b.deploy)) return b.id;
+  return b.legacyPkg || null;
+}
+
+/**
+ * O board que PUBLICA o pacote `pkg` — o board cujo deploy o declara (o descritor do board, com o id igual ao pacote, ou o
+ * `package` que resolve para o alvo legado). Mais de um ⇒ o de id igual ao pacote, senão o primeiro por id (estável).
+ * Nenhum ⇒ null: não há board que refaça o pedido, e quem pergunta diz isso. PURA.
+ */
+export function publishingBoardOf(pkg: string, boards: readonly PublisherCandidate[]): string | null {
+  const matches = boards.filter((b) => publishedPkgOf(b) === pkg).map((b) => b.id);
+  if (matches.length === 0) return null;
+  return matches.includes(pkg) ? pkg : [...matches].sort()[0];
+}
+
+/** Quem publica cada pacote (o resolvedor que a varredura e a migração usam) e o comando declarado do board. */
+export type PublisherOf = (pkg: string) => { board: string; command: string | null } | null;
+
+/** O resolvedor de {@link PublisherOf} sobre os boards lidos. PURA. */
+export function publisherResolver(boards: ReadonlyArray<PublisherCandidate>): PublisherOf {
+  return (pkg) => {
+    const board = publishingBoardOf(pkg, boards);
+    if (!board) return null;
+    const b = boards.find((x) => x.id === board);
+    return { board, command: b?.deploy?.command?.trim() || null };
+  };
+}
+
+/** Junta a linha `from` na `into` (a mesma causa): os cards com o board de cada um, os pedidos e o que o dono já deu. PURA. */
+function mergeRowInto(into: DeployBlockRow, from: DeployBlockRow): DeployBlockRow {
+  const boards: Record<string, string> = { ...(into.cardBoards ?? {}) };
+  for (const id of from.cardIds) {
+    const home = cardBoardOf(from, id);
+    if (home !== into.board) boards[id] = home;
+    else delete boards[id];
+  }
+  const cardIds = uniq([...into.cardIds, ...from.cardIds]);
+  const kept = Object.fromEntries(Object.entries(boards).filter(([id]) => cardIds.includes(id)));
+  const granted = uniq([...(into.granted ?? []), ...(from.granted ?? [])]).slice(-GRANTED_KEEP);
+  const approvals = into.approvals?.length ? into.approvals : from.approvals;
+  const rerequestedAt = [into.rerequestedAt, from.rerequestedAt].filter((x): x is string => !!x).sort().at(-1);
+  const stale = uniq([...(into.staleApprovals ?? []), ...(from.staleApprovals ?? [])]).filter((h) => approvals?.some((a) => a.subject.hash === h));
+  const { cardBoards: _a, approvals: _b, granted: _c, rerequestedAt: _d, staleApprovals: _e, ...rest } = into;
+  return {
+    ...rest,
+    command: into.command ?? from.command,
+    firstAt: [into.firstAt, from.firstAt].filter(Boolean).sort()[0] ?? into.firstAt,
+    lastAt: [into.lastAt, from.lastAt].filter(Boolean).sort().at(-1) ?? into.lastAt,
+    cardIds,
+    attributedCard: into.attributedCard ?? from.attributedCard,
+    ...(Object.keys(kept).length ? { cardBoards: kept } : {}),
+    ...(approvals?.length ? { approvals } : {}),
+    ...(granted.length ? { granted } : {}),
+    ...(rerequestedAt ? { rerequestedAt } : {}),
+    ...(stale.length ? { staleApprovals: stale } : {}),
+  };
+}
+
+/** Move a linha para o board `to` (o que publica o pacote): os cards levam o board de onde vieram. PURA. */
+function moveRow(row: DeployBlockRow, to: string, command: string | null): DeployBlockRow {
+  const boards: Record<string, string> = {};
+  for (const id of row.cardIds) {
+    const home = cardBoardOf(row, id);
+    if (home !== to) boards[id] = home;
+  }
+  const { cardBoards: _x, ...rest } = row;
+  return { ...rest, board: to, command: command ?? row.command, ...(Object.keys(boards).length ? { cardBoards: boards } : {}) };
+}
+
+/**
+ * A MIGRAÇÃO: cada linha vai para o board que PUBLICA o pacote dela (quando há um, e é outro) — juntando-se à linha da
+ * mesma causa que já estiver lá. É o que leva de volta a linha que nasceu no board de um card movido (um board sem deploy,
+ * onde o pedido não tinha quem o refizesse nem o Inbox certo). Devolve o que moveu, para o registro. PURA.
+ */
+export function relocateDeployBlocks(
+  rows: readonly DeployBlockRow[],
+  publisherOf: PublisherOf,
+): { rows: DeployBlockRow[]; moved: Array<{ causeKey: string; from: string; to: string; cards: number }> } {
+  const moved: Array<{ causeKey: string; from: string; to: string; cards: number }> = [];
+  let out: DeployBlockRow[] = [...rows];
+  for (const row of rows) {
+    const pub = publisherOf(row.pkg);
+    if (!pub || pub.board === row.board) continue;
+    const current = out.find((r) => r.board === row.board && r.causeKey === row.causeKey);
+    if (!current) continue;
+    out = out.filter((r) => r !== current);
+    const at = out.findIndex((r) => r.board === pub.board && r.causeKey === row.causeKey);
+    if (at >= 0) out[at] = mergeRowInto(out[at], current);
+    else out.push(moveRow(current, pub.board, pub.command));
+    moved.push({ causeKey: row.causeKey, from: row.board, to: pub.board, cards: current.cardIds.length });
+  }
+  return { rows: out, moved };
 }
 
 /** Quantos assuntos autorizados a linha lembra (os mais recentes). */
@@ -411,6 +569,11 @@ export function upsertDeployBlock(
     if (r.board === board && r.causeKey === cause.causeKey) {
       found = true;
       const { approvals: _previous, ...rest } = r;
+      // o plano de AGORA chegou (`approvals` lido): o «refazendo o pedido…» terminou, e o que se sabia velho foi substituído
+      if (input.approvals !== undefined) {
+        delete rest.rerequestedAt;
+        delete rest.staleApprovals;
+      }
       out.push({
         ...rest,
         phase: cause.phase,
@@ -439,34 +602,59 @@ export function upsertDeployBlock(
 }
 
 /**
- * O livro do board como PROJEÇÃO dos findings abertos: cada causa referida por um finding aberto tem a sua linha, com
- * exatamente os cards que a referem; linha sem card some; linha nova nasce da causa. Outros boards intocados. É o que
- * faz o livro se curar sozinho (um card resolvido por qualquer caminho sai dele na próxima varredura). PURA.
+ * O livro como PROJEÇÃO dos findings abertos dos cards do board `board`: cada causa referida por um finding aberto tem a
+ * sua linha, com exatamente os cards que a referem; linha sem card some; linha nova nasce da causa. A linha mora no board
+ * que PUBLICA o pacote da causa (`publisherOf`; sem um, no board do card) — e pode juntar cards de vários boards, cada um
+ * com o board dele: esta projeção só refaz a CONTRIBUIÇÃO dos cards de `board`, a dos outros boards fica. É o que faz o
+ * livro se curar sozinho (um card resolvido por qualquer caminho sai dele na próxima varredura). PURA.
  */
 export function syncDeployBlocks(
   rows: readonly DeployBlockRow[],
   board: string,
   open: ReadonlyArray<{ cardId: string; cause: DeployCause }>,
-  ctx: { at: string; command: string | null },
+  ctx: { at: string; command: string | null; publisherOf?: PublisherOf },
 ): DeployBlockRow[] {
-  const byKey = new Map<string, { cause: DeployCause; cardIds: string[]; attributed: string | null }>();
+  const homeOf = (cause: DeployCause) => ctx.publisherOf?.(cause.pkg) ?? null;
+  // 1. tira de toda linha os cards DESTE board (a contribuição que esta varredura refaz) — a linha fica, por ora, mesmo
+  // vazia: se a causa seguir aberta, ela é reposta com o que já sabia (pedidos, autorizações, quando nasceu)
+  let out: DeployBlockRow[] = rows.map((r) => {
+    if (!r.cardIds.some((id) => cardBoardOf(r, id) === board)) return r;
+    const cardIds = r.cardIds.filter((id) => cardBoardOf(r, id) !== board);
+    const cardBoards = Object.fromEntries(Object.entries(r.cardBoards ?? {}).filter(([id]) => cardIds.includes(id)));
+    const { cardBoards: _x, ...rest } = r;
+    return { ...rest, cardIds, ...(Object.keys(cardBoards).length ? { cardBoards } : {}) };
+  });
+  // 2. cada card aberto entra na linha da causa, no board que publica o pacote
   for (const o of open) {
-    const g = byKey.get(o.cause.causeKey) ?? { cause: o.cause, cardIds: [], attributed: null };
-    g.cardIds.push(o.cardId);
-    g.attributed ??= o.cause.attributedCardIds?.[0] ?? null;
-    byKey.set(o.cause.causeKey, g);
+    const pub = homeOf(o.cause);
+    const home = pub?.board ?? board;
+    let at = out.findIndex((r) => r.board === home && r.causeKey === o.cause.causeKey);
+    if (at < 0 && home !== board) {
+      // a linha ainda no lugar antigo (o board do card, antes da migração): ela MUDA de board com o que sabe
+      const old = out.findIndex((r) => r.board === board && r.causeKey === o.cause.causeKey);
+      if (old >= 0) {
+        out[old] = moveRow(out[old], home, pub?.command ?? null);
+        at = old;
+      }
+    }
+    if (at < 0) {
+      out.push({ ...rowFromCause(home, o.cause, ctx.at, pub?.command ?? ctx.command, []), attributedCard: null });
+      at = out.length - 1;
+    }
+    const r = out[at];
+    const cardBoards = { ...(r.cardBoards ?? {}) };
+    if (board !== home) cardBoards[o.cardId] = board;
+    else delete cardBoards[o.cardId];
+    const { cardBoards: _x, ...rest } = r;
+    out[at] = {
+      ...rest,
+      cardIds: uniq([...r.cardIds, o.cardId]),
+      attributedCard: r.attributedCard ?? o.cause.attributedCardIds?.[0] ?? null,
+      ...(Object.keys(cardBoards).length ? { cardBoards } : {}),
+    };
   }
-  const out = rows.filter((r) => r.board !== board);
-  const prev = new Map(rows.filter((r) => r.board === board).map((r) => [r.causeKey, r]));
-  for (const [key, g] of byKey) {
-    const p = prev.get(key);
-    out.push(
-      p
-        ? { ...p, cardIds: uniq(g.cardIds), attributedCard: p.attributedCard ?? g.attributed }
-        : { ...rowFromCause(board, g.cause, ctx.at, ctx.command, uniq(g.cardIds)), attributedCard: g.attributed },
-    );
-  }
-  return out;
+  // 3. linha sem card some
+  return out.filter((r) => r.cardIds.length > 0);
 }
 
 /** A causa fechou: a linha some. PURA. */
@@ -480,7 +668,14 @@ export function touchDeployBlock(rows: readonly DeployBlockRow[], board: string,
     if (r.board !== board || r.causeKey !== cause.causeKey) return r;
     // O plano relido diz também o que o dono ainda deve autorizar (`undefined` = quem chamou não leu o plano: fica como estava).
     const { approvals: previous, ...rest } = r;
-    const next = cause.decider === "owner" ? (approvalsForCause(approvals, cause.rules) ?? previous) : undefined;
+    // o plano relido responde o «refazendo o pedido…» (com os pedidos de agora, ou com nenhum) e substitui o que se sabia velho
+    if (approvals !== undefined) {
+      delete rest.rerequestedAt;
+      delete rest.staleApprovals;
+    }
+    const done = new Set(r.granted ?? []);
+    const read = approvalsForCause(approvals, cause.rules)?.filter((a) => !done.has(a.subject.hash));
+    const next = cause.decider === "owner" ? (read ?? previous) : undefined;
     return { ...rest, units: cause.units, rules: cause.rules, lastAt: at, planHead: cause.headSha ?? r.planHead, ...(next?.length ? { approvals: next } : {}) };
   });
 }
@@ -497,6 +692,52 @@ export function grantDeployApprovals(rows: readonly DeployBlockRow[], board: str
     const left = approvals.filter((a) => !granted.has(a.subject.hash));
     const remembered = uniq([...(r.granted ?? []), ...grantedHashes]).slice(-GRANTED_KEEP);
     return { ...rest, ...(left.length ? { approvals: left } : {}), granted: remembered };
+  });
+}
+
+/**
+ * As causas `keys` do board passam a «refazendo o pedido…» desde `at` (null = desfaz a marca), e os pedidos recusados por
+ * velhos (`drop`) saem da linha — sem entrar em `granted`: o dono não os autorizou, e o plano novo pode pedi-los de novo. PURA.
+ */
+export function markRerequested(rows: readonly DeployBlockRow[], board: string, keys: readonly string[], at: string | null, drop: readonly string[]): DeployBlockRow[] {
+  const gone = new Set(drop);
+  return rows.map((r) => {
+    if (r.board !== board || !keys.includes(r.causeKey)) return r;
+    const { rerequestedAt: _x, approvals, staleApprovals, ...rest } = r;
+    const left = (approvals ?? []).filter((a) => !gone.has(a.subject.hash));
+    // o que se sabia velho e saiu da linha não precisa mais da marca; o que ficou (o refazer foi desfeito) a mantém
+    const stillStale = (staleApprovals ?? []).filter((h) => left.some((a) => a.subject.hash === h));
+    return { ...rest, ...(left.length ? { approvals: left } : {}), ...(at ? { rerequestedAt: at } : {}), ...(stillStale.length ? { staleApprovals: stillStale } : {}) };
+  });
+}
+
+/**
+ * Os pedidos `hashes` das causas `keys` do board passam a «velhos, use Refazer» (auto-rerequest.ts não pôde refazê-los
+ * sozinho sem arriscar publicar): só os que a linha ainda tem; os pedidos ficam na linha (o botão do operador os refaz),
+ * mas não viram «Autorizar». Idempotente. PURA.
+ */
+export function markApprovalsStale(rows: readonly DeployBlockRow[], board: string, keys: readonly string[], hashes: readonly string[]): DeployBlockRow[] {
+  return rows.map((r) => {
+    if (r.board !== board || !keys.includes(r.causeKey)) return r;
+    const known = hashes.filter((h) => r.approvals?.some((a) => a.subject.hash === h));
+    if (!known.length) return r;
+    return { ...r, staleApprovals: uniq([...(r.staleApprovals ?? []), ...known]) };
+  });
+}
+
+/**
+ * O deploy do pacote `pkg` terminou (o disparado sem card — o que refaz os pedidos): a saída 3 traz os pedidos de AGORA,
+ * que entram nas linhas do pacote que estavam «refazendo o pedido…» (menos o que o dono já autorizou); qualquer desfecho
+ * encerra o «refazendo». `report` null = o deploy não trouxe plano legível (falhou de outro jeito): só a marca sai. PURA.
+ */
+export function refreshRowsAfterDeploy(rows: readonly DeployBlockRow[], pkg: string, report: Pick<DeployExit3Report, "ownerApprovals"> | null): DeployBlockRow[] {
+  return rows.map((r) => {
+    if (r.pkg !== pkg || !r.rerequestedAt) return r;
+    const { rerequestedAt: _x, approvals: previous, staleApprovals, ...rest } = r;
+    if (!report || r.decider !== "owner") return { ...rest, ...(previous?.length ? { approvals: previous } : {}), ...(staleApprovals?.length ? { staleApprovals } : {}) };
+    const done = new Set(r.granted ?? []);
+    const next = (approvalsForCause(report.ownerApprovals ?? [], r.rules) ?? []).filter((a) => !done.has(a.subject.hash));
+    return { ...rest, ...(next.length ? { approvals: next } : {}) };
   });
 }
 
@@ -551,12 +792,22 @@ function readRows(raw: string): { rows: DeployBlockRow[]; skipped: number; recov
         attributedCard: typeof r.attributedCard === "string" ? r.attributedCard : null,
         ...(ownerApprovalRequestsOf(r.approvals).length ? { approvals: ownerApprovalRequestsOf(r.approvals) } : {}),
         ...(strs(r.granted).length ? { granted: strs(r.granted) } : {}),
+        ...cardBoardsOf(r.cardBoards),
+        ...(typeof r.rerequestedAt === "string" && r.rerequestedAt ? { rerequestedAt: r.rerequestedAt } : {}),
+        ...(strs(r.staleApprovals).length ? { staleApprovals: strs(r.staleApprovals) } : {}),
       });
     }
     return { rows: out, skipped, recovering };
   } catch {
     return null;
   }
+}
+
+/** `cardBoards` lido do disco: só pares texto → texto. PURA. */
+function cardBoardsOf(v: unknown): { cardBoards?: Record<string, string> } {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out = Object.fromEntries(Object.entries(v as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string" && !!e[1]));
+  return Object.keys(out).length ? { cardBoards: out } : {};
 }
 
 /** A leitura tolerante: só as linhas que se leem (quem só CONSULTA uma linha — nunca quem julga por ausência). */
@@ -743,12 +994,16 @@ export async function remeasureBoardCauses(
     now: number;
     /** A POLÍTICA do passo privilegiado que o alvo declarou (lançadores/receitas). Ausente ⇒ a do settings do alvo ∪ o env. */
     policy?: DeployCommandPolicy;
+    /** mede AGORA, fora da janela de 15 min (o pedido refeito: a autorização recusada por velha, o botão do operador). */
+    force?: boolean;
   },
 ): Promise<RemeasureVerdict> {
   const verdict: RemeasureVerdict = { dead: [], present: [] };
   const fresh = rows.filter((r) => r.phase === "freshness");
   const plan = rows.filter(isPlanCause);
-  if ((!fresh.length && !plan.length) || !claimRemeasure(board, io.now)) return verdict;
+  if (!fresh.length && !plan.length) return verdict;
+  if (io.force) remeasuredAt.set(board, io.now);
+  else if (!claimRemeasure(board, io.now)) return verdict;
   try {
     const { loadRunnerConfig } = await import("./config");
     const policy = io.policy ?? deployPolicyFromSettings(loadRunnerConfig().deploy);
@@ -877,6 +1132,8 @@ export interface DeployBlocksSweepDeps {
   attribute(guarded: readonly string[], cards: readonly Card[], config: BoardConfig): Promise<string[]>;
   /** o texto do finding de uma causa do sistema (o mesmo do revert — deploy-revert.ts). */
   systemText(cause: DeployCause, today: string): Pick<Finding, "title" | "detail">;
+  /** quem publica cada pacote (a linha mora lá — {@link publishingBoardOf}). Ausente ⇒ a linha fica no board do card. */
+  publishers?(): Promise<PublisherOf>;
   now(): number;
 }
 
@@ -956,7 +1213,8 @@ export async function sweepDeployBlocks(board: string, deps: DeployBlocksSweepDe
     }
 
     // a projeção INTEIRA do board: depois dela o livro fala por este board de novo (num livro em recuperação, `swept`)
-    let rows = await deps.mutateBlocks((all) => syncDeployBlocks(all, board, open, { at: iso, command: config.deploy?.command ?? null }), { swept: board });
+    const publisherOf = deps.publishers ? await deps.publishers().catch(() => undefined) : undefined;
+    let rows = await deps.mutateBlocks((all) => syncDeployBlocks(all, board, open, { at: iso, command: config.deploy?.command ?? null, publisherOf }), { swept: board });
     // 3b. A causa do DONO sem o pedido de autorização no livro o lê da última saída do deploy do pacote (o log): é o que
     // põe «Autorizar publicar» na frente dele sem esperar a próxima tentativa de publicar (que o disjuntor pode ter parado).
     const waiting = rows.filter((r) => r.board === board && r.decider === "owner" && !r.approvals?.length);
@@ -976,13 +1234,16 @@ export async function sweepDeployBlocks(board: string, deps: DeployBlocksSweepDe
       // sistema o pega) em vez de dizer «o sistema tenta de novo» a um card que continua segurado.
       const released = deps.breaker ? await deps.breaker.releaseCause(board, key).catch(() => [] as string[]) : [];
       if (released === null) continue;
-      for (const o of open.filter((x) => x.cause.causeKey === key)) {
-        await deps.write(board, o.cardId, (c) =>
+      // os cards de OUTROS boards que a linha segura (a linha mora no board que publica): o disjuntor de cada um solta, e o
+      // aviso deles fecha no board deles
+      for (const other of contributorBoardsOf(row).filter((b) => b !== board)) await deps.breaker?.releaseCause(other, key).catch(() => null);
+      for (const cardId of row.cardIds) {
+        await deps.write(cardBoardOf(row, cardId), cardId, (c) =>
           openDeployFailure(c)?.deployCause?.causeKey === key
             ? resolveOpenDeployFailure(c, `a causa sumiu na re-medição (${row.phase === "freshness" ? "o preflight de frescor passou" : "o plano da publicação não a lista mais"}) — o sistema tenta publicar de novo.`, today)
             : null,
         );
-        report.resolved.push(o.cardId);
+        report.resolved.push(cardId);
       }
       await deps.mutateBlocks((all) => dropDeployBlock(all, board, key));
       report.closedCauses.push(key);
@@ -1031,8 +1292,9 @@ export async function closeCausesAfterCleanDeploy(pkg: string, deps: CleanDeploy
     for (const row of causesClosedByCleanDeploy(await deps.readRows(), pkg)) {
       const released = deps.breaker ? await deps.breaker.releaseCause(row.board, row.causeKey).catch(() => [] as string[]) : [];
       if (released === null) continue; // o disjuntor recusa soltar: segue aberta, como na re-medição
+      for (const other of contributorBoardsOf(row).filter((b) => b !== row.board)) await deps.breaker?.releaseCause(other, row.causeKey).catch(() => null);
       for (const cardId of row.cardIds) {
-        await deps.write(row.board, cardId, (c) =>
+        await deps.write(cardBoardOf(row, cardId), cardId, (c) =>
           openDeployFailure(c)?.deployCause?.causeKey === row.causeKey
             ? resolveOpenDeployFailure(c, `o deploy de ${pkg} terminou bem (saída 0): nada mais segura a publicação — a causa foi encerrada.`, today)
             : null,
@@ -1092,8 +1354,61 @@ export async function defaultDeployBlocksSweepDeps(io?: { exec?: ExecFn; repoRoo
     },
     attribute: (guarded, cards, config) => attributeOwnerFiles(guarded, cards, config, { exec, repoRoot }),
     systemText: systemTextOf,
+    publishers: async () => publisherResolver(await readPublisherCandidates()),
     now: Date.now,
   };
+}
+
+/** Os boards como candidatos a publicar (o descritor de deploy e o alvo legado do `package`). Ilegível ⇒ fica de fora. */
+export async function readPublisherCandidates(): Promise<PublisherCandidate[]> {
+  const [{ listBoards, readBoardConfig }, { deployPkgForPackage }] = await Promise.all([import("@/lib/storymap/repo"), import("./product-deploy")]);
+  const out: PublisherCandidate[] = [];
+  for (const b of await listBoards().catch(() => [])) {
+    const config = await readBoardConfig(b.id).catch(() => null);
+    if (!config) continue;
+    const legacyPkg = declaresDeploy(config.deploy) ? null : (() => {
+      try {
+        return deployPkgForPackage(config.package);
+      } catch {
+        return null;
+      }
+    })();
+    out.push({ id: b.id, deploy: config.deploy ?? null, legacyPkg });
+  }
+  return out;
+}
+
+/**
+ * A MIGRAÇÃO DO BOOT: as linhas que vivem num board que não publica o pacote delas (a linha que nasceu no board de um
+ * card movido) voltam para o board que o publica — com uma linha no log do serviço por linha movida (o registro). Nunca
+ * lança. Devolve o que moveu.
+ */
+export async function migrateDeployBlocksToPublishers(deps?: {
+  publishers?: () => Promise<PublisherOf>;
+  readRows?: () => Promise<DeployBlockRow[]>;
+  mutateBlocks?: (fn: (rows: DeployBlockRow[]) => DeployBlockRow[]) => Promise<DeployBlockRow[]>;
+  log?: (line: string) => void;
+}): Promise<Array<{ causeKey: string; from: string; to: string; cards: number }>> {
+  try {
+    const publisherOf = await (deps?.publishers ?? (async () => publisherResolver(await readPublisherCandidates())))();
+    // só GRAVA quando há o que mover: gravar um livro ausente o criaria vazio, e «livro vazio» retira do Inbox toda causa
+    // gravada (ausente é «não sei») até a primeira varredura
+    if (relocateDeployBlocks(await (deps?.readRows ?? (() => readDeployBlocks()))(), publisherOf).moved.length === 0) return [];
+    let moved: Array<{ causeKey: string; from: string; to: string; cards: number }> = [];
+    await (deps?.mutateBlocks ?? ((fn) => mutateDeployBlocks(fn)))((rows) => {
+      const r = relocateDeployBlocks(rows, publisherOf);
+      moved = r.moved;
+      return r.rows;
+    });
+    const log = deps?.log ?? ((line: string) => console.log(line));
+    for (const m of moved) {
+      log(`[deploy-blocks] migração: a causa ${m.causeKey} (${m.cards} card(s)) saiu do board ${m.from} e voltou para ${m.to}, o board que publica o pacote dela`);
+    }
+    return moved;
+  } catch (err) {
+    console.error("[deploy-blocks] migração das linhas para o board que publica falhou:", err instanceof Error ? err.message : err);
+    return [];
+  }
 }
 
 /**

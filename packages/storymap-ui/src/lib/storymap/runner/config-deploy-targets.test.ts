@@ -16,7 +16,7 @@
 // peneira poderia ser removida e a suíte continuaria verde — que é exatamente o modo de falha que esta
 // casa combateu em toda a extração (um guarda que não é medido não é guarda).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { coerceRunnerSettings } from "./config";
+import { applyEnvOverrides, coerceRunnerSettings } from "./config";
 
 describe("settings deploy.targets — a peneira de FORMA tem dentes", () => {
   let avisos: string[];
@@ -120,5 +120,45 @@ describe("settings deploy.composedFace — declaração pela metade não vira fa
     // Meia declaração seria o PIOR estado: o motor acreditando que há face e sem saber publicá-la.
     expect(s.deploy?.composedFace).toBeUndefined();
     expect(avisos.join("\n")).toMatch(/composedFace/);
+  });
+});
+
+// A MARCA DO CANAL DO OPERADOR: só o env do serviço a liga; o settings.yaml não consegue declará-la (o canário dele passa
+// pela régua em face-probe.ts — quem escreve o settings do alvo pode ser um agente, pelo merge train).
+describe("deploy.canaryFromEnv — só o env do serviço marca o canário como do operador", () => {
+  const antes = process.env.AGILEHARNESS_DEPLOY_CANARY_COMMAND;
+  afterEach(() => {
+    if (antes === undefined) delete process.env.AGILEHARNESS_DEPLOY_CANARY_COMMAND;
+    else process.env.AGILEHARNESS_DEPLOY_CANARY_COMMAND = antes;
+  });
+
+  it("o settings.yaml não liga a marca, nem escrevendo-a", () => {
+    const s = coerceRunnerSettings({ version: 1, deploy: { canaryCommand: "./verifica", canaryFromEnv: true } });
+    expect(s.deploy?.canaryCommand).toBe("./verifica");
+    expect(s.deploy?.canaryFromEnv).toBeUndefined();
+  });
+
+  it("o env do serviço liga a marca junto com o comando", () => {
+    process.env.AGILEHARNESS_DEPLOY_CANARY_COMMAND = "./verifica-do-host";
+    const s = applyEnvOverrides(coerceRunnerSettings({ version: 1, deploy: { canaryCommand: "./verifica" } }));
+    expect(s.deploy).toMatchObject({ canaryCommand: "./verifica-do-host", canaryFromEnv: true });
+    delete process.env.AGILEHARNESS_DEPLOY_CANARY_COMMAND;
+    expect(applyEnvOverrides(coerceRunnerSettings({ version: 1, deploy: { canaryCommand: "./verifica" } })).deploy?.canaryFromEnv).toBeUndefined();
+  });
+});
+
+describe("settings deploy.autoRerequestEveryMinutes — a janela da re-medição automática dos pedidos do dono", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("aceita um inteiro de 0 (desligada) a 1440; fora disso DESCARTA com aviso (fica o padrão)", () => {
+    const avisos: string[] = [];
+    vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => void avisos.push(args.map(String).join(" ")));
+    expect(coerceRunnerSettings({ version: 1, deploy: { autoRerequestEveryMinutes: 30 } }).deploy?.autoRerequestEveryMinutes).toBe(30);
+    expect(coerceRunnerSettings({ version: 1, deploy: { autoRerequestEveryMinutes: 0 } }).deploy?.autoRerequestEveryMinutes).toBe(0);
+    expect(avisos).toEqual([]);
+    for (const bad of [-1, 1.5, 2000, "15"]) {
+      expect(coerceRunnerSettings({ version: 1, deploy: { autoRerequestEveryMinutes: bad } }).deploy?.autoRerequestEveryMinutes).toBeUndefined();
+    }
+    expect(avisos.filter((a) => a.includes("autoRerequestEveryMinutes"))).toHaveLength(4);
   });
 });

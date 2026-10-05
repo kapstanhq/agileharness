@@ -4,6 +4,7 @@ import { NAMESPACE_PROBE } from "./runner/autonomy-sandbox";
 import { CONTRATO_DE_ENV } from "./env-contract";
 import { runPreflight, preflightMessage, deployDeclarationsProbe, type DeployDeclarationsProbe, type PreflightProbes, type PreflightCheck } from "./preflight";
 import { deployPolicyFromSettings } from "./runner/deploy-command-guard";
+import { resolveCanaryVerdict } from "./runner/face-probe";
 
 // O relatório de prontidão. Tudo aqui roda sobre sondas INJETADAS — nada toca o disco, o PATH ou o
 // git da máquina que roda a suíte. Ver o cabeçalho de preflight.ts para o porquê do módulo existir.
@@ -660,6 +661,30 @@ describe("deploy.declared-commands e host.just — a ferramenta não supõe o ex
     ]);
     expect(p.boardCommands[2].command).toBe("taskrun ship-app oficina.v2"); // aparado
     expect([...p.programs].sort()).toEqual(["recorder", "shipit", "taskrun"]);
+  });
+
+  // AS DUAS RÉGUAS DO CANÁRIO SÃO A MESMA: o relatório do boot diz «recusado» exatamente quando o runtime
+  // (face-probe.ts `resolveCanaryVerdict`) não roda o canário do settings.yaml — e cala sobre o do env, que o runtime roda.
+  it("canário: o preflight recusa EXATAMENTE o que o runtime não roda (settings.yaml pela régua; env do serviço, não)", () => {
+    const decl = { launchers: ["shipit", "taskrun"], recipes: ["ship-app", "face-check"], recipeRunners: ["taskrun"] };
+    const comandos = ["taskrun face-check", "taskrun outra-receita", "shipit canary", "./verifica", "bash -c 'id'", "node probe.mjs", "taskrun face-check '$(id)'"];
+    let recusados = 0;
+    for (const canaryCommand of comandos) {
+      for (const canaryFromEnv of [false, true]) {
+        const p = deployDeclarationsProbe({ policy: deployPolicyFromSettings(decl, {}), canaryCommand, canaryFromEnv, argvs: [] }, []);
+        const c = acha(runPreflight(saudavel({ deploy: p })).checks, "deploy.declared-commands");
+        const runtime = resolveCanaryVerdict(null, { deploy: { ...decl, canaryCommand, ...(canaryFromEnv ? { canaryFromEnv } : {}) } }, {});
+        const preflightRecusa = c.status === "degraded" && c.observed.includes("settings.yaml → deploy.canaryCommand");
+        expect(preflightRecusa, `${canaryCommand} (env=${canaryFromEnv})`).toBe(runtime.command === null);
+        if (preflightRecusa) {
+          recusados += 1;
+          expect(c.observed).toContain("o canário NÃO roda");
+        }
+      }
+    }
+    // não-vacuidade: a tabela tem os dois lados (recusa e passa) — senão a igualdade seria trivial
+    expect(recusados).toBeGreaterThan(2);
+    expect(recusados).toBeLessThan(comandos.length * 2);
   });
 });
 

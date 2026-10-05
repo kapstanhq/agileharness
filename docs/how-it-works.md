@@ -606,6 +606,7 @@ deploy:
       securityReview: [auditlog, verdict, "{file}"]
       ownerApproval:  [auditlog, approval, "{file}"]
     staleMarkers: ["stale subject"]  # phrases in the recorder's refusal that mean "the subject moved on"
+  autoRerequestEveryMinutes: 15    # at most one automatic re-measure of stale owner requests per package (0 = off)
 ```
 
 | Key | What it answers | Without it |
@@ -619,6 +620,19 @@ deploy:
 | `composedFace` | the face merged from several apps, and the `command` that publishes it | no face: nothing chains. A face declared WITHOUT `command`: a publish whose diff touches the face is **refused** before anything starts |
 | `proof.record.*` | the command that records a security verdict / an owner approval | proofs are never written from log text |
 | `proof.staleMarkers` | which refusal phrases mean "that proof is for another change" | a refusal is never read as stale |
+| `autoRerequestEveryMinutes` | how often, per package, the service may re-measure an owner request that went stale | 15 minutes; `0` turns the automatic re-measure off |
+
+**An owner request that goes stale is redone without anyone clicking.** An owner approval request is bound to an exact
+change: the diff of some files between a base and a head. When `main` moves and touches one of those files, the request
+would authorize something that no longer exists. The service notices that cheaply — a `git diff --name-only <head> main`
+over the request's files, never a deploy — on the recovery tick, when the merge train lands on `main` and when a deploy
+ends. A stale request stops being an «Autorizar» (authorize) button: the Inbox shows «refazendo o pedido…» (redoing the request) on the same item, and the
+service re-measures through the board's `deploy.planCommand`, which only reads. Without a declared plan, it runs the
+board's deploy without a card only while another owner request that is still valid remains for that package (the deploy
+stops there and publishes nothing) and the board's pace does not hold it; otherwise the request is marked stale and the
+Inbox points to «Refazer os pedidos de publicação» on the board's delivery screen. A paused board still re-measures
+through its plan (measuring is not new work and publishes nothing); an organize-only board is never touched. Each request
+is redone automatically at most once: if the target measures the same change again, it is still valid for the target.
 
 The environment can only add to the three lists (`AGILEHARNESS_DEPLOY_LAUNCHERS`, `_RECIPE_RUNNERS`,
 `_RECIPES`); it never removes what the file declared. The result of a run on the legacy path is reported under

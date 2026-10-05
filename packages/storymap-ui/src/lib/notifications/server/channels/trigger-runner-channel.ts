@@ -126,6 +126,8 @@ export function createTriggerRunnerChannel(): NotificationChannel {
       void settleAttachedDeploy(ev);
       return;
     }
+    // um deploy terminou: o que está no ar (a base dos pedidos do dono) pode ter mudado — olha os pedidos daqui a pouco
+    void import("@/lib/storymap/runner/auto-rerequest").then((m) => m.nudgeAutoRerequest()).catch(() => {});
     // Um deploy BEM-SUCEDIDO de um alvo torna vivo TODO card que dependia daquele alvo — não só o card que o
     // disparou. Antes, a cura era escopada ao {board, cardId} do disparo, então um card cujo deploy falhou e
     // que foi republicado por OUTRO card (ou pelo `deploy` do MCP, que roda sem cardId) ficava com o alarme
@@ -145,6 +147,17 @@ export function createTriggerRunnerChannel(): NotificationChannel {
         const { listBoards } = await import("@/lib/storymap/repo");
         for (const b of await listBoards()) await reconcileBoardDeployFailures(b.id);
       })().catch((err) => console.error("[deploy-reconcile settle]", err instanceof Error ? err.message : err));
+    }
+    // O deploy SEM card (o que refaz os pedidos de publicação — owner-approval.ts `rerequestPublishRequests`): a saída 3
+    // traz os pedidos de agora para as linhas que esperavam «refazendo o pedido…»; qualquer desfecho encerra a espera.
+    if (!ev.cardId) {
+      void (async () => {
+        const { mutateDeployBlocks, readDeployBlocks, refreshRowsAfterDeploy } = await import("@/lib/storymap/runner/deploy-blocks");
+        // só grava quando alguma linha do pacote espera (um livro ausente não pode nascer vazio daqui)
+        if (!(await readDeployBlocks()).some((r) => r.pkg === ev.pkg && r.rerequestedAt)) return;
+        const report = isDeployNeedsHuman(ev) ? await readDeployExit3Report(ev.pkg).catch(() => null) : null;
+        await mutateDeployBlocks((rows) => refreshRowsAfterDeploy(rows, ev.pkg, report?.status ? report : null));
+      })().catch((err) => console.error("[deploy-blocks refazer pedidos]", err instanceof Error ? err.message : err));
     }
     if (!ev.board || !ev.cardId) return;
     // story-ex0034 (t5): revert on a genuine FAILURE (exit≠0) OR on a settle that did NO real work — a

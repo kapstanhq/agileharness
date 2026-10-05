@@ -9,6 +9,7 @@ import { collectFleet } from "./fleet-view";
 import { defaultFleetDeps } from "./fleet-deps";
 import { listPublishRequests } from "./publish-queue";
 import { releaseCodePrefixes } from "./release-scope";
+import { stageContentAhead } from "./stage-content";
 import { declaredCodePrefixes } from "./staging";
 import {
   activityIsFresh,
@@ -30,6 +31,8 @@ import { mayRequestPublish, releaseModeOf } from "@/lib/storymap/release-policy"
 
 /** Teto de commits listados por board — a raia mostra entregas, não o histórico do repositório. */
 const MAX_STAGED = 30;
+/** Acima disto a lista de entregas usa o escopo do board como pathspec (a linha de comando tem limite). */
+const MAX_PENDING_PATHSPEC = 400;
 /** Teto de pedidos no histórico da fila — o suficiente para a raia "No ar" e a trilha recente. */
 const MAX_PUBLISH_ROWS = 12;
 const GIT_TIMEOUT_MS = 20_000;
@@ -114,27 +117,26 @@ export async function frontierOf(board: string, exec: ExecFn): Promise<BoardFron
   // pacote não tem o que medir (a promoção também recusaria — `no-prefix` — e diz o que declarar).
   const prefixes = releaseCodePrefixes(boardConfig, declaredCodePrefixes(cfg.staging) ?? []);
   const pathspec = prefixes.length ? ` -- ${prefixes.map(q).join(" ")}` : "";
-  // "ainda não no ar" tem de ser medido contra o que ESTÁ no ar, e a fronteira do board sozinha não
-  // mede isso: `base..stage` é "alcançável do stage e não da fronteira", o que inclui o que voltou de
-  // `main` para o stage no refluxo. Foi assim que o `release:` de OUTRO board (que tocou
-  // `packages/commons*`, dentro do pathspec do acme) apareceu como entrega pendente do board por dias
-  // — anunciado como "ainda não no ar" sendo literalmente ancestral de HEAD.
-  //
-  // Excluir por `liveSha` (não por `main`) casa o número com a sha que a faixa mostra em "No ar": as
-  // duas leituras passam a vir do mesmo instante, então o contador nunca contradiz o que está do lado.
-  // E não há falso negativo: a promoção RE-COMMITA o delta, então trabalho pendente de verdade jamais é
-  // ancestral do que está no ar — só o refluxo é, que é exatamente o que queremos tirar.
+  // "ainda não no ar" é medido pela DIFERENÇA DE CONTEÚDO (stage-content.ts) — a MESMA régua que decide o que o «Publicar»
+  // leva (release.ts): os arquivos do escopo que a stage mudou desde a base, que diferem da main e cujo conteúdo na stage
+  // nunca esteve na main. Contar commits do stage fora do histórico da main mentia nos dois sentidos: a promoção
+  // RE-COMMITA o delta (commit do stage nenhum vira ancestral da main, então o que já foi publicado continuava «pendente»),
+  // e um stage ATRÁS da main num arquivo do escopo aparecia como entrega a publicar — que, publicada, reverteria a main.
+  // As ENTREGAS (a lista e o número) são os commits do stage que tocam esses arquivos; sem arquivo pendente, nenhuma.
+  const live = liveSha || "HEAD";
+  const pending = await stageContentAhead((args) => git(exec, args), { live, stage: stageBranch, base, pathspec: prefixes });
+  if (pending === null) return { ...empty, liveSha, liveAt, stageSha };
+  if (pending.length === 0) return { ...empty, liveSha, liveAt, stageSha, pendingFiles: 0 };
   const notLive = liveSha ? ` --not ${q(liveSha)}` : "";
-  // A LISTA é capada (a raia mostra entregas, não o histórico do repositório) mas a CONTAGEM não pode
-  // ser: "N entregas ainda não no ar" e o contador da raia liam `staged.length`, então acima do teto eles
-  // reportavam 30 como se fosse o total. É o mesmo defeito do contador de "No ar" (uma janela truncada
-  // apresentada como resposta) — e o mais caro dos dois, porque este número é o que decide publicar.
+  const pendingSpec = pending.length <= MAX_PENDING_PATHSPEC ? ` -- ${pending.map(q).join(" ")}` : pathspec;
+  // A LISTA é capada (a raia mostra entregas, não o histórico do repositório) mas a CONTAGEM não pode ser: acima do teto
+  // ela reportaria o teto como se fosse o total — e este é o número que decide publicar.
   const [log, count] = await Promise.all([
     git(
       exec,
-      `log --no-merges --max-count=${MAX_STAGED} --format=${q(STAGED_LOG_FORMAT)} ${q(base)}..${q(stageBranch)}${notLive}${pathspec}`,
+      `log --no-merges --max-count=${MAX_STAGED} --format=${q(STAGED_LOG_FORMAT)} ${q(base)}..${q(stageBranch)}${notLive}${pendingSpec}`,
     ),
-    git(exec, `rev-list --no-merges --count ${q(base)}..${q(stageBranch)}${notLive}${pathspec}`),
+    git(exec, `rev-list --no-merges --count ${q(base)}..${q(stageBranch)}${notLive}${pendingSpec}`),
   ]);
   const staged = log ? parseStagedLog(log) : [];
   return {
@@ -145,7 +147,9 @@ export async function frontierOf(board: string, exec: ExecFn): Promise<BoardFron
     liveAt,
     stageSha,
     staged,
-    stagedTotal: stagedTotalOf(count, staged.length),
+    // conteúdo pendente sem commit que o carregue fora do ar (o commit já é ancestral do que está no ar): ainda é 1 entrega
+    stagedTotal: Math.max(1, stagedTotalOf(count, staged.length)),
+    pendingFiles: pending.length,
   };
 }
 
@@ -166,6 +170,13 @@ async function worktreePending(path: string, exec: ExecFn): Promise<boolean | nu
   } catch {
     return null; // não deu para provar que acabou ⇒ o modelo puro trata como "trabalhando"
   }
+}
+
+/** Os pedidos de publicação do board que esperam alguém (livro de bloqueios de deploy), e se estão sendo refeitos. */
+async function publishRequestsOf(board: string, now: number): Promise<DeliveryOverview["publishRequests"]> {
+  const [{ readDeployBlocks, isRerequesting }, { needsHumanRows }] = await Promise.all([import("./deploy-blocks"), import("./owner-approval")]);
+  const rows = needsHumanRows(await readDeployBlocks(), board);
+  return { board, pending: rows.length, rerequesting: rows.some((r) => isRerequesting(r, now)) };
 }
 
 /**
@@ -206,9 +217,12 @@ export async function collectDelivery(exec: ExecFn = defaultExec, boardId?: stri
     }),
   );
 
+  const publishRequests = boardId ? await publishRequestsOf(boardId, now).catch(() => undefined) : undefined;
+
   return {
     frontiers: frontiers.filter((f): f is BoardFrontier => !!f),
     work: projectWork(fleet, pending),
+    ...(publishRequests ? { publishRequests } : {}),
     publish: publishScoped.slice(0, MAX_PUBLISH_ROWS),
     // Contados sobre a fila INTEIRA (do recorte), nunca sobre a janela acima — ver `publishTotals`.
     publishTotals: {

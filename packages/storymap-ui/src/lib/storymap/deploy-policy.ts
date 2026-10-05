@@ -264,12 +264,15 @@ export interface ResolvedDeployPolicy {
   proof: { record: { securityReview?: string[]; ownerApproval?: string[] }; staleMarkers: string[] };
   composedFace?: { target: string; recipe: string; manifest: string; command?: string[] };
   canaryCommand?: string;
+  /** o `canaryCommand` veio do env do serviço (o canal do operador, sem régua) — não do settings.yaml. */
+  canaryFromEnv?: boolean;
 }
 
 /** O que a resolução lê do RunnerSettings (estrutural: este módulo não importa types.ts). */
 export interface DeploySource {
   deploy?: DeployPolicyDecl & {
     canaryCommand?: string;
+    canaryFromEnv?: boolean;
     targets?: string[];
     composedFace?: { target: string; recipe: string; manifest: string; command?: string[] };
   };
@@ -287,6 +290,7 @@ export function deployPolicyOf(settings: DeploySource | null | undefined): Resol
     proof: { record: { ...(d?.proof?.record ?? {}) }, staleMarkers: [...(d?.proof?.staleMarkers ?? [])] },
     ...(d?.composedFace ? { composedFace: { ...d.composedFace } } : {}),
     ...(d?.canaryCommand ? { canaryCommand: d.canaryCommand } : {}),
+    ...(d?.canaryCommand && d.canaryFromEnv ? { canaryFromEnv: true } : {}),
   };
 }
 

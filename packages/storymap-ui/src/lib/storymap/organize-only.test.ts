@@ -248,6 +248,7 @@ describe("catraca: nenhum ator automático ignora o modo", () => {
     "lib/storymap/health/health-tool.ts": "tool de leitura",
     "lib/notifications/server/channels/trigger-runner-channel.ts": "chama a reconciliação de deploy, que pergunta ao modo dentro dela",
     "lib/storymap/runner/delivery-deps.ts": "a página de Entrega (leitura)",
+    "lib/storymap/runner/deploy-blocks.ts": "só lê o deploy declarado de cada board para saber qual publica cada pacote (onde mora a linha do livro); quem age é a varredura, que pergunta ao modo na reconciliação de deploy",
   };
   const files = (dir: string): string[] =>
     readdirSync(dir, { withFileTypes: true }).flatMap((e) => {

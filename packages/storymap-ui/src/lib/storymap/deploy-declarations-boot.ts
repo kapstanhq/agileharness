@@ -33,6 +33,7 @@ export async function measureDeployDeclarations(): Promise<DeployDeclarationsPro
       {
         policy: deployPolicyFromSettings(declared),
         canaryCommand: declared.canaryCommand,
+        canaryFromEnv: declared.canaryFromEnv,
         argvs: [declared.legacy.command, declared.legacy.plan, declared.composedFace?.command, declared.proof.record.securityReview, declared.proof.record.ownerApproval],
       },
       boards.filter((c): c is NonNullable<typeof c> => c !== null),

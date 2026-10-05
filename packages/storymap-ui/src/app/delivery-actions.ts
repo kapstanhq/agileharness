@@ -16,6 +16,7 @@
 // `release.mode` no board.yaml. Ver `lib/storymap/release-policy.ts`. Verificado AQUI, no servidor.
 
 import { requireSession } from "@/lib/auth/action-guard";
+import { resolveActionCaller } from "@/lib/auth/action-guard";
 import { revalidatePath } from "next/cache";
 import { cancelPublish, enqueuePublish, type PublishRequest } from "@/lib/storymap/runner/publish-queue";
 import { stagingShaOf } from "@/lib/storymap/runner/publish-git";
@@ -129,6 +130,34 @@ export async function cancelPublishAction(input: { id: string; board?: string })
     }).catch(() => {});
     revalidatePath("/entrega");
     return { ok: true };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * «Refazer os pedidos de publicação» — o botão do OPERADOR na Esteira do board, quando há pedido `needs-human` dele: roda
+ * NA HORA a medição/o deploy do pacote no board que o publica (o mesmo caminho da autorização recusada por velha,
+ * owner-approval.ts `rerequestPublishRequests`) e o Inbox mostra «refazendo o pedido…» até o pedido novo chegar. Só a
+ * sessão do operador no navegador: um agente (MCP, mesmo com o token `full`) e o próprio serviço são recusados — o
+ * deploy de produto não é ferramenta de agente.
+ */
+export async function rerequestPublishRequestsAction(input: { board: string }): Promise<Result<{ message: string }>> {
+  await requireSession("rerequestPublishRequestsAction");
+  try {
+    if ((await resolveActionCaller()) !== "operator-session") {
+      return { ok: false, error: "Refazer os pedidos de publicação é do operador: só pela Esteira, com a sua sessão." };
+    }
+    const board = String(input?.board || "").trim();
+    if (!board) return { ok: false, error: "board ausente." };
+    const [{ rerequestBoardPublishRequests, defaultRerequestDeps }, { readDeployBlocks }] = await Promise.all([
+      import("@/lib/storymap/runner/owner-approval"),
+      import("@/lib/storymap/runner/deploy-blocks"),
+    ]);
+    const r = await rerequestBoardPublishRequests(board, { ...defaultRerequestDeps(), readRows: () => readDeployBlocks() });
+    void logHumanActionAction({ surface: "entrega", tool: "rerequestPublishRequestsAction", cls: "deploy", boardId: board, note: r.message.slice(0, 200) }).catch(() => {});
+    revalidatePath(`/board/${board}`);
+    return r.ok ? { ok: true, data: { message: r.message } } : { ok: false, error: r.message };
   } catch (e) {
     return fail(e);
   }

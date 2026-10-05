@@ -9,8 +9,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DeployCause } from "@/lib/storymap/types";
 import { OWNER_APPROVAL_PLACEHOLDER, OWNER_APPROVAL_SCHEMA, buildOwnerApproval, ownerApprovalRequestsOf, parseDeployExit3Report, type OwnerApprovalRequest } from "./deploy-proof";
-import { approvalsForCause, backfillDeployApprovals, grantDeployApprovals, mutateDeployBlocks, readDeployBlocks, touchDeployBlock, upsertDeployBlock, type DeployBlockRow } from "./deploy-blocks";
-import { approvalRefusedAsStale, authorizeOwnerPublish, type OwnerApprovalDeps, type RecordOutcome } from "./owner-approval";
+import { approvalsForCause, backfillDeployApprovals, grantDeployApprovals, isRerequesting, markRerequested, mutateDeployBlocks, readDeployBlocks, refreshRowsAfterDeploy, touchDeployBlock, upsertDeployBlock, type DeployBlockRow } from "./deploy-blocks";
+import { approvalRefusedAsStale, authorizeOwnerPublish, rerequestPublishRequests, rerequestWords, type OwnerApprovalDeps, type RecordOutcome, type RerequestDeps, type RerequestOutcome } from "./owner-approval";
 
 const HEAD = "f".repeat(40);
 const hash = (c: string) => `sha256:${c.repeat(64)}`;
@@ -143,10 +143,11 @@ describe("o clique do dono — authorizeOwnerPublish", () => {
     ...over,
   });
 
-  function harness(opts: { row?: DeployBlockRow | null; record?: (hash: string) => RecordOutcome; publishes?: string[] } = {}) {
+  function harness(opts: { row?: DeployBlockRow | null; record?: (hash: string) => RecordOutcome; publishes?: string[]; rerequest?: RerequestOutcome } = {}) {
     const recorded: Array<{ approval: unknown; hash: string }> = [];
     const granted: string[][] = [];
     const tried: string[] = [];
+    const rerequested: Array<{ pkg: string; stale: string[] }> = [];
     const deps: OwnerApprovalDeps = {
       readRow: async () => (opts.row === undefined ? row() : opts.row),
       record: async (approval, req) => {
@@ -156,13 +157,17 @@ describe("o clique do dono — authorizeOwnerPublish", () => {
       grant: async (_b, _k, hashes) => {
         granted.push(hashes);
       },
-      republish: async (_b, cardId) => {
-        tried.push(cardId);
+      republish: async (b, cardId) => {
+        tried.push(b === "shop" ? cardId : `${b}/${cardId}`);
         return { ok: (opts.publishes ?? ["c2"]).includes(cardId) };
+      },
+      rerequest: async (r, stale) => {
+        rerequested.push({ pkg: r.pkg, stale });
+        return opts.rerequest ?? { ok: true, board: "shop", via: "deploy" };
       },
       now: () => Date.parse(AT),
     };
-    return { deps, recorded, granted, tried };
+    return { deps, recorded, granted, tried, rerequested };
   }
   const run = (h: ReturnType<typeof harness>) => authorizeOwnerPublish(h.deps, { board: "shop", causeKey: MONEY.causeKey });
 
@@ -201,13 +206,33 @@ describe("o clique do dono — authorizeOwnerPublish", () => {
     }
   });
 
-  it("o código guardado mudou desde o pedido (o alvo recusa como OUTRA mudança): nada é autorizado, e a publicação roda para refazer o pedido", async () => {
+  it("o código guardado mudou desde o pedido (o alvo recusa como OUTRA mudança): nada é autorizado, e o pedido é refeito NA HORA no board que publica", async () => {
     const h = harness({ record: () => ({ ok: false, stale: true, error: "recusado: o pedido descreve OUTRA mudança" }) });
     const res = await run(h);
     expect(res.ok).toBe(false);
     expect(!res.ok && res.error).toMatch(/mudou desde este pedido/);
+    expect(!res.ok && res.error).toMatch(/refazendo o pedido…/);
+    expect(!res.ok && res.error).toMatch(/board «shop»/);
     expect(h.granted).toEqual([]);
-    expect(h.tried).toEqual(["c2"]);
+    // nenhum card republica: quem refaz é o deploy/medição do pacote, com os dois pedidos velhos saindo da linha
+    expect(h.tried).toEqual([]);
+    expect(h.rerequested).toEqual([{ pkg: "shop", stale: [reqA.subject.hash, reqB.subject.hash] }]);
+  });
+
+  it("stale SEM board que publique o pacote: a mensagem diz isso, e não promete «volta em instantes»", async () => {
+    const h = harness({
+      record: () => ({ ok: false, stale: true, error: "OUTRA mudança" }),
+      rerequest: { ok: false, reason: "no-publisher", board: null, error: "nenhum board publica o pacote «shop»" },
+    });
+    const res = await run(h);
+    expect(!res.ok && res.error).toMatch(/Nenhum board publica o pacote «shop»/);
+    expect(!res.ok && res.error).not.toMatch(/instantes|refazendo o pedido…/);
+  });
+
+  it("os cards da linha republicam no board DELES (a linha mora no board que publica; o card pode ser de outro)", async () => {
+    const h = harness({ row: row({ attributedCard: "c9", cardIds: ["c9", "c2"], cardBoards: { c9: "oficina" } }), publishes: ["c2"] });
+    expect(await run(h)).toMatchObject({ ok: true, republished: "c2" });
+    expect(h.tried).toEqual(["oficina/c9", "c2"]);
   });
 
   it("o comando do board falhou: erro com o porquê, nada concedido, nada republicado", async () => {
@@ -290,5 +315,91 @@ describe("o pedido chega ao livro sem esperar uma nova tentativa de publicar", (
     expect(approvalsForCause([reqA, reqOther], ["brand-voice"])).toEqual([reqOther]);
     expect(approvalsForCause([reqA, reqOther], [])).toEqual([reqA, reqOther]);
     expect(approvalsForCause(undefined, ["ledger-guard"])).toBeUndefined();
+  });
+});
+
+// ── refazer os pedidos NA HORA, no board que PUBLICA o pacote ────────────────────────────────────────────────────────
+describe("rerequestPublishRequests — o pedido refeito no board que publica o pacote", () => {
+  const reqA = request("a", ["pay/a.ts"], ["api"]);
+  const row = (over: Partial<DeployBlockRow> = {}): DeployBlockRow => ({
+    board: "shop",
+    causeKey: MONEY.causeKey,
+    pkg: "shop",
+    phase: "needs-human",
+    decider: "owner",
+    ownerClass: "money",
+    units: ["api"],
+    rules: ["ledger-guard"],
+    command: "deploy",
+    firstAt: AT,
+    lastAt: AT,
+    cardIds: ["c1"],
+    planHead: HEAD,
+    attributedCard: "c1",
+    approvals: [reqA],
+    ...over,
+  });
+  function deps(opts: { publisher?: string | null; measure?: Awaited<ReturnType<RerequestDeps["measure"]>> } = {}) {
+    const log: string[] = [];
+    const d: RerequestDeps = {
+      publisherOf: async () => (opts.publisher === null ? null : { board: opts.publisher ?? "shop" }),
+      mark: async (b, keys, at, drop) => void log.push(`mark ${b} ${keys.join(",")} ${at} drop=${drop.join(",")}`),
+      unmark: async (b, keys) => void log.push(`unmark ${b} ${keys.join(",")}`),
+      measure: async (b) => {
+        log.push(`measure ${b}`);
+        return opts.measure ?? { ok: true, via: "plan" };
+      },
+      now: () => Date.parse(AT),
+    };
+    return { d, log };
+  }
+
+  it("marca «refazendo o pedido…» no board que PUBLICA e roda a medição dele AGORA (mesmo a linha vindo de outro board)", async () => {
+    const { d, log } = deps({ publisher: "vitrine" });
+    const res = await rerequestPublishRequests(d, { pkg: "shop", rows: [row()], staleHashes: [reqA.subject.hash] });
+    expect(res).toEqual({ ok: true, board: "vitrine", via: "plan" });
+    expect(log).toEqual([`mark vitrine ${MONEY.causeKey} ${AT} drop=${reqA.subject.hash}`, "measure vitrine"]);
+    expect(rerequestWords(res, "shop")).toMatch(/a medição do pacote «shop» roda agora no board «vitrine»/);
+  });
+
+  it("nenhum board publica o pacote ⇒ nada marcado, nada medido, e a resposta DIZ isso", async () => {
+    const { d, log } = deps({ publisher: null });
+    const res = await rerequestPublishRequests(d, { pkg: "shop", rows: [row()] });
+    expect(res).toMatchObject({ ok: false, reason: "no-publisher" });
+    expect(log).toEqual([]);
+    expect(rerequestWords(res, "shop")).toMatch(/Nenhum board publica o pacote «shop»/);
+  });
+
+  it("a medição não rodou ⇒ a marca sai (o Inbox não fica preso em «refazendo») e o porquê vai para o dono", async () => {
+    const { d, log } = deps({ measure: { ok: false, error: "o preflight de frescor recusou" } });
+    const res = await rerequestPublishRequests(d, { pkg: "shop", rows: [row()] });
+    expect(res).toMatchObject({ ok: false, reason: "not-run", board: "shop" });
+    expect(log.at(-1)).toBe(`unmark shop ${MONEY.causeKey}`);
+    expect(rerequestWords(res, "shop")).toMatch(/não rodou: o preflight de frescor recusou/);
+  });
+
+  it("o livro: marcar tira os pedidos velhos SEM contá-los como autorizados; o plano novo traz os de agora e encerra a espera", () => {
+    const fresh = request("novo", ["pay/a.ts"], ["api"]);
+    const marked = markRerequested([row()], "shop", [MONEY.causeKey], AT, [reqA.subject.hash]);
+    expect(marked[0].approvals).toBeUndefined();
+    expect(marked[0].granted).toBeUndefined();
+    expect(isRerequesting(marked[0], Date.parse(AT) + 60_000)).toBe(true);
+    // a janela tem fim: sem resposta, o Inbox volta a mostrar a causa como ela está
+    expect(isRerequesting(marked[0], Date.parse(AT) + 31 * 60_000)).toBe(false);
+    const refreshed = refreshRowsAfterDeploy(marked, "shop", { ownerApprovals: [fresh] });
+    expect(refreshed[0].approvals?.map((a) => a.subject.hash)).toEqual([fresh.subject.hash]);
+    expect(refreshed[0].rerequestedAt).toBeUndefined();
+    // outro pacote não mexe; desfecho sem plano só encerra a espera
+    expect(refreshRowsAfterDeploy(marked, "outro", { ownerApprovals: [fresh] })).toEqual(marked);
+    expect(refreshRowsAfterDeploy(marked, "shop", null)[0]).not.toHaveProperty("rerequestedAt");
+  });
+
+  it("a re-medição do plano também encerra a espera (com os pedidos de agora, menos os já autorizados)", () => {
+    const fresh = request("novo", ["pay/a.ts"], ["api"]);
+    const marked = markRerequested([row({ granted: [reqA.subject.hash] })], "shop", [MONEY.causeKey], AT, [reqA.subject.hash]);
+    const cause: DeployCause = { ...MONEY, units: ["api"], rules: ["ledger-guard"] } as DeployCause;
+    const touched = touchDeployBlock(marked, "shop", cause, AT, [reqA, fresh]);
+    expect(touched[0].rerequestedAt).toBeUndefined();
+    expect(touched[0].approvals?.map((a) => a.subject.hash)).toEqual([fresh.subject.hash]);
   });
 });

@@ -45,8 +45,8 @@ import type { ExecFn } from "./worktree";
 import { authorizeDeployCommand, deployPolicyFromSettings, quoteArgv } from "./deploy-command-guard";
 
 /**
- * O comando de canário APROVADO para execução — uma string que já passou pela régua (board-data) ou que
- * vem do canal do OPERADOR (settings.yaml / env do serviço).
+ * O comando de canário APROVADO para execução — uma string que já passou pela régua (board.yaml, settings.yaml) ou
+ * que vem do canal do OPERADOR (o env do serviço).
  *
  * É um tipo MARCADO (brand) e não um `string` porque a marca é o chokepoint: {@link runFaceCanary} só
  * aceita este tipo, então uma superfície NOVA que tente executar um `canaryCommand` cru não compila. A
@@ -58,15 +58,11 @@ export type AuthorizedCanaryCommand = string & { readonly [AUTHORIZED_CANARY]: t
 
 /**
  * A ÚNICA porta pela qual uma string NÃO examinada pela régua vira {@link AuthorizedCanaryCommand}: o
- * comando declarado pelo OPERADOR.
+ * comando declarado pelo OPERADOR no env do serviço (`AGILEHARNESS_DEPLOY_CANARY_COMMAND`, systemd).
  *
- * Por que ele não passa pela régua: `settings.yaml` e o env do serviço (systemd) NÃO são board-data. Pela
- * régua de proveniência deste repositório (`classifyDeltaPath`, release.ts) `storymap/boards/**` é a classe
- * `board-data` — auto-skip do gate, editável por humano E por agente — enquanto `storymap/settings.yaml` é
- * `control`: um delta nela é justamente o que o gate examina COM MAIS escrutínio, porque pode desligar o
- * próprio gate. Submeter o canal do operador à allow-list de lançadores quebraria o canário REAL de hoje
- * (`node scripts/canary.mjs`) sem fechar buraco nenhum: quem escreve ali já é quem escolhe o
- * que o serviço roda.
+ * Só o env, e não o `settings.yaml`: o settings do alvo chega pelo merge train, que AGENTES alimentam — «confiar» nele
+ * rodaria como root um comando vindo de dado que agente escreve. O canário do settings passa pela mesma régua dos
+ * comandos declarados (lançador/receita), como o do board; o env do serviço é escrito só por quem administra o host.
  *
  * O lint em `deploy-command-guard.test.ts` mantém esta função com UM chamador (o resolvedor abaixo): ela é
  * a lavagem de proveniência, e uma segunda chamada seria a régua contornada de novo.
@@ -79,9 +75,9 @@ export function trustedCanaryFromOperator(command: string): AuthorizedCanaryComm
 export interface CanaryCommandVerdict {
   /** pronto para execução (argv re-citada, no caso do board); `null` quando não há canário ou foi recusado */
   command: AuthorizedCanaryCommand | null;
-  /** `board` = board.yaml (board-data, passa pela régua); `deployment` = settings.yaml/env (operador) */
+  /** `board` = board.yaml; `deployment` = settings.yaml (passa pela régua) ou o env do serviço (operador, sem régua) */
   source: "board" | "deployment" | null;
-  /** presente SÓ quando um canário DECLARADO no board foi recusado — nunca junto com `command` */
+  /** presente SÓ quando um canário DECLARADO (board ou settings.yaml) foi recusado — nunca junto com `command` */
   refusal: string | null;
 }
 
@@ -105,12 +101,14 @@ export interface CanaryCommandVerdict {
 export function resolveCanaryVerdict(
   board: Pick<BoardConfig, "deploy"> | null | undefined,
   settings: Pick<RunnerSettings, "deploy"> | null | undefined,
+  /** o env do serviço (a parte aditiva da política) — injetável para o teste de paridade com o preflight. */
+  env: Record<string, string | undefined> = process.env,
 ): CanaryCommandVerdict {
   const boardCmd = board?.deploy?.canaryCommand?.trim();
   if (boardCmd) {
     // A allow-list é a que o ALVO declarou (settings.yaml → deploy.launchers/recipes/recipeRunners) ∪ o env do serviço: a
     // ferramenta não traz lançador nem receita de fábrica.
-    const { argv, refusal } = authorizeDeployCommand(boardCmd, deployPolicyFromSettings(settings?.deploy));
+    const { argv, refusal } = authorizeDeployCommand(boardCmd, deployPolicyFromSettings(settings?.deploy, env));
     if (!argv) {
       return {
         command: null,
@@ -118,15 +116,27 @@ export function resolveCanaryVerdict(
         refusal:
           `deploy.canaryCommand do board recusado — ${refusal}. O canário roda como root a partir de uma ` +
           `linha de board-data: declare o lançador e a receita em settings.yaml → deploy.launchers / deploy.recipes, ` +
-          `ou declare o canário no canal do operador (settings.yaml deploy.canaryCommand / AGILEHARNESS_DEPLOY_CANARY_COMMAND)`,
+          `ou declare o canário no canal do operador (o env do serviço, AGILEHARNESS_DEPLOY_CANARY_COMMAND)`,
       };
     }
     return { command: quoteArgv(argv) as AuthorizedCanaryCommand, source: "board", refusal: null };
   }
   const deploymentCmd = settings?.deploy?.canaryCommand?.trim();
-  return deploymentCmd
-    ? { command: trustedCanaryFromOperator(deploymentCmd), source: "deployment", refusal: null }
-    : { command: null, source: null, refusal: null };
+  if (!deploymentCmd) return { command: null, source: null, refusal: null };
+  // O env do serviço é o canal do operador (sem régua); o settings.yaml é dado do alvo e passa pela MESMA régua do board.
+  if (settings?.deploy?.canaryFromEnv) return { command: trustedCanaryFromOperator(deploymentCmd), source: "deployment", refusal: null };
+  const { argv, refusal } = authorizeDeployCommand(deploymentCmd, deployPolicyFromSettings(settings?.deploy, env));
+  if (!argv) {
+    return {
+      command: null,
+      source: "deployment",
+      refusal:
+        `deploy.canaryCommand do settings.yaml recusado — ${refusal}. O canário roda como root e o settings.yaml do alvo chega ` +
+        `pelo merge train: declare o lançador e a receita em settings.yaml → deploy.launchers / deploy.recipes, ` +
+        `ou declare o canário no env do serviço (AGILEHARNESS_DEPLOY_CANARY_COMMAND)`,
+    };
+  }
+  return { command: quoteArgv(argv) as AuthorizedCanaryCommand, source: "deployment", refusal: null };
 }
 
 /**

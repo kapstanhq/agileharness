@@ -139,6 +139,11 @@ export interface BoardFrontier {
    * o teto como se fosse o total — e este é o número que decide publicar.
    */
   stagedTotal: number;
+  /**
+   * Quantos arquivos do escopo a stage tem MAIS NOVOS que a main (stage-content.ts) — a régua por conteúdo que decide se
+   * há entrega pendente. Ausente = não medido (sem stage, git que não respondeu).
+   */
+  pendingFiles?: number;
 }
 
 export interface DeliveryOverview {
@@ -154,6 +159,12 @@ export interface DeliveryOverview {
    * histórico e entrega a página é pior que não ter contador — ele parece uma resposta.
    */
   publishTotals: { published: number; open: number };
+  /**
+   * Os pedidos de publicação do board que esperam alguém (as linhas `needs-human` do livro de bloqueios de deploy — o
+   * board que PUBLICA o pacote é onde elas moram). É o que põe o botão «Refazer os pedidos de publicação» na Esteira.
+   * Ausente = sem board no recorte, ou o livro não pôde ser lido.
+   */
+  publishRequests?: { board: string; pending: number; rerequesting: boolean };
   generatedAt: string;
 }
 

@@ -27,7 +27,11 @@ import {
   failureCause,
   guardedOwnerFiles,
   judgePlanCauses,
+  migrateDeployBlocksToPublishers,
   ownerTitleOf,
+  publisherResolver,
+  publishingBoardOf,
+  relocateDeployBlocks,
   unreadableDeployBlocksFile,
   parseDeployBlocks,
   mutateDeployBlocks,
@@ -663,5 +667,171 @@ describe("remeasureBoardCauses — o planCommand declarado passa pela política 
     } finally {
       err.mockRestore();
     }
+  });
+});
+
+// ── a linha mora no board que PUBLICA o pacote ───────────────────────────────────────────────────────────────────────
+// Um card movido de board leva o aviso de publicação dele — e a varredura do board de destino (sem deploy) criava ali uma
+// linha do livro, com o comando nulo e o item no Inbox errado: nenhum deploy daquele board refazia o pedido. Agora a linha
+// vive no board que publica o pacote, guarda os cards de qualquer board (com o board de cada um), e a migração do boot
+// devolve a linha antiga ao lugar dela. Boards inventados: `vitrine` publica (deploy declarado), `bancada` não publica.
+describe("o livro por board que PUBLICA — linhas, cards de outros boards e a migração", () => {
+  const PKG = "vitrine";
+  const OWNER: DeployCause = { pkg: PKG, phase: "needs-human", units: ["api"], rules: ["bills-customer"], ownerClass: "money", decider: "owner", causeKey: `${PKG}:owner:money`, headSha: PLAN_HEAD };
+  const ORPHAN: DeployCause = { ...OWNER, pkg: "avulso", causeKey: "avulso:owner:money" };
+  const finding = (cause: DeployCause): Finding => ({ id: DEPLOY_FAILURE_FINDING_ID, lens: "general", severity: "high", status: "open", deployPhase: "needs-human", deployCause: cause, title: "Precisa de você", detail: "d" });
+  const vitrineCfg = { ...config, id: "vitrine", name: "Vitrine" } as BoardConfig;
+  const bancadaCfg = { ...config, id: "bancada", name: "Bancada", deploy: undefined } as unknown as BoardConfig;
+  const publishers = publisherResolver([
+    { id: "vitrine", deploy: { kind: "command", command: "./ship vitrine" } },
+    { id: "bancada", deploy: null },
+  ]);
+  let byBoard: Record<string, Card[]>;
+  let blocks: DeployBlockRow[];
+  const released: Array<[string, string]> = [];
+  const deps = (over: Partial<DeployBlocksSweepDeps> = {}): DeployBlocksSweepDeps => ({
+    readConfig: async (b) => (b === "vitrine" ? vitrineCfg : bancadaCfg),
+    readCards: async (b) => byBoard[b] ?? [],
+    write: async (b, id, fn) => {
+      const list = byBoard[b] ?? [];
+      const i = list.findIndex((c) => c.id === id);
+      if (i < 0) return;
+      const next = fn(list[i]);
+      if (next) list[i] = next;
+    },
+    lastPlan: async () => null,
+    breaker: {
+      adoptCard: async () => ({}),
+      forget: async () => {},
+      releaseCause: async (b: string, k: string) => {
+        released.push([b, k]);
+        return [];
+      },
+    },
+    codeLanded: async () => new Set<string>(),
+    mutateBlocks: async (fn) => (blocks = fn(blocks)),
+    remeasure: async () => ({ dead: [], present: [] }),
+    reevaluate: async () => {},
+    attribute: async () => [],
+    systemText: systemTextOf,
+    publishers: async () => publishers,
+    now: () => Date.UTC(2026, 9, 5, 12),
+    ...over,
+  });
+  beforeEach(() => {
+    byBoard = {
+      vitrine: [liveCard("story-v1", finding(OWNER), code)],
+      bancada: [liveCard("story-b1", finding(OWNER), code), liveCard("story-b2", finding(ORPHAN), code)],
+    };
+    blocks = [];
+    released.length = 0;
+  });
+
+  it("publishingBoardOf: o deploy declarado (id = pacote) ou o alvo legado do `package`; nenhum ⇒ null", () => {
+    const boards = [
+      { id: "vitrine", deploy: { kind: "command", command: "x" } },
+      { id: "bancada", deploy: null },
+      { id: "oficina", deploy: { kind: "auto" }, legacyPkg: "oficina-app" },
+      { id: "outra", deploy: null, legacyPkg: "oficina-app" },
+    ];
+    expect(publishingBoardOf("vitrine", boards)).toBe("vitrine");
+    expect(publishingBoardOf("oficina-app", boards)).toBe("oficina"); // dois boards no mesmo alvo legado: estável, por id
+    expect(publishingBoardOf("bancada", boards)).toBeNull(); // board sem deploy não publica nem o próprio id
+    expect(publishingBoardOf("avulso", boards)).toBeNull();
+  });
+
+  it("a varredura do board SEM deploy põe a linha no board que publica — com o card e o board dele, e o comando de lá", async () => {
+    await sweepDeployBlocks("bancada", deps());
+    const row = blocks.find((r) => r.causeKey === OWNER.causeKey)!;
+    expect(row).toMatchObject({ board: "vitrine", command: "./ship vitrine", cardIds: ["story-b1"], cardBoards: { "story-b1": "bancada" } });
+    expect(blocks.some((r) => r.board === "bancada" && r.causeKey === OWNER.causeKey)).toBe(false);
+    // o pacote que NENHUM board publica fica no board do card (não há para onde ir) — e o Inbox diz isso ao refazer
+    expect(blocks.find((r) => r.causeKey === ORPHAN.causeKey)).toMatchObject({ board: "bancada", cardIds: ["story-b2"] });
+  });
+
+  it("as duas varreduras compõem UMA linha: cada uma refaz só a contribuição dos cards dela", async () => {
+    await sweepDeployBlocks("bancada", deps());
+    await sweepDeployBlocks("vitrine", deps());
+    const row = () => blocks.find((r) => r.board === "vitrine" && r.causeKey === OWNER.causeKey)!;
+    expect(row().cardIds.sort()).toEqual(["story-b1", "story-v1"]);
+    expect(row().cardBoards).toEqual({ "story-b1": "bancada" });
+    // o card da bancada resolvido por qualquer caminho sai na próxima varredura DELA; o da vitrine fica
+    byBoard.bancada[0] = { ...byBoard.bancada[0], findings: [{ ...byBoard.bancada[0].findings[0], status: "fixed" }] };
+    await sweepDeployBlocks("bancada", deps());
+    expect(row().cardIds).toEqual(["story-v1"]);
+    expect(row().cardBoards).toBeUndefined();
+    // idempotente: a varredura da vitrine de novo não muda nada
+    const before = structuredClone(blocks);
+    await sweepDeployBlocks("vitrine", deps());
+    expect(blocks).toEqual(before);
+  });
+
+  it("mover um card de board NÃO leva a linha: ela fica no board que publica, e o card passa a constar com o board novo", async () => {
+    await sweepDeployBlocks("vitrine", deps());
+    expect(blocks.find((r) => r.causeKey === OWNER.causeKey)).toMatchObject({ board: "vitrine", cardIds: ["story-v1"] });
+    // o card muda de board com o aviso aberto (o que o transfer_card faz: o card inteiro, com os findings)
+    byBoard.bancada.push(byBoard.vitrine.shift()!);
+    await sweepDeployBlocks("vitrine", deps());
+    await sweepDeployBlocks("bancada", deps());
+    const row = blocks.find((r) => r.causeKey === OWNER.causeKey)!;
+    expect(row.board).toBe("vitrine");
+    expect(row.cardIds.sort()).toEqual(["story-b1", "story-v1"]);
+    expect(row.cardBoards).toEqual({ "story-b1": "bancada", "story-v1": "bancada" });
+    expect(blocks.filter((r) => r.board === "bancada").map((r) => r.causeKey)).toEqual([ORPHAN.causeKey]);
+  });
+
+  it("causa MORTA na re-medição do board que publica ⇒ fecha o aviso de TODO card dela, cada um no board dele", async () => {
+    await sweepDeployBlocks("bancada", deps());
+    await sweepDeployBlocks("vitrine", deps({ remeasure: async () => ({ dead: [OWNER.causeKey], present: [] }) }));
+    expect(byBoard.vitrine[0].findings[0].status).toBe("fixed");
+    expect(byBoard.bancada[0].findings[0].status).toBe("fixed");
+    expect(released).toEqual([["vitrine", OWNER.causeKey], ["bancada", OWNER.causeKey]]);
+    expect(blocks.some((r) => r.causeKey === OWNER.causeKey)).toBe(false);
+  });
+
+  it("a MIGRAÇÃO leva a linha antiga (num board sem deploy) ao board que publica, junta com a de lá e guarda o que ela sabia", () => {
+    const old: DeployBlockRow = {
+      board: "bancada", causeKey: OWNER.causeKey, pkg: PKG, phase: "needs-human", decider: "owner", ownerClass: "money", units: ["api"], rules: ["bills-customer"],
+      command: null, firstAt: "2026-10-01T00:00:00.000Z", lastAt: "2026-10-04T00:00:00.000Z", cardIds: ["story-b1"], planHead: PLAN_HEAD, attributedCard: "story-b1", granted: ["sha256:velho"],
+    };
+    const here: DeployBlockRow = { ...old, board: "vitrine", command: "./ship vitrine", firstAt: "2026-10-03T00:00:00.000Z", cardIds: ["story-v1"], attributedCard: null, granted: undefined };
+    const orphan: DeployBlockRow = { ...old, causeKey: ORPHAN.causeKey, pkg: "avulso" };
+    const { rows, moved } = relocateDeployBlocks([old, here, orphan], publishers);
+    expect(moved).toEqual([{ causeKey: OWNER.causeKey, from: "bancada", to: "vitrine", cards: 1 }]);
+    expect(rows).toHaveLength(2);
+    expect(rows.find((r) => r.causeKey === OWNER.causeKey)).toMatchObject({
+      board: "vitrine",
+      command: "./ship vitrine",
+      cardIds: ["story-v1", "story-b1"],
+      cardBoards: { "story-b1": "bancada" },
+      attributedCard: "story-b1",
+      firstAt: "2026-10-01T00:00:00.000Z",
+      granted: ["sha256:velho"],
+    });
+    expect(rows.find((r) => r.causeKey === ORPHAN.causeKey)?.board).toBe("bancada"); // sem board que publique: fica
+    // sozinha (sem linha lá), ela só muda de board
+    expect(relocateDeployBlocks([old], publishers).rows).toEqual([{ ...old, board: "vitrine", command: "./ship vitrine", cardBoards: { "story-b1": "bancada" } }]);
+  });
+
+  it("a migração do boot grava SÓ quando há o que mover, e registra cada linha movida no log", async () => {
+    const logged: string[] = [];
+    let writes = 0;
+    const old = { board: "bancada", causeKey: OWNER.causeKey, pkg: PKG, phase: "needs-human", decider: "owner", ownerClass: "money", units: [], rules: [], command: null, firstAt: "a", lastAt: "b", cardIds: ["story-b1"], planHead: null, attributedCard: null } as DeployBlockRow;
+    let disk: DeployBlockRow[] = [old];
+    const io = {
+      publishers: async () => publishers,
+      readRows: async () => disk,
+      mutateBlocks: async (fn: (rows: DeployBlockRow[]) => DeployBlockRow[]) => {
+        writes += 1;
+        return (disk = fn(disk));
+      },
+      log: (l: string) => void logged.push(l),
+    };
+    expect(await migrateDeployBlocksToPublishers(io)).toEqual([{ causeKey: OWNER.causeKey, from: "bancada", to: "vitrine", cards: 1 }]);
+    expect(disk[0].board).toBe("vitrine");
+    expect(logged).toEqual([`[deploy-blocks] migração: a causa ${OWNER.causeKey} (1 card(s)) saiu do board bancada e voltou para vitrine, o board que publica o pacote dela`]);
+    // segunda vez: nada a mover ⇒ nem grava (um livro ausente não nasce vazio por causa dela)
+    expect(await migrateDeployBlocksToPublishers(io)).toEqual([]);
+    expect(writes).toBe(1);
   });
 });

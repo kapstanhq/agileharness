@@ -14,6 +14,8 @@ import { emptyFacts, isDiscard, type InboxFacts } from "./contract";
 import type { FollowUpItem } from "../system-decisions";
 import { FIXTURES, HUMAN, HUMAN_JIDO, KINDS, MODES, NOW, ULTRA, ULTRA_JIDO, ctx, mkCard, st } from "./items.fixture";
 import { findingFixRefusal } from "../finding-fix";
+import { inboxFactsOf } from "./collect";
+import type { DeployBlockRow } from "../runner/deploy-blocks";
 
 const decide = (kind: CockpitItemKind, config: BoardConfig = HUMAN) => decideItem(FIXTURES[kind].item, ctx(config, FIXTURES[kind].card));
 const fmt = localTimeFormatter(NOW, "America/Sao_Paulo");
@@ -834,6 +836,86 @@ describe("a publicação parada por código do DONO: «Autorizar publicar» quan
   it("sem pedido no livro (o alvo não o emite, ou o dono já autorizou): não há botão de autorizar", () => {
     const d = decideItem(item, { ...ctx(ULTRA, held), facts: facts() });
     expect(d.options.some((o) => o.invoke.kind === "authorize-publish")).toBe(false);
+  });
+});
+
+// O ITEM DA CAUSA mora no Inbox do board que PUBLICA o pacote (a linha do livro mora lá): os cards de outros boards que
+// ela segura entram nele com o board de cada um, o card de outro board só diz onde decidir, e o pedido refeito aparece
+// como «refazendo o pedido…» até o plano novo chegar. Boards inventados: `vitrine` publica, `bancada` não.
+describe("o Inbox da causa no board que publica — cards de outros boards e o pedido refeito", () => {
+  const own: DeployCause = { pkg: "vitrine", phase: "needs-human", units: ["api"], rules: ["checkout"], ownerClass: "money", decider: "owner", causeKey: "vitrine:owner:money" };
+  const finding = { id: DEPLOY_FAILURE_FINDING_ID, lens: "general", severity: "high", status: "open", title: "Precisa de você", deployPhase: "needs-human", deployCause: own } as Card["findings"][number];
+  const VITRINE = { ...ULTRA, id: "vitrine", name: "Vitrine" } as BoardConfig;
+  const BANCADA = { ...ULTRA, id: "bancada", name: "Bancada" } as BoardConfig;
+  const local = mkCard({ id: "v1", title: "Cupom no carrinho", status: "release", findings: [finding] });
+  const moved = mkCard({ id: "b1", title: "Parcelar a compra", status: "release", findings: [finding] });
+  const request = { subject: { kind: "diff" as const, hash: `sha256:${"a".repeat(64)}`, base: "abc1234", head: "f".repeat(40), files: ["pay/a.ts"] }, record: "rec", units: ["api"], rules: ["checkout"] };
+  const row = (over: Partial<DeployBlockRow> = {}): DeployBlockRow => ({
+    board: "vitrine", causeKey: own.causeKey, pkg: "vitrine", phase: "needs-human", decider: "owner", ownerClass: "money", units: ["api"], rules: ["checkout"],
+    command: "./ship", firstAt: "2026-09-28T10:00:00Z", lastAt: "2026-09-28T10:00:00Z", cardIds: ["v1", "b1"], planHead: null, attributedCard: "b1",
+    cardBoards: { b1: "bancada" }, approvals: [request], ...over,
+  });
+  const names = new Map([["vitrine", "Vitrine"], ["bancada", "Bancada"]]);
+  const itemOf = (card: Card, board: string) => ({ ...FIXTURES["deploy-failed"].item, id: `${card.id}:deploy-failed`, boardId: board, cardId: card.id, cardTitle: card.title, needsHuman: true, causeKey: own.causeKey }) as CockpitItem;
+
+  it("no board que publica: o card de OUTRO board entra, o pedido autoriza na linha DESTE board e a lista diz o board de cada card", () => {
+    const facts = inboxFactsOf({ boardId: "vitrine", config: VITRINE, cards: [local, moved], ledger: [row()], boardNames: names, now: NOW });
+    expect(facts.deployLedger?.has(own.causeKey)).toBe(true);
+    const d = decideItem(itemOf(moved, "bancada"), { ...ctx(VITRINE, moved), facts });
+    expect(d.bucket).toBe("decidir");
+    expect(d.options[0]).toMatchObject({ id: "authorize-publish", invoke: { kind: "authorize-publish", boardId: "vitrine", causeKey: own.causeKey } });
+    expect(d.details.find((x) => x.label === "Cards")?.value).toBe("«Cupom no carrinho» (Vitrine), «Parcelar a compra» (Bancada)");
+    // o card âncora abre no board DELE
+    expect(JSON.stringify(d.more)).toContain("/board/bancada/");
+  });
+
+  it("no board do card movido: a causa segue viva, mas a decisão mora no board que publica — sem botão, com o caminho", () => {
+    const facts = inboxFactsOf({ boardId: "bancada", config: BANCADA, cards: [moved], ledger: [row()], boardNames: names, now: NOW });
+    // viva: a linha de OUTRO board segura este card (sem isso o item sairia com «o sistema publica de novo»)
+    expect(facts.deployLedger?.has(own.causeKey)).toBe(true);
+    const d = decideItem(itemOf(moved, "bancada"), { ...ctx(BANCADA, moved), facts });
+    expect(d.bucket).toBe("acompanhar");
+    expect(d.options).toEqual([]);
+    expect(d.ask).toMatch(/espera no board «Vitrine», que publica o pacote dela/);
+    expect(d.more.find((o) => o.id === "more:open-publisher")?.invoke).toEqual({ kind: "link", href: "/board/vitrine/inbox?item=b1%3Adeploy-failed" });
+  });
+
+  it("o pedido sendo refeito: «refazendo o pedido…» em vez do botão (que autorizaria o que já mudou), até a janela acabar", () => {
+    const rerequesting = row({ rerequestedAt: new Date(NOW - 60_000).toISOString() });
+    const facts = inboxFactsOf({ boardId: "vitrine", config: VITRINE, cards: [local, moved], ledger: [rerequesting], boardNames: names, now: NOW });
+    const d = decideItem(itemOf(local, "vitrine"), { ...ctx(VITRINE, local), facts });
+    expect(d.bucket).toBe("acompanhar");
+    expect(d.ask).toMatch(/^Refazendo o pedido de publicação…/);
+    expect(d.next.label).toBe("refazendo o pedido…");
+    expect(d.options.some((o) => o.invoke.kind === "authorize-publish")).toBe(false);
+    // passada a janela sem resposta, o Inbox volta a mostrar a causa como ela está
+    const late = inboxFactsOf({ boardId: "vitrine", config: VITRINE, cards: [local, moved], ledger: [rerequesting], boardNames: names, now: NOW + 31 * 60_000 });
+    expect(decideItem(itemOf(local, "vitrine"), { ...ctx(VITRINE, local, NOW + 31 * 60_000), facts: late }).options[0]?.id).toBe("authorize-publish");
+  });
+
+  it("o pedido que o sistema JÁ SABE velho e não pôde refazer sozinho: sem «Autorizar», o caminho para a Esteira — no MESMO item", () => {
+    const stale = row({ staleApprovals: [request.subject.hash] });
+    const facts = inboxFactsOf({ boardId: "vitrine", config: VITRINE, cards: [local, moved], ledger: [stale], boardNames: names, now: NOW });
+    expect(facts.deployApprovals.has(own.causeKey)).toBe(false);
+    const item = itemOf(local, "vitrine");
+    const d = decideItem(item, { ...ctx(VITRINE, local), facts });
+    expect(d.bucket).toBe("acompanhar");
+    expect(d.options.some((o) => o.invoke.kind === "authorize-publish")).toBe(false);
+    expect(d.ask).toMatch(/^O pedido de publicação envelheceu/);
+    expect(d.more.find((o) => o.id === "more:open-esteira")?.invoke).toEqual({ kind: "link", href: "/board/vitrine/entrega" });
+    // o pedido novo chega na mesma linha (o plano relido apaga a marca): o MESMO item volta a «Autorizar»
+    const fresh = row({ approvals: [{ ...request, subject: { ...request.subject, hash: `sha256:${"b".repeat(64)}` } }] });
+    const again = decideItem(item, { ...ctx(VITRINE, local), facts: inboxFactsOf({ boardId: "vitrine", config: VITRINE, cards: [local, moved], ledger: [fresh], boardNames: names, now: NOW }) });
+    expect(again.options[0]?.id).toBe("authorize-publish");
+  });
+
+  it("um pedido velho e outro que vale na mesma causa: o botão autoriza só o que vale", () => {
+    const other = { ...request, subject: { ...request.subject, hash: `sha256:${"c".repeat(64)}`, files: ["pay/b.ts"] } };
+    const facts = inboxFactsOf({ boardId: "vitrine", config: VITRINE, cards: [local, moved], ledger: [row({ approvals: [request, other], staleApprovals: [request.subject.hash] })], boardNames: names, now: NOW });
+    expect(facts.deployApprovals.get(own.causeKey)?.map((a) => a.subject.hash)).toEqual([other.subject.hash]);
+    const d = decideItem(itemOf(local, "vitrine"), { ...ctx(VITRINE, local), facts });
+    expect(d.options[0]?.id).toBe("authorize-publish");
+    expect(d.details.find((x) => x.label === "Arquivos")?.value).toBe("pay/b.ts");
   });
 });
 

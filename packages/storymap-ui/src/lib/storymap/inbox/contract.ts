@@ -114,6 +114,20 @@ export interface InboxFacts {
    */
   deployApprovals: ReadonlyMap<string, readonly OwnerApprovalRequest[]>;
   /**
+   * Os cards DESTE board cuja causa de publicação mora no livro de OUTRO board — o que publica o pacote (id e nome). A
+   * decisão da causa é do Inbox de lá; aqui o item só diz onde.
+   */
+  deployHeldOn: ReadonlyMap<string, { id: string; name: string }>;
+  /** o board (id e nome) de cada card que uma linha DESTE board segura — os de outros boards entram no Inbox daqui. */
+  deployCardBoard: ReadonlyMap<string, { id: string; name: string }>;
+  /** as causas deste board cujo pedido o sistema está refazendo agora (deploy-blocks.ts `isRerequesting`). */
+  deployRerequesting: ReadonlySet<string>;
+  /**
+   * as causas deste board com pedidos que o sistema JÁ SABE velhos e não pôde refazer sozinho sem arriscar publicar
+   * (deploy-blocks.ts `staleApprovals`, auto-rerequest.ts): o item delas manda à Esteira («Refazer os pedidos»).
+   */
+  deployStale: ReadonlySet<string>;
+  /**
    * O item de aprovação (`gate`) de cada card parado num passo manual, EXATAMENTE como o coletor o entregou — com o
    * recuo do Jido marcado (`copilotBackoff`). A causa do dono só pede o passo do card âncora quando o item de aprovação
    * DELE mora em Decidir (decision.ts); recalculá-lo do card perderia o recuo e diria «o Jido cuida» de um passo que o
@@ -138,6 +152,10 @@ export function emptyFacts(cards: readonly Card[] = []): InboxFacts {
     deployLedger: null,
     deployAnchor: new Map(),
     deployApprovals: new Map(),
+    deployHeldOn: new Map(),
+    deployCardBoard: new Map(),
+    deployRerequesting: new Set(),
+    deployStale: new Set(),
     gateOf: new Map(),
     publishRetryAt: new Map(),
     lastTransitionAt: new Map(),
