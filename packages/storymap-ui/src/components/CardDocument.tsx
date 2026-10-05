@@ -173,7 +173,9 @@ export function CardDocument({
 
       {/* 6.3 — the auditable ledger reader: the card's REAL status trajectory (human moves, run advances, the
           merge verdict, a system deploy-revert), read from the durable WS2 ledger. Shown when there's history. */}
-      {loaded && transitions.length > 0 && <CardHopTimeline transitions={transitions} />}
+      {loaded && transitions.length > 0 && (
+        <CardHopTimeline transitions={transitions} statusNames={Object.fromEntries(config.statuses.map((s) => [s.id, s.name]))} />
+      )}
     </div>
   );
 }

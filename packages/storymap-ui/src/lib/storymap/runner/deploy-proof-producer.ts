@@ -33,6 +33,8 @@ import {
 export const MAX_REVIEW_ATTEMPTS = 2;
 /** Republicações pelo produtor, por card — um HEAD que não para de andar não vira laço de deploys. */
 export const MAX_PROOF_ROUNDS = 3;
+/** Quantas vezes o produtor tenta criar o MESMO card de conserto antes de desistir (uma recusa ou falha não vira «respondido»). */
+export const FIX_CARD_ATTEMPTS = 3;
 const LEDGER_MAX_ROWS = 500;
 /** O agente das decisões que não são de uma revisão (a republicação, o card de conserto): o próprio produtor. */
 export const PRODUCER_AGENT = "deploy-proof";
@@ -130,11 +132,22 @@ export async function produceDeployProofs(deps: DeployProofDeps, pending: ProofP
     // um card de conserto por motivo (e por card) — nunca repetido.
     const fixOnce = async (why: string, reason: string, files?: readonly string[]): Promise<ProofOutcome> => {
       const key = fixKey(board, cardId, why);
-      if (!rows.some((e) => e.key === key)) {
+      const prior = rows.find((e) => e.key === key);
+      if (prior?.outcome !== "answered") {
+        // Só «respondido» quando o card de conserto EXISTE: uma criação recusada (verificação de entrada, board só de
+        // organização) ou que falhou é tentada de novo na próxima passada — até FIX_CARD_ATTEMPTS, e então para.
+        if ((prior?.attempts ?? 0) >= FIX_CARD_ATTEMPTS) return { action: "failed", reason: `o card de conserto não pôde ser criado depois de ${FIX_CARD_ATTEMPTS} tentativas` };
         const fixId = await deps.openFixCard(board, cardId, reason, files).catch(() => null);
-        rows = upsert(rows, { key, attempts: 1, lastAt: nowIso(), outcome: "answered", ...(fixId ? { detail: fixId } : {}) });
+        const attempts = (prior?.attempts ?? 0) + 1;
+        if (!fixId) {
+          rows = upsert(rows, { key, attempts, lastAt: nowIso(), outcome: "failed", detail: "o card de conserto não pôde ser criado" });
+          await deps.ledger.persist(rows);
+          log(`${board}/${cardId}: o card de conserto não pôde ser criado (${attempts}/${FIX_CARD_ATTEMPTS}) — tenta de novo na próxima passada`);
+          return { action: "failed", reason: "o card de conserto não pôde ser criado" };
+        }
+        rows = upsert(rows, { key, attempts, lastAt: nowIso(), outcome: "answered", detail: fixId });
         await deps.ledger.persist(rows);
-        await deps.record({ ...decision(`Abriu um card de conserto para «${card.title}»${fixId ? ` (${fixId})` : ""}`, reason), agent: "system", kind: "recovery-fix-card", ...(fixId ? { cardId: fixId, undo: { kind: "discard-card" as const, cardId: fixId } } : {}) }).catch(() => {});
+        await deps.record({ ...decision(`Abriu um card de conserto para «${card.title}» (${fixId})`, reason), agent: "system", kind: "recovery-fix-card", cardId: fixId, undo: { kind: "discard-card" as const, cardId: fixId } }).catch(() => {});
       }
       return { action: "fix-card", reason };
     };

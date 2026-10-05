@@ -19,6 +19,7 @@ import { DOC_SECTION } from "@/components/doc/typography";
 import { GATE_ICON, runStatusLabel, type StepCapability, type StepGate, type StepRollup } from "@/lib/storymap/step-rollup";
 import type { RunOutcome } from "@/lib/storymap/runner/journal";
 import type { Transition } from "@/lib/storymap/runner/transitions";
+import { hopNoteWords } from "@/lib/storymap/hop-words";
 
 const DASH = "—";
 
@@ -262,10 +263,11 @@ function StageTrailChips({ rollups }: { rollups: StepRollup[] }) {
 const HOP_ACTOR_LABEL = (actor: string): string =>
   actor.startsWith("run:")
     ? "agente"
-    : (({ human: "você", cascade: "cascata", system: "sistema", merge: "merge" }) as Record<string, string>)[actor] ??
+    : (({ human: "você", cascade: "automático", system: "sistema", merge: "integração" }) as Record<string, string>)[actor] ??
       actor;
 
-export function CardHopTimeline({ transitions }: { transitions: Transition[] }) {
+export function CardHopTimeline({ transitions, statusNames = {} }: { transitions: Transition[]; statusNames?: Record<string, string> }) {
+  const name = (id: string) => statusNames[id] ?? id;
   if (transitions.length === 0) return null;
   // The ledger is append-only chronological; show most-recent first (stable sort by ISO `at`, desc).
   const hops = transitions
@@ -284,14 +286,14 @@ export function CardHopTimeline({ transitions }: { transitions: Transition[] }) 
                 {Number.isFinite(ms) ? fmtDateTime(ms) : DASH}
               </span>
               <span className="min-w-0 flex-1 leading-snug">
-                <span className={t.from ? "text-fg-muted" : "text-fg-subtle"}>{t.from ?? "início"}</span>
+                <span className={t.from ? "text-fg-muted" : "text-fg-subtle"}>{t.from ? name(t.from) : "início"}</span>
                 <span className="mx-1 text-fg-subtle" aria-hidden>
                   →
                 </span>
-                <span className="font-medium text-fg">{t.to}</span>
+                <span className="font-medium text-fg">{name(t.to)}</span>
                 <span className="ml-1.5 text-[11px] text-fg-subtle">
                   · {HOP_ACTOR_LABEL(t.actor)}
-                  {t.note ? ` · ${t.note}` : ""}
+                  {t.note ? ` · ${hopNoteWords(t.note)}` : ""}
                 </span>
               </span>
             </li>

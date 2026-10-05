@@ -14,7 +14,7 @@
 // drift: the rendered drawer ≡ the markdown ≡ the source of truth.
 
 import { formatRiceScore, riceScore } from "./rice";
-import { KANO_BY_ID, FUNNEL_BY_ID, STORY_TYPE_BY_ID } from "./frameworks";
+import { KANO_BY_ID, FUNNEL_BY_ID, STORY_TYPE_BY_ID, narrativeSentence } from "./frameworks";
 import { runStatusLabel, type StepRollup } from "./step-rollup";
 import { isMechanismBlockerId } from "./runner/findings";
 import { canvasWideFeedback, hasCanvasContent, JOURNEY_FEEDBACK_ID, orderedCanvasArtifacts } from "./design-canvas";
@@ -81,6 +81,12 @@ function inlineText(s: string): string {
   return s.replace(/\r/g, "").trim();
 }
 
+/** Uma linha só: as quebras de linha do texto de origem (o digest dobrado em YAML) viram espaço — dentro da
+ *  citação do contexto cada quebra virava uma linha cortada no meio da frase. */
+function oneLine(s: string): string {
+  return inlineText(s).replace(/\s*\n\s*/g, " ");
+}
+
 // ── section builders (each returns markdown, or "" when it has nothing) ───────
 
 /** Title (H1) + the three-part agile narrative as a prose sentence + strategic meta block. */
@@ -91,14 +97,13 @@ function headProse(card: Card, ctx: CardDocContext): string {
   const conn = card.storyType ? STORY_TYPE_BY_ID[card.storyType]?.connectors : null;
   const n = card.narrative ?? { role: null, want: null, soThat: null };
   if (conn && (n.role || n.want || n.soThat)) {
-    const sentence = [
-      n.role ? `${conn.role} ${inlineText(n.role)}` : null,
-      n.want ? `${conn.want} ${inlineText(n.want)}` : null,
-      n.soThat ? `${conn.soThat} ${inlineText(n.soThat)}` : null,
-    ]
-      .filter(Boolean)
-      .join(", ");
-    if (sentence) out.push(`${sentence}.`);
+    // narrativeSentence: o conector do tipo não se repete quando a parte já traz o seu («Como…», «quero…»)
+    const sentence = narrativeSentence(conn, {
+      role: n.role ? inlineText(n.role) : null,
+      want: n.want ? inlineText(n.want) : null,
+      soThat: n.soThat ? inlineText(n.soThat) : null,
+    });
+    if (sentence) out.push(sentence);
   }
 
   const meta = strategicLines(ctx.strategic);
@@ -117,12 +122,12 @@ function strategicLines(s: CardDocStrategic): string[] {
     // `Rótulo: texto` (a forma do digest) → `**Rótulo** — texto` (a forma do documento). Uma linha
     // sem rótulo entra inteira, em vez de sumir.
     const corte = linha.indexOf(":");
-    if (corte > 0) lines.push(`**${linha.slice(0, corte).trim()}** — ${inlineText(linha.slice(corte + 1))}`);
-    else if (linha.trim()) lines.push(inlineText(linha));
+    if (corte > 0) lines.push(`**${linha.slice(0, corte).trim()}** — ${oneLine(linha.slice(corte + 1))}`);
+    else if (linha.trim()) lines.push(oneLine(linha));
   }
   if (s.idea?.statement?.trim()) {
     const status = s.idea.statusName ? ` _(${s.idea.statusName})_` : "";
-    lines.push(`**Ideia** — ${inlineText(s.idea.statement)}${status}`);
+    lines.push(`**Ideia** — ${oneLine(s.idea.statement)}${status}`);
   }
   if (s.personas.length) lines.push(`**Personas** — ${s.personas.join(", ")}`);
   if (s.systems.length) lines.push(`**Sistemas** — ${s.systems.join(", ")}`);
@@ -154,7 +159,9 @@ function bodyProse(card: Card): string {
 
 /** The technical plan (plans/<id>.md) under a canonical heading. */
 function notasProse(ctx: CardDocContext): string {
-  const plan = (ctx.plan ?? "").trim();
+  // O plano costuma abrir com o próprio título («# Plano técnico — story-ex9711»): sob «Notas de execução» ele só
+  // repetia o rótulo e punha o id cru do card no índice lateral. O título de abertura sai; o resto fica.
+  const plan = (ctx.plan ?? "").trim().replace(/^#\s[^\n]*\n+/, "").trim();
   if (!plan) return "";
   return `## Notas de execução\n\n${plan}`;
 }

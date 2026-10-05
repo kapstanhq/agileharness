@@ -49,7 +49,12 @@ describe("DocShell — o alternador de views cabe numa linha no celular", () => 
     // MEDIDO no navegador: 0px de folga visível nas três views (documento, quadro, tabela). O título
     // do documento tem `mb-8` e nenhuma margem no topo; o quadro e a tabela começam na borda. A folga
     // pertence à BARRA — deixá-la a cargo de cada view faz a próxima nascer colada de novo.
-    expect(shell).toContain('inline ? "mb-6 justify-end" : "shrink-0"');
+    expect(shell).toContain('inline ? "mb-6 justify-end" : "min-w-0 max-w-full sm:shrink-0"');
+  });
+
+  it("fora do inline, no celular o cluster encolhe e QUEBRA (não empurra a página para o lado); do sm para cima não encolhe", () => {
+    // Era `shrink-0` sempre: o `flex-wrap` do cluster nunca agia e a barra media 441px num viewport de 390.
+    expect(shell).not.toContain('inline ? "mb-6 justify-end" : "shrink-0"');
   });
 
   it("EDITAR é botão do cluster, não item do menu '…'", () => {

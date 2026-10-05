@@ -741,9 +741,14 @@ const DECIDE: DecideMap = {
         const where = units.length ? ` em ${units.join(", ")}` : "";
         const of = anchor ? ` de ${quoted(anchor.title)}` : "";
         const shown = files.slice(0, 8);
+        // Visto de OUTRO card que a mesma causa segura (o selo «Precisa de você» do Kanban mostra este texto em cada card
+        // afetado), «…do código de «<âncora>»» parecia falar do card errado: diz que o código vem de lá e segura este.
+        const fromOther = anchor && item.cardId && anchor.id !== item.cardId;
         return {
           askVerb: "Autorizar",
-          ask: `Autorizar a publicação do código de ${classText}${of}?${affects}`,
+          ask: fromOther
+            ? `Autorizar a publicação do código de ${classText} que segura este card? (o código vem de ${quoted(anchor.title)})${affects}`
+            : `Autorizar a publicação do código de ${classText}${of}?${affects}`,
           happened: `A publicação parou porque a mudança mexe em código de ${classText}, e só você libera isso: ${plural(files.length, "arquivo", "arquivos")}${where}. Nada foi publicado.`,
           options: [
             {

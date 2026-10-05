@@ -57,6 +57,8 @@ export type SystemDecisionKind =
   | "card-transfer"
   /** o juiz da triagem mandou um card ao board a que ele pertence (o roteamento, triage/judge.ts). */
   | "triage-route"
+  /** a verificação de entrada (card-intake.ts) recusou o card que um agente queria criar, ou o aceitou com «board incerto». */
+  | "card-intake"
   | "undo";
 
 /** Como desfazer, quando dá. Cada variante é UMA ação com pré-condição (undoRefusal). */
@@ -252,6 +254,8 @@ export function agentLabel(agent: string): string {
     "deploy-proof": "Produtor da prova de deploy",
     // quem mudou um card de board por uma tool (card-transfer.ts) — um agente, sem o nível do token no texto do dono
     agent: "Agente",
+    // a verificação de entrada de card (card-intake.ts)
+    "card-intake": "Verificação de entrada",
     system: "Sistema",
     human: "Você",
   };

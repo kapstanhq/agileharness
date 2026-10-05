@@ -146,8 +146,10 @@ export function BoardPacePanel({ boardId, view, failed = false, onChanged }: { b
   };
 
   const disarmed = view.source === "disarmed";
+  // só organização: o ritmo não se aplica (nada roda sozinho, de qualquer jeito) — o painel só diz o estado
+  const organize = view.source === "organize-only";
   // desarmado e ilegível seguram tudo antes de olhar tipo: o escopo só tem o que dizer num board que anda
-  const showScope = view.source !== "disarmed" && view.source !== "unreadable";
+  const showScope = view.source !== "disarmed" && view.source !== "unreadable" && !organize;
   const scopePreset = view.scope?.preset ?? "all";
   const waitingWords = scopeWaitingWords(view);
   const shipWords = featuresToShipWords(view.featuresToShip);
@@ -163,10 +165,12 @@ export function BoardPacePanel({ boardId, view, failed = false, onChanged }: { b
         {view.reason && !pausing && <p className="text-[12px] leading-snug text-fg-muted">Motivo: {view.reason}</p>}
         {view.waiting > 0 && !pausing && (
           <p className="text-[12px] leading-snug text-fg-muted">
-            {view.waiting} {view.waiting === 1 ? "card espera" : "cards esperam"} a retomada.
+            {/* «waiting» conta os PEDIDOS de trabalho que a pausa segurou (um card pode pedir mais de uma vez) — não é a
+                fila de cards do Kanban («N na fila»), que conta cards esperando vaga de agente. */}
+            A pausa segurou {view.waiting} {view.waiting === 1 ? "pedido de trabalho" : "pedidos de trabalho"}; eles voltam quando você retomar.
           </p>
         )}
-        <div className="flex gap-1.5" role="group" aria-label="Ritmo do board">
+        {!organize && (<div className="flex gap-1.5" role="group" aria-label="Ritmo do board">
           {LEVELS.map((level) => {
             const on = pausing ? level === "paused" : view.level === level && !disarmed;
             return (
@@ -184,8 +188,8 @@ export function BoardPacePanel({ boardId, view, failed = false, onChanged }: { b
               </button>
             );
           })}
-        </div>
-        {!pausing && <p className="text-[11px] leading-snug text-fg-subtle">{PACE_HELP[disarmed ? "paused" : view.level]}</p>}
+        </div>)}
+        {!pausing && !organize && <p className="text-[11px] leading-snug text-fg-subtle">{PACE_HELP[disarmed ? "paused" : view.level]}</p>}
       </NavPopoverBlock>
 
       {showScope && !pausing && (
@@ -336,7 +340,7 @@ export function BoardPaceChip({ boardId }: { boardId: string }) {
   const { open, setOpen, ref } = useHoverPopover();
   const { view, setView, failed } = useBoardPace(boardId, open);
   const level = view?.level ?? "normal";
-  const disarmed = view?.source === "disarmed";
+  const disarmed = view?.source === "disarmed" || view?.source === "organize-only";
   const tone: NavTone = level === "paused" && !disarmed ? "owner" : "idle";
   // Sem leitura o chip NÃO assume «Normal»: diz que está lendo (ou que não deu), sem nível e sem o ícone de «anda».
   const face = paceChipFace(view, failed, Date.now());
@@ -360,6 +364,29 @@ export function BoardPaceChip({ boardId }: { boardId: string }) {
         </NavPopover>
       )}
     </div>
+  );
+}
+
+/**
+ * O SELO do ritmo no topo do celular: só aparece quando o board NÃO está andando normal (pausado/devagar). No celular
+ * o chip não monta (o painel mora no «Mais»), e um board pausado ficava invisível no topo — quem abria o Kanban não
+ * sabia por que nada andava. Só indica; trocar o ritmo segue no «Mais».
+ */
+export function BoardPaceBadge({ boardId }: { boardId: string }) {
+  const { view } = useBoardPace(boardId, false);
+  if (!view || view.source === "disarmed" || view.level === "normal") return null;
+  const label = view.level === "paused" ? "Pausado" : "Devagar";
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11.5px] font-medium",
+        view.level === "paused" ? "border-amber-600/40 bg-amber-500/10 text-amber-800 dark:text-amber-300" : "border-line text-fg-muted",
+      )}
+      title={`Ritmo do board: ${paceChipValue(view)} — troque no menu «Mais»`}
+    >
+      <PaceIcon level={view.level} className="h-3.5 w-3.5" />
+      {label}
+    </span>
   );
 }
 

@@ -14,6 +14,7 @@ import { applyDeployNeedsProofHold, parseDeployExit3Report, type DeployExit3Repo
 import { buildDeployFailureFinding } from "./deploy-revert";
 import { settleFailureDetail } from "./deploy-needs-human";
 import {
+  FIX_CARD_ATTEMPTS,
   MAX_PROOF_ROUNDS,
   MAX_REVIEW_ATTEMPTS,
   PRODUCER_AGENT,
@@ -124,6 +125,23 @@ describe("produceDeployProofs", () => {
     expect(deps.review).toHaveBeenCalledTimes(MAX_REVIEW_ATTEMPTS);
     expect(deps.openFixCard).toHaveBeenCalledTimes(1);
     expect((deps.openFixCard as ReturnType<typeof vi.fn>).mock.calls[0][2]).toMatch(/revisão de segurança/);
+  });
+
+  it("card de conserto RECUSADO na criação não vira «respondido»: tenta de novo na passada seguinte, até FIX_CARD_ATTEMPTS", async () => {
+    const { deps, state } = world();
+    (deps.openFixCard as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    expect(await produceDeployProofs(deps, pending(FULL))).toMatchObject({ action: "failed" });
+    for (let i = 0; i < FIX_CARD_ATTEMPTS + 2; i++) await produceDeployProofs(deps, pending(FULL));
+    expect(deps.openFixCard).toHaveBeenCalledTimes(FIX_CARD_ATTEMPTS);
+    expect(state.decisions.filter((d) => d.kind === "recovery-fix-card")).toHaveLength(0);
+    // quando a criação volta a funcionar dentro do teto, o conserto nasce e só então é «respondido»
+    const second = world();
+    (second.deps.openFixCard as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null).mockResolvedValue("story-fix");
+    await produceDeployProofs(second.deps, pending(FULL));
+    expect(await produceDeployProofs(second.deps, pending(FULL))).toMatchObject({ action: "fix-card" });
+    await produceDeployProofs(second.deps, pending(FULL));
+    expect(second.deps.openFixCard).toHaveBeenCalledTimes(2);
+    expect(second.state.decisions.filter((d) => d.kind === "recovery-fix-card")).toHaveLength(1);
   });
 
   it("uma prova que o AH não produz (o ensaio de rollback) vira card de conserto; a revisão sai, mas não se republica", async () => {

@@ -16,6 +16,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { runnerStateDir } from "@/lib/storymap/paths";
 import type { BoardConfig } from "@/lib/storymap/types";
+import { organizeOnlyNow } from "@/lib/storymap/organize-only";
 import { holdPaceEntry, parsePaceFile, resolveBoardGate, serializePaceFile, type BoardGate, type BoardPaceRow, type PaceHeldEntry } from "./board-pace";
 
 /** O arquivo de ritmo — ao lado dos outros livros do runner. */
@@ -80,9 +81,12 @@ export function boardPaceRow(board: string, fileOverride?: string): BoardPaceRow
  * O PORTÃO da produção: o que todo automático pergunta antes de começar algo no board. Síncrono, em cache, nunca lança.
  * `config` null = o board não pôde ser lido ⇒ segura.
  */
-export function boardGateNow(board: string, config: Pick<BoardConfig, "autorunDisabled"> | null | undefined, now: number = Date.now()): BoardGate {
+export function boardGateNow(board: string, config: Pick<BoardConfig, "autorunDisabled" | "organizeOnly"> | null | undefined, now: number = Date.now()): BoardGate {
   const snap = readBoardPace();
-  return resolveBoardGate(config, snap.rows.find((r) => r.board === board) ?? null, now, snap.unreadable);
+  // Só organização vale mesmo para quem pergunta sem a configuração em mãos (o copiloto e o pump passam `{}`): o
+  // modo é lido do disco, em cache — organize-only.ts.
+  const cfg = config && !config.organizeOnly && organizeOnlyNow(board) ? { ...config, organizeOnly: true } : config;
+  return resolveBoardGate(cfg, snap.rows.find((r) => r.board === board) ?? null, now, snap.unreadable);
 }
 
 /**

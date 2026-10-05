@@ -508,6 +508,10 @@ reasoning or opinion of the code.
      (accept the risk and integrate / authorize one more cycle / stop) — then park (see "Estacionar e
      retomar"). Never leave a card conducted with no session AND no open question: nobody would know what
      it is waiting for.
+   - Every card you create passes the **intake check**: pass `files` (the paths the card touches) so it lands
+     on the right board; write the title in plain words (no card id, no file path, no code in backticks);
+     a bug says what happens and what was expected. A refusal names what to fix — and, for a wrong board,
+     the right one: create it there (never retry the same request unchanged).
 6. **Low-risk shortcut.** A change with no UI surface, no auth/rules/payments/personal data/
    schema/public-contract impact, a small diff (≈ ≤3 source files, ≈ ≤50 changed lines) and a
    red→green test may rely on the deterministic gates alone (full suite + typecheck + lint).

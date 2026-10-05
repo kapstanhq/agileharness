@@ -166,6 +166,8 @@ export const SUFIXOS_NATIVOS: readonly string[] = [
   "GOVERNOR",
   "HALT_FILE",
   "HOST",
+  // o kill switch da verificação de entrada de card (runner/card-intake-deps.ts) — nasceu AGILEHARNESS_, sem grafia legada.
+  "INTAKE",
   "JUST",
   // o comando do keepalive do medidor de uso (runner/capacity-service.ts) — argv em JSON; SÓ do ambiente do host,
   // nunca do settings.yaml (que chega a main pelo train). Nasceu AGILEHARNESS_, sem grafia legada.

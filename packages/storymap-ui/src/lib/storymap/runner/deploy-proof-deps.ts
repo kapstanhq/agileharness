@@ -182,7 +182,7 @@ export function defaultDeployProofDeps(): DeployProofDeps {
         ].join("\n"),
       };
       const { createCardAction } = await import("@/app/actions");
-      const r = await createCardAction({ boardId: target.board, card: fix, via: "triage" });
+      const r = await createCardAction({ boardId: target.board, card: fix, via: "triage", files: [...(files ?? [])], system: true });
       return r.ok ? (r.data?.card.id ?? null) : null;
     },
     record: appendSystemDecision,

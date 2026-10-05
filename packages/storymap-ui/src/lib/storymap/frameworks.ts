@@ -222,6 +222,69 @@ export function isStoryType(v: unknown): v is StoryType {
   return typeof v === "string" && (STORY_TYPE_IDS as string[]).includes(v);
 }
 
+// ── a frase da narrativa ─────────────────────────────────────────────────────
+// Cada parte da narrativa deveria guardar só o MIOLO («o dono de um board»), e o conector vem do tipo. Na prática
+// muitas partes chegam com o conector embutido («Como o dono…», «quero recusar…», «para que…») — ou com o conector
+// de OUTRO tipo (uma entrega técnica escrita como user story). Colar o conector do tipo na frente dava
+// «Para viabilizar Como o dono…, precisamos quero…». Regra: se a parte já abre com um conector conhecido, ela fala
+// por si e o conector do tipo não entra.
+
+/** Conectores de abertura reconhecidos (todos os tipos + as formas soltas mais comuns). Mais longos primeiro. */
+const KNOWN_OPENERS: readonly string[] = [
+  ...new Set([
+    ...STORY_TYPE_DEFS.flatMap((s) => [s.connectors.role, s.connectors.want, s.connectors.soThat]),
+    "eu como",
+    "como",
+    "quero",
+    "queremos",
+    "preciso",
+    "precisamos",
+    "para que",
+    "para",
+    "de modo que",
+    "de forma que",
+    "a fim de",
+    "so that",
+    "as a",
+    "i want",
+  ]),
+]
+  .map((s) => s.toLowerCase())
+  .sort((a, b) => b.length - a.length);
+
+/** A parte já começa com um conector (palavra inteira)? PURA. */
+export function opensWithConnector(part: string): boolean {
+  const t = part.trim().toLowerCase();
+  return KNOWN_OPENERS.some((o) => t === o || (t.startsWith(o) && /[\s,]/.test(t.charAt(o.length))));
+}
+
+/** A narrativa como UMA frase legível («Como X, quero Y, para Z.»), sem conector repetido. Null sem nenhuma parte. PURA. */
+export function narrativeSentence(
+  connectors: { role: string; want: string; soThat: string },
+  n: { role?: string | null; want?: string | null; soThat?: string | null },
+): string | null {
+  const piece = (conn: string, raw?: string | null): string | null => {
+    const text = (raw ?? "").replace(/\s+/g, " ").trim().replace(/[.,;]+$/, "");
+    if (!text) return null;
+    return opensWithConnector(text) ? text : `${conn} ${text}`;
+  };
+  const parts = [piece(connectors.role, n.role), piece(connectors.want, n.want), piece(connectors.soThat, n.soThat)].filter(
+    (p): p is string => p != null,
+  );
+  if (!parts.length) return null;
+  // a frase sempre abre com maiúscula; o meio segue minúsculo («…, quero…», «…, para…»)
+  const [first, ...rest] = parts;
+  const lowerOpen = (p: string) => (opensWithConnector(p) ? p.charAt(0).toLowerCase() + p.slice(1) : p);
+  return `${first.charAt(0).toUpperCase()}${first.slice(1)}${rest.length ? ", " + rest.map(lowerOpen).join(", ") : ""}.`;
+}
+
+/** Só a parte do porquê, com o conector certo, para quem mostra apenas ela (o card do Kanban). PURA. */
+export function narrativeWhy(connectors: { soThat: string }, soThat?: string | null): string | null {
+  const text = (soThat ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  return opensWithConnector(text) ? text : `${connectors.soThat} ${text}`;
+}
+
 // ---------------------------------------------------------------------------
 // Improvement kind (REFINE mode) — what DIMENSION of an already-shipped story a
 // refinement targets. Set on the card's `refinement` block by the Refinar action

@@ -96,6 +96,11 @@ process.env.AGILEHARNESS_HEADROOM_URL = "off";
 // quem prova o HALT cria o seu próprio.
 process.env.AGILEHARNESS_HALT_FILE = path.join(MEU_DIRETORIO, "HALT-nunca-existe");
 
+// A VERIFICAÇÃO DE ENTRADA DE CARD DESLIGADA na suíte, pelo mesmo princípio (runner/card-intake-deps.ts): ligada, toda
+// prova que cria card pela action leria os boards do teste e, na dúvida, chamaria o modelo. Usa o kill switch
+// documentado; as provas da verificação a ligam (e injetam as dependências) só para si.
+process.env.AGILEHARNESS_INTAKE = "0";
+
 // O BINÁRIO DO CLAUDE, DECLARADO NA SUÍTE — mesmo princípio da linha acima.
 //
 // Desde que `runner/claude-bin.ts` passou a resolver o CLI pela régua das ferramentas do host, o

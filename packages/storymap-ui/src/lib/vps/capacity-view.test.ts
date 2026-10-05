@@ -34,12 +34,12 @@ describe("capacityView", () => {
 
   it("liberado: janela 7d/5h com o teto, a cota de hoje, a projeção e os retidos", () => {
     const v = capacityView(snap(), NOW)!;
-    expect(v).toMatchObject({ tone: "idle", headline: "Automação liberada", canClear: false, latch: null, retry: null });
+    expect(v).toMatchObject({ tone: "idle", headline: "Cota livre para o trabalho automático", canClear: false, latch: null, retry: null });
     expect(v.rows.map((r) => [r.key, r.value])).toEqual([
-      ["week", "42.3% · teto 80%"],
+      ["week", "42,3% · teto 80%"],
       ["session", "20% · teto 85%"],
-      ["today", "2.3 de 10 pp"],
-      ["projection", "71.2%"],
+      ["today", "2,3 de 10 pontos da semana"],
+      ["projection", "71,2%"],
       ["held", "nenhum"],
     ]);
     expect(v.rows.find((r) => r.key === "today")?.pct).toBeCloseTo(23);
@@ -67,7 +67,7 @@ describe("capacityView", () => {
     expect(latched).toMatchObject({ tone: "danger", headline: "Travado (mole)", canClear: true });
     expect(latched.latch).toMatchObject({ by: "auto:week", since: "há 10min", halt: false });
     // o número da trava é o do ENGATE: o detalhe diz quando foi e o uso de AGORA, para o 93% não passar por uso de hoje
-    expect(latched.detail).toBe("acionada há 10min: janela de 7 dias em 93% · agora: semana em 42.3%, sessão em 20%");
+    expect(latched.detail).toBe("acionada há 10min: janela de 7 dias em 93% · agora: semana em 42,3%, sessão em 20%");
     const halt = capacityView(
       snap({ latch: { level: "hard", reason: "arquivo /etc/agileharness/HALT presente no host", at: NOW, trippedBy: "host:HALT", source: "halt" } }),
       NOW,
@@ -179,8 +179,8 @@ describe("unifiedQuota — por campo, «desconhecido» igual, e o reset da fonte
     const s = snap();
     const label = (k: string, q: ReturnType<typeof unifiedQuota>) => capacityView(s, NOW, q)!.rows.find((r) => r.key === k)?.label;
     const doProxy = unifiedQuota({ week: { usedPct: 50 }, polledAt: NOW }, s);
-    expect(label("today", doProxy)).toBe("Hoje (cota) · pela leitura do governador");
-    expect(label("projection", doProxy)).toBe("No reset (≈) · pela leitura do governador");
-    expect(label("today", unifiedQuota(null, s))).toBe("Hoje (cota)");
+    expect(label("today", doProxy)).toBe("Hoje · pela leitura anterior da cota");
+    expect(label("projection", doProxy)).toBe("Na virada da semana (estimativa) · pela leitura anterior da cota");
+    expect(label("today", unifiedQuota(null, s))).toBe("Hoje");
   });
 });

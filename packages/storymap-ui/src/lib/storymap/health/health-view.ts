@@ -93,10 +93,41 @@ export function ageWords(ms: number): string {
 
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
-/** O valor de um sinal escrito com a unidade (`%` cola no número). PURA. */
-function valueText(value: number | null, unit: string): string {
+/** O singular das unidades dos sinais — «1 cards», «1 saltos» eram o que a tela dizia. */
+const UNIT_SINGULAR: Readonly<Record<string, string>> = {
+  cards: "card",
+  itens: "item",
+  agentes: "agente",
+  saltos: "salto",
+  repetições: "repetição",
+};
+
+/** Número em pt-BR: vírgula decimal («6,4», nunca «6.4»). PURA. */
+function num(value: number): string {
+  return String(value).replace(".", ",");
+}
+
+/** O valor de um sinal escrito com a unidade (`%` cola no número; singular no 1). PURA. */
+export function valueText(value: number | null, unit: string): string {
   if (value == null) return "não medível";
-  return unit === "%" ? `${value}%` : `${value} ${unit}`;
+  if (unit === "%") return `${num(value)}%`;
+  return `${num(value)} ${value === 1 ? (UNIT_SINGULAR[unit] ?? unit) : unit}`;
+}
+
+/**
+ * A linha de evidência em português de gente: vírgula decimal, «(s)» resolvido pelo número, «1 cards» no singular e os
+ * códigos internos de bloqueio em palavras. O texto vem gravado pelo tick (não dá para refazê-lo na origem sem reescrever
+ * leituras antigas), então a tela o arruma ao desenhar. PURA.
+ */
+export function humanDetail(text: string): string {
+  return text
+    // só a grandeza com unidade («6.4 h», «4.5 min», «12.5%») — versões e ids («v1.2») ficam como estão
+    .replace(/(^|[\s(])(\d+)\.(\d+)(?=\s?(?:h|min|d|s|%)(?![\p{L}\d]))/gu, "$1$2,$3")
+    .replace(/\b(\d+) (\p{L}+)\(s\)/gu, (_m, n: string, w: string) => `${n} ${n === "1" ? w : `${w}s`}`)
+    .replace(/\b1 (cards|itens|agentes|saltos|repetições)\b/g, (_m, u: string) => `1 ${UNIT_SINGULAR[u] ?? u}`)
+    .replace(/\(needs-human\|(\d+)\)/g, "(espera uma pessoa · $1)")
+    .replace(/\bneeds-human\b/g, "espera uma pessoa")
+    .replace(/\bledger\b/g, "histórico de status");
 }
 
 /** Quantos ticks sem leitura nova até a tela chamar a leitura de velha (um atraso ou outro é normal; 3 seguidos não). */
@@ -123,7 +154,7 @@ export function healthPanelModel(
       level: s?.level ?? "unknown",
       levelText: HEALTH_LEVEL_TEXT[s?.level ?? "unknown"],
       valueText: s ? valueText(s.value, info.unit) : "sem leitura",
-      detail: s?.detail ?? null,
+      detail: s?.detail ? humanDetail(s.detail) : null,
       rule: info.rule,
     };
   });

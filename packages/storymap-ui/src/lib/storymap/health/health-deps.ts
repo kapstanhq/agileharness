@@ -17,6 +17,7 @@
 // A escrita do card passa pela MESMA porta do vigia de parados (`withCreateLock` + `makeDraftCard` + `writeCard`): o
 // serviço é o único escritor do board de runtime, e a trava de criação serializa contra a action da UI.
 
+import { ORGANIZE_ONLY_WHY, organizeOnlyNow } from "@/lib/storymap/organize-only";
 import { promises as fsp, readFileSync } from "node:fs";
 import path from "node:path";
 import { atomicWriteFile } from "@/lib/storymap/atomic-write";
@@ -243,6 +244,11 @@ export async function runHealthTick(deps: HealthTickDeps, now: number = Date.now
     for (const s of due) {
       if (!board) {
         cards[s.id] = { outcome: "skipped", reason: "sem board da ferramenta: declare AGILEHARNESS_SELF_BOARD para os cards [saude:*] nascerem" };
+        continue;
+      }
+      // Board SÓ DE ORGANIZAÇÃO (organize-only.ts): o tick de saúde não cria nem atualiza card nele.
+      if (organizeOnlyNow(board)) {
+        cards[s.id] = { outcome: "skipped", reason: ORGANIZE_ONLY_WHY };
         continue;
       }
       cards[s.id] = await deps

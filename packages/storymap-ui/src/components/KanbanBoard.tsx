@@ -878,7 +878,8 @@ function StepTrail({
  *  `of` = o total da coluna enquanto a busca recorta: o chip mostra o que passou, o tooltip diz de quantos. */
 function CountChip({ n, of }: { n: number; of?: number }) {
   return (
-    <span className={countChipCls} title={of != null ? `${n} de ${of} cards` : undefined}>
+    // o número da raia conta CARDS (user stories e entregas) — o mapa conta só os itens do mapa, e a Esteira, publicações
+    <span className={countChipCls} title={of != null ? `${n} de ${of} cards` : `${n} ${n === 1 ? "card" : "cards"} (user stories e entregas)`}>
       {n}
     </span>
   );

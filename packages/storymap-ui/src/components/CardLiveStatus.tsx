@@ -198,7 +198,8 @@ function DiffChip({ boardId, cardId, diff }: { boardId: string; cardId: string; 
           stop(e);
           setOpen(true);
         }}
-        className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded font-semibold tabular-nums text-fg-subtle transition hover:text-fg"
+        // quebra ENTRE as partes (cada parte não quebra): num card estreito «+1296 −107 · 17 arquivos» vazava a borda
+        className="inline-flex max-w-full flex-wrap items-center gap-x-1 rounded font-semibold tabular-nums text-fg-subtle transition hover:text-fg [&>span]:whitespace-nowrap"
       >
         {/* Sem verde/vermelho: verde é só «No ar» e terracota só «falhou» — o sinal +/− já diz o que é. */}
         <span className="text-fg-muted">+{diff.additions}</span>

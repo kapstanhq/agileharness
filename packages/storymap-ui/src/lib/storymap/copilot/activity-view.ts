@@ -96,8 +96,67 @@ const FENCE_RE = /^\s*```/;
  * ". " quando o fragmento não termina em pontuação. Aplicado no RENDER, não na escrita: o diário é append-only e
  * as entradas já gravadas também precisam ficar legíveis. Pura/testada.
  */
+/** O que cada ferramenta faz, em palavras: [feito, a fazer] — o diário mostrava o nome técnico (`move_card`). */
+const TOOL_WORDS: Readonly<Record<string, readonly [string, string]>> = {
+  move_card: ["moveu um card de coluna", "mover um card de coluna"],
+  update_card: ["atualizou um card", "atualizar um card"],
+  create_card: ["criou um card", "criar um card"],
+  create_idea: ["registrou uma ideia", "registrar uma ideia"],
+  triage_finding: ["tratou um aviso", "tratar um aviso"],
+  answer_question: ["respondeu uma pergunta", "responder uma pergunta"],
+  ask_question: ["fez uma pergunta", "fazer uma pergunta"],
+  record_decision: ["registrou uma decisão", "registrar uma decisão"],
+  write_sidecar: ["atualizou o plano de um card", "atualizar o plano de um card"],
+  worktree_open: ["abriu uma cópia de trabalho", "abrir uma cópia de trabalho"],
+  worktree_submit: ["mandou um trabalho para integração", "mandar um trabalho para integração"],
+  worktree_discard: ["encerrou uma cópia de trabalho", "encerrar uma cópia de trabalho"],
+  worktree_refresh: ["atualizou uma cópia de trabalho", "atualizar uma cópia de trabalho"],
+  set_card_driver: ["mudou quem conduz um card", "mudar quem conduz um card"],
+  defer_card: ["adiou um card", "adiar um card"],
+  undefer_card: ["retomou um card adiado", "retomar um card adiado"],
+  transfer_card: ["mudou um card de board", "mudar um card de board"],
+  enqueue: ["pôs um card na fila", "pôr um card na fila"],
+  enqueue_batch: ["pôs cards na fila", "pôr cards na fila"],
+  claude_new: ["abriu uma sessão de agente", "abrir uma sessão de agente"],
+  pause_board: ["mudou o ritmo do board", "mudar o ritmo do board"],
+  resume_board: ["mudou o ritmo do board", "mudar o ritmo do board"],
+};
+const GENERIC: readonly [string, string] = ["fez uma ação no board", "fazer uma ação no board"];
+
+/** O tipo de risco da matriz, em palavras («write-board» → «mexe no board»). */
+const RISK_WORDS: Readonly<Record<string, string>> = {
+  read: "só leitura",
+  "write-board": "mexe no board",
+  "doc-write": "mexe em documento",
+  "reversible-delete": "apaga com volta",
+  run: "roda um processo",
+  session: "abre sessão",
+  "merge-resolve": "resolve integração",
+  "peer-review": "revisão",
+  deploy: "publicação",
+  "run-free": "comando livre",
+  destructive: "destrutivo",
+};
+
+/**
+ * As frases que o próprio serviço escreve no diário com jargão — «executou `move_card` (write-board)», «O condutor do card
+ * story-ex9711» — viram palavras. Aplicado no RENDER (o diário é append-only; as entradas velhas também melhoram). PURA.
+ */
+export function humanizeAgentAction(text: string): string {
+  return text
+    .replace(/(executou|Executei|pediu) `([a-z_]+)`( sozinho)? \(([a-z-]+)\)/g, (_m, verb: string, tool: string, alone: string | undefined, cls: string) => {
+      const [done, todo] = TOOL_WORDS[tool] ?? GENERIC;
+      const risk = RISK_WORDS[cls] ? ` (${RISK_WORDS[cls]})` : "";
+      if (verb === "Executei") return `Fiz${alone ? " sozinho" : ""}: ${todo}${risk}`;
+      if (verb === "pediu") return `pediu para ${todo}${risk}`;
+      return `${done}${risk}`;
+    })
+    .replace(/\b(O|o) condutor do card (?:story|step|act)-[a-z0-9]+\b/g, (_m, o: string) => `${o} agente de um card`)
+    .replace(/`([a-z]+(?:_[a-z]+)+)`/g, (_m, tool: string) => (TOOL_WORDS[tool] ? `«${TOOL_WORDS[tool][1]}»` : "uma ação"));
+}
+
 export function diarySentence(text: string): string {
-  const raw = (text ?? "").replace(/\r\n?/g, "\n");
+  const raw = humanizeAgentAction((text ?? "").replace(/\r\n?/g, "\n"));
   const fragments: string[] = [];
   let inFence = false;
 

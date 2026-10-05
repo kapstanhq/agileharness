@@ -6,6 +6,8 @@
 // Mirrors getRunnerRegistry's globalThis-Symbol pattern (survives Next dev HMR; the
 // channel and a server action load as separate modules but share ONE instance).
 
+import { ORGANIZE_ONLY_WHY, isOrganizeOnly } from "@/lib/storymap/organize-only-core";
+import { organizeOnlyNow } from "@/lib/storymap/organize-only";
 import { spawn, type ChildProcess } from "node:child_process";
 import { resolverAliasesDeEnv } from "@/lib/storymap/env-aliases";
 import { existsSync, mkdirSync, promises as fsp, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -766,7 +768,7 @@ export { sanitizeSpawnPath } from "./spawn-env";
 /** Outcome of asking the engine to run a card's skill. */
 export type RunAttempt =
   | { ok: true }
-  | { ok: false; reason: "in-flight" | "bad-id" | "cooldown" | "rate-limited"; detail: string };
+  | { ok: false; reason: "in-flight" | "bad-id" | "cooldown" | "rate-limited" | "organize-only"; detail: string };
 
 /**
  * Emitted to onComplete subscribers when a run SETTLES (any outcome). The trigger-
@@ -1487,6 +1489,11 @@ export class RunnerEngine {
     const config = await this.readBoardConfig(board).catch(() => null);
     // The column whose trigger produced the branch carries the exact policy (model/effort/maxTurns)
     // to regenerate with. Absent (board/column gone) → can't faithfully re-run → tell the train to pause.
+    // Board SÓ DE ORGANIZAÇÃO (organize-only.ts): o merge train não re-spawna agente nele.
+    if (isOrganizeOnly(config)) {
+      console.log(`${tag} ${ORGANIZE_ONLY_WHY} — re-drive não disparado`);
+      return { ok: false, reason: "organize-only", detail: ORGANIZE_ONLY_WHY };
+    }
     const def = config?.statuses.find((s) => s.trigger === trigger);
     if (!def) {
       console.error(`${tag} não foi possível resolver a coluna do trigger — re-drive abortado`);
@@ -2375,6 +2382,12 @@ export class RunnerEngine {
       const detail = `id fora do charset slug: board=${JSON.stringify(board)} card=${JSON.stringify(cardId)}`;
       console.error(`[harness-autorun] recusado ${detail}`);
       return { ok: false, reason: "bad-id", detail };
+    }
+    // Board SÓ DE ORGANIZAÇÃO (organize-only.ts): nenhum agente de coluna roda nele — nem disparado à mão (run_skill,
+    // enqueue), nem por recuperação. O trabalho de um board desses é feito por sessões independentes, fora do pipeline.
+    if (organizeOnlyNow(board)) {
+      console.log(`[harness-autorun ${key}] ${ORGANIZE_ONLY_WHY} — ${trigger} não disparado`);
+      return { ok: false, reason: "organize-only", detail: ORGANIZE_ONLY_WHY };
     }
     // Anti-replay: when the caller passes a window (autorun), refuse a repeat of the
     // SAME trigger on the SAME card within it — absorbs fs.watch double-fires + a

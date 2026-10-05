@@ -4,12 +4,12 @@
 // chamada (5.2) e a atribuição do ledger (5.1) distinguirem um agente escopado (tick, token `write`) do
 // operador humano (`full`) — sem passar um parâmetro `actor` por toda a árvore de chamadas.
 //
-// FRONTEIRA (documentada no design 5.1): o store SÓ existe no caminho SÍNCRONO do request. Efeitos
-// fire-and-forget (`void ENTRY_EFFECTS[...]`, evaluateAutorunOnEntry, fs.watch→trigger-runner) rodam FORA
-// dessa cadeia → currentMcpActor() é undefined lá (fail-open p/ "full"/interno). O guard de 5.3 roda ANTES do
-// commit do move (síncrono), então os efeitos pós-commit já nascem de um move aprovado; o risco residual seria
-// um efeito que RE-dispara uma ação guardada fora do request — por isso o guard trata actor ausente como
-// interno/full e as ações guardadas NÃO são dirigidas por efeitos de origem escopada (ver análise no design).
+// FRONTEIRA — ATENÇÃO: o AsyncLocalStorage ATRAVESSA promessas, `void` fire-and-forget, `import().then` e callbacks
+// (inclusive o de saída de processo filho) criados DENTRO do request. Um efeito disparado por um request MCP
+// (`void ENTRY_EFFECTS[...]`, o produtor de provas, a auditoria) continua vendo o ator MCP — currentMcpActor() NÃO é
+// undefined lá. Só o que nasce fora de um request (fs.watch→trigger-runner, timers do boot) roda sem ator. Por isso:
+// trabalho do SERVIÇO que decide por «quem chamou» não pode confiar no contexto — ou declara a origem explicitamente
+// (ex.: `createCardAction({ system: true })`) ou roda dentro de `runAsService` (abaixo), que zera o ator.
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { McpLevel } from "@/lib/storymap/types";
@@ -29,6 +29,14 @@ const STORE = new AsyncLocalStorage<McpActor>();
 /** Roda `fn` com `actor` como o ator MCP corrente (route.ts embrulha o handler por request). */
 export function runWithMcpActor<T>(actor: McpActor, fn: () => T): T {
   return STORE.run(actor, fn);
+}
+
+/**
+ * Roda `fn` SEM ator MCP: o trabalho do próprio serviço (um efeito, um produtor, uma auditoria) disparado de dentro
+ * de um request MCP não herda a identidade do agente que o disparou. Não toca o escopo do request do Next.
+ */
+export function runAsService<T>(fn: () => T): T {
+  return STORE.exit(fn);
 }
 
 /** O ator MCP da requisição corrente, ou undefined fora de um request MCP (chamada interna do serviço). */

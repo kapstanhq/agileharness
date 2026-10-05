@@ -6,7 +6,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { cn } from "@/lib/cn";
 import { cardEyebrow, cardSurface, cardSurfaceHover } from "@/lib/ui";
 import { cardPriorityTier, priorityGlyph, priorityScore } from "@/lib/storymap/priority";
-import { STORY_TYPE_BY_ID } from "@/lib/storymap/frameworks";
+import { STORY_TYPE_BY_ID, narrativeWhy } from "@/lib/storymap/frameworks";
 import { cardTypeLabel } from "@/lib/storymap/kanban-filter";
 import { isDeliveryStory, needsPlacement, servesTarget } from "@/lib/storymap/unplaced";
 import { effectiveAutonomy } from "@/lib/storymap/autonomy";
@@ -116,8 +116,8 @@ function KanbanCardImpl({
 
   // The "porquê" — the story's soThat benefit, framed by its type's connector (user/bug → "para",
   // enabler → "de modo que"). Restores the card's rationale (was documented but never rendered).
-  const soThat = card.narrative?.soThat?.trim() || null;
-  const whyConnector = STORY_TYPE_BY_ID[card.storyType ?? "user"]?.connectors.soThat ?? "para";
+  // narrativeWhy: quando a parte já traz o próprio conector («para que…»), o do tipo não se repete
+  const why = narrativeWhy({ soThat: STORY_TYPE_BY_ID[card.storyType ?? "user"]?.connectors.soThat ?? "para" }, card.narrative?.soThat);
 
   // (a) The MOTHER STORY a ticket belongs to (servesTarget = serves ?? parent) — shown ONLY for delivery
   // tickets (technical/bug/chore/spike); a user story IS the story, so it shows no parent. No kind label.
@@ -217,9 +217,9 @@ function KanbanCardImpl({
         )}
 
         {/* (b') Porquê — o benefício (soThat) com o conector do tipo. Discreto, 2 linhas no máx. */}
-        {soThat && !overlay && (
-          <p className="mt-1.5 text-[12.5px] leading-[1.45] text-fg-muted line-clamp-2" title={`${whyConnector} ${soThat}`}>
-            {whyConnector} {soThat}
+        {why && !overlay && (
+          <p className="mt-1.5 text-[12.5px] leading-[1.45] text-fg-muted line-clamp-2" title={why}>
+            {why}
           </p>
         )}
 
@@ -410,7 +410,7 @@ function DeliveryStepper({
   const isDeployStep = cur.onEnter === "promote-and-deploy";
   const showButton = !!onAdvance && !!next && cur.autorun !== true && !cur.autoEnterTerminal && !isDeployStep;
   const isPublish = next?.onEnter === "promote-and-deploy";
-  const working = cur.autorun === true ? "auto…" : cur.autoEnterTerminal || isDeployStep ? "publicando…" : null;
+  const working = cur.autorun === true ? "automático" : cur.autoEnterTerminal || isDeployStep ? "publicando…" : null;
   return (
     <div className="mt-2 rounded-md bg-fg/[0.04] px-2 py-1.5">
       <div className="flex items-center gap-1.5 text-[11px] font-medium text-fg-muted">

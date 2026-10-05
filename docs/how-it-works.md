@@ -279,6 +279,57 @@ package: apps/galpao
 ownsPaths: [ops/, tarefas.toml]   # repo paths outside any package that this board owns — routing only
 ```
 
+**Every card an agent creates passes an intake check first** (`card-intake.ts`). It is meant to be fast,
+cheap and explain itself, so it has two layers:
+
+- **Rules, no AI, ~5 ms on a 500-card board.** (a) *Board*: the files the card touches — the `files` field of
+  `create_card`/`usm_capture`, plus repository paths found in its body and criteria — decide the board with
+  the same weighing as fix cards; files owned by **another** board refuse the card, naming the right board.
+  Nothing is moved on its own: the agent creates it there. (b) *Creation pattern*: a plain-language title
+  (no raw card id, no file path, no code in backticks, 8–140 characters, not all caps); a bug says what
+  happens and what was expected; a user story created outside Triagem has at least one acceptance
+  criterion. (c) *Duplicate*: a title nearly identical to an **open** card of the same board (word overlap
+  above `intake.similarity`) refuses and points to the existing card.
+- **A small model, only in doubt.** When the rules cannot decide — files split between boards, or no files
+  and the text names another board — a short structured call (Sonnet, low effort, the boards' scopes plus
+  the card, the card text treated as data) answers `{board, confidence, why}`. Another board with
+  confidence ≥ 0.7 refuses like the rules would. Answers are cached by text hash; calls are capped per
+  call and per hour and wait for the automation admission. If the model is off, over the cap, held, or
+  does not answer, the card is **accepted in the requested board with a "board uncertain" flag** for
+  triage to check — the only fail-open path, so a check that could not run never blocks creation.
+
+Who it applies to is decided by the caller: an **agent** (MCP) is refused for real — nothing is created
+and the refusal lists what to fix, for every item of a batch; the **service itself** (technical audit,
+deploy-proof and stall fixes, the orchestrator) is never blocked — its card enters, flagged for review when
+the board looks wrong, and the warning is recorded; the **operator** on screen and a capture the owner
+reviewed in place skip it. Every refusal and every uncertain acceptance appears in the follow-up as a
+decision of "Verificação de entrada", and `intake_stats` counts refusals per reason so the owner can see
+whether agents keep getting it wrong. `AGILEHARNESS_INTAKE=0` turns it off.
+
+The caller is **declared, not inferred**: service work that creates a card (a fix, an audit, the orchestrator)
+passes `system: true`, because the request context of the agent that triggered it travels with the work (the
+async context crosses promises and callbacks) and would otherwise be judged as that agent. Service creation is
+also what a board in *organize-only* mode refuses, whoever triggered it. The model calls reserve the hourly
+budget atomically (read and book in one exclusive step) and at most two run at the same time.
+
+**It is a quality control at creation, not a security boundary.** It runs when a card is created through
+`create_card`, `usm_capture`, `report_issue` and the service's own creators. A card edited afterwards with
+`update_card`, or a card file written in a worktree and landed by the merge train, does not pass through it
+again — a determined agent can still put a card on the wrong board that way; the check exists to stop the
+ordinary mistakes cheaply.
+
+```yaml
+# storymap/settings.yaml — all optional; these are the defaults
+intake:
+  enabled: true
+  similarity: 0.75          # word-overlap (Jaccard) above which two titles are the same card
+  llm:
+    enabled: true
+    maxUsdPerCall: 0.05
+    maxCallsPerHour: 20
+    maxUsdPerHour: 0.5
+```
+
 ### Questions: the agent asks, the human decides, the next skill reads
 
 The interesting part of an autonomous pipeline is what it does when it *doesn't know*. It does not
@@ -799,6 +850,28 @@ unreadable and holds *everything*, which is the safe direction; the new reader a
 scope *history* is the one scope field allowed in version 1 (an older binary ignores a field it does
 not know), so lifting the last limit — or its deadline expiring — keeps the record of who widened
 and when; the layers themselves and the held notes stay version-2 only.
+
+**A board can be for organizing only.** `organizeOnly: true` in a board's `board.yaml` makes it a
+notebook: people (from the screen) and agents (over MCP) still read, write, move and transfer its cards,
+but nothing automatic acts on it and nothing arrives by itself. It is stronger than a disarmed board
+(`autorunDisabled`), which only stops the column cascade. With the flag on:
+
+- nothing starts — column skills (also an `onEnter` fired by a manual move: no promotion, no publish),
+  `run_skill`/`enqueue`, the conductor (entry, queue, adoption, wake), the triage judge, the proxy, the
+  copilot, technical and delivery audits, the deploy-proof producer, the stall watch, the spend ceiling,
+  crash recovery, the merge train's conflict re-drive, the release sweeps, the publish producer and the
+  publish drain, the health tick, ledger-divergence warnings and the trash purge;
+- nothing arrives — the triage judge never routes a card to it, auto-generated fix cards are never
+  routed to it, and the service's own card creation there is refused; `claude_new` opens no session for
+  its cards (that work belongs to an independent session, outside the board);
+- whatever was in flight when the flag went on (queued or running column runs, live conductors) is taken
+  off on the next recovery tick, by the same path as pausing with "stop now".
+
+The gate answers "held" with source `organize-only`, so every actor that already asks the gate inherits
+it — including the ones that ask without the board config in hand (the copilot, the engine pump), which
+read the flag from disk, cached by mtime. The actors that do not ask the gate check it directly. A ratchet
+test walks every file that iterates the boards and fails when one consults neither the gate nor the flag.
+The board chip reads "Só organização — nada roda sozinho".
 
 
 ## Built on Claude Code

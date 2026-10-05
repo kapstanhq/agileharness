@@ -287,6 +287,7 @@ const proposedItemShape = z.object({
     .optional()
     .describe("WS7 lote: decomposição PRÉ-SEMEADA de UM card guarda-chuva (vira Card.tasks). Use quando o texto descreve N ajustes/refatorações na MESMA superfície/arquivo → 1 card com N tasks, NÃO N cards. Story-only."),
   body: z.string().optional().describe("contexto/decisões/constraints/valor além do rationale — SÓ quando o texto já trouxe essas decisões"),
+  files: z.array(z.string()).optional().describe("os arquivos/caminhos que o item toca — a verificação de entrada decide o board por eles"),
   // dual-track OST — SÓ p/ type:story:
   addresses: z.string().nullable().optional().describe("dual-track OST: a idea (DOR) que esta STORY endereça — id de card existente OU tempId de uma idea do MESMO lote. Vira o edge 'addresses' (story→idea). Só p/ type:story."),
   // OST-light — SÓ p/ type:idea:
@@ -1054,7 +1055,11 @@ export function registerStorymapTools(server: McpServer): void {
         "(o card revisado) — o card nasce ligado a ele e conta como uma rodada da cadeia. Numa sessão cujo card tem achados de " +
         "revisão abertos, uma ENTREGA criada sem `continuesFrom` herda a cadeia do card da sessão sozinha. No teto de rodadas, " +
         "NENHUM card é criado: a pergunta vai ao dono no card revisado (aceitar o risco, pagar mais uma rodada ou parar) — espere " +
-        "a resposta; depois de o dono aceitar o risco ou mandar parar, nenhum conserto novo desta cadeia é criado.",
+        "a resposta; depois de o dono aceitar o risco ou mandar parar, nenhum conserto novo desta cadeia é criado. " +
+        "VERIFICAÇÃO DE ENTRADA: o card passa por uma checagem rápida antes de existir — passe `files` (os arquivos que ele toca): " +
+        "arquivos de OUTRO board recusam com o board certo (crie lá); título em linguagem simples (sem id de card, caminho de " +
+        "arquivo ou código em crase); bug dizendo o que acontece e o que era esperado; card quase igual a um aberto recusa " +
+        "apontando o existente. A recusa diz o que corrigir — nada é criado.",
       inputSchema: {
         board: z.string(),
         title: z.string(),
@@ -1073,6 +1078,10 @@ export function registerStorymapTools(server: McpServer): void {
           .string()
           .optional()
           .describe("o card cuja REVISÃO deixou os achados que este card conserta — conta para o teto de rodadas"),
+        files: z
+          .array(z.string())
+          .optional()
+          .describe("os arquivos/caminhos que o card toca — a verificação de entrada decide o board por eles e recusa o board errado"),
       },
     },
     async (a) => {
@@ -1154,6 +1163,7 @@ export function registerStorymapTools(server: McpServer): void {
             personas: a.personas ?? [],
             systems: a.systems ?? [],
             body: a.body,
+            ...(a.files?.length ? { files: a.files } : {}),
             rationale: "criado via MCP (celular)",
           },
         ],
@@ -2505,6 +2515,22 @@ export function registerStorymapTools(server: McpServer): void {
         programas: r.value.programs,
         nota: "pedido no Inbox do dono — nada roda até ele aprovar; se o card tem condutor ele é acordado, senão consulte locked_command_status",
       });
+    },
+  );
+
+  defineTool(server,
+    "intake_stats",
+    {
+      title: "Contagens da verificação de entrada de card",
+      description:
+        "Quantos cards de agentes a verificação de entrada recusou, por motivo (board errado, fora do padrão, duplicado), " +
+        "quantos entraram com «board incerto», quantas consultas ao modelo pequeno houve e quantos consertos do próprio " +
+        "serviço entraram com aviso — desde a data em `since`. Só leitura.",
+      inputSchema: {},
+    },
+    async () => {
+      const { readIntakeStats } = await import("@/lib/storymap/runner/card-intake-deps");
+      return json(await readIntakeStats());
     },
   );
 

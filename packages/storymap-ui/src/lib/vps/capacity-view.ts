@@ -39,7 +39,8 @@ const HOLD_LABEL: Record<HoldReason, string> = {
   "daily-allowance": "cota de hoje esgotada",
 };
 
-const r1 = (n: number): string => (Math.round(n * 10) / 10).toString();
+/** Uma casa decimal, com vírgula (pt-BR): «26,3», nunca «26.3». */
+const r1 = (n: number): string => (Math.round(n * 10) / 10).toString().replace(".", ",");
 
 function clock(ms: number): string {
   return new Date(ms).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
@@ -139,7 +140,7 @@ export function capacityView(s: GovernorSnapshot | null | undefined, now: number
   const muted = !!reading?.stale;
   // «Hoje» e «No reset» são contas do GOVERNADOR sobre a leitura DELE; quando o número da semana mostrado é outro (o do
   // proxy, mais recente), essas linhas dizem de onde vêm em vez de parecer contas sobre o número de cima.
-  const fromGovernor = q?.week && q.week.source !== "governor" && s.reading ? " · pela leitura do governador" : "";
+  const fromGovernor = q?.week && q.week.source !== "governor" && s.reading ? " · pela leitura anterior da cota" : "";
 
   if (reading) {
     const ceiling = s.pacing?.ceilingPct ?? s.caps.weekCapPct;
@@ -156,18 +157,18 @@ export function capacityView(s: GovernorSnapshot | null | undefined, now: number
     const { usedTodayPct, allowancePct } = s.pacing;
     rows.push({
       key: "today",
-      label: `Hoje (cota)${fromGovernor}`,
-      value: `${r1(usedTodayPct)} de ${r1(allowancePct)} pp`,
+      label: `Hoje${fromGovernor}`,
+      value: `${r1(usedTodayPct)} de ${r1(allowancePct)} pontos da semana`,
       pct: allowancePct > 0 ? Math.min(100, (usedTodayPct / allowancePct) * 100) : 100,
       muted,
     });
   }
   if (s.projectionAtResetPct != null) {
-    rows.push({ key: "projection", label: `No reset (≈)${fromGovernor}`, value: `${r1(s.projectionAtResetPct)}%`, pct: Math.min(100, s.projectionAtResetPct), muted });
+    rows.push({ key: "projection", label: `Na virada da semana (estimativa)${fromGovernor}`, value: `${r1(s.projectionAtResetPct)}%`, pct: Math.min(100, s.projectionAtResetPct), muted });
   }
   rows.push({
     key: "held",
-    label: "Retidos",
+    label: "Trabalhos segurados",
     value: s.held.count === 0 ? "nenhum" : `${s.held.count}${s.held.oldestSince != null ? ` · o mais antigo ${ago(s.held.oldestSince, now)}` : ""}`,
     pct: null,
   });
@@ -193,7 +194,7 @@ export function capacityView(s: GovernorSnapshot | null | undefined, now: number
     tone = "danger";
     headline = "Medidor de cota PARADO — automação retida";
   } else if (s.inert) {
-    headline = s.inert === "disabled" ? "Governador desligado" : "Inerte — sem medidor de uso";
+    headline = s.inert === "disabled" ? "Controle de cota desligado" : "Inerte — sem medidor de uso";
   } else if (s.verdict.kind === "latch") {
     tone = "danger";
     headline = "Automação retida — condição de trava";
@@ -201,7 +202,9 @@ export function capacityView(s: GovernorSnapshot | null | undefined, now: number
     tone = "attention";
     headline = `Automação retida — ${HOLD_LABEL[s.verdict.reason as HoldReason] ?? s.verdict.reason}`;
   } else {
-    headline = "Automação liberada";
+    // A COTA libera; se um board anda ou não é o RITMO dele (pausado/devagar). «Automação liberada» com o board
+    // pausado ao lado parecia contradição — o painel fala só do que ele mede.
+    headline = "Cota livre para o trabalho automático";
   }
 
   // A trava guarda o número do ENGATE («janela de 7 dias em 95%»); sem o «quando» e o «agora» ao lado, quem lê

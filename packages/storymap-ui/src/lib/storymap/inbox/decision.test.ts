@@ -811,6 +811,20 @@ describe("a publicação parada por código do DONO: «Autorizar publicar» quan
     expect(d.details.find((x) => x.label === "Arquivos")?.value).toBe("pay/a.ts, pay/b.ts, fn/c.ts");
   });
 
+  it("visto de OUTRO card que a causa segura: diz que o código vem do card âncora e segura este (não parece falar do card errado)", () => {
+    const anchor = mkCard({ id: "story-ex7702", title: "Trocar o meio de pagamento da oficina" });
+    const approvals = new Map([[own.causeKey, [request("a", ["pay/a.ts"], ["api"])]]]);
+    const withAnchor = (cardId: string) =>
+      decideItem({ ...item, cardId } as CockpitItem, {
+        ...ctx(ULTRA, held),
+        facts: facts({ deployApprovals: approvals, deployAnchor: new Map([[own.causeKey, anchor.id]]), cardsById: new Map([[anchor.id, anchor], [held.id, held]]) }),
+      });
+    expect(withAnchor(held.id === anchor.id ? "story-ex7703" : held.id).ask).toMatch(
+      /^Autorizar a publicação do código de «.+» que segura este card\? \(o código vem de «Trocar o meio de pagamento da oficina»\)/,
+    );
+    expect(withAnchor(anchor.id).ask).toMatch(/^Autorizar a publicação do código de «.+» de «Trocar o meio de pagamento da oficina»\?/);
+  });
+
   it("muitos arquivos: a lista mostra os primeiros e diz quantos faltam", () => {
     const many = Array.from({ length: 11 }, (_, i) => `pay/f${i}.ts`);
     const d = decideItem(item, { ...ctx(ULTRA, held), facts: facts({ deployApprovals: new Map([[own.causeKey, [request("a", many, ["api"])]]]) }) });

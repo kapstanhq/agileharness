@@ -36,6 +36,7 @@ import { AGENT_STATE_WORDS, type SessionPresence } from "@/lib/storymap/agent-pr
 import { sinceWords } from "@/lib/storymap/card-live-status";
 import { useAgentPresence } from "@/components/RunnerStatusProvider";
 import { AgentDot } from "@/components/nav/NavAgentsChip";
+import { modelWords } from "@/lib/storymap/model-words";
 
 const ROLE_META: Record<FleetRow["role"], { label: string; hex: string; hint: string }> = {
   implement: { label: "implementa", hex: "#3b82f6", hint: "escreve código no worktree próprio" },
@@ -196,7 +197,7 @@ function FleetRowItem({
           // sem presença conhecida: o processo existe, e só isso se sabe — nada de verde, nada de «trabalhando»
           <span className="inline-flex items-center gap-1 font-medium text-fg-muted">
             <span aria-hidden className="h-1.5 w-1.5 rounded-full border border-state-idle" />
-            {row.processAlive === null ? "sem tmux" : "processo vivo"}
+            {row.processAlive === null ? "sem terminal" : "processo vivo"}
           </span>
         )}
         <span>·</span>
@@ -204,7 +205,7 @@ function FleetRowItem({
         {row.model && (
           <>
             <span>·</span>
-            <span>{row.model}</span>
+            <span title={row.model}>{modelWords(row.model)}</span>
           </>
         )}
         {row.contextPct != null && (
@@ -220,13 +221,13 @@ function FleetRowItem({
         {row.claim && (
           <>
             <span>·</span>
-            <span title={`claim ${row.claim.kind}/${row.claim.scope} até ${row.claim.expiresAt}`}>claim {row.claim.kind}</span>
+            <span title={`reserva ${row.claim.kind}/${row.claim.scope} até ${row.claim.expiresAt}`}>card reservado</span>
           </>
         )}
         {row.train && (
           <>
             <span>·</span>
-            <span title={row.train.pinnedSha ? `sha ${row.train.pinnedSha}` : undefined}>train: {row.train.status}</span>
+            <span title={row.train.pinnedSha ? `sha ${row.train.pinnedSha}` : undefined}>integração: {row.train.status}</span>
           </>
         )}
         {row.branch && (
@@ -300,7 +301,7 @@ function FleetRowItem({
             title="Devolver o card para a fila (advisory — não interrompe o agente)"
             className={cn(btn, "text-fg-muted hover:bg-surface-hover hover:text-fg")}
           >
-            {spin("release") ? <Loader2 className="h-3 w-3 animate-spin" /> : <Unlock className="h-3 w-3" />} Liberar claim
+            {spin("release") ? <Loader2 className="h-3 w-3 animate-spin" /> : <Unlock className="h-3 w-3" />} Liberar o card
           </button>
         )}
         {row.tmuxSession && !dead && (

@@ -513,7 +513,7 @@ export function isCardProvenance(v: unknown): v is CardProvenance {
  */
 export interface CardCommitWarning {
   tempId: string;
-  code: "parent-dropped" | "forced-created" | "serves-dropped" | "duplicate-suspected" | "idea-ignored";
+  code: "parent-dropped" | "forced-created" | "serves-dropped" | "duplicate-suspected" | "idea-ignored" | "intake-review";
   detail: string;
   /** Fase 4.1 — the REAL minted id of the card this warning is about (resolved from the commit's internal
    *  tempId→id map before returning). Lets a human surface link straight to the created card ("Ver card").
@@ -1400,6 +1400,12 @@ export interface DeployCause {
   rules: string[];
   /** a classe de NEGÓCIO do dono que a regra carrega (dinheiro, pagamento…), ou null quando não há. */
   ownerClass: string | null;
+  /**
+   * Sem classe, a parte é do dono porque o plano DECLAROU que só uma pessoa a publica (unidade manual, aceite manual) —
+   * e não porque o sistema não conseguiu classificar (fail-closed). Só com ela o pedido diz «ação manual»; sem ela, diz
+   * que o sistema não classificou e pede para conferir o que sobe.
+   */
+  declaredManual?: boolean;
   /** quem decide: o dono (classe de negócio) ou o sistema (lacuna de ferramenta/config, prova, atraso). */
   decider: "owner" | "system";
   /** a chave da causa — uma só por pacote + o que a recusou; dobra N cards em UM item. */
@@ -2232,6 +2238,14 @@ export interface BoardConfig {
    * tool's own dogfood board — always a manual guided session). Absent/false = normal autorun.
    */
   autorunDisabled?: boolean;
+  /**
+   * Board SÓ DE ORGANIZAÇÃO: agentes leem, escrevem e movem cards por MCP, e o
+   * operador pela tela — mas NADA automático age nele (cascata/onEnter, condutor, juiz da triagem, procurador,
+   * copiloto, auditorias, produtor de provas, vigia de parado, teto de gasto, recovery, re-drive, reconcile/settle,
+   * publicação, tick de saúde) e nada CHEGA sozinho (roteamento da triagem, consertos roteados, criação automática).
+   * Mais forte que `autorunDisabled`. Predicado único: `isOrganizeOnly` (organize-only.ts). Local do board.
+   */
+  organizeOnly?: boolean;
   /**
    * WS8 (F7) — per-board ORCHESTRATOR/copiloto POLICY (default OFF ⇒ byte-identical when absent). `mode`
    * (off/paired/autonomous) gates the copiloto; `riskMatrix` (O2.5 declarative) maps each risk CLASS to a
@@ -3257,6 +3271,12 @@ export interface RunnerSettings {
    */
   notifications?: { push: { critical: PushEventKind[] } };
   /**
+   * A VERIFICAÇÃO DE ENTRADA DE CARD (card-intake.ts): o card que um AGENTE cria passa por regras rápidas (board certo
+   * pelos arquivos, padrão de criação, duplicata) e, só na dúvida, por um modelo pequeno. Ausente ⇒ os padrões
+   * (ligada, modelo ligado, tetos baixos — ver `intakeSettingsOf` em runner/card-intake-deps.ts).
+   */
+  intake?: IntakeSettings;
+  /**
    * DEPLOYMENT-wide deploy knobs. `canaryCommand`: the DEFAULT publication-fidelity canary for boards
    * that do not declare their own (`board.yaml` `deploy.canaryCommand` wins). A deployment where every
    * board publishes to ONE shared surface declares it once here; a repository publishing several
@@ -3439,3 +3459,21 @@ export interface BoardSummary {
 
 /** Synthetic release id used in the UI/containers for unscheduled stories. */
 export const NO_RELEASE = "none";
+
+/** A verificação de entrada de card (card-intake.ts + runner/card-intake-deps.ts) — `settings.yaml → intake`. */
+export interface IntakeSettings {
+  /** desligada ⇒ todo card de agente entra como antes */
+  enabled: boolean;
+  /** 0..1 — a partir de quanto dois títulos são o mesmo card (Jaccard das palavras) */
+  similarity: number;
+  llm: {
+    /** a consulta ao modelo pequeno na dúvida; desligada ⇒ a dúvida entra no board pedido com «board incerto» */
+    enabled: boolean;
+    /** o teto de UMA consulta (`--max-budget-usd`) */
+    maxUsdPerCall: number;
+    /** quantas consultas por hora, no máximo */
+    maxCallsPerHour: number;
+    /** quanto, no máximo, por hora (contado pelo teto de cada consulta) */
+    maxUsdPerHour: number;
+  };
+}

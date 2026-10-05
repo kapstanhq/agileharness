@@ -1,6 +1,7 @@
 // O JUIZ DA TRIAGEM (runner/triage-judge.ts), ligado à produção. Resolvido POR CHAMADA como o proxy: o master, os
 // limites e o binário vêm do settings VIVO, então ligar/desligar não pede restart.
 
+import { ORGANIZE_ONLY_WHY, isOrganizeOnly, organizeOnlyNow } from "@/lib/storymap/organize-only";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { evaluateAutorunOnEntry } from "@/lib/notifications/server/channels/autorun-eval";
@@ -63,6 +64,8 @@ export function defaultTriageJudgeDeps(): TriageJudgeDeps {
         if (b.id === board) continue;
         const cfg = await readBoardConfig(b.id).catch(() => null);
         if (!cfg) continue;
+        // Board SÓ DE ORGANIZAÇÃO (organize-only.ts) nunca é destino do roteamento: nada chega nele sozinho.
+        if (isOrganizeOnly(cfg)) continue;
         const prd = await fsp.readFile(boardDocPath(b.id, "prd"), "utf8").catch(() => null);
         out.push({
           id: b.id,
@@ -78,6 +81,8 @@ export function defaultTriageJudgeDeps(): TriageJudgeDeps {
     // Mandar ao board certo: a MESMA mudança de board da tela e da tool (card-transfer-service.ts), atribuída ao juiz; o
     // juiz de lá é cutucado na hora (o card chegou sem veredito, na Triagem de lá).
     route: async (board, cardId, toBoard, reason) => {
+      // Defesa em profundidade: mesmo que o juiz nomeie um board só de organização, a mudança automática não acontece.
+      if (organizeOnlyNow(toBoard)) return { ok: false, error: `o board «${toBoard}» é ${ORGANIZE_ONLY_WHY.replace(/^board /, "")}: nada chega nele pela triagem` };
       const { transferCard, defaultCardTransferDeps } = await import("./card-transfer-service");
       const r = await transferCard(defaultCardTransferDeps(), { fromBoard: board, toBoard, cardId, reason, by: "triage-judge" });
       if (!r.ok) return { ok: false, error: r.error };

@@ -45,7 +45,7 @@ function formatTokens(n: number): string {
 }
 /** % with 1 decimal below 10 so a small-but-real savings (0.7%) reads as "0.7%", not rounded to 0/1. */
 function formatPct(p: number): string {
-  return p > 0 && p < 10 ? p.toFixed(1) : p.toFixed(0);
+  return (p > 0 && p < 10 ? p.toFixed(1) : p.toFixed(0)).replace(".", ",");
 }
 /** "há 2h" / "há 35min" — how long ago the proxy last polled (for the stale marker). */
 function formatAge(polledAt: number | null): string {
@@ -277,14 +277,14 @@ function HeadroomLine() {
         />
         {working ? (
           <span>
-            Headroom poupou{" "}
+            A compressão de contexto poupou{" "}
             <span className="font-medium tabular-nums text-emerald-700 dark:text-emerald-400">
               {formatPct(h.savingsPct)}%
             </span>{" "}
-            desta conta — {formatTokens(h.tokensSaved)} tokens, US$ {h.savedUsd.toFixed(2)}.
+            desta conta — {formatTokens(h.tokensSaved)} tokens, US$ {h.savedUsd.toFixed(2).replace(".", ",")}.
           </span>
         ) : (
-          <span>Headroom ligado, mas ainda não comprimiu nenhuma requisição.</span>
+          <span>Compressão de contexto ligada, mas ainda não comprimiu nenhuma requisição.</span>
         )}
       </p>
     </>

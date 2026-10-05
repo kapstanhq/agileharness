@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideCascade, decideForward } from "./cascade-decision";
+import { DEPENDENCY_STOP_REASON, decideCascade, decideForward, dependencyWait } from "./cascade-decision";
 import { coerceCard } from "@/lib/storymap/repo";
 import type { StoryType } from "@/lib/storymap/frameworks";
 import type { BoardConfig, StatusDef } from "@/lib/storymap/types";
@@ -559,5 +559,33 @@ describe("decideCascade — o disjuntor da publicação segura o forward rumo a 
     const status = release.statuses[0]!;
     expect(decideForward(stuck, status, release, hold("espera"))).toMatchObject({ action: "stop" });
     expect(decideForward(stuck, status, release)).toEqual({ action: "forward", to: "deploy" });
+  });
+});
+
+describe("dependencyWait / dependencyHold — o card espera outro trabalho: a skill não é disparada", () => {
+  const byId = new Map([
+    ["story-ex0101", { status: "enriquecer", title: "Pré-requisito em curso" }],
+    ["story-ex0102", { status: "concluida", title: "Pré-requisito pronto" }],
+  ]);
+
+  it("depends-on para card do board que não terminou ⇒ espera; terminado ou fora do board ⇒ não", () => {
+    expect(dependencyWait(card({ status: "enriquecer", links: [{ rel: "depends-on", to: "story-ex0101" }] }), byId, pipeline)).toMatch(/Pré-requisito em curso.*ainda não terminou/);
+    expect(dependencyWait(card({ status: "enriquecer", links: [{ rel: "depends-on", to: "story-ex0102" }] }), byId, pipeline)).toBeNull();
+    expect(dependencyWait(card({ status: "enriquecer", links: [{ rel: "depends-on", to: "story-ex0999" }] }), byId, pipeline)).toBeNull();
+    expect(dependencyWait(card({ status: "enriquecer", links: [{ rel: "relates-to", to: "story-ex0101" }] }), byId, pipeline)).toBeNull();
+  });
+
+  it("bloqueio de dependência aberto (blocked-by-*, blocker) ⇒ espera; fechado ou de outro tipo ⇒ não", () => {
+    const f = (over: Record<string, unknown>) => ({ id: "blocked-by-ambiente", lens: "general", severity: "blocker", status: "open", title: "Espera o ambiente de ensaio", ...over });
+    expect(dependencyWait(card({ status: "enriquecer", findings: [f({})] }), byId, pipeline)).toMatch(/Espera o ambiente de ensaio/);
+    expect(dependencyWait(card({ status: "enriquecer", findings: [f({ status: "fixed" })] }), byId, pipeline)).toBeNull();
+    expect(dependencyWait(card({ status: "enriquecer", findings: [f({ id: "review-1" })] }), byId, pipeline)).toBeNull();
+  });
+
+  it("decideCascade: a decisão que seria RODAR vira STOP com o motivo; forward e manual não mudam", () => {
+    const hold = () => "espera X";
+    expect(decideCascade(card({ status: "enriquecer" }), pipeline, { dependencyHold: hold })).toEqual({ action: "stop", reason: `${DEPENDENCY_STOP_REASON}: espera X` });
+    expect(decideCascade(card({ status: "com-design" }), pipeline, { dependencyHold: hold })).toEqual({ action: "stop", reason: "manual" });
+    expect(decideCascade(card({ status: "enriquecer" }), pipeline, { dependencyHold: () => null })).toEqual({ action: "run", trigger: "harness-enrich" });
   });
 });

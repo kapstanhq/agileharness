@@ -23,6 +23,7 @@
 //
 // Verdict PURO + IO injetável (git/fs), para os testes provarem a lógica sem repo, sem rede e sem deploy.
 
+import { isOrganizeOnly, organizeOnlyNow } from "@/lib/storymap/organize-only";
 import { cardOwnerClass, isBusinessOnly } from "@/lib/storymap/decision-class";
 import { isAutonomousDelivery } from "@/lib/storymap/delivery-audit";
 import { ownerPublishHold } from "@/lib/storymap/owner-waiting";
@@ -677,6 +678,8 @@ export async function settleDeploySuccess(
       console.warn(`[deploy-settle ${board}/${cardId}] board sem config — settle ignorado`);
       return null;
     }
+    // Board SÓ DE ORGANIZAÇÃO (organize-only.ts): o assentamento por evidência não move card dele.
+    if (isOrganizeOnly(config)) return null;
     const cards = await (d.readBoardCards ?? readCards)(board).catch(() => [] as Card[]);
     const card = cards.find((c) => c.id === cardId);
     if (!card) return null;
@@ -895,6 +898,7 @@ export interface ReleaseLiveSweepDeps {
  * (o deploy): o código já está no ar. Devolve os ids que atravessaram. Nunca lança.
  */
 export async function settleReleasedLiveCards(board: string, config: BoardConfig, cards: readonly Card[], d: ReleaseLiveSweepDeps): Promise<string[]> {
+  if (isOrganizeOnly(config)) return [];
   const moved: string[] = [];
   for (const card of cards) {
     try {
@@ -931,6 +935,8 @@ export async function reconcileBoardDeployFailures(
   board: string,
   deps?: { repoRoot?: string; exec?: ExecFn; sweepBlocks?: (board: string) => Promise<unknown> },
 ): Promise<string[]> {
+  // Board SÓ DE ORGANIZAÇÃO (organize-only.ts): nem reconcilia alarmes nem leva cards de «Liberar» adiante.
+  if (organizeOnlyNow(board)) return [];
   const repoRoot = deps?.repoRoot ?? findRepoRoot();
   const exec = deps?.exec ?? defaultExec;
   const contains = makeGitContains(exec, repoRoot);

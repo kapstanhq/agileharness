@@ -75,6 +75,12 @@ export interface SweepTickDeps {
    *  Sem a passada periódica, o card de um deploy feito à mão nunca sairia do alarme.
    *  Best-effort: sua falha nunca rebaixa um tick de recovery bem-sucedido. */
   runDeployReconcile?: () => Promise<unknown>;
+  /** Card × histórico (ledger-divergence.ts): o card cujo arquivo e cujo histórico discordam do status ganha um aviso que
+   *  pede a decisão (e o perde quando voltam a concordar). Board-data só (sem git). Best-effort como as irmãs. */
+  runLedgerDivergence?: () => Promise<unknown>;
+  /** Board «só organização» (organize-only-sweep.ts): desliga o que ainda estava em voo quando o modo foi ligado — os
+   *  runs e os condutores do board, pelo mesmo caminho da pausa com «parar agora». Best-effort como as irmãs. */
+  runOrganizeOnlySweep?: () => Promise<unknown>;
   /** story-ex9528 M2 — optional idle-gated trash GC (prune soft-deleted board data older than 7d).
    *  Board-data fs ops only (no git), best-effort: its failure never demotes a successful recovery tick. */
   runTrashGc?: () => Promise<unknown>;
@@ -131,6 +137,9 @@ export async function runRecoverySweepTick(deps: SweepTickDeps): Promise<SweepSt
     // P-3b — e, logo depois, re-cutuca a fila: destravar a cabeça sem bombear o laço só troca uma fila
     // parada por outra. Mesma janela, mesmo motivo (ver o doc da dep).
     if (deps.pumpMergeQueue) await deps.pumpMergeQueue().catch(() => {});
+    // Board «só organização»: roda ANTES da janela ociosa e mesmo com a máquina ocupada — o que está em voo num board desses
+    // é justamente o que deixa a máquina «ocupada», e desligá-lo não toca git (só a fila do engine e os condutores).
+    if (deps.runOrganizeOnlySweep) await deps.runOrganizeOnlySweep().catch(() => {});
     let starved = false;
     if (!(await deps.isIdle())) {
       // Busy — normally skip. But if we have skipped this many times in a row, the "busy" we are deferring
@@ -150,6 +159,7 @@ export async function runRecoverySweepTick(deps: SweepTickDeps): Promise<SweepSt
     // Mesma janela ociosa, mesmo motivo (git subprocesses fora do caminho do train): reconcilia os
     // deploy-failure contra a realidade publicada. Best-effort — nunca rebaixa um recovery bem-sucedido.
     if (deps.runDeployReconcile) await deps.runDeployReconcile().catch(() => {});
+    if (deps.runLedgerDivergence) await deps.runLedgerDivergence().catch(() => {});
     // M2 — same idle window: prune the soft-delete trash past its 7-day window. Board-data only (no git), so it
     // can't fight the train; best-effort — a GC error never demotes a successful recovery tick.
     if (deps.runTrashGc) await deps.runTrashGc().catch(() => {});

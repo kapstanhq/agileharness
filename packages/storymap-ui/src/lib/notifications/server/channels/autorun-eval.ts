@@ -35,7 +35,7 @@ import { isAutonomousDelivery } from "@/lib/storymap/delivery-audit";
 import { cardOwnerClass } from "@/lib/storymap/decision-class";
 import { runEntryEffect } from "@/lib/storymap/runner/entry-effects";
 import { getPendingEffects } from "@/lib/storymap/runner/pending-effects";
-import { CONDUCTOR_STOP_REASON, PUBLISH_BACKOFF_STOP_REASON, decideCascade } from "./cascade-decision";
+import { CONDUCTOR_STOP_REASON, DEPENDENCY_STOP_REASON, PUBLISH_BACKOFF_STOP_REASON, decideCascade, dependencyWait } from "./cascade-decision";
 import { tryGetPublishBreaker } from "@/lib/storymap/runner/publish-breaker";
 import { OWNER_DECISION_STOP_REASON } from "@/lib/storymap/owner-waiting";
 import { conductorEntryVerdict } from "@/lib/storymap/runner/conductor";
@@ -51,6 +51,8 @@ import type { BoardConfig, Card, StatusDef, TriggerId } from "@/lib/storymap/typ
 // a cada poucos segundos.
 const PUBLISH_BACKOFF_LOG_EVERY_MS = 10 * 60_000;
 const publishBackoffLoggedAt = new Map<string, number>();
+/** Última linha de «o card espera outro trabalho» por card — a mesma janela do disjuntor (sem martelar o log). */
+const dependencyLoggedAt = new Map<string, number>();
 
 /**
  * O motivo de o disjuntor da publicação segurar este card, ou null. FAIL-OPEN em TODA falha — inclusive a SÍNCRONA
@@ -270,7 +272,7 @@ export async function evaluateAutorunOnEntry(
   const gate = boardGateNow(boardId, config);
   if (gate.held && gate.source !== "pace") {
     console.log(
-      `[harness-autorun ${boardId}/${cardId}] autorun desabilitado para o board '${boardId}' (autorunDisabled) — nenhuma skill disparada (rode manualmente via run_skill)`,
+      `[harness-autorun ${boardId}/${cardId}] ${gate.source === "organize-only" ? gate.why : `autorun desabilitado para o board '${boardId}' (autorunDisabled)`} — nenhuma skill disparada (rode manualmente via run_skill)`,
     );
     return;
   }
@@ -372,7 +374,16 @@ export async function evaluateAutorunOnEntry(
         .then((ts) => !isAutonomousDelivery(ts, config))
         .catch(() => false)
     : false;
-  const decision = decideCascade(card, config, { suppressTrigger: opts.suppressTrigger, publishHold: () => backoffReason, ownerApproved });
+  // O card espera outro trabalho (depends-on aberto, bloqueio de dependência)? Lido só se a decisão for rodar a skill — a
+  // leitura do board é a única IO, e uma que falhe NÃO segura (fail-open: no pior caso, o comportamento anterior).
+  const boardCards = card.links?.some((l) => l.rel === "depends-on") ? await readCards(boardId).catch(() => null) : null;
+  const byId = new Map((boardCards ?? []).map((c) => [c.id, c] as const));
+  const decision = decideCascade(card, config, {
+    suppressTrigger: opts.suppressTrigger,
+    publishHold: () => backoffReason,
+    ownerApproved,
+    dependencyHold: (c) => dependencyWait(c, byId, config),
+  });
   if (decision.action === "run") {
     // Economy mode: skip autorun for heavy triggers (harness-refine, harness-fix) — user runs them manually.
     if (runnerConfig.economyMode && ECONOMY_BLOCKED_AUTORUN_TRIGGERS.includes(decision.trigger)) {
@@ -497,7 +508,19 @@ export async function evaluateAutorunOnEntry(
       console.log(`[harness-autorun ${key}] ${decision.reason}`);
     }
   } else if (decision.reason === "manual") {
-    console.log(`[harness-autorun ${boardId}/${cardId}] autorun:false em '${card.status}' — skip`);
+    // Card num passo TERMINAL (concluído, arquivado) não anda mais: dizer «skip» a cada reavaliação dele só enchia o log
+    // (centenas de linhas por dia). Fica no debug; o passo manual de verdade (um gate humano) segue no log.
+    const terminal = !!config.statuses.find((s) => s.id === card.status)?.terminal;
+    if (terminal) console.debug(`[harness-autorun ${boardId}/${cardId}] terminal '${card.status}' — nada a fazer`);
+    else console.log(`[harness-autorun ${boardId}/${cardId}] autorun:false em '${card.status}' — skip`);
+  } else if (decision.reason.startsWith(DEPENDENCY_STOP_REASON)) {
+    // O card espera outro trabalho: a skill não é disparada (nenhum run queimado). Uma linha por janela por card.
+    const key = `${boardId}/${cardId}`;
+    const last = dependencyLoggedAt.get(key) ?? 0;
+    if (Date.now() - last >= PUBLISH_BACKOFF_LOG_EVERY_MS) {
+      dependencyLoggedAt.set(key, Date.now());
+      console.log(`[harness-autorun ${key}] não disparou a skill — ${decision.reason}`);
+    }
   } else if (decision.reason.startsWith("gate:")) {
     console.log(`[harness-autorun ${boardId}/${cardId}] forward bloqueado — ${decision.reason}`);
   } else if (decision.reason.startsWith(OWNER_DECISION_STOP_REASON)) {

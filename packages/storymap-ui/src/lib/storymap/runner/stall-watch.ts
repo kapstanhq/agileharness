@@ -207,6 +207,13 @@ export interface StallWatchDeps {
   record(entry: SystemDecision): Promise<void>;
   /** a hora de um instante, como o dono a lê (ex.: «07h53»). */
   clock(ms: number): string;
+  /**
+   * O status ATUAL de um card de um board que esta passada NÃO varreu (pausado, desarmado ou ilegível): `null` quando o
+   * card sumiu. É o que solta a vigilância de um card que chegou ao fim (ou saiu do passo) enquanto o board estava
+   * parado — sem isso a linha escalada sobrevivia e o card concluído seguia contado como «parado». Ausente ⇒ as linhas
+   * desses boards ficam como estão (o comportamento antigo).
+   */
+  cardStatus?(board: string, cardId: string): Promise<string | null>;
   now?(): number;
   log?(line: string): void;
 }
@@ -383,8 +390,23 @@ export async function sweepStalledCards(deps: StallWatchDeps): Promise<StallRepo
       }
     }
 
-    // O card saiu do passo (ou sumiu): a linha é história. Linhas de um board que não foi lido agora ficam.
-    rows = rows.filter((r) => !boardsSeen.has(r.board) || inStep.has(r.key));
+    // O card saiu do passo (ou sumiu): a linha é história. Linhas de um board que não foi varrido agora ficam — salvo
+    // quando o card, lido direto, já não está no status da linha (chegou ao fim, mudou de passo ou sumiu).
+    const kept: StallRow[] = [];
+    for (const r of rows) {
+      if (boardsSeen.has(r.board)) {
+        if (inStep.has(r.key)) kept.push(r);
+        continue;
+      }
+      if (!deps.cardStatus) {
+        kept.push(r);
+        continue;
+      }
+      const status = await deps.cardStatus(r.board, r.cardId).catch(() => r.status); // leitura falhou ⇒ a linha fica
+      if (status === r.status) kept.push(r);
+      else log(`${r.board}/${r.cardId}: saiu de «${r.status}» (agora «${status ?? "—"}») com o board fora da varredura — vigilância solta`);
+    }
+    rows = kept;
     if (JSON.stringify(rows) !== before) await deps.ledger.persist(rows);
   } catch (err) {
     log(`a varredura falhou — ${err instanceof Error ? err.message : String(err)}`);

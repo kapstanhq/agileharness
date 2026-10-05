@@ -8,6 +8,7 @@ import {
   decideTriage,
   inferTriagePlacement,
   parseTriage,
+  refineAppliesTo,
   sanitizeIntakeText,
   triagePlacementGap,
   TRIAGE_CONFIDENCE_THRESHOLD,
@@ -290,5 +291,14 @@ describe("triagePlacementGap — o card da Triagem tem lugar para ser ACEITO?", 
   it("com o lugar declarado ⇒ nenhuma lacuna", () => {
     expect(triagePlacementGap(coerceCard("s", { type: "story", storyType: "technical", status: "triage", serves: "story-user" }, ""), cfg)).toBeNull();
     expect(triagePlacementGap(coerceCard("s", { type: "story", storyType: "user", status: "triage", parent: "step-1" }, ""), cfg)).toBeNull();
+  });
+});
+
+describe("refineAppliesTo — «refinar» só reabre story de usuário", () => {
+  it("user (ou sem tipo) ⇒ refinar; entrega técnica, chore, spike, bug ⇒ fluxo normal", () => {
+    expect(refineAppliesTo("user")).toBe(true);
+    expect(refineAppliesTo(undefined)).toBe(true);
+    expect(refineAppliesTo(null)).toBe(true);
+    for (const t of ["technical", "chore", "spike", "bug"]) expect(refineAppliesTo(t)).toBe(false);
   });
 });

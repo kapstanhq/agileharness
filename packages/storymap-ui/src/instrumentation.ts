@@ -607,6 +607,16 @@ async function registerImpl(): Promise<void> {
           ]);
           for (const b of await listBoards()) await reconcileBoardDeployFailures(b.id);
         },
+        // Card × histórico: o card cujo arquivo e cujo histórico discordam do status ganha um aviso que pede a decisão.
+        // Board «só organização»: o que ainda estava em voo quando o modo foi ligado é desligado (runs e condutores).
+        runOrganizeOnlySweep: async () => {
+          const { sweepOrganizeOnlyInFlight, defaultOrganizeOnlySweepDeps } = await import("@/lib/storymap/runner/organize-only-sweep");
+          await sweepOrganizeOnlyInFlight(await defaultOrganizeOnlySweepDeps());
+        },
+        runLedgerDivergence: async () => {
+          const { sweepLedgerDivergence, defaultLedgerDivergenceDeps } = await import("@/lib/storymap/runner/ledger-divergence");
+          await sweepLedgerDivergence(defaultLedgerDivergenceDeps());
+        },
         // story-ex9528 M2 — prune the soft-delete trash past its 7-day window, every board. Board-data
         // fs ops only (no git subprocess), so it never contends with the train. Best-effort by contract.
         runTrashGc: async () => {
@@ -875,7 +885,10 @@ async function registerImpl(): Promise<void> {
         const boards = await listBoards().catch(() => []);
         const open = await listPublishRequests().catch(() => []);
         for (const { id: board } of boards) {
-          const mode = releaseModeOf(await readBoardConfig(board).catch(() => null));
+          const boardCfg = await readBoardConfig(board).catch(() => null);
+          // Board SÓ DE ORGANIZAÇÃO (organize-only.ts): nada é publicado sozinho a partir dele.
+          if ((await import("@/lib/storymap/organize-only")).isOrganizeOnly(boardCfg)) continue;
+          const mode = releaseModeOf(boardCfg);
           if (mode !== "auto") continue; // o caso comum sai daqui sem tocar git
           const frontier = await frontierOf(board, defaultExec).catch(() => null);
           if (!frontier?.stageSha) continue;
@@ -930,6 +943,9 @@ async function registerImpl(): Promise<void> {
         // código ESTÁ em main (promovido agora ou já estava) — é a única coisa que autoriza `published`.
         // `concurrent-work` é adiamento, não defeito: volta para `waiting` e o próximo tick tenta sozinho.
         publish: async (board, excludeSessionId, publishOpts) => {
+          // Board SÓ DE ORGANIZAÇÃO (organize-only.ts): um pedido que já estava na fila não promove nem publica.
+          const organize = await import("@/lib/storymap/organize-only");
+          if (organize.organizeOnlyNow(board)) return { landed: false, deferred: false, reason: `o board «${board}» é ${organize.ORGANIZE_ONLY_WHY.replace(/^board /, "")}: nada é publicado a partir dele` };
           // excludeSessionId = a sessão que pediu (o dono do trabalho staged). A sonda de concorrência da
           // promoção tem de ignorá-la — o trabalho dela É o que vai ao ar —, senão o fluxo documentado
           // (submit → publish_when_idle → discard) trava: o promote adia por `concurrent-work` a cada tick

@@ -16,6 +16,7 @@
 // The decision (decideRecovery) is PURE — like cascade-decision.ts. The orchestrator takes
 // all side effects as injected deps so it is unit-testable without fs / spawn.
 
+import { isOrganizeOnly } from "@/lib/storymap/organize-only-core";
 import { spawn } from "node:child_process";
 import { promises as fsp } from "node:fs";
 import { findRepoRoot } from "@/lib/storymap/paths";
@@ -53,6 +54,9 @@ export function findResumable(entries: JournalEntry[]): JournalEntry[] {
 /** O motivo do `drop` de um run interrompido cujo card está fora do que o board pode começar (escopo de tipos). */
 export const RECOVERY_SCOPE_DROP_REASON = "tipo-nao-admitido";
 
+/** O motivo do `drop` quando o board é só de organização (organize-only.ts). */
+export const RECOVERY_ORGANIZE_ONLY_DROP_REASON = "organize-only";
+
 /**
  * Decide what to do with one interrupted run given the card's CURRENT disk state.
  * PURE — assumes the master switch was already checked by the caller.
@@ -74,6 +78,8 @@ export function decideRecovery(
   // exempts manual runs from the dedupe/rate-limit; recovery must honor the same intent.
   if (entry.origin === "manual") return { action: "drop", reason: "manual-oneshot" };
   if (!card) return { action: "drop", reason: "card-removed" };
+  // Board SÓ DE ORGANIZAÇÃO (organize-only.ts): nada renasce sozinho nele.
+  if (isOrganizeOnly(config)) return { action: "drop", reason: RECOVERY_ORGANIZE_ONLY_DROP_REASON };
   const decision = decideCascade(card, config);
   if (decision.action === "run" && decision.trigger === entry.trigger) {
     if (gate && entry.origin !== "conflict-redrive" && !gateAdmitsCard(gate, card, "column").admit) {

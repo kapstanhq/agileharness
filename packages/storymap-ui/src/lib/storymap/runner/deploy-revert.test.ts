@@ -78,7 +78,9 @@ describe("deploy-revert — redeploy revert transform (P0/story-ex0017: deploy f
 
   it("phase `needs-human` sem nada legível no log: ainda honesto — a decisão fica com o dono e aponta o log em vez de inventar regra", () => {
     const f = buildDeployFailureFinding({ pkg: "acme", exitCode: 3, phase: "needs-human" }, "2026-09-28");
-    expect(f.title).toBe("Precisa de você: a publicação espera a sua decisão");
+    // nada legível = o sistema NÃO classificou (fail-closed): o título não pode tranquilizar com «ação manual»
+    expect(f.title).toBe("Precisa de você: o sistema não conseguiu classificar o que segurou a publicação — confira o que sobe antes de liberar");
+    expect(f.title).not.toMatch(/não é decisão de negócio/);
     expect(f.detail).toContain("mcp-deploy-acme.log");
     expect(f.detail).toContain("por segurança");
     expect(f.suggestion).toBeUndefined();

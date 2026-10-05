@@ -178,6 +178,7 @@ const TOOL_ANNOTATIONS: Record<string, ToolHints> = {
   // execução aprovada: propor só grava um pedido no estado do serviço (nada roda antes do clique do dono); ler é leitura
   propose_locked_command: WRITE,
   locked_command_status: RO,
+  intake_stats: RO,
   resolve_merge: DESTRUCTIVE, // drena/aborta head pausado da merge train — abort apaga o branch run/<id>
   // --- board destructive ---
   // (story-ex9528 M2) delete_* seguem com o HINT `destructive` (é uma mutação

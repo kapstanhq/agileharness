@@ -3,7 +3,7 @@
 
 import { describe, it, expect } from "vitest";
 import type { CopilotActivityEntry } from "./activity";
-import { tierOf, groupActivity, summarizeEntry, diarySentence } from "./activity-view";
+import { tierOf, groupActivity, summarizeEntry, diarySentence, humanizeAgentAction } from "./activity-view";
 
 const entry = (over: Partial<CopilotActivityEntry> & Pick<CopilotActivityEntry, "id" | "kind" | "text">): CopilotActivityEntry => ({
   at: "2026-07-16T17:13:00.000Z",
@@ -107,7 +107,7 @@ describe("diarySentence", () => {
   });
 
   it("tira as crases das NOSSAS próprias entradas (o guard escreve `Executei \\`move_card\\``)", () => {
-    expect(diarySentence("Executei `move_card` sozinho (reversible).")).toBe("Executei move_card sozinho (reversible).");
+    expect(diarySentence("Executei `move_card` sozinho (reversible).")).toBe("Fiz sozinho: mover um card de coluna.");
   });
 
   it("costura fragmentos com '. ' só quando falta pontuação", () => {
@@ -173,5 +173,26 @@ describe("tierOf — promessa é ruído; desistência é a sua vez", () => {
   it("`woke` volta a significar SÓ o disparo real (a promessa saiu de cima dele)", () => {
     expect(tierOf("woke")).toBe("idle"); // o ciclo em si é ruído; o que ele FEZ vem no finished (work)
     expect(tierOf("finished")).toBe("work");
+  });
+});
+
+// O diário fala com o dono: nada de nome de ferramenta nem id de card cru.
+describe("humanizeAgentAction", () => {
+  it("troca a ferramenta e o tipo de risco por palavras, e o id do card por «um card»", () => {
+    expect(humanizeAgentAction("O condutor do card story-ex9712 executou `move_card` (write-board).")).toBe(
+      "O agente de um card moveu um card de coluna (mexe no board).",
+    );
+    expect(humanizeAgentAction("Executei `worktree_discard` sozinho (session).")).toBe("Fiz sozinho: encerrar uma cópia de trabalho (abre sessão).");
+    expect(humanizeAgentAction("Uma sessão de trabalho pediu `record_decision` (write-board) e eu adiei")).toBe(
+      "Uma sessão de trabalho pediu para registrar uma decisão (mexe no board) e eu adiei",
+    );
+    expect(humanizeAgentAction("executou `ferramenta_nova` (write-board)")).toBe("fez uma ação no board (mexe no board)");
+    expect(humanizeAgentAction("Texto sem jargão.")).toBe("Texto sem jargão.");
+  });
+
+  it("diarySentence já devolve a frase humanizada", () => {
+    expect(diarySentence("O condutor do card story-ex9712 executou `update_card` (write-board).")).toBe(
+      "O agente de um card atualizou um card (mexe no board).",
+    );
   });
 });

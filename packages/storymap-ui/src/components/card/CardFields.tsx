@@ -30,7 +30,7 @@ import { slugify } from "@/lib/storymap/id";
 import { formatRiceScore, riceScore } from "@/lib/storymap/rice";
 import { isDeliveryStory } from "@/lib/storymap/unplaced";
 import { optInsEditable } from "@/lib/storymap/card-opt-ins";
-import { KANO_CATEGORIES, FUNNEL_STAGES, STORY_TYPE_DEFS, STORY_TYPE_BY_ID } from "@/lib/storymap/frameworks";
+import { KANO_CATEGORIES, FUNNEL_STAGES, STORY_TYPE_DEFS, STORY_TYPE_BY_ID, narrativeSentence } from "@/lib/storymap/frameworks";
 import type { KanoCategory, FunnelStage, StoryType } from "@/lib/storymap/frameworks";
 import { savePersonaAction, saveSystemAction } from "@/app/actions";
 import type { BoardConfig, Card, CardType, NamedColor, Rice, StoryNarrative, Task } from "@/lib/storymap/types";
@@ -782,7 +782,7 @@ function NarrativeFields({
   const patch = (key: keyof StoryNarrative, raw: string) =>
     onChange({ ...narrative, [key]: raw.trim() === "" ? null : raw });
   const complete = Boolean(narrative.role && narrative.want && narrative.soThat);
-  const preview = `${c.role} ${narrative.role ?? "…"}, ${c.want} ${narrative.want ?? "…"}, ${c.soThat} ${narrative.soThat ?? "…"}.`;
+  const preview = narrativeSentence(c, { role: narrative.role ?? "…", want: narrative.want ?? "…", soThat: narrative.soThat ?? "…" }) ?? "";
 
   return (
     <div>

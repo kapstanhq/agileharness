@@ -2177,6 +2177,8 @@ async function resolveBoardConfigFromOwnRaw(
     // config always read undefined, so the kill-switch was DEAD even with the flag set on disk.
     // Conditional spread (not `?? undefined`) so boards without the flag carry no ghost key.
     ...((parsed as any).autorunDisabled === true ? { autorunDisabled: true } : {}),
+    // Board só de organização (organize-only.ts) — mesma regra do kill-switch: local, sem chave fantasma.
+    ...((parsed as any).organizeOnly === true ? { organizeOnly: true } : {}),
   };
   // B1 — the Zod contract as a LIVE drift alarm: the coerced config (incl. the _base merge) must
   // satisfy BoardConfigSchema, proven for the real boards by contracts.test. If a bad _base or a
@@ -2192,11 +2194,23 @@ async function resolveBoardConfigFromOwnRaw(
   // O mesmo alarme para o condutor: um `enabled: true` que nunca dispara (fromStatus inexistente/terminal) é
   // declarado, aceito pelo contrato e INERTE — o pior modo de falha. Grita; nunca apaga o board por isso.
   const conductorProblem = conductorConfigProblem(config);
-  if (conductorProblem) console.error(`[storymap] board "${boardId}": ${conductorProblem}`);
+  if (conductorProblem) alarmOnce(boardConfigPath(boardId), `[storymap] board "${boardId}": ${conductorProblem}`);
   // E para a vista em raias: status sem raia (ou em duas) é mapa torto — o card cai em "outros" e o dono não
   // sabe por quê. O mesmo texto aparece na própria vista (KanbanBoard), legível para quem declarou.
-  for (const problem of laneViewProblems(config)) console.error(`[storymap] board "${boardId}" view.lanes: ${problem}`);
+  for (const problem of laneViewProblems(config)) alarmOnce(boardConfigPath(boardId), `[storymap] board "${boardId}" view.lanes: ${problem}`);
   return config;
+}
+
+/** Os alarmes de config já ditos neste processo. A config é relida a CADA requisição: sem isto o mesmo aviso saía
+ *  dezenas de vezes por minuto no log (e no console do navegador em dev), afogando o resto. Config nova = texto novo =
+ *  dito de novo. */
+const ALARMS_SAID = new Set<string>();
+function alarmOnce(where: string, message: string): void {
+  // a chave inclui o ARQUIVO (outro alvo, outro board.yaml ⇒ dito de novo), não só o texto
+  const key = `${where}\u0000${message}`;
+  if (ALARMS_SAID.has(key)) return;
+  ALARMS_SAID.add(key);
+  console.error(message);
 }
 
 /**
@@ -2358,6 +2372,8 @@ export async function deriveBoardConfigForPersist(
   // story-ex0077 kill-switch — board-local operational flag (never inherited from _base): persist when
   // set, else ANY board.yaml save (vocab/canvas/strategy) silently DELETED the line from disk (D15).
   if (config.autorunDisabled) out.autorunDisabled = true;
+  // Só organização — mesma regra: persistir, senão qualquer gravação do board.yaml apagaria a linha.
+  if (config.organizeOnly) out.organizeOnly = true;
   // Strategy bench artifacts (board-local; _base has none) — persist when present so a governance
   // approve / direct edit actually lands on disk and round-trips through readBoardConfig.
   if (config.positioning != null) out.positioning = config.positioning;

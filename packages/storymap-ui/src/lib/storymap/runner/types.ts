@@ -341,7 +341,7 @@ export interface EnqueueResult {
   /** when blocked, the "board/cardId" of each predecessor still keeping it waiting. */
   blockedBy?: string[];
   /** when the underlying runSkill was REFUSED (not blocked, not enqueued), why. */
-  reason?: "in-flight" | "cooldown" | "rate-limited" | "bad-id";
+  reason?: "in-flight" | "cooldown" | "rate-limited" | "bad-id" | "organize-only";
 }
 
 /** The aggregate answer for `engine`-backed `enqueue_batch` (one EnqueueResult per card). */

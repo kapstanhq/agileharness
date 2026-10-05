@@ -427,6 +427,8 @@
     ".ah-composer{width:min(420px,100%);max-height:min(86vh,720px);overflow:auto;box-sizing:border-box;display:flex;flex-direction:column;background:var(--ah-surface);border:1px solid var(--ah-line);border-radius:14px;padding:14px;color:var(--ah-fg);font:13px/1.45 var(--ah-font);box-shadow:0 24px 60px rgba(10,10,12,.34);animation:ah-rise .14s ease-out}",
     // Narrow screens: a bottom sheet. Centring fights the on-screen keyboard, which shrinks the
     // viewport from the bottom and would push a centred card halfway under it.
+    // No celular a pílula fica só com o ícone — com o rótulo ela cobria o conteúdo do canto (cards do Kanban, texto).
+    "@media (max-width:640px){.ah-bar .ah-lb{display:none}}",
     "@media (max-width:520px){.ah-modal{align-items:flex-end;padding:0}.ah-composer{width:100%;max-height:88vh;border-radius:16px 16px 0 0;border-bottom:0;padding-bottom:18px}}",
     // Flex items SHRINK by default: past the max-height the textarea and the thumbnail would be
     // squashed to slivers instead of the card scrolling. `flex:none` is what turns the overflow into
@@ -1201,7 +1203,11 @@
     else if (AH_ICON_NODE) ic.appendChild(document.importNode(AH_ICON_NODE, true));
     else ic.innerHTML = AH_ICON_DEFAULT;
     var lb = document.createElement("span");
+    lb.className = "ah-lb";
     lb.textContent = (picking ? "Parar" : AH_LABEL) + (pins.length ? " (" + pins.length + ")" : "");
+    // no celular só o ícone aparece (o rótulo vira nome acessível): a pílula com texto cobria os cards do Kanban
+    toggle.setAttribute("aria-label", lb.textContent);
+    toggle.setAttribute("title", lb.textContent);
     toggle.appendChild(ic); toggle.appendChild(lb);
   }
 

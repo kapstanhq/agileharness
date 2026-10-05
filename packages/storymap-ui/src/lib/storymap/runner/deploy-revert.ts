@@ -144,7 +144,7 @@ export function buildDeployFailureFinding(detail: DeployFailureDetail, today: st
     const from = detail.cause?.attributedCardIds?.length ? detail.cause.attributedCardIds.join(", ") : null;
     return {
       ...base,
-      title: ownerTitleOf(detail.ownerClass),
+      title: ownerTitleOf(detail.ownerClass, !!detail.cause?.declaredManual),
       detail:
         `O deploy${detail.pkg ? ` de ${detail.pkg}` : ""} parou ANTES de publicar (exit ${exit}): nada foi ` +
         `publicado e produção segue exatamente como estava. ` +

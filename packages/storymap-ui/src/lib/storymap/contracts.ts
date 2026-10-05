@@ -818,6 +818,8 @@ export const BoardConfigSchema = z.object({
   // skill on this board (move/accept/cascade) — a human still runs skills manually. Used by `storymap`
   // (the dogfood board). Absent/false = normal autorun.
   autorunDisabled: z.boolean().optional(),
+  // Board só de organização — nada automático age nem chega sozinho (organize-only.ts).
+  organizeOnly: z.boolean().optional(),
   // WS8 — orchestrator/copiloto policy (mode + riskMatrix). Additive/optional (absent ⇒ mode off).
   orchestrator: z
     .object({

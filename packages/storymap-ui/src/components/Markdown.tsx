@@ -20,6 +20,7 @@
 // A third scale is almost always the wrong move: stretch one of these two, and put the numbers in
 // typography.ts — never inline at a call site.
 
+import { Children, isValidElement, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import dynamic from "next/dynamic";
@@ -168,9 +169,18 @@ function buildComponents(s: MarkdownScale): Components {
       </ul>
     ),
     ol: ({ children }) => <ol className={cn(s.list, "list-decimal pl-5", s.listMarker)}>{children}</ol>,
-    li: ({ children, className }) => (
-      <li className={cn(s.li, isTaskItem(className) && "flex items-start gap-2.5")}>{children}</li>
-    ),
+    li: ({ children, className }) => {
+      if (!isTaskItem(className)) return <li className={s.li}>{children}</li>;
+      // Item de tarefa: o <li> é flex (caixinha + texto). O texto PRECISA ir num só filho — senão cada pedaço
+      // (texto, `código`, negrito) vira um item flex e a frase quebra uma palavra por linha.
+      const { box, text } = splitTaskChildren(children);
+      return (
+        <li className={cn(s.li, "flex items-start gap-2.5")}>
+          {box}
+          <span className="min-w-0 flex-1">{text}</span>
+        </li>
+      );
+    },
     // GFM task-list checkbox (read-only — reflects qaPassed/done state baked into the markdown).
     input: ({ checked, type }) =>
       type === "checkbox" ? (
@@ -230,6 +240,19 @@ function isTaskList(className?: string): boolean {
 }
 function isTaskItem(className?: string): boolean {
   return !!className && className.includes("task-list-item");
+}
+
+/** Separa a caixinha GFM (o `<input type="checkbox">`) do resto do item de tarefa. PURA. */
+export function splitTaskChildren(children: ReactNode): { box: ReactNode[]; text: ReactNode[] } {
+  const box: ReactNode[] = [];
+  const text: ReactNode[] = [];
+  for (const child of Children.toArray(children)) {
+    if (isValidElement<{ type?: unknown }>(child) && child.props.type === "checkbox") box.push(child);
+    else text.push(child);
+  }
+  // o espaço que o GFM deixa entre a caixinha e o texto vira recuo à toa no início da frase
+  if (typeof text[0] === "string") text[0] = text[0].replace(/^\s+/, "");
+  return { box, text };
 }
 
 /** Estável por módulo: um array novo a cada render faria o react-markdown reprocessar o pipeline à toa. */

@@ -189,7 +189,10 @@ export function DocToolbar({
         // visível nas TRÊS views. O aviso de validação só tornou o defeito ÓBVIO porque tem borda e
         // fundo — ele encostava na barra. A folga é da BARRA, não de cada view: assim toda superfície
         // (e toda view futura) nasce respirando, em vez de cada uma lembrar de reservar o espaço.
-        inline ? "mb-6 justify-end" : "shrink-0",
+        // Fora do inline: no celular o cluster QUEBRA dentro da largura (era `shrink-0` sempre — não encolhia, então o
+        // `flex-wrap` nunca agia e a barra Editar · Mover para · Documento empurrava a página para o lado, 441px num
+        // viewport de 390). Do `sm` para cima ele volta a não encolher.
+        inline ? "mb-6 justify-end" : "min-w-0 max-w-full sm:shrink-0",
       )}
     >
         {/* EDITAR é a ação primária da tela e mora AQUI, visível (correção posterior).

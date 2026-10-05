@@ -346,7 +346,7 @@ function EntregaBody({
           )}
         </Lane>
 
-        <Lane label="No ar" count={data.publishTotals.published} icon={Rocket} className="order-4 xl:order-none">
+        <Lane label="Publicações no ar" count={data.publishTotals.published} icon={Rocket} className="order-4 xl:order-none">
           {published.length === 0 && <LaneEmpty>Nenhuma publicação recente pela fila.</LaneEmpty>}
           {published.slice(0, LIVE_SHOWN).map((r) => (
             <PublishedRow key={r.id} req={r} now={now} />

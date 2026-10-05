@@ -8,6 +8,7 @@
 //
 // SERVER-ONLY (real git + deploy). Each effect is best-effort and never throws to its caller.
 
+import { ORGANIZE_ONLY_WHY, organizeOnlyNow } from "@/lib/storymap/organize-only";
 import path from "node:path";
 import os from "node:os";
 import { promises as fsp } from "node:fs";
@@ -788,6 +789,11 @@ export async function firePromoteAndDeploy(
   cardId?: string,
   opts?: { excludeSessionId?: string; overrideEmbargo?: boolean },
 ): Promise<ReleaseOutcome> {
+  // Board SÓ DE ORGANIZAÇÃO (organize-only.ts): o ponto único de promover+publicar não age a partir dele (nem por um
+  // pedido já na fila, nem por uma tool chamada direto).
+  if (organizeOnlyNow(boardId)) {
+    return { promoted: false, deployable: false, revert: false, expectWork: false, changedFiles: [], outcome: "nothing-staged", reason: ORGANIZE_ONLY_WHY };
+  }
   // Card sem código: nem promoção nem deploy do pacote — assenta por evidência. A promoção do board é dos cards que
   // trazem código; rodá-la na entrada deste o exporia a uma recusa (de promoção ou de deploy) que não é dele.
   if (cardId && (await evidenceRoute(boardId, cardId)) === "no-code") {
@@ -845,5 +851,11 @@ export const ENTRY_EFFECTS: Record<EntryEffect, (boardId: string, cardId?: strin
  * run resolves it. The effect's own error still propagates (the boot recovery keeps a thrown effect pending).
  */
 export async function runEntryEffect(effect: EntryEffect, boardId: string, cardId?: string): Promise<void> {
+  // Board SÓ DE ORGANIZAÇÃO (organize-only.ts): mover um card para um passo com efeito de entrada (promover, publicar)
+  // não dispara nada — nem por agente nem pela tela. O ponto único por onde todo onEnter passa.
+  if (organizeOnlyNow(boardId)) {
+    console.log(`[entry-effect ${effect} ${boardId}${cardId ? `/${cardId}` : ""}] ${ORGANIZE_ONLY_WHY} — efeito de entrada não disparado`);
+    return;
+  }
   await runReportedEntryEffect(effect, boardId, cardId, () => ENTRY_EFFECTS[effect](boardId, cardId));
 }

@@ -4,13 +4,15 @@
 
 import { listBoards, readBoardConfig } from "@/lib/storymap/repo";
 import { boardForFiles, type BoardForFiles, type BoardFootprint } from "@/lib/storymap/card-routing";
+import { isOrganizeOnly } from "@/lib/storymap/organize-only-core";
 
-/** Os boards do alvo com o que cada um declara possuir. Tolerante: um board ilegível fica de fora. */
+/** Os boards do alvo com o que cada um declara possuir. Tolerante: um board ilegível fica de fora; um só de organização também. */
 export async function boardFootprints(): Promise<BoardFootprint[]> {
   const out: BoardFootprint[] = [];
   for (const b of await listBoards().catch(() => [])) {
     const cfg = await readBoardConfig(b.id).catch(() => null);
-    if (cfg) out.push({ id: cfg.id ?? b.id, name: cfg.name, package: cfg.package, sharedPackages: cfg.sharedPackages, ownsPaths: cfg.ownsPaths });
+    // Board SÓ DE ORGANIZAÇÃO (organize-only.ts) não recebe conserto roteado: nada chega nele sozinho.
+    if (cfg && !isOrganizeOnly(cfg)) out.push({ id: cfg.id ?? b.id, name: cfg.name, package: cfg.package, sharedPackages: cfg.sharedPackages, ownsPaths: cfg.ownsPaths });
   }
   return out;
 }

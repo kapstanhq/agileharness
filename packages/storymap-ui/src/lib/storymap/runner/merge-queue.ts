@@ -52,6 +52,7 @@ import { describeFrontmatterError, frontmatterLimits, parseFrontmatter } from "@
 import { coerceCard, readBoardConfig, readCards } from "@/lib/storymap/repo";
 import { terminalStatusIds } from "@/lib/storymap/views";
 import { mergeCardThreeWay } from "@/lib/storymap/card-merge";
+import { BOARD_YAML_RE, restoreGovernanceKeys } from "./governance-keys";
 import { updateCardOnDisk, withCardLock, writeCardToPath } from "@/lib/storymap/write";
 import {
   commitBoardDataScoped,
@@ -4098,6 +4099,13 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
           const carved = data.filter((f) => diverged.has(f) || liveDirty.has(f));
           const lineData = data.filter((f) => !carved.includes(f));
 
+          // As CHAVES DE GOVERNANÇA do board.yaml (governance-keys.ts) não vêm de um worktree: guarda o texto VIVO de cada
+          // board.yaml que este run mexe, para devolver a chave ao valor de main depois do patch.
+          const govLive = new Map<string, string | null>();
+          for (const f of lineData.filter((p) => BOARD_YAML_RE.test(p))) {
+            govLive.set(f, await fsp.readFile(path.join(cfg.repoRoot, f), "utf8").catch(() => null));
+          }
+
           // 1) Line-apply everything that is NOT a carved card. On conflict the markers stay on disk only until
           //    `undo` puts back the bytes this attempt wrote (and NOTHING else) before we park.
           let lineApplied = false;
@@ -4120,6 +4128,16 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
             }
             if (applied === "applied") lineApplied = true; // "already" ⇒ a prior attempt landed it (no new stage)
             await noteWrote(lineData);
+            for (const [f, liveText] of govLive) {
+              const file = path.join(cfg.repoRoot, f);
+              const landed = await fsp.readFile(file, "utf8").catch(() => null);
+              if (landed === null) continue;
+              const fixed = restoreGovernanceKeys(landed, liveText);
+              if (fixed === null) continue;
+              await fsp.writeFile(file, fixed);
+              await git(`add -- ${quote(f)}`);
+              console.warn(`[harness-merge-queue] split: ${f} — a chave de governança «organizeOnly» do run ${entry.runId} não foi aceita (só o operador a muda); o valor de main foi mantido`);
+            }
           }
 
           // 2) Field-level 3-way merge each carved card into main (story-ex0120): pipeline-advance fields from

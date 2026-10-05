@@ -56,6 +56,7 @@ import {
   type RiskClass,
   type RiskDisposition,
   type RunnerColumnDefaults,
+  type IntakeSettings,
   type RunnerSettings,
   type StatusDef,
   type TriggerId,
@@ -448,6 +449,7 @@ export function coerceRunnerSettings(raw: unknown): RunnerSettings {
   const dataUnits = mg.dataUnits && typeof mg.dataUnits === "object" ? coerceGateUnitMap(mg.dataUnits, "mergeGate.dataUnits") : {};
   const surfaceMaxBudgetUSD = coerceSurfaceBudgets(a.surfaceMaxBudgetUSD);
   const notifications = coerceNotificationSettings(r.notifications);
+  const intake = coerceIntakeSettings(r.intake);
   // Coagidos UMA vez cada (o aviso de descarte sai uma vez por leitura do arquivo, não duas).
   const target = coerceTargetProfile(r.target);
   const deploy = coerceDeploySettings(r.deploy);
@@ -635,6 +637,38 @@ export function coerceRunnerSettings(raw: unknown): RunnerSettings {
     // A política de push (notifications/push-policy): só quando DECLARADA — ausente, quem lê aplica o padrão (o
     // crítico). Coerção explícita: um fato desconhecido na lista é descartado com aviso, nunca aceito às cegas.
     ...(notifications ? { notifications } : {}),
+    // A verificação de entrada de card: só quando DECLARADA — ausente, quem lê aplica os padrões (intakeSettingsOf).
+    ...(intake ? { intake } : {}),
+  };
+}
+
+/** Os padrões da verificação de entrada de card (card-intake.ts): ligada; o modelo pequeno só na dúvida, com tetos baixos. */
+export const DEFAULT_INTAKE_SETTINGS: Readonly<IntakeSettings> = {
+  enabled: true,
+  similarity: 0.75,
+  llm: { enabled: true, maxUsdPerCall: 0.05, maxCallsPerHour: 20, maxUsdPerHour: 0.5 },
+};
+
+/**
+ * `intake` do settings → o objeto completo, ou undefined quando não declarado. Campo a campo, sem spread: lixo cai no
+ * padrão daquele campo (um teto nunca some por erro de digitação). Exportada para o teste.
+ */
+export function coerceIntakeSettings(raw: unknown): IntakeSettings | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  const l = (o.llm && typeof o.llm === "object" && !Array.isArray(o.llm) ? o.llm : {}) as Record<string, unknown>;
+  const d = DEFAULT_INTAKE_SETTINGS;
+  const frac = (v: unknown, dflt: number) => (typeof v === "number" && v > 0 && v <= 1 ? v : dflt);
+  const pos = (v: unknown, dflt: number) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : dflt);
+  return {
+    enabled: typeof o.enabled === "boolean" ? o.enabled : d.enabled,
+    similarity: frac(o.similarity, d.similarity),
+    llm: {
+      enabled: typeof l.enabled === "boolean" ? l.enabled : d.llm.enabled,
+      maxUsdPerCall: pos(l.maxUsdPerCall, d.llm.maxUsdPerCall),
+      maxCallsPerHour: Math.floor(pos(l.maxCallsPerHour, d.llm.maxCallsPerHour)),
+      maxUsdPerHour: pos(l.maxUsdPerHour, d.llm.maxUsdPerHour),
+    },
   };
 }
 

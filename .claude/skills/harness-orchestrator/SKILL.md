@@ -398,6 +398,9 @@ Quando o harness defere o schema, carregue com `tool_search "select:<nome>"` e u
 **Escolha a superfície de criação certa:** plano/brain-dump (≥3 itens ou hierarquia
 activity/step/story) → `usm_capture` (NÃO faça N `create_card` → vira N stubs órfãos);
 item único isolado → `create_card`; bug/ideia em texto livre → `report_issue`.
+Todo card criado por agente passa pela **verificação de entrada**: passe `files` (os caminhos que o card toca)
+para ele cair no board certo; título em linguagem simples (sem id de card, caminho de arquivo ou código em crase);
+bug dizendo o que acontece e o esperado. A recusa diz o que corrigir — e, no board errado, qual é o certo: crie lá.
 
 ## Gotchas operacionais (lições caras)
 

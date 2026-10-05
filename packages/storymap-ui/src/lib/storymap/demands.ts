@@ -868,6 +868,10 @@ export interface DeployFailedCockpitItem extends CockpitItemBase {
   /** o deploy pediu uma PROVA (fase `needs-proof`): o sistema a produz e republica. Trabalho do
    *  sistema (Acompanhar), nunca do dono; o Jido não o pega (republicar antes da prova só repete o pedido). */
   needsProof?: true;
+  /** a causa da parada (`deployCause.causeKey`) — o que junta N cards parados pelo MESMO motivo num item só. */
+  causeKey?: string;
+  /** os OUTROS cards parados pela mesma causa (o item fala por todos). Esparso: ausente quando é um card só. */
+  alsoCards?: { cardId: string; cardTitle: string }[];
 }
 
 /** 🟢 F8 — um gate manual DO BOARD: a automação produziu trabalho e espera alguém empurrar ("Aprovar entrega",
@@ -1379,6 +1383,7 @@ export function cardCockpitItems(card: Card, config: BoardConfig, boardId: strin
       suggestion: deployFail.suggestion,
       ...(deployFail.deployPhase === "needs-human" ? { needsHuman: true as const } : {}),
       ...(deployFail.deployPhase === "needs-proof" ? { needsProof: true as const } : {}),
+      ...(deployFail.deployCause?.causeKey ? { causeKey: deployFail.deployCause.causeKey } : {}),
     });
   }
 
@@ -1696,7 +1701,38 @@ export function compareCockpitItems(a: Pick<CockpitItem, "lane" | "severity" | "
 
 /** Every cockpit item on a board's cards, sorted by {@link compareCockpitItems}. */
 export function boardCockpitItems(cards: Card[], config: BoardConfig, boardId: string, opts?: DemandTimingOpts): CockpitItem[] {
-  return cards.flatMap((c) => cardCockpitItems(c, config, boardId, opts)).sort(compareCockpitItems);
+  return groupDeployStops(cards.flatMap((c) => cardCockpitItems(c, config, boardId, opts)).sort(compareCockpitItems));
+}
+
+/**
+ * Uma parada de publicação que espera alguém (`needsHuman`) ou a prova do sistema (`needsProof`) é UM fato do pacote,
+ * não um por card: N cards do mesmo lote, parados pela mesma causa, viravam N avisos idênticos no Inbox. Aqui eles
+ * viram UM item — o primeiro na ordem do Inbox — que lista os outros em `alsoCards`. Uma falha de verdade (sem fase)
+ * segue por card (cada um pode ter a sua). PURA; preserva a ordem.
+ */
+export function groupDeployStops(items: CockpitItem[]): CockpitItem[] {
+  const firstByCause = new Map<string, DeployFailedCockpitItem>();
+  const out: CockpitItem[] = [];
+  for (const it of items) {
+    if (it.kind !== "deploy-failed" || !it.causeKey || !(it.needsHuman || it.needsProof)) {
+      out.push(it);
+      continue;
+    }
+    const key = `${it.boardId}::${it.causeKey}`;
+    const head = firstByCause.get(key);
+    if (!head) {
+      const copy: DeployFailedCockpitItem = { ...it };
+      firstByCause.set(key, copy);
+      out.push(copy);
+      continue;
+    }
+    head.alsoCards = [...(head.alsoCards ?? []), { cardId: it.cardId, cardTitle: it.cardTitle }];
+  }
+  for (const head of firstByCause.values()) {
+    const n = head.alsoCards?.length ?? 0;
+    if (n > 0) head.title = `${head.title} — este e mais ${n} card${n > 1 ? "s" : ""} do mesmo lote`;
+  }
+  return out;
 }
 
 // ── Stuck + Conflict items from external sources (pure projections, no IO) ───

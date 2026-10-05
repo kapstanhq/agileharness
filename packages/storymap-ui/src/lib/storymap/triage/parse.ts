@@ -169,6 +169,15 @@ export function decideTriage(report: TriageReport, opts: { threshold?: number } 
 // The lane's entry gate (hasBugReport / hasRefineBrief) is pre-satisfied at intake
 // (see reportIssueAction), so the accept is a clean status move. PURE.
 
+/**
+ * O modo «refinar» reabre uma STORY de usuário já entregue para melhorá-la no lugar (harness-refine diagnostica o que
+ * ela entregou). Uma entrega técnica/chore/spike nova com intenção de «melhoria» não tem o que reabrir: segue o fluxo
+ * normal de construção. PURA.
+ */
+export function refineAppliesTo(storyType: string | null | undefined): boolean {
+  return storyType == null || storyType === "user";
+}
+
 /** The lane status an accepted triage card routes into, by its persisted kind. The bug/refine lanes
  *  DERIVE from REOPEN_KINDS (single source). A plain feature enters the build flow at its FIRST step:
  *  a `user` story at `interview` (discovery FIRST — USM: o aceite nasce da conversa), every non-user

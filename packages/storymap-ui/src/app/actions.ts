@@ -10,6 +10,7 @@ import { anchoredTo, dependentsSample, discardGroupKey, discardGroupRefusal, dis
 import { deferTargets, deferralFor, liftTargets } from "@/lib/storymap/deferral";
 import { requireSession } from "@/lib/auth/action-guard";
 import { resolveActionCaller } from "@/lib/auth/action-guard";
+import { intakeGate, intakeModeFor } from "@/lib/storymap/runner/card-intake-deps";
 import { revalidatePath } from "next/cache";
 import { readBoardConfig, readCard, readCards } from "@/lib/storymap/repo";
 import { applyReopen, isReopenableStatus, isReopenDestination, REOPEN_KINDS, type ReopenDestination } from "@/lib/storymap/reopen";
@@ -52,6 +53,8 @@ import {
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { runEntryEffect } from "@/lib/storymap/runner/entry-effects";
+import { ORGANIZE_ONLY_WHY, isOrganizeOnly } from "@/lib/storymap/organize-only-core";
+import { organizeOnlyNow } from "@/lib/storymap/organize-only";
 import { readPublishStatus, type PublishStatus } from "@/lib/storymap/runner/publish-status";
 import { entryEffectStartedOutcome, movedOutcome, runStartedOutcome, type ActionOutcome } from "@/lib/storymap/action-outcome";
 import {
@@ -162,6 +165,7 @@ import {
   decideTriage,
   inferTriagePlacement,
   parseTriage,
+  refineAppliesTo,
   sanitizeIntakeText,
 } from "@/lib/storymap/triage/parse";
 import type { TriageOutcome, TriageReport } from "@/lib/storymap/triage/types";
@@ -541,9 +545,53 @@ export async function createCardAction(input: {
   /** WS6 (F5): creation provenance for this direct-write path (UI "+ Novo item", triage accept, …).
    *  Defaults to "ui"; a card that already carries `via` keeps it. */
   via?: CardProvenance;
+  /** os arquivos/caminhos que o card toca — a verificação de entrada (card-intake.ts) decide o board por eles. */
+  files?: string[];
+  /**
+   * Criação do PRÓPRIO SERVIÇO (consertos automáticos, auditorias, triagem, copiloto). Declarada por quem chama — não
+   * deduzida do contexto da requisição: um trabalho do serviço disparado por um request MCP herda o ator MCP pelo
+   * AsyncLocalStorage e seria julgado como «agente». Com ela: verificação de entrada em AVISO e recusa em board só de
+   * organização, qualquer que seja o chamador. Nenhuma tool MCP repassa este campo.
+   */
+  system?: boolean;
 }): Promise<Result<{ card: Card }>> {
   await requireSession("createCardAction");
   try {
+    const caller = await resolveActionCaller();
+    // Board SÓ DE ORGANIZAÇÃO (organize-only.ts): nada CHEGA sozinho — o próprio serviço (consertos automáticos,
+    // auditorias, triagem, saúde) não cria card nele. Agentes por MCP e o operador seguem criando (é organização).
+    if ((input.system || caller === "in-process") && organizeOnlyNow(input.boardId)) {
+      return { ok: false, error: `O board «${input.boardId}» é ${ORGANIZE_ONLY_WHY.replace(/^board /, "")}: nenhum card é criado nele automaticamente.` };
+    }
+    // A VERIFICAÇÃO DE ENTRADA (card-intake.ts), antes do lock — ver commitProposalAction. Um agente pelo MCP é barrado;
+    // o próprio serviço (consertos automáticos, auditorias) só é avisado; o operador não passa.
+    const intakeMode = input.system ? "advise" : intakeModeFor(caller);
+    let intakeFlag = false;
+    if (intakeMode && input.card.type === "story") {
+      const cfg = await readBoardConfig(input.boardId);
+      const quarantine = !input.card.status || !!cfg.statuses.find((st) => st.id === input.card.status)?.staging;
+      const gate = await intakeGate(
+        input.boardId,
+        [
+          {
+            key: "card",
+            candidate: {
+              title: input.card.title,
+              type: input.card.type,
+              storyType: input.card.storyType ?? "user",
+              body: input.card.body ?? "",
+              acceptance: input.card.acceptance ?? [],
+              files: input.files ?? [],
+              landsInQuarantine: quarantine,
+              bugReport: input.card.bugReport ?? null,
+            },
+          },
+        ],
+        intakeMode,
+      );
+      if (!gate.ok) return { ok: false, error: gate.error };
+      intakeFlag = gate.review.has("card");
+    }
     // createcard-toctou: serialize read-ids → mint → write per board so two concurrent creates of the
     // same deterministic slug id (e.g. a UI "+ Novo item" racing an MCP create_card of an identically-
     // titled backbone) can't both mint it and have the second writeCard overwrite the first.
@@ -551,7 +599,7 @@ export async function createCardAction(input: {
     const cards = await readCards(input.boardId);
     const existing = new Set(cards.map((c) => c.id));
     // WS6 (F5): stamp provenance (dedicated field) — the card's own `via` wins, else the caller's, else "ui".
-    let card: Card = { ...input.card, via: input.card.via ?? input.via ?? "ui" };
+    let card: Card = { ...input.card, via: input.card.via ?? input.via ?? "ui", ...(intakeFlag ? { needsHumanReview: true } : {}) };
     // The client id is collision-free against the snapshot it held, but re-check
     // against fresh disk state (a concurrent create/agent run may have taken it).
     if (existing.has(card.id)) {
@@ -818,13 +866,49 @@ export async function commitProposalAction(input: {
    * do MCP, depois do portão do teto) — nunca entrada de agente. Numa escrita só, uma falha não deixa um card sem marca.
    */
   stamp?: { labels?: string[]; links?: CardLink[]; reviewChain?: ReviewChainMark };
+  /** criação do PRÓPRIO SERVIÇO — ver createCardAction.system (aviso na entrada; recusa em board só de organização). */
+  system?: boolean;
 }): Promise<Result<{ created: Card[]; extended: ExtendedCardOutcome[]; warnings: CardCommitWarning[] }>> {
   await requireSession("commitProposalAction");
   try {
+    const caller = await resolveActionCaller();
+    // Board SÓ DE ORGANIZAÇÃO (organize-only.ts): nada CHEGA sozinho — a criação automática do serviço é recusada.
+    if ((input.system || caller === "in-process") && organizeOnlyNow(input.boardId)) {
+      return { ok: false, error: `O board «${input.boardId}» é ${ORGANIZE_ONLY_WHY.replace(/^board /, "")}: nenhum card é criado nele automaticamente.` };
+    }
     // WS6 (F5): the provenance stamped on every card this commit mints, and the structured degradation
     // warnings (a placement the proposal asked for that couldn't be honored) — surfaced, not dropped silent.
     const via: CardProvenance = input.via ?? "capture";
     const warnings: CardCommitWarning[] = [];
+    // A VERIFICAÇÃO DE ENTRADA (card-intake.ts): o card que um AGENTE cria passa por ela ANTES do lock de criação (a
+    // dúvida pode consultar um modelo; segurar o lock por isso travaria a criação do board inteiro). O operador e uma
+    // revisão humana desta mesma tela não passam. Recusa ⇒ nada é criado; aceite com aviso ⇒ nasce marcado para revisão.
+    let intakeReview = new Map<string, string>();
+    const intakeMode = input.humanReviewed ? null : input.system ? "advise" : intakeModeFor(caller);
+    if (intakeMode) {
+      const cfg = await readBoardConfig(input.boardId);
+      const quarantine = !!cfg.statuses.find((st) => st.id === entryStatusId(cfg))?.staging;
+      const gate = await intakeGate(
+        input.boardId,
+        input.items
+          .filter((it) => it.type === "story" && !it.targetCardId)
+          .map((it) => ({
+            key: it.tempId,
+            candidate: {
+              title: it.title,
+              type: it.type,
+              storyType: it.storyType ?? "user",
+              body: [it.body ?? "", it.rationale ?? ""].filter(Boolean).join("\n"),
+              acceptance: it.acceptance ?? [],
+              files: it.files ?? [],
+              landsInQuarantine: quarantine,
+            },
+          })),
+        intakeMode,
+      );
+      if (!gate.ok) return { ok: false, error: gate.error };
+      intakeReview = gate.review;
+    }
     // createcard-toctou: serialize the whole read→mint→write loop per board so concurrent captures
     // (a UI commit racing an MCP usm_capture) can't mint colliding deterministic ids and overwrite
     // each other's cards. Per-card edits/reads stay parallel.
@@ -1038,7 +1122,9 @@ export async function commitProposalAction(input: {
         //            flagged needsHumanReview rather than auto-routing into a lane.
         // Anything else (incl. an undefined storyType → "user") keeps the entry status (triage).
         const isStory = it.type === "story";
-        let resolvedStatus = entryStatus;
+        // Nó do MAPA (atividade, passo) não anda na esteira: nasce sem status, como os outros nós do mapa. Antes ele
+        // nascia na Triagem e ficava lá para sempre (nada aceita um nó do mapa).
+        let resolvedStatus: string | null = isStory ? entryStatus : null;
         let resolvedMode: CardMode | undefined;
         let resolvedBugReport: BugReport | undefined;
         let resolvedNeedsHumanReview: boolean | undefined;
@@ -1158,6 +1244,8 @@ export async function commitProposalAction(input: {
             ? { duplicateOf: duplicateSuspect, ...(input.humanReviewed ? {} : { needsHumanReview: true }) }
             : {}),
           ...(resolvedNeedsHumanReview ? { needsHumanReview: resolvedNeedsHumanReview } : {}),
+          // a verificação de entrada deixou entrar com aviso (board incerto / board errado num conserto do serviço)
+          ...(intakeReview.has(it.tempId) ? { needsHumanReview: true } : {}),
           ...(input.stamp && isStory
             ? {
                 ...(input.stamp.labels?.length ? { labels: [...new Set(input.stamp.labels)] } : {}),
@@ -1173,6 +1261,7 @@ export async function commitProposalAction(input: {
         existing.add(id);
         tempToReal.set(it.tempId, id);
         created.push(card);
+        if (intakeReview.has(it.tempId)) warnings.push({ tempId: it.tempId, code: "intake-review", detail: intakeReview.get(it.tempId)! });
       }
       pending = pending.filter((it) => !batch.includes(it));
     }
@@ -1504,7 +1593,7 @@ export async function reportIssueAction(input: {
               mode: "fix",
               bugReport: buildTriageBugReport(report),
             }
-          : report.intent === "melhoria"
+          : report.intent === "melhoria" && refineAppliesTo(report.storyType)
             ? { mode: "refine", refinement: buildTriageRefinement(report) }
             : {};
 
@@ -1804,7 +1893,8 @@ export async function updateCardAction(input: {
       // destination step declares onEnter; we're already inside the genuine-status-change guard. Best-effort —
       // never breaks the save (mirrors moveCardAction). The MCP update_card path can't reach here: it rejects
       // status changes upstream, so card.status === prevStatus there and this branch never runs.
-      const effect = entryEffect(config, card.status, prevStatus);
+      // Board só de organização (organize-only.ts): o move grava, mas nenhum efeito de entrada dispara.
+      const effect = isOrganizeOnly(config) ? null : entryEffect(config, card.status, prevStatus);
       const stepName = config.statuses.find((s) => s.id === card.status)?.name ?? card.status;
       outcome = movedOutcome(stepName);
       if (effect) {
@@ -1968,7 +2058,8 @@ export async function moveCardAction(input: {
     // B3: entrar num step com `onEnter` (release/deploy) DISPARA o efeito via ENTRY_EFFECTS — um eixo
     // único no lugar dos if-blocks clonados. entryEffect já aplica o dedup (mudança real de status); o
     // `moved.status === input.status` confirma que o move pegou. Best-effort (nunca quebra o move).
-    const effect = moved.status === input.status ? entryEffect(config, input.status, prevStatus) : null;
+    // Board só de organização (organize-only.ts): o move grava, mas nenhum efeito de entrada dispara.
+    const effect = moved.status === input.status && !isOrganizeOnly(config) ? entryEffect(config, input.status, prevStatus) : null;
     if (effect) {
       // B2 — reportado: uma recusa/erro do efeito vira o finding `entry-effect-failed` no card (o item do Inbox).
       void runEntryEffect(effect, input.boardId, input.cardId).catch((err) =>
@@ -2002,6 +2093,7 @@ export async function republishCardAction(input: { boardId: string; cardId: stri
     const refusal = republishRefusal(card, config);
     const def = config.statuses.find((s) => s.id === card.status);
     const effect = def?.onEnter;
+    if (isOrganizeOnly(config)) return { ok: false, error: `Este ${ORGANIZE_ONLY_WHY}: nada é promovido nem publicado a partir dele.` };
     if (refusal || !def || !effect) return { ok: false, error: refusal ?? "Este passo não dispara ação automática." };
     const gate = await gateScopedMove(input.boardId, input.cardId, def.id, config, "move_card", {
       board: input.boardId,
@@ -2636,6 +2728,15 @@ export async function updateBoardConfigAction(input: {
 }): Promise<Result> {
   await requireSession("updateBoardConfigAction");
   try {
+    // `organizeOnly` é chave de GOVERNANÇA: só a sessão do operador a liga ou desliga. Um agente por MCP pode salvar o
+    // resto da configuração, mas o valor do modo fica como está no disco.
+    const caller = await resolveActionCaller();
+    if (caller !== "operator-session") {
+      const current = await readBoardConfig(input.boardId).catch(() => null);
+      if (!!current?.organizeOnly !== !!input.config.organizeOnly) {
+        return { ok: false, error: "O modo «só organização» do board é uma decisão do operador: só muda pela tela, não por um agente." };
+      }
+    }
     await writeBoardConfig(input.boardId, input.config);
     revalidateBoard(input.boardId);
     return { ok: true };
@@ -3902,7 +4003,7 @@ export async function undoSystemDecisionAction(input: {
           return res.ok ? { ok: true as const } : { ok: false as const, error: res.error };
         },
         createCard: async (board, card) => {
-          const res = await createCardAction({ boardId: board, card, via: "triage" });
+          const res = await createCardAction({ boardId: board, card, via: "triage", system: true });
           return res.ok ? (res.data?.card ?? null) : null;
         },
         appendDecision: (e) => appendSystemDecision(e),

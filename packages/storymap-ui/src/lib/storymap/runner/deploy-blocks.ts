@@ -159,6 +159,10 @@ export function deployCausesOf(report: DeployExit3Report, ctx: { pkg: string; co
       ownerClass: g.verdict.ownerClass,
       decider: g.verdict.decider,
       causeKey,
+      // «ação manual» só quando o plano DECLAROU, em cada entrada com regra, que é do dono — nunca no fail-closed
+      ...(g.verdict.decider === "owner" && !g.verdict.ownerClass && systemActsOn(ctx.config) && g.entries.every((e) => !!e.rule && (e.owner || e.decider === "owner"))
+        ? { declaredManual: true }
+        : {}),
       ...head,
       ...drift,
     }),
@@ -823,8 +827,14 @@ export function resolveOpenDeployFailure(card: Card, why: string, at: string): C
 }
 
 /** O título do pedido ao DONO: a decisão que espera, na classe de negócio quando há — nunca «só você publica». PURA. */
-export function ownerTitleOf(ownerClassLabel: string | null | undefined): string {
-  return ownerClassLabel ? `Precisa de você — ${ownerClassLabel}: a publicação espera a sua decisão` : "Precisa de você: a publicação espera a sua decisão";
+export function ownerTitleOf(ownerClassLabel: string | null | undefined, declaredManual = false): string {
+  if (ownerClassLabel) return `Precisa de você — ${ownerClassLabel}: a publicação espera a sua decisão`;
+  // Sem classe, dois casos que não podem ter o mesmo texto: o plano DECLAROU uma parte manual (unidade sem classe
+  // automática, aceite manual) — aí é ação, não decisão de negócio; ou o sistema NÃO CONSEGUIU classificar (fail-closed:
+  // sem regra, sem tabela de classes, saída ilegível) — aí ele não sabe o que é, e o texto não pode tranquilizar.
+  return declaredManual
+    ? "Precisa de você: uma parte da publicação só uma pessoa faz (ação manual, não é decisão de negócio)"
+    : "Precisa de você: o sistema não conseguiu classificar o que segurou a publicação — confira o que sobe antes de liberar";
 }
 
 /**
@@ -937,7 +947,7 @@ export async function sweepDeployBlocks(board: string, deps: DeployBlocksSweepDe
       await deps.write(board, card.id, (c) => {
         const cur = openDeployFailure(c);
         if (!cur || cur.deployCause) return null; // mudou sob o lock: a próxima varredura decide
-        const ownerTitle = cause.decider === "owner" ? ownerTitleOf(cause.ownerClass ? ownerClassLabel(cause.ownerClass, config) : null) : undefined;
+        const ownerTitle = cause.decider === "owner" ? ownerTitleOf(cause.ownerClass ? ownerClassLabel(cause.ownerClass, config) : null, !!cause.declaredManual) : undefined;
         return { ...c, findings: c.findings.map((x) => (x === cur ? withBackfilledCause(cur, cause, (k) => deps.systemText(k, today), ownerTitle) : x)) };
       });
       await deps.breaker?.adoptCard(board, card.id, cause.causeKey, cause.phase).catch(() => {});

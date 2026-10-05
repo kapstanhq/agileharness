@@ -6,6 +6,9 @@ import type { BoardPaceView, PaceActor, PaceChange, ScopePreset, ScopeRecord } f
 import type { GovernorSnapshot } from "./runner/capacity-governor";
 import { FIXES_ONLY_TYPES, paceLabel, SCOPE_TYPE_ORDER, SCOPE_TYPE_WORDS, scopePresetOf, scopeTypesPhrase } from "./runner/board-pace";
 
+/** O selo do board só de organização (organize-only.ts) — a mesma frase no chip e no painel. */
+export const ORGANIZE_ONLY_SEAL = "Só organização — nada roda sozinho";
+
 // As palavras fixas dos tipos para o dono (a tabela mora em runner/board-pace.ts, que monta as frases do portão; aqui é a
 // porta das telas e das tools): Funcionalidade nova (user), Erro (bug), Trabalho técnico (technical), Manutenção (chore),
 // Investigação (spike).
@@ -25,6 +28,7 @@ export function paceStatusLine(
   now: number,
   timeZone?: string,
 ): string {
+  if (view.source === "organize-only") return `${ORGANIZE_ONLY_SEAL}: você e os agentes leem, escrevem e movem cards; nenhum passo automático dispara e nada chega sozinho.`;
   if (view.source === "disarmed") return "Este board está desligado: nenhum passo automático dispara.";
   if (view.source === "unreadable") return `Tudo parado: ${view.why}.`;
   // O escopo é outro eixo: vai depois do ritmo, na mesma linha («Ritmo normal · Só consertos e manutenção por você · …»). Com o
@@ -59,6 +63,7 @@ export const SCOPE_PRESETS: ReadonlyArray<{ id: Exclude<ScopePreset, "custom">; 
  * «Devagar · só consertos». Desarmado e ilegível não levam escopo (seguram tudo antes de olhar tipo). PURA.
  */
 export function paceChipValue(view: Pick<BoardPaceView, "level" | "source" | "scope">): string {
+  if (view.source === "organize-only") return "Só organização";
   if (view.source === "disarmed") return "Desligado";
   const suffix = view.source === "unreadable" ? null : scopeChipSuffix(view);
   return suffix ? `${paceLabel(view.level)} · ${suffix}` : paceLabel(view.level);

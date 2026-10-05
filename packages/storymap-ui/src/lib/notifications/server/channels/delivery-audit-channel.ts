@@ -13,6 +13,7 @@
 //
 // Não notifica: uma auditoria é trabalho do Inbox, não do bolso (notifications/push-policy).
 
+import { isOrganizeOnly } from "@/lib/storymap/organize-only-core";
 import type { AgileHarnessEvent, NotificationChannel } from "../../event";
 import { deliveredStatusIds } from "@/lib/storymap/delivered";
 import { deliveryAuditDecision, isAutonomousUltraDelivery, stampDeliveryAudit } from "@/lib/storymap/delivery-audit";
@@ -42,6 +43,8 @@ export async function auditDeliveryArrival(deps: DeliveryAuditDeps, event: Agile
     const config = await deps.readBoardConfig(event.boardId);
     // o caso comum sai daqui sem ler card nem ledger: a chegada não é a um status de entrega
     if (!config || !deliveredStatusIds(config).has(event.toStatus)) return false;
+    // Board SÓ DE ORGANIZAÇÃO (organize-only.ts): nenhuma auditoria automática carimba card dele.
+    if (isOrganizeOnly(config)) return false;
     const card = await deps.readCard(event.boardId, event.cardId);
     if (!card) return false;
     const transitions = await deps.readTransitions({ board: event.boardId, cardId: event.cardId }).catch(() => [] as Transition[]);

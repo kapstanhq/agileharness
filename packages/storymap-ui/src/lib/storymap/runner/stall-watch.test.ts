@@ -193,6 +193,39 @@ function world(opts: { card?: Card; mode?: "auto" | "manual"; facts?: StallFacts
   return { deps, state, sweep };
 }
 
+describe("sweepStalledCards — board fora da varredura (pausado/desarmado)", () => {
+  const row = (status: string, escalated = true): StallRow => ({
+    key: `b2/story-y@${status}`, board: "b2", cardId: "story-y", status, firstSeenAt: 1, attempts: 1, ...(escalated ? { escalatedAt: 2 } : {}),
+  });
+  it("a linha escalada sai quando o card, lido direto, chegou ao fim, mudou de passo ou sumiu", async () => {
+    for (const now of ["concluida", "revisao", null]) {
+      const { deps, state, sweep } = world();
+      state.rows = [row("deploy")];
+      deps.cardStatus = vi.fn(async () => now);
+      await sweep();
+      expect(state.rows.find((r) => r.board === "b2"), String(now)).toBeUndefined();
+    }
+  });
+  it("o card ainda no mesmo passo (ou a leitura falhou) mantém a linha; sem a porta, nada muda", async () => {
+    const still = world();
+    still.state.rows = [row("deploy")];
+    still.deps.cardStatus = vi.fn(async () => "deploy");
+    await still.sweep();
+    expect(still.state.rows.find((r) => r.board === "b2")).toBeTruthy();
+    const failing = world();
+    failing.state.rows = [row("deploy")];
+    failing.deps.cardStatus = vi.fn(async () => {
+      throw new Error("ilegível");
+    });
+    await failing.sweep();
+    expect(failing.state.rows.find((r) => r.board === "b2")).toBeTruthy();
+    const legacy = world();
+    legacy.state.rows = [row("deploy")];
+    await legacy.sweep();
+    expect(legacy.state.rows.find((r) => r.board === "b2")).toBeTruthy();
+  });
+});
+
 describe("sweepStalledCards — refaz uma vez, depois avisa", () => {
   it("o relógio é do vigia: a primeira vista só começa a contar; antes dos 15 minutos nada acontece", async () => {
     const { deps, sweep } = world();

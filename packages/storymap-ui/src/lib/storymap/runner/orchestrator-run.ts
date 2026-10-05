@@ -126,7 +126,7 @@ function businessRecoveryDeps(): BusinessRecoveryDeps {
     writeState: (board, s) => writeOrchestratorState(board, s),
     createCard: async (board, card) => {
       const { createCardAction } = await import("@/app/actions");
-      const r = await createCardAction({ boardId: board, card, via: "triage" });
+      const r = await createCardAction({ boardId: board, card, via: "triage", system: true });
       return r.ok ? (r.data?.card ?? null) : null;
     },
     // o registro do que o Jido decidiu em nome do dono, com o «Desfazer» (descartar o card de conserto).

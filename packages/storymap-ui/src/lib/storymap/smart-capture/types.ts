@@ -91,6 +91,8 @@ export interface ProposedItem {
    */
   tasks?: { id?: string; title: string }[];
   /** contexto/decisões/constraints/valor além do rationale de 1 linha */
+  /** os arquivos/caminhos que este item toca — a verificação de entrada (card-intake.ts) decide o board por eles. */
+  files?: string[];
   body?: string;
   /**
    * Dual-track OST: the idea (a user PAIN) this STORY addresses — an existing card id OR the

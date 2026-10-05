@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import { DEFAULT_HEALTH_SETTINGS, HEALTH_SIGNAL_IDS, type HealthLevel, type HealthRecord } from "./ah-health";
-import { ageWords, HEALTH_LEVEL_TEXT, HEALTH_TONE, healthPanelModel, lastReadingSummary } from "./health-view";
+import { ageWords, HEALTH_LEVEL_TEXT, HEALTH_TONE, healthPanelModel, humanDetail, lastReadingSummary, valueText } from "./health-view";
 
 const MIN = 60_000;
 const SETTINGS = { tickMinutes: DEFAULT_HEALTH_SETTINGS.tickMinutes, thresholds: DEFAULT_HEALTH_SETTINGS.thresholds };
@@ -144,5 +144,26 @@ describe("ageWords e lastReadingSummary", () => {
   it("o resumo da última leitura: quando, o pior nível e quem está vermelho/em atenção; sem leitura, null", () => {
     expect(lastReadingSummary(SAMPLE_READING)).toEqual({ at: SAMPLE_READING.at, worst: "red", red: ["S2", "S6", "S10"], amber: ["S1", "S3", "S4", "S7", "S9"] });
     expect(lastReadingSummary(null)).toBeNull();
+  });
+});
+
+// A linha de evidência e o valor em português de gente: vírgula decimal, singular no 1, «(s)» resolvido, códigos internos em
+// palavras. O ponto decimal, «1 cards», «(s)» sem resolver e códigos internos não chegam ao dono.
+describe("valueText e humanDetail — o número como o dono lê", () => {
+  it("vírgula decimal, singular no 1, % colado", () => {
+    expect(valueText(6.4, "h")).toBe("6,4 h");
+    expect(valueText(1, "cards")).toBe("1 card");
+    expect(valueText(2, "cards")).toBe("2 cards");
+    expect(valueText(1, "saltos")).toBe("1 salto");
+    expect(valueText(65, "%")).toBe("65%");
+    expect(valueText(null, "cards")).toBe("não medível");
+  });
+
+  it("detalhe: (s) pelo número, 1 no singular, códigos internos em palavras, decimal com vírgula", () => {
+    expect(humanDetail("1 vigiado(s), 2 escalado(s)")).toBe("1 vigiado, 2 escalados");
+    expect(humanDetail("6.4 h com fila; 1 cards esperam")).toBe("6,4 h com fila; 1 card esperam");
+    expect(humanDetail("2 pela mesma causa (needs-human|7)")).toBe("2 pela mesma causa (espera uma pessoa · 7)");
+    expect(humanDetail("bate com o último salto do ledger")).toBe("bate com o último salto do histórico de status");
+    expect(humanDetail("v1.2 do texto e 4.5 min de espera")).toBe("v1.2 do texto e 4,5 min de espera");
   });
 });

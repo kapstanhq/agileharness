@@ -7,6 +7,7 @@ import "./globals.css";
 import { PATHNAME_HEADER, shouldMountOverlay } from "@/lib/feedback/overlay-mount";
 import { resolvedOwnerTimeZone } from "@/lib/storymap/owner-timezone";
 import { OwnerTimeZoneProvider } from "@/components/OwnerTimeZone";
+import { StaleActionGuard } from "@/components/StaleActionGuard";
 // As telas de abertura do PWA no iOS. A lista de aparelhos vive em `lib/pwa-splash.ts` porque o
 // gerador dos PNG (`scripts/gen-splash.ts`) usa a MESMA — duas cópias divergiriam no primeiro
 // iPhone novo, e um `<link>` para um arquivo que ninguém gerou é uma tela preta na estreia.
@@ -166,6 +167,8 @@ const mountOverlay = selfBoard !== null && shouldMountOverlay((await headers()).
       <body className="font-sans antialiased text-fg">
         {/* toda hora da tela no fuso do DONO (governor.timezone), a mesma no SSR e na hidratação */}
         <OwnerTimeZoneProvider timeZone={resolvedOwnerTimeZone()}>{children}</OwnerTimeZoneProvider>
+        {/* a aba de antes de uma atualização: recarrega quando uma ação some, sem perder o que foi digitado */}
+        <StaleActionGuard />
         {mountOverlay && (
           <>
             <script dangerouslySetInnerHTML={{ __html: `window.__AH_FEEDBACK_CONFIG__=${JSON.stringify(ahFeedbackConfig(selfBoard!))};` }} />

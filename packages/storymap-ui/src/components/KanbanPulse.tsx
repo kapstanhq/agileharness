@@ -57,7 +57,9 @@ export function KanbanPulse({
           {working} {working === 1 ? "agente agindo" : "agentes agindo"}
         </span>
         <span className="text-fg-subtle">·</span>
-        <span className="tabular-nums">{pulse.queued} na fila</span>
+        <span className="tabular-nums" title="Cards esperando uma vaga de agente">
+          {pulse.queued} {pulse.queued === 1 ? "card" : "cards"} na fila
+        </span>
         {slots && (
           <>
             <span className="text-fg-subtle">·</span>

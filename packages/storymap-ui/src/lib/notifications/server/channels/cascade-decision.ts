@@ -56,6 +56,38 @@ export interface CascadeOpts {
    * dono aberta continua segurando. Ausente ⇒ não aprovado (a trava vale, como antes).
    */
   ownerApproved?: boolean;
+  /**
+   * O card ESPERA outro trabalho antes de a skill da coluna poder fazer algo (um `depends-on` para um card que ainda não
+   * terminou, ou um bloqueio de dependência declarado): o motivo, ou null. Consultado só quando a decisão seria RODAR a
+   * skill — disparar um agente num card que não pode avançar queima um run e deixa um aviso de «run morreu» que não diz
+   * nada novo. Ausente ⇒ sem espera (testes, callers que só perguntam «para onde iria»).
+   */
+  dependencyHold?: (card: Card) => string | null;
+}
+
+/** O prefixo do motivo de parada «o card espera outro trabalho». */
+export const DEPENDENCY_STOP_REASON = "waiting-dependency";
+
+/** Id dos findings que declaram um bloqueio de DEPENDÊNCIA (o card espera outra coisa): `blocked-by-<o que>`. */
+export const DEPENDENCY_BLOCKER_PREFIX = "blocked-by-";
+
+/**
+ * PURA — o que este card ainda espera: os `depends-on` para cards do MESMO board que não chegaram a um passo terminal, e
+ * os bloqueios de dependência abertos (`blocked-by-*`, severidade blocker). `null` ⇒ nada a esperar. Um `depends-on` para
+ * card que não existe no board (outro board, apagado) não segura — não há como saber quando ele termina daqui.
+ */
+export function dependencyWait(card: Card, cardsById: ReadonlyMap<string, Pick<Card, "status" | "title">>, config: Pick<BoardConfig, "statuses">): string | null {
+  const terminal = new Set(config.statuses.filter((s) => s.terminal).map((s) => s.id));
+  const waits: string[] = [];
+  for (const l of card.links ?? []) {
+    if (l.rel !== "depends-on" || l.to === card.id) continue;
+    const dep = cardsById.get(l.to);
+    if (dep && !(dep.status && terminal.has(dep.status))) waits.push(`«${dep.title}» (${l.to}) ainda não terminou`);
+  }
+  for (const f of card.findings ?? []) {
+    if (f.status === "open" && f.severity === "blocker" && f.id.startsWith(DEPENDENCY_BLOCKER_PREFIX)) waits.push(f.title);
+  }
+  return waits.length ? waits.join("; ") : null;
 }
 
 /**
@@ -130,6 +162,8 @@ export function decideCascade(card: Card, config: BoardConfig, opts: CascadeOpts
     if (opts.suppressTrigger && effectiveTrigger === opts.suppressTrigger) {
       return { action: "stop", reason: "already-ran" };
     }
+    const waiting = opts.dependencyHold?.(card);
+    if (waiting) return { action: "stop", reason: `${DEPENDENCY_STOP_REASON}: ${waiting}` };
     return { action: "run", trigger: effectiveTrigger };
   }
   return decideForward(card, status, config, opts);

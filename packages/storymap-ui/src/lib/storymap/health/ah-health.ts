@@ -647,7 +647,7 @@ function s9(i: HealthInputs, t: HealthThresholds): HealthSignal {
   });
   return signal(
     "S9",
-    { label: "Card × ledger", unit: "cards", fixHint: "Toda mudança de status do arquivo deve passar pelo escritor que grava a transição (e o merge do card pelo train deve reaplicar, não sobrescrever, as escritas de MCP)." },
+    { label: "Card × histórico de status", unit: "cards", fixHint: "Toda mudança de status do arquivo deve passar pelo escritor que grava a transição (e o merge do card pelo train deve reaplicar, não sobrescrever, as escritas de MCP)." },
     t.s9,
     {
       value: diverged.length,

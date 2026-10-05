@@ -143,7 +143,7 @@ export function defaultTechnicalAuditDeps(): TechnicalAuditDeps {
         ].join("\n"),
       };
       const { createCardAction } = await import("@/app/actions");
-      const r = await createCardAction({ boardId: target.board, card: fix, via: "triage" });
+      const r = await createCardAction({ boardId: target.board, card: fix, via: "triage", files: output.findings.map((f) => f.file ?? "").filter(Boolean), system: true });
       return r.ok ? (r.data?.card.id ?? null) : null;
     },
     roundsGate: (board, cardId, summary, severe) => reviewRoundsGate(board, cardId, summary, undefined, undefined, undefined, { severe }),

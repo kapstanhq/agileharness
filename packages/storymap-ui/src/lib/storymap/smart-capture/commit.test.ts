@@ -418,7 +418,8 @@ describe("SM-03 guard: the isStory guard keeps a non-story type out of the bug/c
     await commit({ boardId: "test-board", items: [item] });
 
     const [, written] = mockedWriteCard.mock.calls[0] as [string, Card];
-    expect(written.status).toBe("triage");
+    // nó do mapa nasce sem status (não anda na esteira) — nem Corrigir, nem Triagem
+    expect(written.status ?? null).toBeNull();
     expect(written.storyType).toBeNull();
     expect(written.mode).toBeUndefined();
     expect(written.bugReport == null).toBe(true);
@@ -1049,5 +1050,26 @@ describe("needsHumanReview: só para o que chegou SEM ninguém olhar", () => {
     expect(cru.ok).toBe(true);
     const [, b] = mockedWriteCard.mock.calls[0] as [string, Card];
     expect(b.needsHumanReview).toBe(true);
+  });
+});
+
+// Nó do MAPA não anda na esteira: a captura que cria atividade e passo os grava SEM status (como os demais nós do mapa).
+// Antes eles nasciam na Triagem e ficavam lá — nada aceita um nó do mapa.
+describe("commitProposalAction — nós do mapa nascem sem status", () => {
+  it("atividade e passo sem status; a user story pendurada neles segue na Triagem", async () => {
+    const r = await commitProposalAction({
+      boardId: "test-board",
+      via: "capture",
+      items: [
+        { tempId: "a1", type: "activity", title: "Cuidar da horta", rationale: "r" },
+        { tempId: "s1", type: "step", title: "Regar no fim da tarde", parent: "a1", rationale: "r" },
+        { tempId: "u1", type: "story", storyType: "user", title: "Ser lembrado de regar", parent: "s1", rationale: "r" },
+      ] as ProposedItem[],
+    });
+    expect(r.ok).toBe(true);
+    const written = mockedWriteCard.mock.calls.map(([, c]) => c as Card);
+    expect(written.find((c) => c.type === "activity")?.status ?? null).toBeNull();
+    expect(written.find((c) => c.type === "step")?.status ?? null).toBeNull();
+    expect(written.find((c) => c.type === "story")?.status).toBe("triage");
   });
 });

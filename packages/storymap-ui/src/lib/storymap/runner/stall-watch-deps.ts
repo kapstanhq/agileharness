@@ -270,6 +270,7 @@ export function defaultStallWatchDeps(): StallWatchDeps {
       return out;
     },
     facts: async (board, card) => factsOf(await (wide ??= boardWideFacts()), board, card),
+    cardStatus: async (board, cardId) => (await readCard(board, cardId))?.status ?? null,
     // O MESMO efeito do «Re-publicar», como o próprio serviço (ver o cabeçalho). O efeito relata a si mesmo: uma
     // recusa ou um erro deixa o finding `entry-effect-failed` no card — a partir daí ele tem explicação e item próprio.
     retry: async (board, cardId, effect) => {
@@ -291,15 +292,26 @@ export function defaultStallWatchDeps(): StallWatchDeps {
     },
     // Card de conserto técnico na Triagem (o juiz o aceita), ligado ao card parado. Escrita pela lib, sob a mesma
     // trava de criação da action — sem depender de quem chamou.
-    openFixCard: async (board, card, reason) =>
-      withCreateLock(board, async () => {
+    openFixCard: async (board, card, reason) => {
+      // A verificação de entrada (card-intake.ts) em modo AVISO: o conserto do próprio serviço nunca é barrado — fica
+      // registrado e, se a régua achar outro board, nasce marcado para revisão.
+      const fixTitle = `Conserto: «${card.title}» parou sem ninguém cuidando`;
+      const { intakeGate } = await import("./card-intake-deps");
+      const intake = await intakeGate(
+        board,
+        [{ key: "fix", candidate: { title: fixTitle, type: "story", storyType: "technical", body: reason, acceptance: [], files: [], landsInQuarantine: true } }],
+        "advise",
+      ).catch(() => null);
+      const flag = !!(intake && intake.ok && intake.review.has("fix"));
+      return withCreateLock(board, async () => {
         const [config, cards] = await Promise.all([readBoardConfig(board), readCards(board)]);
         const staging = config.statuses.find((s) => s.staging)?.id ?? null;
         if (!staging) return null; // sem coluna de entrada não há onde pousar um card sem âncora
         const serves = card.storyType == null || card.storyType === "user" ? card.id : (card.serves ?? card.parent ?? undefined);
-        const draft = makeDraftCard({ type: "story", title: `Conserto: «${card.title}» parou sem ninguém cuidando`, status: staging, cards });
+        const draft = makeDraftCard({ type: "story", title: fixTitle, status: staging, cards });
         const fix: Card = {
           ...draft,
+          ...(flag ? { needsHumanReview: true } : {}),
           storyType: "technical",
           via: "triage",
           ...(serves ? { serves } : {}),
@@ -316,7 +328,8 @@ export function defaultStallWatchDeps(): StallWatchDeps {
         };
         await writeCard(board, fix);
         return fix.id;
-      }),
+      });
+    },
     stamp: async (board, cardId, finding) => {
       await updateCardOnDisk(board, cardId, (fresh) => {
         const next = upsertFindingIfChanged(fresh.findings ?? [], finding);

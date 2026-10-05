@@ -17,6 +17,7 @@
 //     from the phone, migrate the connector to OAuth — the URL token alone guarding a
 //     prod deploy is a thin line.
 
+import { ORGANIZE_ONLY_WHY, organizeOnlyNow } from "@/lib/storymap/organize-only";
 import { promises as fs } from "node:fs";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
@@ -2641,6 +2642,11 @@ export function registerDevTools(server: McpServer): void {
     },
     async ({ role, task, board, cardId, model, name }) => {
       if (cardId && !board) return fail("cardId sem board — passe os dois (o claim é por board/card).");
+      // Board SÓ DE ORGANIZAÇÃO (organize-only.ts): o pipeline não abre sessão de agente para card dele — o trabalho é
+      // feito por sessões independentes, fora do board.
+      if (board && organizeOnlyNow(board)) {
+        return fail(`o board «${board}» é ${ORGANIZE_ONLY_WHY.replace(/^board /, "")}: nenhuma sessão é aberta pelo pipeline para cards dele — o trabalho é feito por uma sessão independente, fora do board.`);
+      }
       // F7 — um retry de rede não pode virar uma segunda sessão. Uma chamada que estoure o timeout do
       // proxy é re-tentada pelo cliente, e sem isto o servidor spawnava outro tmux + outra árvore + outra
       // vaga do cap para o MESMO trabalho. Trabalho com card se defendia pelo claim; sem card, nada.

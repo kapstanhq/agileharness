@@ -23,6 +23,7 @@
 // degrau fica no registro de decisões do sistema; o estacionar tem «Desfazer» (reabrir o condutor já).
 // Núcleo DI; as deps de produção moram em conductor-pause-deps.ts.
 
+import { isOrganizeOnly } from "@/lib/storymap/organize-only-core";
 import { ownerOnlyOpenQuestions } from "@/lib/storymap/autonomy";
 import { whoDecides } from "@/lib/storymap/decision-class";
 import { isDeliveryApprovalStep } from "@/lib/storymap/delivery-audit";
@@ -109,6 +110,8 @@ export async function wakeConductor(
   try {
     const [card, config] = await Promise.all([deps.readCard(board, cardId), deps.readBoardConfig(board)]);
     if (!card || !config || !isConducted(card)) return "not-conducted";
+    // Board SÓ DE ORGANIZAÇÃO (organize-only.ts): nenhum condutor é acordado nem retomado nele.
+    if (isOrganizeOnly(config)) return "not-conducted";
     if (config.statuses.find((s) => s.id === card.status)?.terminal) return "terminal";
     const live = await deps.liveTmux().catch(() => null);
     if (live === null) return "unknown"; // sem saber quem está vivo, nem digita nem reabre

@@ -40,6 +40,7 @@
 import type { StoryType } from "@/lib/storymap/frameworks";
 import { cardTypeKeys } from "@/lib/storymap/kanban-filter";
 import type { BoardConfig, Card } from "@/lib/storymap/types";
+import { ORGANIZE_ONLY_WHY } from "@/lib/storymap/organize-only-core";
 
 export type PaceLevel = "paused" | "slow" | "normal";
 export const PACE_LEVELS: readonly PaceLevel[] = ["paused", "slow", "normal"];
@@ -504,7 +505,7 @@ export function storyTypeChangeLine(card: Pick<Card, "id" | "storyType">, after:
 // ── o portão ─────────────────────────────────────────────────────────────────────────────────────────
 
 /** De onde veio a resposta do portão. */
-export type BoardGateSource = "disarmed" | "pace" | "unreadable" | "default";
+export type BoardGateSource = "organize-only" | "disarmed" | "pace" | "unreadable" | "default";
 
 /** O que TODO automático pergunta antes de começar algo num board. */
 export interface BoardGate {
@@ -532,12 +533,14 @@ const WHO: Record<PaceActor["kind"], string> = { owner: "pelo dono", agent: "por
  * como vazio, um board que o dono pausou voltaria a gastar sozinho. PURA.
  */
 export function resolveBoardGate(
-  config: Pick<BoardConfig, "autorunDisabled"> | null | undefined,
+  config: Pick<BoardConfig, "autorunDisabled" | "organizeOnly"> | null | undefined,
   row: BoardPaceRow | null | undefined,
   now: number,
   unreadable = false,
 ): BoardGate {
   if (!config) return { level: "paused", held: true, background: false, source: "unreadable", why: "a configuração do board não pôde ser lida" };
+  // Só organização vem ANTES do desarmado: é o mais forte (nada age nem chega sozinho — organize-only.ts).
+  if (config.organizeOnly) return { level: "paused", held: true, background: false, source: "organize-only", why: ORGANIZE_ONLY_WHY };
   if (config.autorunDisabled) return { level: "paused", held: true, background: false, source: "disarmed", why: "o board está desarmado (o autorun dele está desligado)" };
   if (unreadable) {
     return { level: "paused", held: true, background: false, source: "unreadable", why: "o registro de ritmo dos boards não pôde ser lido — retome o board para regravá-lo" };
@@ -550,15 +553,15 @@ export function resolveBoardGate(
 }
 
 /** O portão de quem só tem a configuração (os núcleos sem a porta de ritmo ligada, e os testes deles). PURA. */
-export function configOnlyGate(config: Pick<BoardConfig, "autorunDisabled"> | null | undefined): BoardGate {
+export function configOnlyGate(config: Pick<BoardConfig, "autorunDisabled" | "organizeOnly"> | null | undefined): BoardGate {
   return resolveBoardGate(config, null, 0);
 }
 
 /** A porta que os núcleos recebem: a produção liga `boardGateNow` (board-pace-store.ts); sem ela, só a configuração responde. */
-export type BoardGatePort = (board: string, config: Pick<BoardConfig, "autorunDisabled"> | null | undefined) => BoardGate;
+export type BoardGatePort = (board: string, config: Pick<BoardConfig, "autorunDisabled" | "organizeOnly"> | null | undefined) => BoardGate;
 
 /** O portão pelo que o núcleo tem: a porta injetada, ou só a configuração. PURA (a porta é quem faz IO). */
-export function gateOf(port: BoardGatePort | undefined, board: string, config: Pick<BoardConfig, "autorunDisabled"> | null | undefined): BoardGate {
+export function gateOf(port: BoardGatePort | undefined, board: string, config: Pick<BoardConfig, "autorunDisabled" | "organizeOnly"> | null | undefined): BoardGate {
   return port ? port(board, config) : configOnlyGate(config);
 }
 
@@ -1015,7 +1018,7 @@ export interface ScopeView {
 /** A projeção. `quota` null = sem leitura confiável da cota (nenhuma sugestão sai de um palpite). PURA. */
 export function paceViewOf(
   board: string,
-  config: Pick<BoardConfig, "autorunDisabled"> | null | undefined,
+  config: Pick<BoardConfig, "autorunDisabled" | "organizeOnly"> | null | undefined,
   snap: { rows: readonly BoardPaceRow[]; unreadable: boolean },
   now: number,
   quota: { onPace: boolean; detail: string } | null,

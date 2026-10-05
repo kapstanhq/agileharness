@@ -160,6 +160,22 @@ describe("deployCausesOf — as causas de uma saída 3", () => {
     expect(deployCausesOf({ ...empty, status: "needs-units" }, { pkg: "p", config })[0]).toMatchObject({ decider: "system", causeKey: "p:system" });
   });
 
+  it("«ação manual» só quando o plano DECLAROU a parte manual; no fail-closed o título diz que o sistema não classificou", () => {
+    const declared: DeployExit3Report = { ...LIVE_PLAN, entries: [entry({ rule: "no-class-declared", decider: "owner" })] };
+    const [manual] = deployCausesOf(declared, { pkg: "p", config });
+    expect(manual).toMatchObject({ decider: "owner", ownerClass: null, declaredManual: true });
+    const unreadable: DeployExit3Report = { ...LIVE_PLAN, entries: [entry({ rule: null })] };
+    const [unknown] = deployCausesOf(unreadable, { pkg: "p", config });
+    expect(unknown).toMatchObject({ decider: "owner", ownerClass: null });
+    expect(unknown.declaredManual).toBeUndefined();
+    // board só-negócio sem a tabela de classes: o dono por fail-closed, nunca «manual»
+    const ultraNoMap = { autonomy: { mode: "ultra" } } as unknown as BoardConfig;
+    expect(deployCausesOf({ ...LIVE_PLAN, entries: [entry({ rule: "bills-customer" })] }, { pkg: "p", config: ultraNoMap })[0].declaredManual).toBeUndefined();
+    expect(ownerTitleOf(null, true)).toMatch(/ação manual, não é decisão de negócio/);
+    expect(ownerTitleOf(null)).toMatch(/não conseguiu classificar/);
+    expect(ownerTitleOf(null)).not.toMatch(/não é decisão de negócio/);
+  });
+
   it("needs-proof é uma causa do sistema (o produtor providencia a prova)", () => {
     const r = { ...parseDeployExit3Report(""), status: "needs-proof" as const };
     expect(deployCausesOf(r, { pkg: "p", config })).toEqual([expect.objectContaining({ causeKey: "p:proof", decider: "system", phase: "needs-proof" })]);

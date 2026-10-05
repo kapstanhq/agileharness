@@ -21,7 +21,9 @@ export function HealthPanel({ model }: { model: HealthPanelModel }) {
         </h2>
         <p className="mt-0.5 text-[13px] text-fg">{model.headline}</p>
         {model.note ? <p className={cn("mt-1 text-[12.5px]", noteTone)}>{model.note}</p> : null}
-        <p className="mt-1 text-[12px] text-fg-subtle">Trabalho do sistema: nada aqui pede você.</p>
+        <p className="mt-1 text-[12px] text-fg-subtle">
+          Trabalho do sistema: nada aqui pede você. S1 a S12 são os códigos dos sinais — passe o mouse numa linha para ver a regra.
+        </p>
       </header>
       <ul className="divide-y divide-line-muted">
         {model.rows.map((row) => {

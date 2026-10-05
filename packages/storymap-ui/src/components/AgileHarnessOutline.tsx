@@ -394,16 +394,16 @@ function OutlineHeader({
       <dl className="flex shrink-0 gap-5">
         <Stat n={totals.activities} label="ações" />
         <Stat n={totals.steps} label="passos" />
-        <Stat n={totals.stories} label="stories" />
-        <Stat n={totals.done} label="no ar" muted />
+        <Stat n={totals.stories} label="itens" title="Itens no nível de story do mapa: user stories e as entregas penduradas direto num passo" />
+        <Stat n={totals.done} label="itens no ar" muted title="Desses itens do mapa, quantos já estão no ar (não é a raia «No ar» do Kanban, que conta todos os cards)" />
       </dl>
     </header>
   );
 }
 
-function Stat({ n, label, muted }: { n: number; label: string; muted?: boolean }) {
+function Stat({ n, label, muted, title }: { n: number; label: string; muted?: boolean; title?: string }) {
   return (
-    <div className="text-right">
+    <div className="text-right" title={title}>
       <dd className={cn("text-[19px] font-semibold tabular-nums", muted ? "text-fg-muted" : "text-fg")}>{n}</dd>
       <dt className="text-[10px] uppercase tracking-[0.06em] text-fg-subtle">{label}</dt>
     </div>

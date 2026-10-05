@@ -33,7 +33,7 @@ import { useAgentPresence, useRunnerSnapshot, useTerminalAttention, useVpsMetric
 import { agentPulse } from "@/lib/storymap/agent-presence";
 import { useInboxSummary } from "@/components/useInboxSummary";
 import { NavAgentsChip } from "@/components/nav/NavAgentsChip";
-import { BoardPaceChip, BoardPaceSheetSection } from "@/components/nav/BoardPaceChip";
+import { BoardPaceBadge, BoardPaceChip, BoardPaceSheetSection } from "@/components/nav/BoardPaceChip";
 import { HealthPill } from "@/components/HealthPill";
 import { AgileHarnessLogo } from "@/components/AgileHarnessLogo";
 import { TopBar } from "@/components/nav/TopBar";
@@ -52,7 +52,7 @@ import { useCopilotAnnouncer } from "@/components/copilot/useCopilotAnnouncer";
 import { useCopilotOverview, type CopilotOverview } from "@/components/copilot/useCopilotOverview";
 import { currentCopilotFace, onCopilotFace, type CopilotFaceState } from "@/components/copilot/face-bus";
 import { copilotActivityAction, copilotSessionMeterAction, type CopilotSessionMeter } from "@/app/copilot-actions";
-import { groupActivity } from "@/lib/storymap/copilot/activity-view";
+import { diarySentence, groupActivity } from "@/lib/storymap/copilot/activity-view";
 import type { CopilotActivityEntry } from "@/lib/storymap/copilot/activity";
 import { onCopilotSessionChanged } from "@/components/copilot/meter-bus";
 import { useBoardTrash, TrashDrawer } from "@/components/BoardTrash";
@@ -340,6 +340,12 @@ export function BoardHeader({
             <span className="hidden md:ml-1.5 md:inline-flex">
               <CaptureMenu boardId={config.id} onSmartCapture={openCapture} />
             </span>
+            {/* No celular o chip do ritmo não monta; o board pausado/devagar aparece como selo no topo. */}
+            {!isDesktop && (
+              <span className="md:hidden">
+                <BoardPaceBadge boardId={config.id} />
+              </span>
+            )}
           </>
         }
       />
@@ -779,8 +785,8 @@ function CopilotChip({
                 {recall.map((g) => (
                   <li key={g.key} className="flex items-start gap-1.5 text-[11px] leading-snug text-fg-subtle">
                     <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-line-emphasis" />
-                    <span className="min-w-0 flex-1 truncate" title={g.entry.detail ?? g.entry.text}>
-                      {g.entry.text}
+                    <span className="min-w-0 flex-1 truncate" title={g.entry.detail ?? diarySentence(g.entry.text)}>
+                      {diarySentence(g.entry.text)}
                     </span>
                     {/* "×3 desde 14:02" no lugar de três linhas idênticas — o colapso é o que impede a
                         lista de virar o mesmo aviso repetido empurrando o que importa para baixo. */}

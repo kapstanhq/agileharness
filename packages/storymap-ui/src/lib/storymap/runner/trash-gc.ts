@@ -6,6 +6,7 @@
 // ops — so it never fights the merge train. Best-effort: a per-board or per-entry failure is skipped, never
 // thrown; a GC error never demotes a successful recovery tick. Journals each harvest to trash-gc.jsonl.
 
+import { organizeOnlyNow } from "@/lib/storymap/organize-only";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { runnerStateDir } from "@/lib/storymap/paths";
@@ -62,7 +63,8 @@ export async function runTrashGc(deps: TrashGcDeps = {}): Promise<number> {
   const journal = deps.journal ?? appendTrashGcJournal;
   let boards: { id: string }[];
   try {
-    boards = deps.boards ? await deps.boards() : await listBoards();
+    // Board SÓ DE ORGANIZAÇÃO (organize-only.ts): a lixeira dele não é esvaziada sozinha.
+    boards = deps.boards ? await deps.boards() : (await listBoards()).filter((b) => !organizeOnlyNow(b.id));
   } catch {
     return 0;
   }
