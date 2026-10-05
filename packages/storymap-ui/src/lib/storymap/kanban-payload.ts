@@ -28,8 +28,28 @@ export function kanbanCard(card: Card, terminal: boolean): Card {
   delete (slim as Partial<Card>).triageDecision;
   // card no fim do fluxo não passa mais por gate de QA: o mapa critério→spec não serve ao quadro
   if (terminal) delete (slim as Partial<Card>).criteriaSpecs;
-  return slim;
+  return terminal ? terminalFace(slim) : slim;
 }
+
+/**
+ * O card no FIM do fluxo (a raia «No ar»), reduzido ao que a face dele mostra. Num board maduro eles são a maioria dos
+ * cards e quase todo o peso da página — e a face de um card terminal só lê título, tipo, etapa, o porquê (soThat), o selo
+ * de bloqueio aberto, a severidade do bug e o resumo do diff. Os critérios, as tarefas, o custo, as provas e o
+ * raciocínio da prioridade (que a face não mostra num card terminal) ficam no disco: abrir o card lê o card inteiro.
+ * O quadro nunca devolve o objeto card ao servidor (as actions recebem ids), então nada daqui se perde por escrita.
+ */
+function terminalFace(card: Card): Card {
+  // `acceptance`/`tasks` são obrigatórios no tipo: vão VAZIOS (nenhuma leitura do quadro quebra), os opcionais saem
+  const face: Card = { ...card, acceptance: [], tasks: [] };
+  for (const k of ["costImpact", "deployProof", "qaEvidence", "refinement", "retirement"] as const) {
+    delete (face as Partial<Card>)[k];
+  }
+  if (card.narrative) face.narrative = { role: null, want: null, soThat: card.narrative.soThat ?? null };
+  if (card.bugReport) face.bugReport = { ...card.bugReport, brief: "", expected: null, actual: null, steps: [] };
+  if (card.priorityCall) face.priorityCall = { ...card.priorityCall, rationale: "", riskiestAssumption: null };
+  return face;
+}
+
 
 /** O board enxuto para o Kanban (os cards, só). A config segue inteira — é pequena e o quadro a usa toda. */
 export function kanbanBoard(board: Board): Board {

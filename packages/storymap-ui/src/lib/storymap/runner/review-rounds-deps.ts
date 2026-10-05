@@ -6,10 +6,10 @@
 // novo. A árvore é lida em TODOS os boards (um conserto roteado conta). O teto vem de `autorun.reviewRoundsCap`.
 
 import { addStructuredQuestions, type StructuredQuestionInput } from "@/lib/storymap/questions";
-import { listBoards, readBoardConfig, readCards } from "@/lib/storymap/repo";
+import { listBoards, readBoardConfig, readCard, readCards, readTrashedCards } from "@/lib/storymap/repo";
 import { CAP_STOP_DEFER_REASON, deferralFor } from "@/lib/storymap/deferral";
 import { updateCardOnDisk } from "@/lib/storymap/write";
-import type { ReviewChainMark } from "@/lib/storymap/types";
+import type { Card, ReviewChainMark } from "@/lib/storymap/types";
 import { loadRunnerConfig } from "./config";
 import { appendRoundAnswer, readRoundAnswers } from "./review-rounds-ledger";
 import {
@@ -18,6 +18,7 @@ import {
   chainRootOf,
   chainTree,
   cycleOf,
+  hasOpenRoundsCapQuestion,
   reviewRoundVerdict,
   roundChoiceOf,
   roundsCapQuestionInput,
@@ -40,19 +41,23 @@ export function reviewRoundsCap(): number {
   return loadRunnerConfig().autorun.reviewRoundsCap ?? DEFAULT_REVIEW_ROUNDS_CAP;
 }
 
-/** Os cards de todos os boards do alvo. */
+/**
+ * Os cards de todos os boards do alvo — inclusive os da LIXEIRA (apagar um conserto não o tira da conta). Um board que
+ * não se lê LANÇA: quem conta decide o lado seguro (o portão pergunta ao dono em vez de contar a menos).
+ */
 export async function readAllBoardCards(): Promise<BoardCard[]> {
   const out: BoardCard[] = [];
   for (const b of await listBoards()) {
-    for (const card of await readCards(b.id).catch(() => [])) out.push({ board: b.id, card });
+    for (const card of await readCards(b.id)) out.push({ board: b.id, card });
+    for (const card of await readTrashedCards(b.id)) out.push({ board: b.id, card });
   }
   return out;
 }
 
 /**
  * Pode abrir mais uma rodada de conserto a partir de `board/fromId`? `summary` = o que a revisão deixou aberto, para a
- * pergunta ao dono. Falha ao ler ⇒ «open» sem marca (o comportamento de antes do teto — nunca esconde um conserto por
- * erro de leitura).
+ * pergunta ao dono. Falha ao ler a árvore ⇒ a pergunta vai ao dono (uma só: com a do teto já aberta no card, não repete) e
+ * a resposta é «perguntei» — contar a menos por um board ilegível abriria rodadas além do teto.
  */
 export async function reviewRoundsGate(
   board: string,
@@ -63,14 +68,23 @@ export async function reviewRoundsGate(
   ask: (board: string, cardId: string, q: StructuredQuestionInput) => Promise<void> = askOnDisk,
   readAll: () => Promise<BoardCard[]> = readAllBoardCards,
   /** `severe` = a revisão achou um bloqueante (pergunta de novo mesmo depois de «aceitar»/«parar»); `answers` = o registro. */
-  opts: { severe?: boolean; answers?: () => Promise<RoundAnswer[]> } = {},
+  opts: { severe?: boolean; answers?: () => Promise<RoundAnswer[]>; readOne?: (board: string, cardId: string) => Promise<Card | null> } = {},
 ): Promise<ReviewRoundsDecision> {
   let all: BoardCard[];
   let answers: RoundAnswer[];
   try {
     [all, answers] = await Promise.all([readAll(), (opts.answers ?? readRoundAnswers)()]);
-  } catch {
-    return { gate: "open", mark: null };
+  } catch (err) {
+    console.error("[review-rounds] a árvore não pôde ser lida — a pergunta vai ao dono:", err instanceof Error ? err.message : err);
+    try {
+      const from = await (opts.readOne ?? readCard)(board, fromId);
+      if (!from || !hasOpenRoundsCapQuestion(from)) {
+        await ask(board, fromId, roundsCapQuestionInput({ title: from?.title ?? fromId, rounds: null, summary }));
+      }
+    } catch (askErr) {
+      console.error("[review-rounds] a pergunta ao dono não pôde ser gravada:", askErr instanceof Error ? askErr.message : askErr);
+    }
+    return { gate: "asked", mark: null };
   }
   const v = reviewRoundVerdict(board, fromId, all, cap, { answers, severe: opts.severe });
   switch (v.state) {

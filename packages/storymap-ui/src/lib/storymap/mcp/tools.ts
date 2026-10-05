@@ -14,6 +14,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { defineTool } from "./register";
 import { currentMcpActor, isScopedActor, mcpActorAttribution } from "./actor";
+import { agentRoundsDecision } from "@/lib/storymap/runner/review-rounds-agent";
 import { getLockedExecService } from "@/lib/storymap/runner/locked-exec-service";
 import { callerTag } from "./caller";
 import { effectiveScope, SCOPE_TYPE_ORDER, scopeCardOf, scopeTypesOf, storyTypeChangeLine, storyTypeChangeRefusal, type BoardPaceView, type ScopeCard } from "@/lib/storymap/runner/board-pace";
@@ -305,25 +306,6 @@ const proposedItemShape = z.object({
  * `enqueue`/`enqueue_batch` tools and `run_skill` share ONE path (no duplicated logic). The
  * runner-enabled gate is checked by the caller (once per tool call, not per card).
  */
-/**
- * A origem de cadeia de revisão HERDADA da sessão do agente (create_card sem `continuesFrom`): o card que a sessão
- * conduz, se ele tem achados de revisão abertos — senão null. Best-effort: sem o registro de sessões, null.
- */
-async function sessionReviewOrigin(): Promise<{ board: string; card: Card } | null> {
-  const actor = currentMcpActor();
-  if (actor?.caller?.kind !== "session") return null;
-  try {
-    const { allSessions } = await import("@/lib/storymap/runner/session-worktree");
-    const s = (await allSessions()).find((x) => x.sessionId === actor.caller!.id);
-    if (!s?.board || !s.cardId) return null;
-    const card = await readCard(s.board, s.cardId);
-    const { hasOpenReviewFindings } = await import("@/lib/storymap/runner/review-rounds");
-    return card && hasOpenReviewFindings(card) ? { board: s.board, card } : null;
-  } catch {
-    return null;
-  }
-}
-
 async function resolveEnqueueTarget(
   board: string,
   cardId: string,
@@ -1053,7 +1035,9 @@ export function registerStorymapTools(server: McpServer): void {
         "O card descansa na Triagem (sem autorun) até ser roteado para Enriquecer, de onde a cascata segue; ou mova/rode as skills manualmente. " +
         "CONSERTO DE REVISÃO: ao abrir um card para os achados que uma revisão deixou abertos em outro card, passe `continuesFrom` " +
         "(o card revisado) — o card nasce ligado a ele e conta como uma rodada da cadeia. Numa sessão cujo card tem achados de " +
-        "revisão abertos, uma ENTREGA criada sem `continuesFrom` herda a cadeia do card da sessão sozinha. No teto de rodadas, " +
+        "revisão (abertos, ou fechados por agente) ou que já é rodada, TODA story criada herda a cadeia do card da sessão — e um " +
+        "`continuesFrom` fora dessa cadeia é recusado. A sessão vale só com a prova que o worktree_open/spawn entregou " +
+        "(cabeçalho x-agileharness-session-proof); o rótulo sozinho não liga a sessão. No teto de rodadas, " +
         "NENHUM card é criado: a pergunta vai ao dono no card revisado (aceitar o risco, pagar mais uma rodada ou parar) — espere " +
         "a resposta; depois de o dono aceitar o risco ou mandar parar, nenhum conserto novo desta cadeia é criado. " +
         "VERIFICAÇÃO DE ENTRADA: o card passa por uma checagem rápida antes de existir — passe `files` (os arquivos que ele toca): " +
@@ -1086,45 +1070,23 @@ export function registerStorymapTools(server: McpServer): void {
     },
     async (a) => {
       const type = a.type ?? "story";
-      // O teto de rodadas de revisão (decisão do dono): no teto, a pergunta vai ao dono no card revisado e nada é criado.
-      // A ORIGEM: `continuesFrom` explícito (neste board); sem ele, uma ENTREGA criada numa sessão cujo card tem achados de
-      // revisão abertos herda a cadeia do card da sessão (em qualquer board) — omitir o campo não escapa do teto.
+      // O teto de rodadas de revisão (decisão do dono), pelo PORTÃO ÚNICO dos agentes (runner/review-rounds-agent.ts): a
+      // origem é o `continuesFrom` explícito (neste board, e DENTRO da árvore da sessão quando ela carrega cadeia) ou,
+      // sem ele, a cadeia do card da sessão PROVADA — para qualquer story. No teto, nada é criado e a pergunta vai ao dono.
       let roundStamp: { labels: string[]; links: CardLink[]; reviewChain?: ReviewChainMark } | null = null;
-      let origin: { board: string; card: Card } | null = null;
-      if (a.continuesFrom) {
-        const c = await readCard(a.board, a.continuesFrom);
-        if (!c) return fail(`continuesFrom: card não encontrado neste board: ${a.continuesFrom}`);
-        origin = { board: a.board, card: c };
-      } else if (type === "story" && a.storyType != null && a.storyType !== "user") {
-        origin = await sessionReviewOrigin();
-      }
-      if (origin) {
-        const { reviewRoundsGate } = await import("@/lib/storymap/runner/review-rounds-deps");
-        const { REVIEW_ROUND_LABEL, EXTRA_ROUND_LABEL } = await import("@/lib/storymap/runner/review-rounds");
-        const o = origin;
-        const decision = await reviewRoundsGate(o.board, o.card.id, a.body ?? a.title, undefined, async (board, cardId, q) => {
-          const r = await askQuestionsAction({ boardId: board, cardId, questions: [q], askedBy: "system:review-rounds" });
-          if (!r.ok) throw new Error(r.error);
-        });
-        if (decision.gate === "asked" || decision.gate === "accepted" || decision.gate === "stopped") {
-          const why =
-            decision.gate === "asked"
-              ? `chegou ao teto de rodadas de revisão: nenhum card foi criado e a pergunta foi ao dono no card ${o.card.id} (aceitar o risco restante, pagar mais uma rodada ou parar). Espere a resposta`
-              : decision.gate === "accepted"
-                ? "já teve a resposta do dono: ele aceitou o risco restante. Nenhum card foi criado"
-                : "já teve a resposta do dono: ele mandou parar. Nenhum card foi criado";
-          return json({
-            created: [],
-            ownerAsked: true,
-            nota: `A cadeia de consertos de «${o.card.title}» ${why}; não abra outro card para esta cadeia.`,
-          });
-        }
-        roundStamp = {
-          labels: [REVIEW_ROUND_LABEL, ...(decision.gate === "open-extra" ? [EXTRA_ROUND_LABEL] : [])],
-          // o vínculo só vale dentro do mesmo board; a marca de cadeia vale em qualquer um
-          links: o.board === a.board ? [{ rel: "relates-to", to: o.card.id }] : [],
-          ...(decision.mark ? { reviewChain: decision.mark } : {}),
-        };
+      if (type === "story" || a.continuesFrom) {
+        const rounds = await agentRoundsDecision(
+          { boardId: a.board, summary: a.body ?? a.title, continuesFrom: a.continuesFrom ?? null, actor: currentMcpActor() },
+          {
+            ask: async (board, cardId, q) => {
+              const r = await askQuestionsAction({ boardId: board, cardId, questions: [q], askedBy: "system:review-rounds" });
+              if (!r.ok) throw new Error(r.error);
+            },
+          },
+        );
+        if (rounds.kind === "refuse") return fail(rounds.error);
+        if (rounds.kind === "held") return json({ created: [], ownerAsked: true, nota: rounds.nota });
+        if (rounds.kind === "stamp") roundStamp = rounds.stamp;
       }
       // Todo card nasce ANCORADO. O antigo `acceptUnplaced` (que criava a story sem lugar com um
       // `unplacedAck`) foi APOSENTADO — era a válvula por onde os órfãos entravam. Este pre-check é a
@@ -1167,8 +1129,10 @@ export function registerStorymapTools(server: McpServer): void {
             rationale: "criado via MCP (celular)",
           },
         ],
-        // a rodada nasce LIGADA, rotulada e MARCADA na mesma escrita (review-rounds.ts) — uma falha não deixa card sem marca
+        // a rodada nasce LIGADA, rotulada e MARCADA na mesma escrita (review-rounds.ts) — uma falha não deixa card sem marca;
+        // o portão já correu acima, então a ação não corre de novo
         ...(roundStamp ? { stamp: roundStamp } : {}),
+        roundsChecked: true,
       });
       if (!r.ok) return fail(r.error);
       const created = (r.data?.created ?? []).map((c) => slim(c));

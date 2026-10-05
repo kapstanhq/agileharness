@@ -475,7 +475,12 @@ function FrontierStrip({
 
       <div className="flex items-center gap-2">
         <span className={cardEyebrow}>{frontier.board}</span>
-        {!frontier.canPublish ? (
+        {frontier.organizeOnly ? (
+          // board só de organização: nada publica dali — dizer isso em vez de um botão que a action recusaria.
+          <span className="text-[12px] text-fg-subtle" title="board só de organização — nada roda sozinho">
+            board só de organização
+          </span>
+        ) : !frontier.canPublish ? (
           // O mecanismo inteiro está desligado (kill-switch global ou staging off) — aí não há botão a
           // oferecer, e dizer isso é melhor que um botão que só sabe recusar.
           <span className="text-[12px] text-fg-subtle" title="autorun.publishQueue.enabled / autorun.staging no settings.yaml">

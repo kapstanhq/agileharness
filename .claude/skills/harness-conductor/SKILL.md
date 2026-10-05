@@ -502,7 +502,8 @@ reasoning or opinion of the code.
        on a question the owner already answered carries his decision in `detail` — follow it.
    - After the extra cycle there is NO fourth by you: acceptance passing ⇒ integrate and open the fix card
      for what is left (`create_card` with `continuesFrom: <this card>`, with the open findings — that link is
-     what counts the review rounds; if it returns `ownerAsked: true`, the board's rounds cap was reached: no
+     what counts the review rounds; any story you create in this session inherits the chain anyway, and a
+     `continuesFrom` outside it is refused; if it returns `ownerAsked: true`, the board's rounds cap was reached: no
      card was created, the owner was asked on this card, and you do NOT open another one); a criterion still
      failing ⇒ call `request_extra_cycle` again with `loopsUsed: 3` — it becomes the owner's question
      (accept the risk and integrate / authorize one more cycle / stop) — then park (see "Estacionar e

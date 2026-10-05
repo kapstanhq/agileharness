@@ -42,6 +42,7 @@
 import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { buildOrchestratorMcpConfig } from "./orchestrator-spawn";
+import { currentSessionProof } from "@/lib/storymap/mcp/session-proof";
 import { CLAIM_TTL_SESSION_MS, sessionClaimActor, type CardClaim, type ClaimKind, type ClaimScope } from "./claims";
 import {
   discardSessionWorktree,
@@ -313,13 +314,20 @@ export async function writeSessionMcpConfig(
   sessionId: string,
   token: string | undefined,
   port: number,
+  /** a prova de sessão a escrever (testes injetam); omitida ⇒ a cunhada pelo serviço. */
+  sessionProof?: string | null,
 ): Promise<string | null> {
   const clean = token?.trim();
   if (!clean) return null;
   const file = sessionMcpConfigPath(stateDir, sessionId);
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  // a sessão se nomeia pelo sessionId do registro: a trilha e o diário do board dizem QUAL agente fez cada chamada
-  await fs.writeFile(file, buildOrchestratorMcpConfig(clean, port, { kind: "session", id: sessionId }), { encoding: "utf8", mode: 0o600 });
+  // a sessão se nomeia pelo sessionId do registro: a trilha e o diário do board dizem QUAL agente fez cada chamada; e
+  // leva a prova que o serviço cunhou para ela (mcp/session-proof.ts), o vínculo do servidor para o que decide por sessão
+  await fs.writeFile(
+    file,
+    buildOrchestratorMcpConfig(clean, port, { kind: "session", id: sessionId }, sessionProof === undefined ? currentSessionProof(sessionId) : sessionProof),
+    { encoding: "utf8", mode: 0o600 },
+  );
   return file;
 }
 

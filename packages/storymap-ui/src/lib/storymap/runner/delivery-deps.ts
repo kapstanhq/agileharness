@@ -22,6 +22,7 @@ import {
 } from "./delivery-view";
 import { parsePorcelainZPaths } from "./session-activity";
 import { loadRunnerConfig } from "./config";
+import { isOrganizeOnly } from "@/lib/storymap/organize-only-core";
 import { defaultExec, type ExecFn } from "./worktree";
 import { findRepoRoot } from "@/lib/storymap/paths";
 import { listBoards, readBoardConfig } from "@/lib/storymap/repo";
@@ -82,6 +83,7 @@ export async function frontierOf(board: string, exec: ExecFn): Promise<BoardFron
     board,
     releaseMode,
     canPublish,
+    ...(isOrganizeOnly(boardConfig) ? { organizeOnly: true } : {}),
     liveSha: null,
     liveAt: null,
     stageSha: null,

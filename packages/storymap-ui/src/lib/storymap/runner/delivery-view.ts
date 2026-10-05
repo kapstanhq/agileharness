@@ -126,6 +126,8 @@ export interface BoardFrontier {
    * board — separá-la do modo é a correção: uma flag só respondia as duas e apagava o botão junto.
    */
   canPublish: boolean;
+  /** board só de organização: nada publica dali (o botão some e a action recusa) */
+  organizeOnly?: boolean;
   liveSha: string | null;
   liveAt: string | null;
   stageSha: string | null;

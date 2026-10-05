@@ -130,9 +130,27 @@ export function foldByCause(entries: readonly InboxEntry[]): InboxEntry[] {
     const facet: InboxFacet = { itemId: e.itemId, kind: e.kind as CockpitItemKind, ask: e.decision.ask, ...(e.cardId ? { cardId: e.cardId, cardTitle: e.cardTitle } : {}) };
     out[at] = { ...out[at], facets: [...out[at].facets, facet, ...e.facets] };
   }
+  // ENTRE seções: a aprovação de um card em Decidir e, em Acompanhar, a publicação parada que espera exatamente essa
+  // decisão (mesma causa) eram o mesmo assunto em dois lugares. A decisão é a ação: a publicação parada vira faceta dela.
+  const decideLead = new Map<string, number>();
+  out.forEach((e, i) => {
+    if (e.kind !== "system-decision" && e.decision.bucket === "decidir") decideLead.set(`${e.boardId}|${e.causeKey}`, i);
+  });
+  const absorbed = new Set<number>();
+  out.forEach((e, i) => {
+    // só a publicação parada que ESPERA essa decisão — outros acompanhamentos do mesmo card (auditoria de entrega, o
+    // procurador que respondeu) são outro assunto e seguem sozinhos.
+    if (e.kind !== "deploy-failed" || e.decision.bucket !== "acompanhar") return;
+    const at = decideLead.get(`${e.boardId}|${e.causeKey}`);
+    if (at === undefined) return;
+    const facet: InboxFacet = { itemId: e.itemId, kind: e.kind as CockpitItemKind, ask: e.decision.ask, ...(e.cardId ? { cardId: e.cardId, cardTitle: e.cardTitle } : {}) };
+    out[at] = { ...out[at], facets: [...out[at].facets, facet, ...e.facets] };
+    absorbed.add(i);
+  });
+  const kept = out.filter((_, i) => !absorbed.has(i));
   // A ordem de volta à da coleta (a precedência só escolhe quem lidera cada causa).
   const order = new Map(entries.map((e, i) => [e.key, i]));
-  return out.sort((a, z) => (order.get(a.key) ?? 0) - (order.get(z.key) ?? 0));
+  return kept.sort((a, z) => (order.get(a.key) ?? 0) - (order.get(z.key) ?? 0));
 }
 
 /** O nome antigo da dobra (testes de outros módulos o chamam): a dobra é por causa, e a causa padrão é o card. */

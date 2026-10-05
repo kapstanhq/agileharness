@@ -28,22 +28,33 @@ import type { BoardSummary } from "@/lib/storymap/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// A lista é CARA (tmux, ps, git por cwd e os cards de todos os boards) e várias abas/chips a pedem quase juntos ao abrir
+// uma página: uma leitura em voo é compartilhada e o resultado vale alguns segundos. Toda mutação desta rota (POST/
+// DELETE/PATCH) descarta o guardado, então criar, matar ou renomear aparece na próxima leitura.
+const SESSIONS_TTL_MS = 5_000;
+let cached: { at: number; body: Promise<{ sessions: Awaited<ReturnType<typeof buildEnrichedSessions>>; boards: BoardSummary[] }> } | null = null;
+const forgetSessions = () => {
+  cached = null;
+};
+
 export async function GET(): Promise<Response> {
   // `boards` viaja JUNTO das sessões porque a página do terminal é um asset estático: sem isto ela
   // precisaria de uma segunda rota só para montar o seletor de board. O custo é um readdir + N
   // board.yaml, num endpoint que já faz fan-out de tmux/ps — e degrada para lista vazia (o seletor
   // some, o resto da página continua).
-  const [sessions, boards] = await Promise.all([
-    buildEnrichedSessions(),
-    listBoards().catch(() => [] as BoardSummary[]),
-  ]);
+  if (!cached || Date.now() - cached.at > SESSIONS_TTL_MS) {
+    const body = Promise.all([buildEnrichedSessions(), listBoards().catch(() => [] as BoardSummary[])]).then(([sessions, boards]) => ({ sessions, boards }));
+    cached = { at: Date.now(), body };
+    body.catch(forgetSessions);
+  }
+  const { sessions, boards } = await cached.body;
   return Response.json(
     { ok: true, at: new Date().toISOString(), sessions, boards },
     { headers: { "cache-control": "no-store" } },
   );
 }
 
-export async function POST(request: Request): Promise<Response> {
+async function postSessions(request: Request): Promise<Response> {
   let body: { name?: unknown };
   try {
     body = await request.json();
@@ -69,7 +80,7 @@ export async function POST(request: Request): Promise<Response> {
   return Response.json({ ok: true, name, created: res.created });
 }
 
-export async function DELETE(request: Request): Promise<Response> {
+async function deleteSessions(request: Request): Promise<Response> {
   let body: { name?: unknown };
   try {
     body = await request.json();
@@ -95,7 +106,7 @@ export async function DELETE(request: Request): Promise<Response> {
   return Response.json({ ok: true, killed: true });
 }
 
-export async function PATCH(request: Request): Promise<Response> {
+async function patchSessions(request: Request): Promise<Response> {
   let body: { name?: unknown; alias?: unknown; pinned?: unknown; board?: unknown };
   try {
     body = await request.json();
@@ -148,4 +159,29 @@ export async function PATCH(request: Request): Promise<Response> {
     ok: true,
     prefs: { alias: pref.alias ?? null, pinned: !!pref.pinned, board: pref.board ?? null },
   });
+}
+
+// As mutações descartam a lista guardada DEPOIS de agir (uma leitura no meio guardaria o estado de antes).
+export async function POST(request: Request): Promise<Response> {
+  try {
+    return await postSessions(request);
+  } finally {
+    forgetSessions();
+  }
+}
+
+export async function DELETE(request: Request): Promise<Response> {
+  try {
+    return await deleteSessions(request);
+  } finally {
+    forgetSessions();
+  }
+}
+
+export async function PATCH(request: Request): Promise<Response> {
+  try {
+    return await patchSessions(request);
+  } finally {
+    forgetSessions();
+  }
 }

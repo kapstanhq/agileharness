@@ -63,11 +63,14 @@ export function NavAgentsChip() {
           if (alive && j?.sessions) setSessions(j.sessions);
         })
         .catch(() => {});
-    load();
+    // a primeira leitura espera a página assentar: a rota é cara e nada do primeiro quadro depende dela (o popover só abre
+    // com o cursor em cima, e o chip já conta os agentes pela presença do RunnerStatusProvider)
+    const first = setTimeout(load, 3_000);
     const poll = setInterval(load, 60_000);
     const off = onTerminalRenamed(() => void load());
     return () => {
       alive = false;
+      clearTimeout(first);
       clearInterval(poll);
       off();
     };

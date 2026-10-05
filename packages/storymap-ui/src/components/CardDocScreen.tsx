@@ -37,6 +37,7 @@ import { RefineModal } from "@/components/RefineModal";
 import { BugModal } from "@/components/BugModal";
 import { DiscontinueModal } from "@/components/DiscontinueModal";
 import { deferCardAction, deleteCardAction, syncCardAction, undeferCardAction, updateCardAction } from "@/app/actions";
+import { isOrganizeOnly } from "@/lib/storymap/organize-only-core";
 import {
   CARD_ALLOWED_BLOCKS,
   CARD_DOC_TYPE,
@@ -250,14 +251,19 @@ export function CardDocScreen({
   };
 
   const menuItems: DocMenuItem[] = [
-    {
-      key: "sync",
-      icon: RefreshCw,
-      label: syncing ? "Sincronizando…" : "Sincronizar",
-      hint: "Revisa o card vs. o código real e o reposiciona",
-      disabled: syncing,
-      onClick: sync,
-    },
+    // board só de organização: o «Sincronizar» roda um agente — some (editar, mover, adiar e excluir ficam)
+    ...(isOrganizeOnly(config)
+      ? []
+      : [
+          {
+            key: "sync",
+            icon: RefreshCw,
+            label: syncing ? "Sincronizando…" : "Sincronizar",
+            hint: "Revisa o card vs. o código real e o reposiciona",
+            disabled: syncing,
+            onClick: sync,
+          },
+        ]),
     ...(reopenable
       ? [
           {

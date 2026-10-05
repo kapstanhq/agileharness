@@ -15,7 +15,8 @@ import { revalidatePath } from "next/cache";
 import { readBoardConfig, readCard, readCards } from "@/lib/storymap/repo";
 import { applyReopen, isReopenableStatus, isReopenDestination, REOPEN_KINDS, type ReopenDestination } from "@/lib/storymap/reopen";
 import { appendTransition, readTransitions, type Transition } from "@/lib/storymap/runner/transitions";
-import { isScopedActor, mcpActorAttribution, transitionActorLabel } from "@/lib/storymap/mcp/actor";
+import { currentMcpActor, isScopedActor, mcpActorAttribution, transitionActorLabel } from "@/lib/storymap/mcp/actor";
+import { agentRoundsDecision } from "@/lib/storymap/runner/review-rounds-agent";
 import { moveRiskClass } from "@/lib/storymap/entry-effect";
 import { dispositionFor } from "@/lib/storymap/runner/orchestrator-policy";
 import { consumeGrant, createApprovalRequest, decideApprovalRequest, findMatchingGrant } from "@/lib/storymap/approvals";
@@ -592,6 +593,26 @@ export async function createCardAction(input: {
       if (!gate.ok) return { ok: false, error: gate.error };
       intakeFlag = gate.review.has("card");
     }
+    // O TETO DE RODADAS para um agente pelo MCP (runner/review-rounds-agent.ts) — o mesmo portão do `create_card`: a
+    // sessão PROVADA cujo card carrega cadeia de revisão faz este card nascer rodada dela; no teto, nada nasce.
+    let roundsCard: Card = input.card;
+    if (caller === "mcp-token" && !input.system && input.card.type === "story") {
+      const rounds = await agentRoundsDecision({
+        boardId: input.boardId,
+        summary: [input.card.title, input.card.body ?? ""].filter(Boolean).join(" — "),
+        actor: currentMcpActor(),
+      });
+      if (rounds.kind === "refuse") return { ok: false, error: rounds.error };
+      if (rounds.kind === "held") return { ok: false, error: rounds.nota };
+      if (rounds.kind === "stamp") {
+        roundsCard = {
+          ...input.card,
+          labels: [...new Set([...(input.card.labels ?? []), ...rounds.stamp.labels])],
+          ...(rounds.stamp.reviewChain ? { reviewChain: rounds.stamp.reviewChain } : {}),
+          links: [...(input.card.links ?? []), ...rounds.stamp.links],
+        };
+      }
+    }
     // createcard-toctou: serialize read-ids → mint → write per board so two concurrent creates of the
     // same deterministic slug id (e.g. a UI "+ Novo item" racing an MCP create_card of an identically-
     // titled backbone) can't both mint it and have the second writeCard overwrite the first.
@@ -599,7 +620,9 @@ export async function createCardAction(input: {
     const cards = await readCards(input.boardId);
     const existing = new Set(cards.map((c) => c.id));
     // WS6 (F5): stamp provenance (dedicated field) — the card's own `via` wins, else the caller's, else "ui".
-    let card: Card = { ...input.card, via: input.card.via ?? input.via ?? "ui", ...(intakeFlag ? { needsHumanReview: true } : {}) };
+    let card: Card = { ...roundsCard, via: roundsCard.via ?? input.via ?? "ui", ...(intakeFlag ? { needsHumanReview: true } : {}) };
+    // um vínculo da rodada só vale para card que existe neste board (a marca de cadeia vale em qualquer um)
+    if (roundsCard !== input.card) card = { ...card, links: (card.links ?? []).filter((l) => (input.card.links ?? []).includes(l) || existing.has(l.to)) };
     // The client id is collision-free against the snapshot it held, but re-check
     // against fresh disk state (a concurrent create/agent run may have taken it).
     if (existing.has(card.id)) {
@@ -868,6 +891,11 @@ export async function commitProposalAction(input: {
   stamp?: { labels?: string[]; links?: CardLink[]; reviewChain?: ReviewChainMark };
   /** criação do PRÓPRIO SERVIÇO — ver createCardAction.system (aviso na entrada; recusa em board só de organização). */
   system?: boolean;
+  /**
+   * O `create_card` do MCP já passou pelo portão do teto de rodadas (runner/review-rounds-agent.ts) e traz o resultado no
+   * `stamp` — não passa de novo. Só código do serviço passa; nenhuma tool repassa entrada de agente para cá.
+   */
+  roundsChecked?: boolean;
 }): Promise<Result<{ created: Card[]; extended: ExtendedCardOutcome[]; warnings: CardCommitWarning[] }>> {
   await requireSession("commitProposalAction");
   try {
@@ -908,6 +936,20 @@ export async function commitProposalAction(input: {
       );
       if (!gate.ok) return { ok: false, error: gate.error };
       intakeReview = gate.review;
+    }
+    // O TETO DE RODADAS (runner/review-rounds-agent.ts) para TODO caminho de criação de um agente pelo MCP — a captura
+    // aplicada, o relato livre, o que for: a sessão PROVADA cujo card carrega cadeia de revisão faz as stories deste lote
+    // nascerem como rodada dela (ou, no teto, nada nasce e a pergunta vai ao dono). Antes do lock, como a entrada.
+    let stamp = input.stamp;
+    if (caller === "mcp-token" && !input.system && !input.roundsChecked && !stamp && input.items.some((it) => it.type === "story" && !it.targetCardId)) {
+      const rounds = await agentRoundsDecision({
+        boardId: input.boardId,
+        summary: input.items.map((it) => it.title).join("; "),
+        actor: currentMcpActor(),
+      });
+      if (rounds.kind === "refuse") return { ok: false, error: rounds.error };
+      if (rounds.kind === "held") return { ok: false, error: rounds.nota };
+      if (rounds.kind === "stamp") stamp = rounds.stamp;
     }
     // createcard-toctou: serialize the whole read→mint→write loop per board so concurrent captures
     // (a UI commit racing an MCP usm_capture) can't mint colliding deterministic ids and overwrite
@@ -1246,16 +1288,16 @@ export async function commitProposalAction(input: {
           ...(resolvedNeedsHumanReview ? { needsHumanReview: resolvedNeedsHumanReview } : {}),
           // a verificação de entrada deixou entrar com aviso (board incerto / board errado num conserto do serviço)
           ...(intakeReview.has(it.tempId) ? { needsHumanReview: true } : {}),
-          ...(input.stamp && isStory
+          ...(stamp && isStory
             ? {
-                ...(input.stamp.labels?.length ? { labels: [...new Set(input.stamp.labels)] } : {}),
-                ...(input.stamp.reviewChain ? { reviewChain: input.stamp.reviewChain } : {}),
+                ...(stamp.labels?.length ? { labels: [...new Set(stamp.labels)] } : {}),
+                ...(stamp.reviewChain ? { reviewChain: stamp.reviewChain } : {}),
               }
             : {}),
         };
-        if (input.stamp?.links?.length && isStory) {
+        if (stamp?.links?.length && isStory) {
           const have = new Set(card.links.map((l) => `${l.rel}:${l.to}`));
-          card.links = [...card.links, ...input.stamp.links.filter((l) => existing.has(l.to) && !have.has(`${l.rel}:${l.to}`))];
+          card.links = [...card.links, ...stamp.links.filter((l) => existing.has(l.to) && !have.has(`${l.rel}:${l.to}`))];
         }
         await writeCard(input.boardId, card);
         existing.add(id);

@@ -24,6 +24,8 @@ import { mayRequestPublish, publishRefusalReason } from "@/lib/storymap/release-
 import { collectDelivery } from "@/lib/storymap/runner/delivery-deps";
 import type { DeliveryOverview } from "@/lib/storymap/runner/delivery-view";
 import { logHumanActionAction } from "./audit-actions";
+import { organizeOnlyNow } from "@/lib/storymap/organize-only";
+import { ORGANIZE_ONLY_WHY } from "@/lib/storymap/organize-only-core";
 
 type Result<T = unknown> = { ok: true; data?: T } | { ok: false; error: string };
 
@@ -79,6 +81,7 @@ export async function publishStagedAction(input: {
   try {
     const board = String(input.board || "").trim();
     if (!board) return { ok: false, error: "board ausente." };
+    if (organizeOnlyNow(board)) return { ok: false, error: `${ORGANIZE_ONLY_WHY}: nada é publicado a partir deste board.` };
     const machinery = publishMachineryState();
     if (!mayRequestPublish(machinery)) {
       return { ok: false, error: publishRefusalReason(machinery) ?? "A publicação não está disponível." };

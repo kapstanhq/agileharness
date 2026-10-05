@@ -1308,10 +1308,13 @@ export function KanbanCardActionsMenu({
   boardId,
   cardId,
   card,
+  organizeOnly = false,
 }: {
   boardId: string;
   cardId: string;
   card: Card;
+  /** board só de organização: some o «Sincronizar» (ele roda um agente) — mover, adiar e excluir ficam */
+  organizeOnly?: boolean;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -1465,7 +1468,7 @@ export function KanbanCardActionsMenu({
               <p className="px-1 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wide text-fg-subtle">
                 Ações
               </p>
-              <button
+              {!organizeOnly && <button
                 type="button"
                 disabled={busy}
                 onClick={sync}
@@ -1474,7 +1477,7 @@ export function KanbanCardActionsMenu({
               >
                 <RefreshCw className="h-3.5 w-3.5 shrink-0 text-sky-500" />
                 <span className="min-w-0 flex-1 truncate">Sincronizar</span>
-              </button>
+              </button>}
               <button
                 type="button"
                 disabled={busy}

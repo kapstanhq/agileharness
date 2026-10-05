@@ -791,8 +791,15 @@ chain mark, `reviewChain: {root, round}`, set in the same write that creates it 
 fix card; an agent's `create_card` with `continuesFrom`; a fix the owner asked for from the Inbox). An
 agent cannot write that field, and the count is the **tree** of the root — the reviewed card plus every
 card marked with it, on any board — so sibling fixes add up and routing a fix or moving a card does not
-reset it. An agent's delivery created without `continuesFrom` inside a session whose card has open
-review findings inherits that card's chain. At `autorun.reviewRoundsCap` (2 by default) no new fix card
+reset it. Every path an agent creates cards through (`create_card`, `usm_capture` apply, `report_issue`,
+anything that reaches the create actions) runs the same gate. Inside a **proven** session whose card carries
+a review chain — it is already a round, or has review findings open, or had them closed by an agent — every
+story created inherits that card's chain, whatever its type, and a `continuesFrom` pointing outside the
+session's tree is refused. A session is proven by the HMAC the service mints for it
+(`x-agileharness-session-proof`, written into the MCP config of the sessions it spawns and returned by
+`worktree_open`); the `session:<id>` label alone is attribution only, and an unproven label is ignored for
+this decision and logged. Cards in the board's trash still count in the tree, and a board that cannot be
+read makes the gate ask the owner instead of counting fewer rounds. At `autorun.reviewRoundsCap` (2 by default) no new fix card
 is opened: the owner is asked, in plain words, to accept the remaining risk, pay for one more round, or
 stop. The owner's answer is read from a **server-side record** written by the answer action
 (`runnerStateDir()/review-rounds.jsonl`), never from the card's frontmatter, and the merge train never
@@ -802,12 +809,11 @@ given in — the root's reviewed commit range and mode; new code or reopening th
 critical finding asks again regardless. "Stop" defers every live card of the tree, on any board, so no
 agent spends on it or moves it toward production; only the operator's session lifts an owner's deferral.
 
-**Known limitation: the ceiling contains cost, it is not a security boundary.** It bounds what the normal
-flow spends — an honest agent opening fixes, the technical audit, a fix the owner asks for. An agent
-acting in bad faith can still open work outside the chain: point `continuesFrom` at an unrelated decoy
-card, create through other surfaces (`usm_capture`, `report_issue`) or delete and recreate a card, or
-declare a misleading session label. Those paths are governed by the risk matrix, the triage judge and
-the owner's Inbox, not by the round count.
+**Known limitation: the proof is as strong as the host's separation.** A decoy `continuesFrom`, the other
+creation surfaces, delete-and-recreate and a borrowed session label are closed by the gate above. What
+remains: an agent working outside any session (no chain to inherit), and an agent that can read the
+service's state directory on the same host (it could read another session's MCP config and borrow its
+proof) — the latter closes only with agents running as a different user than the service.
 
 **Narrowing lets what is running finish.** Work already executing is not interrupted and live
 conductors are not parked; only the engine and conductor queues are cleared of the types that no

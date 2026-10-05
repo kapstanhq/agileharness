@@ -63,3 +63,36 @@ describe("kanbanBoard", () => {
     expect(out.config).toBe(board.config);
   });
 });
+
+describe("card no fim do fluxo: só a face", () => {
+  const done = card({
+    status: "concluida",
+    acceptance: ["Dado … Quando … Então …"],
+    narrative: { role: "Como sócio da oficina", want: "quero reservar", soThat: "para não disputar a bancada" },
+    bugReport: { brief: "texto longo", severity: "alta", expected: "x", actual: "y", steps: ["1"], target: null } as never,
+    priorityCall: { rank: 2, rationale: "por que agora", riskiestAssumption: "a hipótese", source: "agent", assessedAt: "2026-01-01" },
+    costImpact: { monthlyAmount: 1, scope: "infra", assumptions: "x" } as never,
+  });
+
+  it("guarda o que a face mostra (título, tipo, porquê, severidade, bloqueio aberto) e tira critérios, tarefas, custo e raciocínio", () => {
+    const k = kanbanCard(done, true);
+    expect(k.title).toBe("Reservar uma bancada");
+    expect(k.narrative?.soThat).toBe("para não disputar a bancada");
+    expect(k.narrative?.role).toBeNull();
+    expect(k.bugReport?.severity).toBe("alta");
+    expect(k.bugReport?.brief).toBe("");
+    expect(k.priorityCall?.rank).toBe(2);
+    expect(k.priorityCall?.rationale).toBe("");
+    expect(k.findings.map((f) => f.id)).toEqual(["a"]);
+    expect(k.acceptance).toEqual([]);
+    expect(k.tasks).toEqual([]);
+    expect("costImpact" in k).toBe(false);
+  });
+
+  it("um card que NÃO terminou segue com critérios e tarefas (o arraste e os gates os leem)", () => {
+    const k = kanbanCard({ ...done, status: "desenvolver" }, false);
+    expect(k.acceptance).toHaveLength(1);
+    expect(k.tasks).toHaveLength(1);
+    expect(k.narrative?.role).toBe("Como sócio da oficina");
+  });
+});

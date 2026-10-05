@@ -12,6 +12,7 @@ import { isDeliveryStory, needsPlacement, servesTarget } from "@/lib/storymap/un
 import { effectiveAutonomy } from "@/lib/storymap/autonomy";
 import { isConducted } from "@/lib/storymap/driver";
 import { deferralText } from "@/lib/storymap/deferral";
+import { isOrganizeOnly } from "@/lib/storymap/organize-only-core";
 import type { BoardConfig, Card, StatusDef } from "@/lib/storymap/types";
 import { VocabChips } from "./Chip";
 import {
@@ -289,12 +290,12 @@ function KanbanCardImpl({
             <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
               {/* Kebab (⋯) — secondary/destructive actions (Sincronizar · Excluir card), revealed on
                   card hover, to the LEFT of the operational icons. */}
-              <KanbanCardActionsMenu boardId={config.id} cardId={card.id} card={card} />
+              <KanbanCardActionsMenu boardId={config.id} cardId={card.id} card={card} organizeOnly={isOrganizeOnly(config)} />
               <KanbanCardHistoryButton boardId={config.id} cardId={card.id} card={card} config={config} />
               <KanbanCardConsoleButton boardId={config.id} cardId={card.id} />
               <KanbanCardNextAction boardId={config.id} cardId={card.id} />
               <MoveToPopover boardId={config.id} cardId={card.id} card={card} config={config} />
-              <KanbanCardRunButton boardId={config.id} cardId={card.id} hasTrigger={hasTrigger} card={card} busy={busy} />
+              <KanbanCardRunButton boardId={config.id} cardId={card.id} hasTrigger={hasTrigger && !isOrganizeOnly(config)} card={card} busy={busy} />
             </div>
           </div>
         )}
@@ -408,7 +409,8 @@ function DeliveryStepper({
   // deployProof and advances through the gate; a manual advance would just be rejected by
   // hasDeployProof, so offering the button is a lie. It reads "publicando…" the whole wait instead.
   const isDeployStep = cur.onEnter === "promote-and-deploy";
-  const showButton = !!onAdvance && !!next && cur.autorun !== true && !cur.autoEnterTerminal && !isDeployStep;
+  // board só de organização: sem «Aprovar entrega»/«Publicar» — o passo seguinte não roda lá (mover segue no «Mover»).
+  const showButton = !!onAdvance && !!next && cur.autorun !== true && !cur.autoEnterTerminal && !isDeployStep && !isOrganizeOnly(config);
   const isPublish = next?.onEnter === "promote-and-deploy";
   const working = cur.autorun === true ? "automático" : cur.autoEnterTerminal || isDeployStep ? "publicando…" : null;
   return (

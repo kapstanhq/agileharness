@@ -66,6 +66,7 @@ vi.mock("@/app/actions", async (orig) => {
 import { registerStorymapTools } from "./tools";
 import { coerceCard } from "@/lib/storymap/repo";
 import { runWithMcpActor } from "./actor";
+import { sessionProofFor } from "./session-proof";
 
 type ToolHandler = (args: Record<string, unknown>) => CallToolResult | Promise<CallToolResult>;
 function handler(): ToolHandler {
@@ -90,7 +91,11 @@ const capQ = (selected: string) => ({
   selectedOptionIds: [selected],
   answeredAt: "2026-03-02",
 });
-const asSession = <T,>(sessionId: string, fn: () => Promise<T>) => runWithMcpActor({ level: "orch", tokenEnv: "T", caller: { kind: "session", id: sessionId } } as never, fn);
+// a SESSÃO só liga com a prova que o serviço cunha (mcp/session-proof.ts) — o rótulo sozinho é só atribuição
+const SECRET = "segredo-de-teste-da-oficina-0123456789";
+process.env.AGILEHARNESS_SESSION_SECRET = SECRET;
+const asSession = <T,>(sessionId: string, fn: () => Promise<T>, proof: string | null | undefined = sessionProofFor(sessionId, SECRET)) =>
+  runWithMcpActor({ level: "orch", tokenEnv: "T", caller: { kind: "session", id: sessionId, ...(proof ? { proof } : {}) } } as never, fn);
 
 beforeEach(() => {
   cards = [card("story-ex7100", { storyType: "user" } as Partial<Card>), card("story-ex7101")];
@@ -175,5 +180,71 @@ describe("create_card com continuesFrom — o teto de rodadas", () => {
     // e o segundo, na mesma sessão, esbarra no teto
     const r = await asSession("s-1", () => handler()(args()) as Promise<CallToolResult>);
     expect(JSON.parse(text(r))).toMatchObject({ created: [], ownerAsked: true });
+  });
+
+  it("RÓTULO FALSO (B2): sem a prova, ou com a prova de outra sessão, o rótulo não liga a sessão — nada é herdado", async () => {
+    cards = cards.map((c) =>
+      c.id === "story-ex7101" ? { ...c, findings: [{ id: "f1", lens: "security", severity: "high", status: "open", title: "a pinça raspa" }] } : c,
+    );
+    sessions = [{ sessionId: "s-1", board: "oficina", cardId: "story-ex7101" }];
+    await asSession("s-1", () => handler()(args()) as Promise<CallToolResult>, null);
+    await asSession("s-1", () => handler()(args()) as Promise<CallToolResult>, sessionProofFor("s-2", SECRET));
+    expect(commits).toHaveLength(2);
+    expect(commits.every((c) => c.stamp === undefined)).toBe(true);
+  });
+
+  it("sessão encerrada não liga, mesmo com a prova certa", async () => {
+    cards = cards.map((c) =>
+      c.id === "story-ex7101" ? { ...c, findings: [{ id: "f1", lens: "security", severity: "high", status: "open", title: "a pinça raspa" }] } : c,
+    );
+    sessions = [{ sessionId: "s-1", board: "oficina", cardId: "story-ex7101", endedAt: "2026-03-01T00:00:00Z" } as never];
+    await asSession("s-1", () => handler()(args()) as Promise<CallToolResult>);
+    expect(commits[0].stamp).toBeUndefined();
+  });
+
+  it("ISCA (M1): qualquer story herda — user story ou sem storyType também viram rodada da sessão", async () => {
+    cards = cards.map((c) =>
+      c.id === "story-ex7101" ? { ...c, findings: [{ id: "f1", lens: "security", severity: "high", status: "open", title: "a pinça raspa" }] } : c,
+    );
+    sessions = [{ sessionId: "s-1", board: "oficina", cardId: "story-ex7101" }];
+    const { storyType: _omit, serves: _s, ...semTipo } = args();
+    await asSession("s-1", () => handler()({ ...semTipo, parent: "step-ex7100" }) as Promise<CallToolResult>);
+    expect(commits[0].stamp).toMatchObject({ reviewChain: { root: "oficina/story-ex7101", round: 2 } });
+  });
+
+  it("ISCA (M1): continuesFrom fora da árvore da sessão é RECUSADO, e nada é criado", async () => {
+    cards = [
+      ...cards.map((c) =>
+        c.id === "story-ex7101" ? ({ ...c, findings: [{ id: "f1", lens: "security", severity: "high", status: "open", title: "a pinça raspa" }] } as Card) : c,
+      ),
+      card("story-ex7150", { title: "Um card qualquer sem cadeia" }),
+    ];
+    sessions = [{ sessionId: "s-1", board: "oficina", cardId: "story-ex7101" }];
+    const r = await asSession("s-1", () => handler()(args("story-ex7150")) as Promise<CallToolResult>);
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/FORA da cadeia de revisão/);
+    expect(commits).toHaveLength(0);
+  });
+
+  it("ISCA (M1): fechar os achados com triage_finding (por agente) não desliga a herança na sessão", async () => {
+    cards = cards.map((c) =>
+      c.id === "story-ex7101"
+        ? { ...c, findings: [{ id: "f1", lens: "security", severity: "high", status: "fixed", statusBy: "copilot", title: "a pinça raspa" }] }
+        : c,
+    );
+    sessions = [{ sessionId: "s-1", board: "oficina", cardId: "story-ex7101" }];
+    await asSession("s-1", () => handler()(args()) as Promise<CallToolResult>);
+    expect(commits[0].stamp).toMatchObject({ reviewChain: { root: "oficina/story-ex7101" } });
+  });
+
+  it("achados fechados pelo DONO encerram a herança (só ele encerra a cadeia)", async () => {
+    cards = cards.map((c) =>
+      c.id === "story-ex7101"
+        ? { ...c, findings: [{ id: "f1", lens: "security", severity: "high", status: "fixed", statusBy: "human", title: "a pinça raspa" }] }
+        : c,
+    );
+    sessions = [{ sessionId: "s-1", board: "oficina", cardId: "story-ex7101" }];
+    await asSession("s-1", () => handler()(args()) as Promise<CallToolResult>);
+    expect(commits[0].stamp).toBeUndefined();
   });
 });

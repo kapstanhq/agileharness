@@ -278,7 +278,10 @@ function KanbanBoardInner({ board, boards, initialOwner }: { board: Board; board
         onClick: () => router.push(cardHref(config.id, card.id, { view: "campos" })),
       });
     }
-    const verdict = toStatus ? evaluateGate(card, toStatus, config) : null;
+    // um card que estava no FIM do fluxo chega ao quadro reduzido à face (sem critérios/tarefas — kanban-payload.ts):
+    // avaliar o gate com ele mentiria sobre o que falta; o servidor já disse o motivo.
+    const fromTerminal = config.statuses.find((s) => s.id === card.status)?.terminal === true;
+    const verdict = toStatus && !fromTerminal ? evaluateGate(card, toStatus, config) : null;
     if (!verdict || !toStatus) return toast(error);
     toast(error, "error", [
       // B11 — o que falta para o gate está no CARD (os campos), não num item do Inbox (esta recusa não gera um).
@@ -732,8 +735,16 @@ function LaneColumn({
     [lane.demand, sorted, live],
   );
   const [openFila, setOpenFila] = useState(false);
-  const showSections = sections.length > 1 || sections.some((s) => s.collapsed);
-  const rendered = showSections ? sections.flatMap((s) => (s.collapsed && !openFila ? [] : s.cards)) : sorted;
+  // A raia do FIM do fluxo («No ar») acumula centenas de cards num board maduro e, desenhada inteira, era a maior parte
+  // da página (HTML do servidor e hidratação). Mostra os mais recentes; o resto abre no lugar. Uma busca mostra tudo o
+  // que casou.
+  const terminalLane =
+    !lane.demand && !lane.others && lane.statuses.length > 0 && lane.statuses.every((id) => config.statuses.find((st) => st.id === id)?.terminal === true);
+  const [showAllDone, setShowAllDone] = useState(false);
+  const capDone = terminalLane && !filtering && !showAllDone && sorted.length > TERMINAL_LANE_CAP;
+  const shown = capDone ? sorted.slice(0, TERMINAL_LANE_CAP) : sorted;
+  const showSections = !terminalLane && (sections.length > 1 || sections.some((s) => s.collapsed));
+  const rendered = showSections ? sections.flatMap((s) => (s.collapsed && !openFila ? [] : s.cards)) : shown;
   const ownerTotal = owner?.total ?? null;
   // Compacta só a raia vazia DE FATO; a que a busca esvaziou fica larga, dizendo "nenhum card". A raia do dono vazia
   // fica larga também quando há decisão fora do quadro — senão o «+K» sumiria com ela.
@@ -807,8 +818,17 @@ function LaneColumn({
                   {(!sec.collapsed || openFila) && sec.cards.map(card)}
                 </Fragment>
               ))
-            : sorted.map(card)}
+            : shown.map(card)}
         </SortableContext>
+        {capDone && (
+          <button
+            type="button"
+            onClick={() => setShowAllDone(true)}
+            className="mt-1 min-h-8 rounded-md px-1 text-left text-[12px] font-medium text-fg-muted underline-offset-2 transition hover:text-fg hover:underline"
+          >
+            Mostrar todos ({sorted.length})
+          </button>
+        )}
       </div>
     </section>
   );

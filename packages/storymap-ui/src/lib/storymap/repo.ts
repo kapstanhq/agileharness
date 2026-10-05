@@ -11,7 +11,7 @@ import {
   parseYamlMap,
   type FrontmatterRejection,
 } from "./frontmatter";
-import { baseBoardConfigPath, boardConfigPath, boardsDir, cardPath, cardsDir, runnerStateDir } from "./paths";
+import { baseBoardConfigPath, boardConfigPath, boardsDir, cardPath, cardsDir, runnerStateDir, trashDir } from "./paths";
 import { parseBoardConfig, parseCard } from "./contracts";
 import { isCurrencyCode, isReviewLensId } from "./target-profile";
 import { coerceCanvas as coerceCanvasKernel, coerceCanvasTags as coerceCanvasTagsKernel } from "./canvas";
@@ -2463,6 +2463,38 @@ export async function readCards(boardId: string): Promise<Card[]> {
     }),
   );
   return results.filter((c): c is Card => c !== null);
+}
+
+/**
+ * Os cards na LIXEIRA do board (`.trash/card-<id>.md`, story-ex9528 M2) — para quem precisa CONTAR o que já existiu (o teto
+ * de rodadas de revisão: apagar um conserto não pode tirá-lo da conta). Um arquivo ilegível fica de fora com o motivo no
+ * log, como em {@link readCards}; a pasta ausente é lixeira vazia; outro erro de leitura da pasta LANÇA (quem conta decide
+ * o lado seguro).
+ */
+export async function readTrashedCards(boardId: string): Promise<Card[]> {
+  const dir = trashDir(boardId);
+  let files: string[];
+  try {
+    files = (await fs.readdir(dir)).filter((f) => f.startsWith("card-") && f.endsWith(".md"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return [];
+    throw err;
+  }
+  const out: Card[] = [];
+  for (const file of files) {
+    const id = file.replace(/^card-/, "").replace(/\.md$/, "");
+    try {
+      const full = path.join(dir, file);
+      const stat = await fs.stat(full).catch(() => null);
+      assertStatWithinByteCap(stat?.size, `${boardId}/.trash/${file}`);
+      const raw = await fs.readFile(full, "utf8");
+      const { data, content } = parseFrontmatter(raw, `${boardId}/.trash/${file}`);
+      out.push(coerceCard(id, data as Record<string, any>, content, stat?.mtimeMs));
+    } catch (err) {
+      console.error(`[storymap] ignorando card ilegível na lixeira ${boardId}/${id}:`, describeFrontmatterError(err));
+    }
+  }
+  return out;
 }
 
 /**

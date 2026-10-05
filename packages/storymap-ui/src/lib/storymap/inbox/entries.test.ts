@@ -48,6 +48,25 @@ describe("foldByCause", () => {
     expect(decidir[0].facets.map((f) => f.kind)).toEqual(["approval"]);
   });
 
+  it("a MESMA causa em Decidir e em Acompanhar ⇒ 1 entrada só, em Decidir (o acompanhamento vira faceta da decisão)", () => {
+    const mk = (key: string, bucket: "decidir" | "acompanhar", kind: string, cardId: string) =>
+      ({ key, boardId: "b1", boardName: "B", itemId: key, cardId, cardTitle: `Card ${cardId}`, kind, causeKey: "card:c7", facets: [], decision: { bucket, ask: `${kind} ${cardId}` } }) as never;
+    const decide = mk("b1/c7:gate", "decidir", "gate", "c7");
+    const waits = mk("b1/c7:deploy-failed", "acompanhar", "deploy-failed", "c7");
+    const other = mk("b1/c8:deploy-failed", "acompanhar", "deploy-failed", "c8");
+    const folded = foldByCause([waits, decide, other]);
+    const { decidir, acompanhar } = inboxSections(folded);
+    expect(decidir).toHaveLength(1);
+    expect(acompanhar).toHaveLength(0);
+    expect(decidir[0].facets.map((f) => f.cardId).sort()).toEqual(["c7", "c8"]);
+    // outro acompanhamento do MESMO card e causa (ex.: a auditoria de entrega) não é a publicação parada — segue sozinho
+    const audit = mk("b1/c7:delivery-audit", "acompanhar", "delivery-audit", "c7");
+    expect(inboxSections(foldByCause([decide, audit])).acompanhar).toHaveLength(1);
+    // causa diferente em Acompanhar segue sozinha
+    const unrelated = { ...(other as object), key: "b1/c9:x", itemId: "c9:x", cardId: "c9", causeKey: "card:c9" } as never;
+    expect(inboxSections(foldByCause([decide, unrelated])).acompanhar).toHaveLength(1);
+  });
+
   it("uma decisão do sistema nunca dobra (a causa dela é ela mesma)", () => {
     const sd = { key: "b1/sd:1", boardId: "b1", boardName: "B", itemId: "sd:1", cardId: "c1", cardTitle: "", kind: "system-decision", causeKey: "sd:1", facets: [], decision: { bucket: "acompanhar" } } as never;
     const sd2 = { ...(sd as object), key: "b1/sd:2", itemId: "sd:2", causeKey: "sd:2" } as never;

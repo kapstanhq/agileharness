@@ -213,9 +213,13 @@ export function isStopAnswer(question: Pick<CardQuestion, "text" | "selectedOpti
 }
 
 /** A pergunta ao dono quando a cadeia chega ao teto — linguagem simples, classe dinheiro (mais uma rodada custa). PURA. */
-export function roundsCapQuestionInput(input: { title: string; rounds: number; summary: string }): StructuredQuestionInput {
+export function roundsCapQuestionInput(input: { title: string; rounds: number | null; summary: string }): StructuredQuestionInput {
   return {
-    text: `${ROUNDS_CAP_QUESTION_PREFIX} a revisão de «${input.title}» achou problema de novo, depois de ${input.rounds} rodadas. Como seguir?`,
+    // `rounds: null` = a contagem não pôde ser conferida (um board não foi lido): pergunta ao dono em vez de contar a menos
+    text:
+      input.rounds == null
+        ? `${ROUNDS_CAP_QUESTION_PREFIX} a revisão de «${input.title}» pediu mais um conserto, mas não consegui conferir quantas rodadas já houve (um board não foi lido). Como seguir?`
+        : `${ROUNDS_CAP_QUESTION_PREFIX} a revisão de «${input.title}» achou problema de novo, depois de ${input.rounds} rodadas. Como seguir?`,
     context:
       `O que ficou aberto: ${input.summary.trim() || "veja os avisos do card"}. ` +
       "Cada rodada é uma sessão inteira de agente; uma checagem por leitura de código pode nunca fechar em 100%.",
@@ -240,5 +244,27 @@ export function roundsCapQuestionInput(input: { title: string; rounds: number; s
  * a cadeia sozinho (MCP `create_card`), mesmo sem `continuesFrom`. PURA.
  */
 export function hasOpenReviewFindings(card: Pick<Card, "findings"> | null | undefined): boolean {
-  return (card?.findings ?? []).some((f) => f.status === "open" && f.lens !== "general" && (f.severity === "blocker" || f.severity === "high" || f.severity === "medium"));
+  return (card?.findings ?? []).some((f) => f.status === "open" && isReviewFinding(f));
+}
+
+/** Achado de REVISÃO (lente de revisão, severidade média para cima) — a régua de {@link hasOpenReviewFindings}. PURA. */
+function isReviewFinding(f: NonNullable<Card["findings"]>[number]): boolean {
+  return f.lens !== "general" && (f.severity === "blocker" || f.severity === "high" || f.severity === "medium");
+}
+
+/**
+ * O card CARREGA uma cadeia de conserto de revisão? — o que faz uma entrega criada pela sessão que o conduz herdar a
+ * cadeia sozinha. Vale quando o card já é rodada (`reviewChain`), quando tem achados de revisão abertos, ou quando um
+ * achado de revisão dele foi fechado por um AGENTE (`statusBy` que não é humano): fechar os achados com `triage_finding`
+ * não pode desligar a herança dentro da mesma sessão — só o dono (ou a revisão de novo) encerra a cadeia. PURA.
+ */
+export function cardCarriesReviewChain(card: Pick<Card, "findings" | "reviewChain"> | null | undefined): boolean {
+  if (!card) return false;
+  if (card.reviewChain) return true;
+  return (card.findings ?? []).some((f) => isReviewFinding(f) && (f.status === "open" || (f.statusBy != null && f.statusBy !== "human")));
+}
+
+/** `a` e `b` estão na MESMA árvore de cadeia (a mesma raiz)? PURA. */
+export function sameReviewTree(a: { board: string; id: string }, b: { board: string; id: string }, all: readonly BoardCard[]): boolean {
+  return chainRootOf(a.board, a.id, all) === chainRootOf(b.board, b.id, all);
 }

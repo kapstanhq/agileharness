@@ -75,6 +75,8 @@ import { waitForAnyCore, waitForRunCore, type AnyWatcher } from "@/lib/storymap/
 import { getRunnerEngine } from "@/lib/storymap/runner/engine";
 import { screenStillness } from "@/lib/terminal/attention-watch";
 import { currentMcpActor } from "./actor";
+import { MCP_CALLER_HEADER } from "./caller";
+import { SESSION_PROOF_HEADER, currentSessionProof } from "./session-proof";
 import { CONDUCTOR_PHASES } from "@/lib/storymap/card-live-status";
 // WS-1 — the agent-session worktree lifecycle (open/submit/refresh/discard). The logic lives in the runner
 // (DI-testable against a temp repo); these tools are only the MCP surface over it.
@@ -921,11 +923,17 @@ export function registerDevTools(server: McpServer): void {
       });
       if (!res.ok) return fail(res.reason);
       const s = res.session;
+      // a prova desta sessão (mcp/session-proof.ts): quem abriu a sessão por aqui (sem a config de MCP que o spawn
+      // escreve) a apresenta nos cabeçalhos para ser reconhecido como ELA no que decide por sessão
+      const proof = currentSessionProof(s.sessionId);
       return json({
         sessionId: s.sessionId,
         path: s.worktreePath,
         branch: s.branch,
         baseCommit: s.baseCommit,
+        ...(proof
+          ? { sessionHeaders: { [MCP_CALLER_HEADER]: `session:${s.sessionId}`, [SESSION_PROOF_HEADER]: proof } }
+          : {}),
         next: "trabalhe em `path`; depois worktree_submit({sessionId}) para integrar pelo merge train",
       });
     },

@@ -83,6 +83,7 @@ import { registerResources } from "@/lib/storymap/mcp/resources";
 import { setServerLevel } from "@/lib/storymap/mcp/register";
 import { runWithMcpActor, type McpActor } from "@/lib/storymap/mcp/actor";
 import { MCP_CALLER_HEADER, parseCallerTag } from "@/lib/storymap/mcp/caller";
+import { SESSION_PROOF_HEADER, parseSessionProof } from "@/lib/storymap/mcp/session-proof";
 import type { McpLevel } from "@/lib/storymap/types";
 
 // Tools touch the filesystem + the runner engine singleton (child_process), so this
@@ -257,7 +258,10 @@ async function handle(req: Request, ctx: RouteCtx): Promise<Response> {
   // cacheado por level (a superfície montada não muda por request); a identidade vem do ALS, não do cache.
   // O rótulo que o agente declarou de si (mcp/caller.ts) entra no ator só como ATRIBUIÇÃO — o nível continua vindo do
   // token, e nada autoriza por este cabeçalho.
-  const caller = parseCallerTag(req.headers.get(MCP_CALLER_HEADER));
+  const declared = parseCallerTag(req.headers.get(MCP_CALLER_HEADER));
+  // a prova de sessão (mcp/session-proof.ts) viaja ao lado do rótulo — quem decide por sessão a VERIFICA; aqui é só dado
+  const proof = declared?.kind === "session" ? parseSessionProof(req.headers.get(SESSION_PROOF_HEADER)) : null;
+  const caller = declared && proof ? { ...declared, proof } : declared;
   const actor: McpActor = caller ? { ...portao.value, caller } : portao.value;
   return runWithMcpActor(actor, () => handlerFor(presented, actor.level)(req));
 }

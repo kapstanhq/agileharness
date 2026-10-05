@@ -27,6 +27,7 @@ import { kanbanColumnStatuses, kanbanStories } from "@/lib/storymap/views";
 import { byUpdatedDesc } from "@/lib/storymap/order";
 import { cardSurface } from "@/lib/ui";
 import type { BoardConfig, Card } from "@/lib/storymap/types";
+import { isOrganizeOnly } from "@/lib/storymap/organize-only-core";
 
 const MAX_PER_STAGE = 6;
 
@@ -269,7 +270,7 @@ export function KanbanFeed({
                           <KanbanCardRunButton
                             boardId={boardId}
                             cardId={card.id}
-                            hasTrigger={!!def?.trigger}
+                            hasTrigger={!!def?.trigger && !isOrganizeOnly(config)}
                             card={card}
                           />
                         </span>

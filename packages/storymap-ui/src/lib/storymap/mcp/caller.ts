@@ -27,6 +27,11 @@ export type McpCallerKind =
 export interface McpCaller {
   kind: McpCallerKind;
   id: string;
+  /**
+   * a prova de sessão (mcp/session-proof.ts) que veio no cabeçalho ao lado do rótulo — só um DADO aqui; quem decide por
+   * sessão verifica (runner/session-binding.ts). Ausente na atribuição.
+   */
+  proof?: string;
 }
 
 const KINDS: readonly McpCallerKind[] = ["session", "copilot-tick", "copilot-chat", "external"];
