@@ -434,13 +434,20 @@ function PublishRequestsStrip({
   onRerequest: () => void;
 }) {
   const n = requests.pending;
+  // a régua do Inbox: só é «decisão no Inbox» o pedido que ainda vale; o resto diz o que espera (sem a contagem nova, o texto antigo)
+  const decide = requests.decide ?? n;
+  const stale = requests.stale ?? 0;
+  const waitingOn = requests.waitingOn ?? [];
+  const parts = [
+    decide > 0 ? `${decide === 1 ? "1 pedido espera a sua autorização" : `${decide} pedidos esperam a sua autorização`} — a decisão está no Inbox deste board` : null,
+    stale > 0 ? `${stale === 1 ? "1 pedido envelheceu" : `${stale} pedidos envelheceram`} — refaça aqui` : null,
+    waitingOn.length ? `nada para você decidir: espera a publicação de ${waitingOn.join(", ")}` : null,
+  ].filter(Boolean);
   return (
     <section className={cn(cardSurfaceSm, "flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between")}>
       <div className="flex min-w-0 items-baseline gap-2">
         <span className={cardEyebrow}>Pedidos de publicação</span>
-        <span className="text-[12px] text-fg-muted">
-          {n === 1 ? "1 pedido espera alguém" : `${n} pedidos esperam alguém`} — a decisão está no Inbox deste board
-        </span>
+        <span className="text-[12px] text-fg-muted">{parts.join(" · ") || (n === 1 ? "1 pedido de publicação parado" : `${n} pedidos de publicação parados`)}</span>
       </div>
       {requests.rerequesting ? (
         <span className="text-[12px] font-medium text-fg-muted" title="A medição da publicação está rodando; o pedido novo volta ao Inbox.">

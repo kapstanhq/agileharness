@@ -106,6 +106,7 @@ export const INBOX_KIND_NOUN: Readonly<Record<CockpitItemKind, string>> = {
   "effect-failed": "Ação que não rodou",
   stalled: "Card parado",
   "locked-exec": "Comando para aprovar",
+  "publish-approval": "Autorizar publicação",
 };
 
 /** Os termos do glossário que `text` contém (vazio = limpo). PURA. */

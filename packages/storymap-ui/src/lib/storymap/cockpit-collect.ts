@@ -26,6 +26,7 @@ import { listGovernanceDrafts, readProposal, readWireframe } from "@/lib/storyma
 import { listApprovalRequests, type ApprovalRequest } from "@/lib/storymap/approvals";
 import { approvalRequesterText } from "@/lib/storymap/approval-requester";
 import { lockedExecItem } from "@/lib/storymap/locked-exec-item";
+import { publishApprovalItems } from "@/lib/storymap/publish-approval-item";
 import { getLockedExecService } from "@/lib/storymap/runner/locked-exec-service";
 import type { BoardConfig, Card, GovernanceDraft, WireframeDoc } from "@/lib/storymap/types";
 import type { ProposalDoc } from "@/lib/storymap/smart-capture/types";
@@ -291,6 +292,12 @@ export async function collectBoardCockpit(boardId: string): Promise<BoardCockpit
       return [];
     });
 
+  // (7d) O pedido de autorização do dono que o plano de publicação listou sem card (a linha `planSourced` do livro de
+  //      bloqueios, deploy-blocks.ts): sem card, só este item o leva ao Inbox. Livro ilegível ⇒ sem item.
+  const publishApprovalList: CockpitItem[] = await import("@/lib/storymap/runner/deploy-blocks")
+    .then(async ({ readDeployBlocks }) => publishApprovalItems(await readDeployBlocks(), boardId, Date.now()))
+    .catch(() => []);
+
   // (8) WS-12.2 (D16) — stamp the items the autonomous copiloto GAVE UP on (per-item anti-noop backoff), so the
   //     cockpit can show the chip that makes the hand-off explicit ("this one is yours now"). Read-only over the
   //     durable orchestrator state; fail-open (an unreadable state just means no chips).
@@ -310,6 +317,7 @@ export async function collectBoardCockpit(boardId: string): Promise<BoardCockpit
     ...approvalItems,
     ...meterItems,
     ...lockedExecItems,
+    ...publishApprovalList,
   ];
   // B6 — o aviso de sistema sobre a morte de um run vira EVIDÊNCIA do travado do mesmo card (um fato, um item).
   const folded = foldRunDiagnostics(items0, cardsById);

@@ -174,9 +174,8 @@ async function worktreePending(path: string, exec: ExecFn): Promise<boolean | nu
 
 /** Os pedidos de publicação do board que esperam alguém (livro de bloqueios de deploy), e se estão sendo refeitos. */
 async function publishRequestsOf(board: string, now: number): Promise<DeliveryOverview["publishRequests"]> {
-  const [{ readDeployBlocks, isRerequesting }, { needsHumanRows }] = await Promise.all([import("./deploy-blocks"), import("./owner-approval")]);
-  const rows = needsHumanRows(await readDeployBlocks(), board);
-  return { board, pending: rows.length, rerequesting: rows.some((r) => isRerequesting(r, now)) };
+  const [{ readDeployBlocks }, { publishRequestsSummary }] = await Promise.all([import("./deploy-blocks"), import("./owner-approval")]);
+  return { board, ...publishRequestsSummary(await readDeployBlocks(), board, now) };
 }
 
 /**

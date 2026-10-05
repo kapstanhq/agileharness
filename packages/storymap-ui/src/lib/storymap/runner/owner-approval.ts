@@ -24,7 +24,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { findRepoRoot } from "@/lib/storymap/paths";
 import { buildOwnerApproval, declaredStaleMarkers, recordRefusedAsStale, runDeclaredRecord, type OwnerApproval, type OwnerApprovalRequest } from "./deploy-proof";
-import { cardBoardOf, freshApprovals, grantDeployApprovals, markRerequested, mutateDeployBlocks, readDeployBlocks, type DeployBlockRow } from "./deploy-blocks";
+import { cardBoardOf, freshApprovals, grantDeployApprovals, isRerequesting, markRerequested, mutateDeployBlocks, readDeployBlocks, type DeployBlockRow } from "./deploy-blocks";
 
 const pexec = promisify(execFile);
 
@@ -172,6 +172,40 @@ export async function rerequestPublishRequests(
 /** As linhas `needs-human` do board — os pedidos de publicação que esperam alguém (o que o botão da Esteira refaz). PURA. */
 export function needsHumanRows(rows: readonly DeployBlockRow[], board: string): DeployBlockRow[] {
   return rows.filter((r) => r.board === board && r.phase === "needs-human");
+}
+
+/** O que a Esteira diz dos pedidos de publicação do board — com a MESMA régua do Inbox. */
+export interface PublishRequestsSummary {
+  /** as linhas `needs-human` do board (o que o botão «Refazer» refaz). */
+  pending: number;
+  /** as que têm um pedido do dono que AINDA VALE para decidir agora (o «Autorizar» do Inbox). */
+  decide: number;
+  /** as que só têm pedidos que o sistema sabe velhos (o Inbox manda refazer pela Esteira). */
+  stale: number;
+  /** o que seguram as que não pedem nada ao dono agora (já autorizado, ou a causa não pede autorização): as unidades. */
+  waitingOn: string[];
+  rerequesting: boolean;
+}
+
+/**
+ * Os pedidos de publicação do board como a Esteira os conta: só é «decisão no Inbox» a linha do dono com pedido que ainda
+ * vale (fora do refazer); a que não pede nada agora (o dono já autorizou e ela espera outra publicação, ou a causa não
+ * traz pedido) diz o que ela espera — a Esteira dizia «1 pedido espera alguém — a decisão está no Inbox» com o Inbox
+ * vazio. PURA.
+ */
+export function publishRequestsSummary(rows: readonly DeployBlockRow[], board: string, now: number): PublishRequestsSummary {
+  const mine = needsHumanRows(rows, board);
+  const rerequesting = (r: DeployBlockRow) => isRerequesting(r, now);
+  const asks = (r: DeployBlockRow) => r.decider === "owner" && freshApprovals(r).length > 0;
+  const staleOnly = (r: DeployBlockRow) => r.decider === "owner" && !asks(r) && (r.staleApprovals?.length ?? 0) > 0;
+  const quiet = mine.filter((r) => !rerequesting(r) && !asks(r) && !staleOnly(r));
+  return {
+    pending: mine.length,
+    decide: mine.filter((r) => !rerequesting(r) && asks(r)).length,
+    stale: mine.filter((r) => !rerequesting(r) && staleOnly(r)).length,
+    waitingOn: [...new Set(quiet.flatMap((r) => (r.units.length ? r.units : [r.pkg])))],
+    rerequesting: mine.some(rerequesting),
+  };
 }
 
 /**

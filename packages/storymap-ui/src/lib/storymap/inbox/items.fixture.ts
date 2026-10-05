@@ -87,6 +87,22 @@ export const FIXTURES: Record<CockpitItemKind, { item: CockpitItem; card: Card }
   "merge-failed": { item: mkItem("merge-failed", { id: "c1:merge-failed:r1", runId: "r1", branch: "run/r1", failureReason: "boom" }), card: mkCard({ status: "merge" }) },
   "proxy-audit": { item: mkItem("proxy-audit", { id: "c1:pa:q1", lane: "aprovar", questionId: "q1", prompt: "Qual cor?", answer: "Verde", assumptions: "o guia", confidence: 0.9 }), card: mkCard() },
   "delivery-audit": { item: mkItem("delivery-audit", { id: "c1:da", lane: "aprovar", status: "concluida", sampledAt: "2026-09-27", before: "sem convite", after: "com convite" }), card: mkCard({ status: "concluida" }) },
+  "publish-approval": {
+    item: mkItem("publish-approval", {
+      id: "plan-ask:loja:owner:money",
+      cardId: "",
+      cardTitle: "Publicação do board",
+      status: null,
+      lane: "aprovar",
+      causeKey: "loja:owner:money",
+      pkg: "loja",
+      ownerClass: "money",
+      approvals: [{ hash: `sha256:${"b".repeat(64)}`, files: ["src/cobranca/precos.ts"], units: ["site"], rules: ["codigo-de-cobranca"] }],
+      rerequesting: false,
+      stale: false,
+    }),
+    card: mkCard(),
+  },
   "meter-stalled": { item: mkItem("meter-stalled", { id: "host:meter-stalled:1", cardId: "", status: null, stalledSince: NOW - 3_600_000, detectedAt: NOW, detail: "sem leitura" }), card: mkCard() },
   "data-deletion": {
     item: mkItem("data-deletion", { id: "c1:data-deletion", lane: "aprovar", status: "descontinuar", brief: "remover o convite", scope: [], target: null }),

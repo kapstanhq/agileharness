@@ -64,6 +64,7 @@ export interface InboxEntry {
  */
 export const INBOX_PRECEDENCE: readonly CockpitItemKind[] = [
   "deploy-failed",
+  "publish-approval",
   "effect-failed",
   "stalled",
   "deploy-unsettled",

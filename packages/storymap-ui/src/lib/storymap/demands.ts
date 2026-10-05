@@ -697,7 +697,11 @@ export type CockpitItemKind =
   /** Execução aprovada — um agente propôs um comando que a TRAVA DURA do host recusa a agentes; o dono aprova (o
    *  serviço roda uma vez, confere, desfaz se falhar), recusa, ou — depois — desfaz/mantém. Também os desfechos que
    *  só informam (falhou, desfeito, expirou), até o dono dar «Ok». runner/locked-exec*. */
-  | "locked-exec";
+  | "locked-exec"
+  /** O PEDIDO DE AUTORIZAÇÃO do dono que o plano de publicação (só leitura) lista e que nenhum card registrou — a linha
+   *  do livro de bloqueios nasceu do plano (deploy-blocks.ts `openPlanOwnerRows`): um board pausado nunca tenta publicar,
+   *  então o pedido nunca chegava ao Inbox. Fato do BOARD que publica o pacote, não de um card. */
+  | "publish-approval";
 
 interface CockpitItemBase {
   /** stable id, unique within the board (e.g. `<cardId>:q:<questionId>`) */
@@ -792,6 +796,26 @@ export interface MeterStalledCockpitItem extends CockpitItemBase {
   detectedAt: number;
   /** o que o governador mediu (texto dele, curto). */
   detail: string;
+}
+
+/**
+ * 🔴 O pedido de autorização do dono para publicar, que o PLANO listou sem card nenhum (a linha `planSourced` do livro
+ * de bloqueios). Sem card: `cardId` vazio, como o aviso do medidor. O botão é o mesmo «Autorizar publicar» da publicação
+ * parada (board + causa).
+ */
+export interface PublishApprovalCockpitItem extends CockpitItemBase {
+  kind: "publish-approval";
+  /** a causa no livro do board (o botão grava a autorização dela). */
+  causeKey: string;
+  /** o pacote que o board publica. */
+  pkg: string;
+  ownerClass: string | null;
+  /** os pedidos que ainda valem (o que o botão autoriza). */
+  approvals: Array<{ hash: string; files: string[]; units: string[]; rules: string[] }>;
+  /** o sistema está refazendo o pedido agora (a main mexeu nos arquivos): sem botão até o novo chegar. */
+  rerequesting: boolean;
+  /** só sobraram pedidos que o sistema sabe velhos e não pôde refazer sozinho: a saída é a Esteira. */
+  stale: boolean;
 }
 
 /** O fato do governador que {@link meterStallItem} projeta (capacity-governor `snapshot().meterStall`). */
@@ -1166,7 +1190,8 @@ export type CockpitItem =
   | DataDeletionCockpitItem
   | EffectFailedCockpitItem
   | StalledCockpitItem
-  | LockedExecCockpitItem;
+  | LockedExecCockpitItem
+  | PublishApprovalCockpitItem;
 
 /**
  * 6.4 — quem pode ACIONAR cada kind do cockpit, POR TIER do copiloto. O princípio (herdado da F8) é um só:
@@ -1251,6 +1276,9 @@ const KIND_AUTONOMY: Record<CockpitItemKind, KindAutonomy> = {
   // outro chamador). Nenhum tier tem a alavanca, e acordar por um pedido que ele mesmo não pode aprovar é o laço de
   // impotência desta tabela.
   "locked-exec": "never",
+  // O pedido de autorização do dono que o plano listou sem card: só o clique do DONO grava a autorização (dinheiro e o
+  // resto que o alvo lhe reserva). Nenhum tier tem a alavanca.
+  "publish-approval": "never",
   approval: "never", // é o pedido que o PRÓPRIO copiloto abriu — ele aguarda VOCÊ. Se fosse acionável, o tick
   // acordaria por causa de si mesmo, veria "trabalho", e re-acordaria: laço. O gate DO CARD (que ele PODE
   // empurrar) é o kind `gate` — outro item, outra semântica.

@@ -164,7 +164,17 @@ export interface DeliveryOverview {
    * board que PUBLICA o pacote é onde elas moram). É o que põe o botão «Refazer os pedidos de publicação» na Esteira.
    * Ausente = sem board no recorte, ou o livro não pôde ser lido.
    */
-  publishRequests?: { board: string; pending: number; rerequesting: boolean };
+  publishRequests?: {
+    board: string;
+    pending: number;
+    rerequesting: boolean;
+    /** quantas pedem a decisão do dono AGORA (owner-approval.ts `publishRequestsSummary`); ausente = leitura antiga. */
+    decide?: number;
+    /** quantas só têm pedidos velhos (refazer pela Esteira). */
+    stale?: number;
+    /** o que as que não pedem nada ao dono agora esperam (as unidades). */
+    waitingOn?: string[];
+  };
   generatedAt: string;
 }
 

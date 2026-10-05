@@ -37,6 +37,11 @@ export interface PlanBlockEntry {
   owner: boolean;
   /** quem decide, quando o ALVO o declara (contrato novo); null no alvo de hoje. */
   decider: "owner" | "system" | null;
+  /**
+   * a entrada traz um PEDIDO DE AUTORIZAÇÃO do dono legível (`ownerApproval` com assunto de diff e comando de gravação):
+   * o alvo está dizendo que só o sim do dono a libera — é do dono, mesmo com a regra fora do mapa de classes do board.
+   */
+  asksOwnerApproval?: boolean;
 }
 
 /** O ASSUNTO de uma revisão: a mudança exata (diff base..head daqueles arquivos) ou o conteúdo exato (regras). */
@@ -167,6 +172,7 @@ function planEntryOf(h: unknown): PlanBlockEntry | null {
     why: str(e.why) || null,
     owner: e.owner === true,
     decider: e.decider === "owner" || e.decider === "system" ? e.decider : null,
+    ...(e.ownerApproval && ownerApprovalRequestsOf([e]).length ? { asksOwnerApproval: true } : {}),
   };
 }
 

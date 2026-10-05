@@ -404,6 +404,11 @@ const MATRIX: Record<CockpitItemKind, Row> = {
   "proxy-audit": { item: mk("proxy-audit"), ultra: { decider: "owner", ownerClass: null }, structural: "a amostra do que o sistema decidiu em nome do dono" },
   "delivery-audit": { item: mk("delivery-audit"), ultra: { decider: "owner", ownerClass: null }, structural: "a amostra do que o sistema decidiu em nome do dono" },
   "meter-stalled": { item: mk("meter-stalled"), ultra: { decider: "system" } },
+  "publish-approval": {
+    item: mk("publish-approval", { causeKey: "loja:owner:?", pkg: "loja", ownerClass: null, approvals: [{ hash: "h", files: ["a.ts"], units: ["site"], rules: ["regra-x"] }], rerequesting: false, stale: false }),
+    ultra: { decider: "owner", ownerClass: null },
+    structural: "o plano de publicação pediu a autorização do dono para uma mudança exata",
+  },
   "data-deletion": { item: mk("data-deletion"), ultra: { decider: "owner", ownerClass: "personal-data" } },
   "effect-failed": { item: mk("effect-failed"), ultra: { decider: "system" } },
   stalled: { item: mk("stalled"), ultra: { decider: "system" } },

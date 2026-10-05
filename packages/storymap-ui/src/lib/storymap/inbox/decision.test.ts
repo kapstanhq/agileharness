@@ -102,10 +102,10 @@ describe("quem decide — Decidir é só do dono; o técnico vai para Acompanhar
     expect(acompanhar).toEqual(["delivery-audit", "finding", "meter-stalled", "proxy-audit", "stalled"]);
   });
 
-  it("só-negócio: PRD, dados de pessoas, a captura do dono e o comando travado ficam em Decidir; o técnico sai", () => {
+  it("só-negócio: PRD, dados de pessoas, a captura do dono, o comando travado e o pedido de autorização do plano ficam em Decidir; o técnico sai", () => {
     const decidir = KINDS.filter((k) => decide(k, ULTRA).bucket === "decidir").sort();
     // a pergunta do fixture não tem categoria: fica com o dono até ser classificada (fail-closed, questionVerdict)
-    expect(decidir).toEqual(["data-deletion", "governance", "locked-exec", "proposal", "question"]);
+    expect(decidir).toEqual(["data-deletion", "governance", "locked-exec", "proposal", "publish-approval", "question"]);
     const technical = decideItem({ ...FIXTURES.question.item, category: "technical" } as CockpitItem, ctx(ULTRA, FIXTURES.question.card));
     expect(technical.bucket).toBe("acompanhar");
   });

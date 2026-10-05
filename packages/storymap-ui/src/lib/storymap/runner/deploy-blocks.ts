@@ -31,6 +31,7 @@ import { runnerStateDir, findRepoRoot } from "@/lib/storymap/paths";
 import { ownerClassLabel, ownerClassesOf } from "@/lib/storymap/owner-classes";
 import { isBusinessOnly } from "@/lib/storymap/decision-class";
 import { declaresCode } from "@/lib/storymap/gates";
+import { isOrganizeOnly } from "@/lib/storymap/organize-only-core";
 import { DEPLOY_FAILURE_FINDING_ID } from "@/lib/storymap/demands";
 import { terminalStatusIds } from "@/lib/storymap/views";
 import type { BoardConfig, Card, DeployCause, DeployFailurePhase, Finding } from "@/lib/storymap/types";
@@ -75,7 +76,8 @@ const systemActsOn = (config: AutonomyOf): boolean => isBusinessOnly(null, confi
  * das causas: não há sistema que aja sozinho); (1) o que o ALVO declarar (`decider`, contrato novo) é respeitado;
  * (2) regra ilegível ⇒ dono (não saber o que segurou não pode virar «o sistema resolve»); (3) regra que o board mapeia
  * para uma classe do dono ⇒ dono, com a classe; (4) entrada que o alvo marcou como do dono (`owner: true`, hoje o
- * dinheiro casado num pacote estrangeiro) ⇒ dono; (5) board sem o mapa `autonomy.deployRuleClasses` ⇒ dono (sem ele não
+ * dinheiro casado num pacote estrangeiro), ou que traz um pedido de autorização do dono (`ownerApproval`: só o sim dele a
+ * libera — sem isto, uma regra fora do mapa virava «do sistema» e o pedido nunca chegava ao Inbox) ⇒ dono; (5) board sem o mapa `autonomy.deployRuleClasses` ⇒ dono (sem ele não
  * se sabe se a regra é de dinheiro: fail-closed); (6) o resto — unidade sem classe, rosto compartilhado, unidade
  * estrangeira sem dinheiro, leitura que falhou — é lacuna de ferramenta/config: do SISTEMA. PURA.
  */
@@ -85,7 +87,7 @@ export function entryVerdict(e: PlanBlockEntry, config: AutonomyOf): EntryVerdic
   if (e.decider) return { decider: e.decider, ownerClass: e.decider === "owner" ? cls : null };
   if (!e.rule) return { decider: "owner", ownerClass: null };
   if (cls) return { decider: "owner", ownerClass: cls };
-  if (e.owner) return { decider: "owner", ownerClass: null };
+  if (e.owner || e.asksOwnerApproval) return { decider: "owner", ownerClass: null };
   if (!config?.autonomy?.deployRuleClasses) return { decider: "owner", ownerClass: null };
   return { decider: "system", ownerClass: null };
 }
@@ -374,6 +376,13 @@ export interface DeployBlockRow {
    * «use Refazer os pedidos de publicação». Qualquer pedido novo (plano relido, deploy, refazer) apaga a marca.
    */
   staleApprovals?: string[];
+  /**
+   * A linha NASCEU DO PLANO, não de um card ({@link openPlanOwnerRows}): a medição que só lê (`deploy.planCommand`) pediu
+   * a autorização do dono para uma mudança que nenhuma tentativa de publicar registrou num card (um board pausado nunca
+   * tenta). Sem card, a projeção dos cards não a apaga; ela fecha quando o plano deixa de listá-la. O Inbox a mostra
+   * como item do board (`publish-approval`), com o botão «Autorizar publicar».
+   */
+  planSourced?: true;
 }
 
 /** Os pedidos da linha que ainda valem: os que o sistema não sabe velhos ({@link DeployBlockRow.staleApprovals}). PURA. */
@@ -463,7 +472,7 @@ function mergeRowInto(into: DeployBlockRow, from: DeployBlockRow): DeployBlockRo
   const approvals = into.approvals?.length ? into.approvals : from.approvals;
   const rerequestedAt = [into.rerequestedAt, from.rerequestedAt].filter((x): x is string => !!x).sort().at(-1);
   const stale = uniq([...(into.staleApprovals ?? []), ...(from.staleApprovals ?? [])]).filter((h) => approvals?.some((a) => a.subject.hash === h));
-  const { cardBoards: _a, approvals: _b, granted: _c, rerequestedAt: _d, staleApprovals: _e, ...rest } = into;
+  const { cardBoards: _a, approvals: _b, granted: _c, rerequestedAt: _d, staleApprovals: _e, planSourced: _f, ...rest } = into;
   return {
     ...rest,
     command: into.command ?? from.command,
@@ -476,6 +485,7 @@ function mergeRowInto(into: DeployBlockRow, from: DeployBlockRow): DeployBlockRo
     ...(granted.length ? { granted } : {}),
     ...(rerequestedAt ? { rerequestedAt } : {}),
     ...(stale.length ? { staleApprovals: stale } : {}),
+    ...(into.planSourced || from.planSourced ? { planSourced: true as const } : {}),
   };
 }
 
@@ -592,7 +602,8 @@ export function upsertDeployBlock(
     }
     if (r.board === board && r.cardIds.includes(cardId)) {
       const rest = r.cardIds.filter((c) => c !== cardId);
-      if (rest.length) out.push({ ...r, cardIds: rest });
+      // a linha que nasceu do plano não depende de card: fica, sem ele
+      if (rest.length || r.planSourced) out.push({ ...r, cardIds: rest });
       continue;
     }
     out.push(r);
@@ -653,8 +664,8 @@ export function syncDeployBlocks(
       ...(Object.keys(cardBoards).length ? { cardBoards } : {}),
     };
   }
-  // 3. linha sem card some
-  return out.filter((r) => r.cardIds.length > 0);
+  // 3. linha sem card some — menos a que nasceu do plano (ela fecha quando o plano deixa de listá-la)
+  return out.filter((r) => r.cardIds.length > 0 || r.planSourced);
 }
 
 /** A causa fechou: a linha some. PURA. */
@@ -795,6 +806,7 @@ function readRows(raw: string): { rows: DeployBlockRow[]; skipped: number; recov
         ...cardBoardsOf(r.cardBoards),
         ...(typeof r.rerequestedAt === "string" && r.rerequestedAt ? { rerequestedAt: r.rerequestedAt } : {}),
         ...(strs(r.staleApprovals).length ? { staleApprovals: strs(r.staleApprovals) } : {}),
+        ...(r.planSourced === true ? { planSourced: true as const } : {}),
       });
     }
     return { rows: out, skipped, recovering };
@@ -929,9 +941,10 @@ export const isRemeasured = (r: Pick<DeployBlockRow, "phase">) => r.phase === "f
  * O plano que LISTA causas consegue dizer que esta sumiu? A do dono SEM classe (`owner:?`) não: ela nasce, em geral, de
  * um revert cujo log não trouxe o plano legível (fail-closed) — «o que não se leu» não é comparável às entradas de
  * agora, e julgá-la morta porque o plano lista OUTRA causa soltava o disjuntor a cada janela (as duas fontes nunca
- * concordavam). Só o plano limpo (nothing/ready) a fecha. PURA.
+ * concordavam). Só o plano limpo (nothing/ready) a fecha. A linha que NASCEU do plano ({@link DeployBlockRow.planSourced})
+ * é comparável por construção: o plano que a abriu é o mesmo que deixa de listá-la. PURA.
  */
-const representedByListingPlan = (r: Pick<DeployBlockRow, "decider" | "ownerClass">) => !(r.decider === "owner" && !r.ownerClass);
+const representedByListingPlan = (r: Pick<DeployBlockRow, "decider" | "ownerClass" | "planSourced">) => !!r.planSourced || !(r.decider === "owner" && !r.ownerClass);
 
 /**
  * O que o plano lido AGORA diz das causas da saída 3 do board: as que ele não lista mais estão MORTAS (a do dono sem
@@ -977,6 +990,62 @@ export interface RemeasureVerdict {
   present: DeployCause[];
   /** as autorizações que o plano relido pede ao dono; ausente = o plano não foi lido nesta passada. */
   approvals?: OwnerApprovalRequest[];
+  /**
+   * TODAS as causas que o plano lido agora lista (não só as que já têm linha), para o pacote do board — é delas que
+   * {@link openPlanOwnerRows} abre a linha do pedido do dono que nenhum card registrou. Ausente = o plano não foi lido.
+   */
+  planCauses?: DeployCause[];
+}
+
+/** O plano é lido para DESCOBRIR pedidos do dono sem linha nenhuma no board no máximo uma vez nesta janela (ele lê o ar). */
+export const DISCOVER_EVERY_MS = 60 * 60_000;
+const DISCOVER_KEY = Symbol.for("agileharness.deploy-blocks.discoveredAt");
+const discoveredAt = ((globalThis as Record<symbol, unknown>)[DISCOVER_KEY] ??= new Map<string, number>()) as Map<string, number>;
+
+/** Pode ler o plano deste board só para descobrir (sem causa nenhuma a re-medir)? Reserva a janela quando sim. */
+export function claimDiscover(board: string, now: number): boolean {
+  const last = discoveredAt.get(board);
+  if (last != null && now - last < DISCOVER_EVERY_MS) return false;
+  discoveredAt.set(board, now);
+  return true;
+}
+
+/** Só para teste: esquece as janelas da descoberta. */
+export function resetDiscoverForTest(): void {
+  discoveredAt.clear();
+}
+
+/** As causas que o plano lido lista para o pacote `pkg` (só a saída 3 lista; ilegível ou limpo ⇒ nenhuma). PURA. */
+export function planCausesOf(plan: { status: string; report: DeployExit3Report } | null, pkg: string, config: AutonomyOf): DeployCause[] {
+  if (!plan || !EXIT3_STATUSES.includes(plan.status)) return [];
+  return deployCausesOf(plan.report, { pkg, config });
+}
+
+/**
+ * A linha do PEDIDO DO DONO que nenhum card registrou: o plano lido agora (só leitura) lista uma causa do dono com pedido
+ * de autorização, e o livro do board não tem linha dessa causa — um board pausado nunca tenta publicar, então nenhum card
+ * ganharia o aviso e o pedido nunca chegaria ao Inbox. Abre a linha marcada {@link DeployBlockRow.planSourced}, sem card,
+ * com os pedidos de agora (menos os que o dono já autorizou em qualquer linha do board, e os que outra linha já mostra).
+ * Board só de organização: nada. Linha da causa que já existe: não mexe (o `touch` da re-medição a atualiza). PURA.
+ */
+export function openPlanOwnerRows(
+  rows: readonly DeployBlockRow[],
+  board: string,
+  input: { causes: readonly DeployCause[]; approvals: readonly OwnerApprovalRequest[]; at: string; command: string | null; organizeOnly: boolean },
+): DeployBlockRow[] {
+  if (input.organizeOnly || !input.approvals.length) return [...rows];
+  const mine = rows.filter((r) => r.board === board);
+  const known = new Set(mine.flatMap((r) => [...(r.granted ?? []), ...(r.approvals ?? []).map((a) => a.subject.hash)]));
+  const out = [...rows];
+  for (const cause of input.causes) {
+    if (cause.decider !== "owner" || cause.phase !== "needs-human") continue;
+    if (out.some((r) => r.board === board && r.causeKey === cause.causeKey)) continue;
+    const asks = (approvalsForCause(input.approvals, cause.rules) ?? []).filter((a) => !known.has(a.subject.hash));
+    if (!asks.length) continue;
+    for (const a of asks) known.add(a.subject.hash);
+    out.push({ ...rowFromCause(board, cause, input.at, input.command, [], asks), attributedCard: null, planSourced: true });
+  }
+  return out;
 }
 
 /**
@@ -1001,8 +1070,15 @@ export async function remeasureBoardCauses(
   const verdict: RemeasureVerdict = { dead: [], present: [] };
   const fresh = rows.filter((r) => r.phase === "freshness");
   const plan = rows.filter(isPlanCause);
-  if (!fresh.length && !plan.length) return verdict;
-  if (io.force) remeasuredAt.set(board, io.now);
+  const declared = config.deploy?.planCommand?.trim();
+  // sem causa a re-medir, o plano ainda é lido — mais devagar — para DESCOBRIR o pedido do dono que nenhum card registrou
+  // (board pausado: ninguém tenta publicar). Só com o plano declarado (a medição que não publica) e fora do só-organização.
+  const discover = !fresh.length && !plan.length;
+  if (discover) {
+    if (!declared || isOrganizeOnly(config)) return verdict;
+    if (io.force) discoveredAt.set(board, io.now);
+    else if (!claimDiscover(board, io.now)) return verdict;
+  } else if (io.force) remeasuredAt.set(board, io.now);
   else if (!claimRemeasure(board, io.now)) return verdict;
   try {
     const { loadRunnerConfig } = await import("./config");
@@ -1025,8 +1101,7 @@ export async function remeasureBoardCauses(
       );
       if (v.ok) verdict.dead.push(...fresh.map((r) => r.causeKey));
     }
-    const declared = config.deploy?.planCommand?.trim();
-    if (plan.length && declared) {
+    if ((plan.length || discover) && declared) {
       const auth = authorizeDeployCommand(declared, policy);
       if (!auth.argv) {
         console.error(`[deploy-blocks ${board}] deploy.planCommand recusado pela régua dos comandos declarados — ${auth.refusal}`);
@@ -1042,7 +1117,11 @@ export async function remeasureBoardCauses(
         const judged = judgePlanCauses(plan, parsed, config);
         verdict.dead.push(...judged.dead);
         verdict.present.push(...judged.present);
-        if (parsed) verdict.approvals = parsed.report.ownerApprovals ?? [];
+        if (parsed) {
+          verdict.approvals = parsed.report.ownerApprovals ?? [];
+          // o pacote das linhas do plano (o de sempre), ou — sem linha — o do próprio board, que declara o plano
+          verdict.planCauses = uniq(plan.length ? plan.map((r) => r.pkg) : [board]).flatMap((pkg) => planCausesOf(parsed, pkg, config));
+        }
       }
     }
   } catch (err) {
@@ -1223,7 +1302,9 @@ export async function sweepDeployBlocks(board: string, deps: DeployBlocksSweepDe
       if ([...plans.values()].some((p) => p?.ownerApprovals?.length)) rows = await deps.mutateBlocks((all) => backfillDeployApprovals(all, board, (pkg) => plans.get(pkg)));
     }
     const mine = rows.filter((r) => r.board === board);
-    const verdict = mine.length ? await deps.remeasure(board, config, mine) : { dead: [], present: [] };
+    // sem linha nenhuma, a re-medição ainda pode DESCOBRIR (o plano declarado, devagar): o pedido do dono que nenhum card
+    // registrou (remeasureBoardCauses decide se lê — ela tem a janela e a régua)
+    const verdict: RemeasureVerdict = mine.length || config.deploy?.planCommand?.trim() ? await deps.remeasure(board, config, mine) : { dead: [], present: [] };
     for (const key of new Set(verdict.dead)) {
       const row = mine.find((r) => r.causeKey === key);
       // só morre pela re-medição o que ela MEDE — a linha da prova (needs-proof) pertence ao produtor da prova, que só vê
@@ -1233,7 +1314,8 @@ export async function sweepDeployBlocks(board: string, deps: DeployBlocksSweepDe
       // pela mesma causa — a re-medição e o revert discordam), nada fecha: o finding segue aberto (a recuperação do
       // sistema o pega) em vez de dizer «o sistema tenta de novo» a um card que continua segurado.
       const released = deps.breaker ? await deps.breaker.releaseCause(board, key).catch(() => [] as string[]) : [];
-      if (released === null) continue;
+      // a linha que nasceu do plano e não segura card nenhum fecha mesmo assim: não há card a manter segurado
+      if (released === null && !(row.planSourced && row.cardIds.length === 0)) continue;
       // os cards de OUTROS boards que a linha segura (a linha mora no board que publica): o disjuntor de cada um solta, e o
       // aviso deles fecha no board deles
       for (const other of contributorBoardsOf(row).filter((b) => b !== board)) await deps.breaker?.releaseCause(other, key).catch(() => null);
@@ -1251,6 +1333,14 @@ export async function sweepDeployBlocks(board: string, deps: DeployBlocksSweepDe
     const dead = new Set(verdict.dead);
     const seen = verdict.present.filter((c) => !dead.has(c.causeKey) && mine.some((r) => r.causeKey === c.causeKey));
     if (seen.length) await deps.mutateBlocks((all) => seen.reduce((acc, c) => touchDeployBlock(acc, board, c, iso, verdict.approvals), all));
+    // o pedido do dono que o plano lista e nenhuma linha mostra: abre a linha dele (sem card) — é o que o leva ao Inbox
+    const planCauses = (verdict.planCauses ?? []).filter((c) => !dead.has(c.causeKey));
+    if (planCauses.length && verdict.approvals?.length) {
+      const approvals = verdict.approvals;
+      await deps.mutateBlocks((all) =>
+        openPlanOwnerRows(all, board, { causes: planCauses, approvals, at: iso, command: config.deploy?.command ?? null, organizeOnly: isOrganizeOnly(config) }),
+      );
+    }
 
     for (const cardId of report.noCode) await deps.reevaluate(board, cardId).catch(() => {});
   } catch (err) {

@@ -1662,6 +1662,81 @@ const DECIDE: DecideMap = {
     dot: "grey",
   }),
 
+  // O PEDIDO DE AUTORIZAÇÃO QUE O PLANO LISTOU SEM CARD (deploy-blocks.ts `openPlanOwnerRows`): o mesmo botão da
+  // publicação parada, sobre a causa do livro — sem card âncora (ninguém tentou publicar; um board pausado nunca tenta).
+  "publish-approval": (item, c) => {
+    const classText = item.ownerClass ? `«${ownerClassLabel(item.ownerClass, c.config)}»` : "negócio";
+    const files = [...new Set(item.approvals.flatMap((a) => a.files))];
+    const units = [...new Set(item.approvals.flatMap((a) => a.units))];
+    const where = units.length ? ` em ${units.join(", ")}` : "";
+    const shown = files.slice(0, 8);
+    const esteira: DecisionOption = {
+      id: "more:open-esteira",
+      label: "Abrir a Esteira",
+      consequence: "Abre a Esteira do board, onde «Refazer os pedidos de publicação» pede a autorização com a mudança de agora. Não decide nada.",
+      tone: "neutral",
+      auditCls: "read",
+      invoke: { kind: "link", href: `/board/${encodeURIComponent(item.boardId)}/entrega` },
+      done: "Aberto.",
+    };
+    const details = [
+      { label: "Pacote", value: item.pkg },
+      ...(files.length ? [{ label: "Arquivos", value: `${shown.join(", ")}${files.length > shown.length ? ` … e mais ${files.length - shown.length}` : ""}` }] : []),
+    ];
+    if (item.rerequesting) {
+      return {
+        bucket: "acompanhar",
+        askVerb: null,
+        ask: "Refazendo o pedido de publicação…",
+        happened: "O código guardado mudou desde o último pedido, e o sistema está medindo de novo a publicação do pacote para pedir a sua autorização com a mudança de agora. Nada foi publicado.",
+        options: [],
+        ifIgnored: "Quando a medição terminar, o pedido novo volta a Decidir (ou some, se nada mais precisar de você).",
+        next: { who: "sistema", label: "refazendo o pedido…" },
+        more: [],
+        details,
+        dot: "grey",
+      };
+    }
+    if (!item.approvals.length) {
+      return {
+        bucket: "acompanhar",
+        askVerb: null,
+        ask: "O pedido de publicação envelheceu — refaça pela Esteira",
+        happened: "O código guardado mudou na main desde o pedido de autorização, então ele já não vale. Nada foi publicado.",
+        options: [],
+        ifIgnored: "A publicação segue parada; nada vai ao ar.",
+        next: { who: "voce", label: "Refazer pela Esteira" },
+        more: [esteira],
+        details,
+        dot: "grey",
+      };
+    }
+    return {
+      askVerb: "Autorizar",
+      ask: `Autorizar a publicação do código de ${classText}${where}?`,
+      happened: `O plano de publicação do board pede o seu sim para ${plural(files.length, "arquivo", "arquivos")} de código de ${classText}${where}. Nenhuma tentativa de publicar o registrou num card (o board pode estar pausado). Nada foi publicado.`,
+      options: [
+        {
+          id: "authorize-publish",
+          label: "Autorizar publicar",
+          consequence: "Grava a sua autorização para ESTA mudança. Se esse código mudar depois, a autorização deixa de valer e o Inbox pede de novo. Publicar continua sendo do board, no ritmo dele.",
+          tone: "primary",
+          confirm: {
+            title: "Autorizar a publicação?",
+            body: `Você autoriza publicar ${plural(files.length, "arquivo", "arquivos")} de código de ${classText}${where}. A autorização vale só para esta mudança.`,
+          },
+          auditCls: "deploy",
+          invoke: { kind: "authorize-publish", boardId: item.boardId, causeKey: item.causeKey },
+          done: "Autorização gravada. A próxima publicação do board já a encontra.",
+        },
+      ],
+      ifIgnored: "A publicação segue parada; nada vai ao ar.",
+      more: [esteira],
+      details: [...details, { label: "O que você autoriza", value: `${plural(files.length, "arquivo", "arquivos")}${where}` }],
+      dot: "red",
+    };
+  },
+
   "meter-stalled": (item) => ({
     bucket: "acompanhar",
     banner: true,

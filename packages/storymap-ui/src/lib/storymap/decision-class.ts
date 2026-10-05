@@ -298,6 +298,20 @@ const KIND_POINT: Record<CockpitItemKind, (item: CockpitItem, card: Card | undef
   governance: () => ({ kind: "governance" }),
   "data-deletion": () => ({ kind: "data-deletion" }),
   "locked-exec": () => ({ kind: "locked-exec" }),
+  // o pedido de autorização que o plano listou sem card: a mesma régua da publicação que pediu alguém — a causa dele é do
+  // dono (o plano pediu o sim dele), com a classe quando o board a nomeia
+  "publish-approval": (item) =>
+    item.kind === "publish-approval"
+      ? {
+          kind: "deploy-hold",
+          cause: {
+            ownerClass: item.ownerClass,
+            decider: "owner",
+            rules: [...new Set(item.approvals.flatMap((a) => a.rules))],
+            units: [...new Set(item.approvals.flatMap((a) => a.units))],
+          },
+        }
+      : { kind: "recovery" },
   stuck: (item, card) => ({ kind: "recovery", failure: stuckFailure(item, card) }),
   conflict: () => ({ kind: "recovery" }),
   "merge-failed": () => ({ kind: "recovery" }),

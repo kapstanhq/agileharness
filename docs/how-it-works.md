@@ -634,6 +634,16 @@ Inbox points to «Refazer os pedidos de publicação» on the board's delivery s
 through its plan (measuring is not new work and publishes nothing); an organize-only board is never touched. Each request
 is redone automatically at most once: if the target measures the same change again, it is still valid for the target.
 
+**An owner request that no card recorded still reaches the Inbox.** Requests used to enter the ledger only when a
+publish attempt failed on a card; a paused board never attempts, so a request the plan listed never reached the owner.
+When the board declares `deploy.planCommand`, the service reads that plan (read-only, never a deploy) also when the
+board has no blocked publication at all — at most once an hour — and opens a ledger row for every owner cause that asks
+for an approval the ledger does not show yet (nor the owner already gave). The row has no card: the Inbox shows it as
+«Autorizar publicação» on the publishing board, with the same «Autorizar publicar» button, and it closes when the plan
+stops listing it. A plan entry that carries an owner approval request is the owner's even when its rule is outside the
+board's `autonomy.deployRuleClasses`. An organize-only board is never read. The delivery screen counts only the rows
+that ask the owner something now; a row that only waits on another package says what it waits for.
+
 The environment can only add to the three lists (`AGILEHARNESS_DEPLOY_LAUNCHERS`, `_RECIPE_RUNNERS`,
 `_RECIPES`); it never removes what the file declared. The result of a run on the legacy path is reported under
 the neutral identity `legacy-command`, whatever program the target declared.
