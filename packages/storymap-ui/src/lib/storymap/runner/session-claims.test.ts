@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { CardClaims, memoryClaimStore, sessionClaimActor, type CardClaim } from "./claims";
-import { claimCardForSession, releaseSessionClaim, sessionOwnsCard, type SessionClaimDeps } from "./session-claims";
+import { bindCardByClaim, claimCardForSession, releaseSessionClaim, sessionOwnsCard, type SessionClaimDeps } from "./session-claims";
 import type { AgentSession } from "./session-worktree";
 
 const session = (over: Partial<AgentSession> = {}): AgentSession => ({
@@ -131,5 +131,42 @@ describe("sessionOwnsCard — o cadeado do set_tasks", () => {
 
   it("sessão desconhecida", () => {
     expect(sessionOwnsCard([], [], { sessionId: "s-1", board: "b", cardId: "c" }, now)).toEqual({ ok: false, reason: "unknown-session" });
+  });
+});
+
+// worktree_open: o card só entra na sessão com o claim dele — senão qualquer token abria uma sessão «de» um card alheio e
+// ganhava herança da cadeia de revisão e escopo por ele.
+describe("bindCardByClaim — o card da sessão recém-aberta vem do claim, não do que o token disse", () => {
+  it("com o claim obtido, a sessão fica com o card", async () => {
+    const sessions = [session()];
+    const d = deps(sessions);
+    expect(await bindCardByClaim(d, { sessionId: "s-1", board: "b", cardId: "c" })).toEqual({ cardId: "c", note: null });
+    expect(sessions[0]).toMatchObject({ board: "b", cardId: "c" });
+  });
+
+  it("outro ator tem o card ⇒ a sessão abre SEM card e o motivo nomeia o holder", async () => {
+    const sessions = [session()];
+    const d = deps(sessions);
+    await d.claims.acquire({ board: "b", cardId: "c", actor: "session:agente-dono", kind: "implement", scope: "both", ttlMs: 60_000 });
+    const r = await bindCardByClaim(d, { sessionId: "s-1", board: "b", cardId: "c" });
+    expect(r.cardId).toBeNull();
+    expect(r.note).toMatch(/SEM card.*session:agente-dono/);
+    expect(sessions[0].cardId).toBeUndefined();
+    expect(d.bound).toEqual([]);
+  });
+
+  it("cardId sem board ⇒ sem card; sem cardId ⇒ nada a fazer", async () => {
+    const d = deps([session()]);
+    expect(await bindCardByClaim(d, { sessionId: "s-1", cardId: "c" })).toEqual({ cardId: null, note: expect.stringMatching(/sem board/) });
+    expect(await bindCardByClaim(d, { sessionId: "s-1" })).toEqual({ cardId: null, note: null });
+  });
+
+  it("estrutural: o worktree_open não registra o cardId na abertura — só pelo claim", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../mcp/dev-tools.ts", import.meta.url), "utf8");
+    const open = src.slice(src.indexOf('"worktree_open"'), src.indexOf('"report_progress"'));
+    const call = open.slice(open.indexOf("openSessionWorktree(sessionDeps(), {"), open.indexOf("if (!res.ok)"));
+    expect(call).not.toMatch(/\bcardId\b/);
+    expect(open).toMatch(/bindCardByClaim\(/);
   });
 });

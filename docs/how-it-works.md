@@ -798,7 +798,15 @@ story created inherits that card's chain, whatever its type, and a `continuesFro
 session's tree is refused. A session is proven by the HMAC the service mints for it
 (`x-agileharness-session-proof`, written into the MCP config of the sessions it spawns and returned by
 `worktree_open`); the `session:<id>` label alone is attribution only, and an unproven label is ignored for
-this decision and logged. Cards in the board's trash still count in the tree, and a board that cannot be
+this decision and logged. A session's card comes from its **claim**, not from what was said when it opened:
+`worktree_open` with a `cardId` opens the session without a card and reserves the card the same way
+`claim_card` does; if another actor holds it, the session stays without a card and the answer says why. The
+same rule scopes a proposed locked command to the proven session that holds the card's claim. The review
+findings' outcome is owner state too: the merge train keeps main's version of every review finding (a run
+cannot close one "as the owner" nor delete it), and a new review finding from a run lands open. What stays
+open: an agent that simply omits the proof is treated as having no session, so its new cards do not inherit
+a chain; and an agent that can read the service's state directory on the same host can borrow another
+session's proof — both close only with agents running as a separate system user. Cards in the board's trash still count in the tree, and a board that cannot be
 read makes the gate ask the owner instead of counting fewer rounds. At `autorun.reviewRoundsCap` (2 by default) no new fix card
 is opened: the owner is asked, in plain words, to accept the remaining risk, pay for one more round, or
 stop. The owner's answer is read from a **server-side record** written by the answer action

@@ -21,6 +21,7 @@
 // também adia os membros vivos da árvore (answerQuestionAction).
 
 import { FINDING_FIX_LABEL } from "../finding-fix";
+import { isReviewFinding } from "../review-finding";
 import type { StructuredQuestionInput } from "../questions";
 import type { Card, CardQuestion, ReviewChainMark } from "../types";
 
@@ -248,9 +249,6 @@ export function hasOpenReviewFindings(card: Pick<Card, "findings"> | null | unde
 }
 
 /** Achado de REVISÃO (lente de revisão, severidade média para cima) — a régua de {@link hasOpenReviewFindings}. PURA. */
-function isReviewFinding(f: NonNullable<Card["findings"]>[number]): boolean {
-  return f.lens !== "general" && (f.severity === "blocker" || f.severity === "high" || f.severity === "medium");
-}
 
 /**
  * O card CARREGA uma cadeia de conserto de revisão? — o que faz uma entrega criada pela sessão que o conduz herdar a

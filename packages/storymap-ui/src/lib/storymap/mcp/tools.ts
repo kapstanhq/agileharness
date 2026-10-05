@@ -2442,17 +2442,17 @@ export function registerStorymapTools(server: McpServer): void {
       // (uma linha, sem controle/bidi, curta) — nunca o uuid cru (story-ex9603)
       let facts: { driver?: string | null; cardId?: string | null; name?: string | null } | null = null;
       if (actor?.caller?.kind === "session") {
-        try {
-          const { allSessions } = await import("@/lib/storymap/runner/session-worktree");
-          const s = (await allSessions()).find((x) => x.sessionId === actor.caller!.id);
-          if (scoped) scopeCardId = s?.cardId ?? null;
-          if (s) {
-            // eslint-disable-next-line no-control-regex
-            const task = String(s.task ?? "").replace(/[\u0000-\u001f\u007f‎‏‪-‮⁦-⁩]/g, " ").replace(/\s+/g, " ").trim();
-            facts = { driver: s.driver ?? null, cardId: s.cardId ?? null, name: task ? (task.length > 60 ? `${task.slice(0, 59)}…` : task) : null };
-          }
-        } catch {
-          scopeCardId = null;
+        // Só a sessão PROVADA (prova do serviço + viva no registro) e que DETÉM o claim do card dá escopo — o rótulo
+        // declarado e o `cardId` com que uma sessão se abriu não bastam (qualquer token abre sessão dizendo um card).
+        // Rótulo sem prova ⇒ sem escopo (o escopado é recusado) e atribuição genérica.
+        const { sessionCardScopeOf } = await import("@/lib/storymap/runner/session-card-scope");
+        const scope = await sessionCardScopeOf(actor);
+        if (scoped) scopeCardId = scope.scopeCardId;
+        const s = scope.session;
+        if (s) {
+          // eslint-disable-next-line no-control-regex
+          const task = String(s.task ?? "").replace(/[\u0000-\u001f\u007f‎‏‪-‮⁦-⁩]/g, " ").replace(/\s+/g, " ").trim();
+          facts = { driver: s.driver ?? null, cardId: scope.scopeCardId, name: task ? (task.length > 60 ? `${task.slice(0, 59)}…` : task) : null };
         }
       }
       const r = await getLockedExecService().propose(

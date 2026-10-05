@@ -80,7 +80,7 @@ import { SESSION_PROOF_HEADER, currentSessionProof } from "./session-proof";
 import { CONDUCTOR_PHASES } from "@/lib/storymap/card-live-status";
 // WS-1 — the agent-session worktree lifecycle (open/submit/refresh/discard). The logic lives in the runner
 // (DI-testable against a temp repo); these tools are only the MCP surface over it.
-import { claimCardForSession, releaseSessionClaim } from "@/lib/storymap/runner/session-claims";
+import { bindCardByClaim, claimCardForSession, releaseSessionClaim } from "@/lib/storymap/runner/session-claims";
 import {
   adoptSession,
   allSessions,
@@ -915,14 +915,17 @@ export function registerDevTools(server: McpServer): void {
       // WHO opened it, for /processes + the steward: the token's authority level and the env-var holding
       // it — the only identity the MCP layer actually has (McpActor carries no free-form principal).
       const who = currentMcpActor();
+      // O card só entra na sessão com o CLAIM dele: a sessão abre sem card e pede a reserva pela mesma regra do
+      // claim_card. Sem claim (outro ator tem o card, ou faltou o board), a sessão segue SEM card — senão qualquer
+      // token abria uma sessão «de» um card alheio e ganhava herança de cadeia e escopo por ele.
       const res = await openSessionWorktree(sessionDeps(), {
         board,
-        cardId,
         task,
         actor: who ? `mcp:${who.level}${who.tokenEnv ? `(${who.tokenEnv})` : ""}` : undefined,
       });
       if (!res.ok) return fail(res.reason);
       const s = res.session;
+      const { cardId: boundCardId, note: cardNote } = await bindCardByClaim(sessionClaimDeps(), { sessionId: s.sessionId, board, cardId });
       // a prova desta sessão (mcp/session-proof.ts): quem abriu a sessão por aqui (sem a config de MCP que o spawn
       // escreve) a apresenta nos cabeçalhos para ser reconhecido como ELA no que decide por sessão
       const proof = currentSessionProof(s.sessionId);
@@ -931,6 +934,8 @@ export function registerDevTools(server: McpServer): void {
         path: s.worktreePath,
         branch: s.branch,
         baseCommit: s.baseCommit,
+        cardId: boundCardId,
+        ...(cardNote ? { cardNote } : {}),
         ...(proof
           ? { sessionHeaders: { [MCP_CALLER_HEADER]: `session:${s.sessionId}`, [SESSION_PROOF_HEADER]: proof } }
           : {}),

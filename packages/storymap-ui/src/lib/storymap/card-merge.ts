@@ -1,4 +1,5 @@
 import { isOwnerOnlyQuestion } from "./autonomy";
+import { isReviewFinding } from "./review-finding";
 import type { Card, CardQuestion } from "./types";
 
 /**
@@ -336,5 +337,40 @@ export function withOwnerStateFromMain(merged: Card, main: Card): Card {
     if (isOwnerStateQuestion(mq) && !questions.some((q) => q.id === mq.id)) questions.push(mq);
   }
   if (questions.length || main.questions || merged.questions) out.questions = questions;
+  const findings = reviewFindingsFromMain(merged.findings, main.findings);
+  if (findings) out.findings = findings;
+  return out;
+}
+
+/**
+ * Os ACHADOS DE REVISÃO também são estado que o run não decide: o desfecho deles (status, quem fechou) é o que mantém ou
+ * encerra a cadeia de conserto (`cardCarriesReviewChain`), e «fechado por um humano» encerra. Um agente que, no próprio
+ * worktree, marcasse o achado como fechado pelo dono — ou o apagasse — desligaria a cadeia só com o merge. Então, para
+ * cada achado de revisão que a MAIN tem, vale a versão de main (inclusive se o run o apagou: ele volta). Um achado de
+ * revisão NOVO do run entra (a revisão roda em worktree), mas nunca nasce «fechado pelo dono»: se vier assim, entra
+ * aberto e sem a marca. Fechar de verdade é pela tela ou por `triage_finding`, que carimba o ator real. PURA.
+ */
+function reviewFindingsFromMain(
+  merged: Card["findings"],
+  main: Card["findings"],
+): Card["findings"] | undefined {
+  const mainList = main ?? [];
+  const mainReview = new Map(mainList.filter(isReviewFinding).map((f) => [f.id, f] as const));
+  if (mainReview.size === 0 && !(merged ?? []).some((f) => isReviewFinding(f) && f.statusBy === "human")) return merged;
+  const out: NonNullable<Card["findings"]> = [];
+  const seen = new Set<string>();
+  for (const f of merged ?? []) {
+    const mf = mainReview.get(f.id);
+    if (mf) {
+      out.push(mf);
+    } else if (isReviewFinding(f) && f.statusBy === "human") {
+      const { statusBy: _by, statusAt: _at, ...rest } = f;
+      out.push({ ...rest, status: "open" });
+    } else {
+      out.push(f);
+    }
+    seen.add(f.id);
+  }
+  for (const mf of mainReview.values()) if (!seen.has(mf.id)) out.push(mf);
   return out;
 }

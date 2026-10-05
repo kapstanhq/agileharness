@@ -422,3 +422,51 @@ describe("mergeCardThreeWay — o estado do dono vence pelo lado da main", () =>
     expect(merged.questions?.[0]).toMatchObject({ id: "q4", status: "answered" });
   });
 });
+
+// Os ACHADOS DE REVISÃO são estado que o run não decide: «fechado pelo dono» encerra a cadeia de conserto, então um agente
+// que marcasse `statusBy: human` (ou apagasse o achado) no próprio worktree desligava a cadeia só com o merge.
+describe("mergeCardThreeWay — achados de revisão: o desfecho vem da main", () => {
+  const review = { id: "f1", lens: "security", severity: "high", title: "A pinça não trava com a roda solta", status: "open" };
+  const general = { id: "f2", lens: "general", severity: "low", title: "Texto do botão", status: "open" };
+
+  it("worktree marca o achado de revisão como fechado PELO DONO ⇒ após o merge, segue aberto e a cadeia continua", async () => {
+    const { cardCarriesReviewChain } = await import("./runner/review-rounds");
+    const base = card({ status: "desenvolver", findings: [review] });
+    const main = card({ status: "desenvolver", findings: [review] });
+    const run = card({ status: "desenvolver", findings: [{ ...review, status: "fixed", statusBy: "human", statusAt: "2026-03-02" }] });
+    expect(cardCarriesReviewChain(run)).toBe(false);
+    const merged = mergeCardThreeWay(base, main, run);
+    expect(merged.findings).toEqual(main.findings);
+    expect(cardCarriesReviewChain(merged)).toBe(true);
+  });
+
+  it("worktree APAGA o achado de revisão ⇒ ele volta; um achado geral apagado continua apagado (3-way normal)", async () => {
+    const { cardCarriesReviewChain } = await import("./runner/review-rounds");
+    const base = card({ findings: [review, general] });
+    const main = card({ findings: [review, general] });
+    const run = card({ findings: [] });
+    const merged = mergeCardThreeWay(base, main, run);
+    expect(merged.findings?.map((f) => f.id)).toEqual(["f1"]);
+    expect(cardCarriesReviewChain(merged)).toBe(true);
+  });
+
+  it("achado de revisão NOVO do run entra; se vier «fechado pelo dono», entra aberto e sem a marca", () => {
+    const base = card({ findings: [] });
+    const main = card({ findings: [] });
+    const fresh = { id: "f3", lens: "perf", severity: "medium", title: "A lista de peças recarrega a cada tecla", status: "open" };
+    const forged = { id: "f4", lens: "security", severity: "blocker", title: "O cofre aceita chave vencida", status: "fixed", statusBy: "human", statusAt: "2026-03-02" };
+    const merged = mergeCardThreeWay(base, main, card({ findings: [fresh, forged] }));
+    expect(merged.findings?.find((f) => f.id === "f3")).toMatchObject({ status: "open" });
+    const f4 = merged.findings?.find((f) => f.id === "f4");
+    expect(f4).toMatchObject({ status: "open" });
+    expect(f4?.statusBy).toBeUndefined();
+  });
+
+  it("o fechamento legítimo (na main, pela tela ou triage_finding) é preservado mesmo que o run traga o achado aberto", () => {
+    const closed = { ...review, status: "fixed", statusBy: "human", statusAt: "2026-03-03" };
+    const base = card({ findings: [review] });
+    const main = card({ findings: [closed] });
+    const run = card({ findings: [review] });
+    expect(mergeCardThreeWay(base, main, run).findings).toEqual(main.findings);
+  });
+});

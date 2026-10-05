@@ -17,15 +17,23 @@ vi.mock("@/lib/storymap/runner/locked-exec-service", async (orig) => {
 // o guard por chamada (matriz de risco) tem os testes dele; aqui ele deixa passar, para medir a régua de ESCOPO da tool
 // — e para nenhum pedido de aprovação do guard ser gravado no board-data do checkout que roda a suíte.
 vi.mock("./guard", async (orig) => ({ ...(await orig<typeof import("./guard")>()), guardToolCall: async () => null }));
-let sessions: Array<{ sessionId: string; cardId?: string; task?: string; driver?: string }> = [];
+let sessions: Array<{ sessionId: string; agentId?: string; board?: string; cardId?: string; task?: string; driver?: string }> = [];
 vi.mock("@/lib/storymap/runner/session-worktree", async (orig) => ({
   ...(await orig<typeof import("../runner/session-worktree")>()),
   allSessions: async () => sessions,
 }));
+// os claims vivos (o escopo exige que a sessão PROVADA detenha o claim do card que registrou)
+let liveClaims: Array<{ board: string; cardId: string; actor: string; kind: string; scope: string; acquiredAt: string; expiresAt: string }> = [];
+vi.mock("@/lib/storymap/runner/claims", async (orig) => {
+  const actual = await orig<typeof import("../runner/claims")>();
+  return { ...actual, getCardClaims: () => ({ list: async (board?: string) => liveClaims.filter((c) => !board || c.board === board) }) };
+});
 
 import { registerStorymapTools } from "./tools";
 import { levelAllows } from "./register";
 import { runWithMcpActor } from "./actor";
+import { sessionProofFor } from "./session-proof";
+import { sessionClaimActor } from "../runner/claims";
 import { LockedExecService } from "../runner/locked-exec-service";
 
 type ToolHandler = (args: Record<string, unknown>) => CallToolResult | Promise<CallToolResult>;
@@ -42,6 +50,7 @@ beforeEach(() => {
   dir = mkdtempSync(path.join(tmpdir(), "locked-exec-tools-"));
   ran = [];
   sessions = [];
+  liveClaims = [];
   service = new LockedExecService({
     stateDir: () => dir,
     classifier: () => ({
@@ -79,6 +88,18 @@ const call = {
 };
 const propose = (args: Record<string, unknown>) => handlers().get("propose_locked_command")!(args);
 
+// uma sessão de verdade: registrada no board/card, com a PROVA que o serviço cunha e (quando `claim`) o claim vivo do card
+const SECRET = "segredo-de-teste-do-atelie-0123456789";
+process.env.AGILEHARNESS_SESSION_SECRET = SECRET;
+function liveSession(sessionId: string, cardId: string, over: { claim?: boolean; task?: string; driver?: string } = {}) {
+  sessions.push({ sessionId, agentId: `ag-${sessionId}`, board: "atelie", cardId, ...(over.task ? { task: over.task } : {}), ...(over.driver ? { driver: over.driver } : {}) });
+  if (over.claim !== false) {
+    liveClaims.push({ board: "atelie", cardId, actor: sessionClaimActor(`ag-${sessionId}`), kind: "implement", scope: "both", acquiredAt: "2026-01-01T00:00:00Z", expiresAt: "2099-01-01T00:00:00Z" });
+  }
+}
+const asSession = <T,>(sessionId: string, fn: () => T | Promise<T>, proof: string | null = sessionProofFor(sessionId, SECRET)): Promise<T> =>
+  runWithMcpActor({ level: "orch", caller: { kind: "session", id: sessionId, ...(proof ? { proof } : {}) } } as never, async () => fn());
+
 describe("propose_locked_command", () => {
   it("grava o pedido pendente, devolve os programas resolvidos e NÃO roda nada (nem o preflight)", async () => {
     const r = await propose(call);
@@ -107,29 +128,47 @@ describe("propose_locked_command", () => {
     expect(ran).toEqual([]);
   });
 
-  it("escopo: um agente escopado só propõe para o card da sessão que conduz", async () => {
-    sessions = [{ sessionId: "s1", cardId: "story-ex7001" }, { sessionId: "s2", cardId: "story-ex7002" }];
-    const other = await runWithMcpActor({ level: "orch", caller: { kind: "session", id: "s2" } }, () => propose(call));
+  it("escopo: um agente escopado só propõe para o card da sessão PROVADA que detém o claim dele", async () => {
+    liveSession("s1", "story-ex7001");
+    liveSession("s2", "story-ex7002");
+    const other = await asSession("s2", () => propose(call));
     expect(other.isError).toBe(true);
     expect(text(other)).toMatch(/só propõe para o card que conduz/);
     const anon = await runWithMcpActor({ level: "write" }, () => propose(call));
     expect(text(anon)).toMatch(/não conduz nenhum/);
-    const mine = await runWithMcpActor({ level: "orch", caller: { kind: "session", id: "s1" } }, () => propose(call));
+    const mine = await asSession("s1", () => propose(call));
     expect(mine.isError).toBeFalsy();
+  });
+
+  it("escopo: o RÓTULO de sessão sem prova não dá escopo (nem o de outra sessão, nem com prova errada)", async () => {
+    liveSession("s1", "story-ex7001");
+    const unproven = await asSession("s1", () => propose(call), null);
+    expect(text(unproven)).toMatch(/não conduz nenhum/);
+    const wrong = await asSession("s1", () => propose(call), sessionProofFor("s9", SECRET));
+    expect(text(wrong)).toMatch(/não conduz nenhum/);
+  });
+
+  it("escopo: sessão provada que REGISTROU o card mas NÃO detém o claim dele não ganha escopo", async () => {
+    liveSession("s3", "story-ex7001", { claim: false });
+    const r = await asSession("s3", () => propose(call));
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/não conduz nenhum/);
   });
 
   // story-ex9603 (acabamento): quem pede é dito pela tarefa que a sessão declarou ao abrir — numa linha, sem caractere de
   // controle/bidi, curta — ou pelo condutor do card; nunca pelo uuid cru da sessão.
   it("quem pediu: a tarefa declarada da sessão (limpa e curta) ou o condutor do card — nunca o uuid", async () => {
-    sessions = [{ sessionId: "00000000-0000-4000-8000-0000000000a1", cardId: "story-ex7001", task: "trocar a chave\n\u202eda API do cofre de chaves do ateliê, com calma e sem pressa nenhuma hoje" }];
-    const r = await runWithMcpActor({ level: "orch", caller: { kind: "session", id: "00000000-0000-4000-8000-0000000000a1" } }, () => propose(call));
+    liveSession("00000000-0000-4000-8000-0000000000a1", "story-ex7001", { task: "trocar a chave\n\u202eda API do cofre de chaves do ateliê, com calma e sem pressa nenhuma hoje" });
+    const r = await asSession("00000000-0000-4000-8000-0000000000a1", () => propose(call));
     const rec = (await service!.get(JSON.parse(text(r)).id as string))!;
     expect(rec.proposedBy.startsWith("session:trocar a chave da API do cofre")).toBe(true);
     expect(rec.proposedBy).not.toMatch(/[\n\u202e]/);
     expect(rec.proposedBy).not.toContain("00000000-0000-4000");
     expect(rec.proposedBy.length).toBeLessThanOrEqual("session:".length + 60);
-    sessions = [{ sessionId: "c9", cardId: "story-ex7001", driver: "conductor" }];
-    const c = await runWithMcpActor({ level: "orch", caller: { kind: "session", id: "c9" } }, () => propose({ ...call, argv: ["cofre-cli", "rotate", "--key=outra"] }));
+    sessions = [];
+    liveClaims = [];
+    liveSession("c9", "story-ex7001", { driver: "conductor" });
+    const c = await asSession("c9", () => propose({ ...call, argv: ["cofre-cli", "rotate", "--key=outra"] }));
     expect((await service!.get(JSON.parse(text(c)).id as string))!.proposedBy).toBe("conductor:story-ex7001");
   });
 

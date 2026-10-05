@@ -70,6 +70,22 @@ export async function claimCardForSession(
   return { ok: true, claim: res.claim, renewedByFleet: !!s.tmuxSession };
 }
 
+/**
+ * O card de uma sessão recém-aberta (worktree_open) entra SÓ com o claim dele: a sessão nasce sem card e pede a reserva
+ * pela mesma regra do claim_card. Sem claim (outro ator tem o card, ou faltou o board), a sessão segue SEM card e o
+ * motivo volta para quem abriu — o card de uma sessão é o que dá herança da cadeia de revisão e escopo por card, então
+ * não pode ser só o que um token disse ao abrir.
+ */
+export async function bindCardByClaim(
+  deps: SessionClaimDeps,
+  input: { sessionId: string; board?: string; cardId?: string },
+): Promise<{ cardId: string | null; note: string | null }> {
+  if (!input.cardId) return { cardId: null, note: null };
+  if (!input.board) return { cardId: null, note: "cardId sem board — a sessão abriu SEM card" };
+  const claimed = await claimCardForSession(deps, { sessionId: input.sessionId, board: input.board, cardId: input.cardId });
+  return claimed.ok ? { cardId: input.cardId, note: null } : { cardId: null, note: `a sessão abriu SEM card: ${claimed.reason}` };
+}
+
 export type ReleaseClaimResult =
   | { ok: true; released: boolean; detail: string }
   | { ok: false; reason: string; holder?: CardClaim };
