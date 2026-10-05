@@ -14,11 +14,16 @@
 // O painel ({@link BoardPacePanel}) é o mesmo no chip do computador e no menu «Mais» do celular.
 
 import { useCallback, useEffect, useState, useTransition } from "react";
-import { CircleDashed, CirclePause, Play, Turtle, Wrench } from "lucide-react";
+import { CircleDashed, CirclePause, ClipboardList, Play, Turtle, Wrench } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { getBoardPaceAction, setBoardPaceAction, setBoardScopeAction } from "@/app/board-pace-actions";
+import { getBoardPaceAction, setBoardPaceAction, setBoardScopeAction, setOrganizeOnlyAction } from "@/app/board-pace-actions";
 import { PACE_HELP, paceLabel, type BoardPaceView, type PaceLevel, type PauseMode } from "@/lib/storymap/runner/board-pace";
 import {
+  ORGANIZE_ONLY_CONFIRM_OFF,
+  ORGANIZE_ONLY_CONFIRM_ON,
+  ORGANIZE_ONLY_TURN_OFF,
+  ORGANIZE_ONLY_TURN_ON,
+  ORGANIZE_ONLY_TURN_ON_HELP,
   PACE_PANEL_LOADING,
   PACE_PANEL_UNAVAILABLE,
   PAUSE_DURATIONS,
@@ -122,6 +127,20 @@ export function BoardPacePanel({ boardId, view, failed = false, onChanged }: { b
       setScopeDuration("none");
       setNote({ tone: "ok", text: r.data.message });
     });
+
+  // O modo «só organização» é do OPERADOR (a action recusa agente e serviço): confirma o efeito antes de mudar.
+  const toggleOrganize = (on: boolean) => {
+    if (!window.confirm(on ? ORGANIZE_ONLY_CONFIRM_ON : ORGANIZE_ONLY_CONFIRM_OFF)) return;
+    start(async () => {
+      setNote(null);
+      const r = await setOrganizeOnlyAction({ boardId, on }).catch((e) => ({ ok: false as const, error: e instanceof Error ? e.message : String(e) }));
+      if (!r.ok) return setNote({ tone: "error", text: r.error });
+      onChanged(r.data.pace);
+      setPausing(false);
+      setLimiting(false);
+      setNote({ tone: "ok", text: r.data.message });
+    });
+  };
 
   const chooseScope = (preset: "all" | "fixes") => {
     if (preset === "all") {
@@ -290,6 +309,24 @@ export function BoardPacePanel({ boardId, view, failed = false, onChanged }: { b
               <PaceIcon level={view.suggestion.level} className="h-3.5 w-3.5" />
               Andar {paceLabel(view.suggestion.level).toLowerCase()}
             </button>
+          </NavPopoverBlock>
+        </>
+      )}
+
+      {!pausing && !limiting && view.source !== "unreadable" && (
+        <>
+          <NavPopoverDivider />
+          <NavPopoverBlock>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => toggleOrganize(!organize)}
+              className={cn(OPTION, OPTION_OFF, "w-full flex-none", pending && "opacity-60")}
+            >
+              <ClipboardList className="h-3.5 w-3.5" aria-hidden />
+              {organize ? ORGANIZE_ONLY_TURN_OFF : ORGANIZE_ONLY_TURN_ON}
+            </button>
+            {!organize && <p className="text-[11px] leading-snug text-fg-subtle">{ORGANIZE_ONLY_TURN_ON_HELP}</p>}
           </NavPopoverBlock>
         </>
       )}

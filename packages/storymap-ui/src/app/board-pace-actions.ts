@@ -8,6 +8,11 @@
 
 import { revalidatePath } from "next/cache";
 import { requireSession } from "@/lib/auth/action-guard";
+import { resolveActionCaller } from "@/lib/auth/action-guard";
+import { readBoardConfig } from "@/lib/storymap/repo";
+import { writeBoardConfig } from "@/lib/storymap/write";
+import type { BoardConfig } from "@/lib/storymap/types";
+import { appendSystemDecision, newSystemDecisionId } from "@/lib/storymap/runner/decision-log";
 import { isScopedActor } from "@/lib/storymap/mcp/actor";
 import { setBoardAutorun } from "@/lib/storymap/board-registry";
 import { boardPaceViewNow, changeBoardPaceNow, changeBoardScopeNow } from "@/lib/storymap/runner/board-pace-actions";
@@ -138,6 +143,68 @@ export async function setBoardScopeAction(input: {
     const pace = await boardPaceViewNow(input.boardId);
     if (!pace) return { ok: false, error: "Este board não existe ou não pôde ser lido." };
     return { ok: true, data: { pace, message: scopeOutcomeWords(scopeLabel(pace.scope?.types ?? null), res) } };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * Liga ou desliga o modo «só organização» do board (organize-only.ts) — o botão do OPERADOR no painel do ritmo. É chave
+ * de GOVERNANÇA: só a sessão do operador no navegador muda; um agente pelo MCP (mesmo com o token `full`) e o próprio
+ * serviço são recusados, e não há tool MCP que chame esta action. Grava pelo caminho de escrita da config (o resto do
+ * board.yaml fica como está), dispara já a varredura que para o que estiver rodando (ou devolve o que ela reteve) e
+ * registra a mudança no Acompanhar.
+ */
+export async function setOrganizeOnlyAction(input: { boardId: string; on: boolean }): Promise<Result<{ pace: BoardPaceView; message: string }>> {
+  await requireSession("setOrganizeOnlyAction");
+  try {
+    const caller = await resolveActionCaller();
+    if (caller !== "operator-session") {
+      return { ok: false, error: "O modo «só organização» é uma decisão do operador: só muda pela tela, com a sua sessão." };
+    }
+    const config = await readBoardConfig(input.boardId).catch(() => null);
+    if (!config) return { ok: false, error: "Este board não existe ou não pôde ser lido." };
+    const already = config.organizeOnly === true;
+    if (already !== input.on) {
+      const next: BoardConfig = { ...config };
+      if (input.on) next.organizeOnly = true;
+      else delete next.organizeOnly;
+      await writeBoardConfig(input.boardId, next);
+      // a varredura (a mesma do tick de recuperação): para o que estiver em voo e retém, ou devolve o retido. Em segundo
+      // plano — o clique não espera os runs pararem; nunca lança.
+      void (async () => {
+        const { sweepOrganizeOnlyInFlight, defaultOrganizeOnlySweepDeps } = await import("@/lib/storymap/runner/organize-only-sweep");
+        await sweepOrganizeOnlyInFlight(await defaultOrganizeOnlySweepDeps());
+      })().catch((e) => console.warn("[organize-only] varredura do clique falhou (o tick de recuperação refaz):", e instanceof Error ? e.message : e));
+      void appendSystemDecision({
+        v: 1,
+        id: newSystemDecisionId(),
+        at: new Date().toISOString(),
+        board: input.boardId,
+        agent: "human",
+        kind: "board-mode",
+        what: input.on ? "Tornou o board só de organização" : "Voltou o board a trabalhar sozinho",
+        why: input.on
+          ? "Nada roda sozinho neste board; você e os agentes continuam lendo, escrevendo e movendo cards."
+          : "Os passos automáticos voltam a disparar; o trabalho que o modo tinha parado volta à fila.",
+      });
+      void appendAgentAction({
+        actor: "human:board-header",
+        board: input.boardId,
+        tool: "setOrganizeOnlyAction",
+        cls: input.on ? "write-board" : "run",
+        disposition: "auto",
+        outcome: "executed",
+        note: `organizeOnly=${input.on}`,
+      });
+      revalidatePath(`/board/${input.boardId}`);
+    }
+    const pace = await boardPaceViewNow(input.boardId);
+    if (!pace) return { ok: false, error: "Este board não existe ou não pôde ser lido." };
+    const message = already === input.on
+      ? input.on ? "O board já estava só de organização." : "O board já trabalhava sozinho."
+      : input.on ? "Board só de organização: nada roda sozinho nele, e o que estava rodando parou." : "O board voltou a trabalhar sozinho; o que o modo tinha parado volta à fila.";
+    return { ok: true, data: { pace, message } };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }

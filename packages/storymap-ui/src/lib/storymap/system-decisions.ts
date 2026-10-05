@@ -59,6 +59,8 @@ export type SystemDecisionKind =
   | "triage-route"
   /** a verificação de entrada (card-intake.ts) recusou o card que um agente queria criar, ou o aceitou com «board incerto». */
   | "card-intake"
+  /** o operador ligou ou desligou o modo «só organização» de um board (pela tela; nunca um agente). */
+  | "board-mode"
   | "undo";
 
 /** Como desfazer, quando dá. Cada variante é UMA ação com pré-condição (undoRefusal). */

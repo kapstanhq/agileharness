@@ -147,6 +147,7 @@ export const DECISION_KIND_LABEL: Record<SystemDecisionKind, string> = {
   "triage-route": "Mandou cards da triagem para o board certo",
   "card-intake": "Barrou ou conferiu cards criados por agentes",
   undo: "Desfez decisões (a seu pedido)",
+  "board-mode": "Mudou o modo do board",
 };
 
 export interface WeeklyBoardInput {

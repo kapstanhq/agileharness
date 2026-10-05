@@ -873,6 +873,13 @@ read the flag from disk, cached by mtime. The actors that do not ask the gate ch
 test walks every file that iterates the boards and fails when one consults neither the gate nor the flag.
 The board chip reads "Só organização — nada roda sozinho".
 
+The operator switches the mode from the board's pace panel ("Tornar só organização" / "Voltar a trabalhar
+sozinho"), after a confirmation that says what stops and that the work it held comes back when switched off.
+The server action accepts only the operator's browser session — an agent over MCP (even with the `full`
+token) and the service itself are refused, and no MCP tool calls it. The click writes the flag through the
+board-config write path (the rest of `board.yaml` is kept), runs the sweep right away (stop and hold, or
+give back what was held) and records the change in the decisions trail.
+
 
 ## Built on Claude Code
 

@@ -9,6 +9,18 @@ import { FIXES_ONLY_TYPES, paceLabel, SCOPE_TYPE_ORDER, SCOPE_TYPE_WORDS, scopeP
 /** O selo do board só de organização (organize-only.ts) — a mesma frase no chip e no painel. */
 export const ORGANIZE_ONLY_SEAL = "Só organização — nada roda sozinho";
 
+/**
+ * O botão do OPERADOR que liga e desliga o modo (setOrganizeOnlyAction) e as confirmações, em palavras simples: o que
+ * deixa de acontecer, e que o que estava rodando volta quando desligar.
+ */
+export const ORGANIZE_ONLY_TURN_ON = "Tornar só organização";
+export const ORGANIZE_ONLY_TURN_OFF = "Voltar a trabalhar sozinho";
+export const ORGANIZE_ONLY_CONFIRM_ON =
+  "Tornar este board só de organização? Nada roda sozinho neste board: nem agentes de coluna, nem condutor, nem consertos automáticos, nem publicação. Você e os agentes continuam lendo, escrevendo e movendo cards. O que estiver rodando para e volta quando você desligar.";
+export const ORGANIZE_ONLY_CONFIRM_OFF =
+  "Voltar a trabalhar sozinho? Os passos automáticos deste board voltam a disparar agentes (o que gasta cota), e o trabalho que o modo tinha parado volta à fila.";
+export const ORGANIZE_ONLY_TURN_ON_HELP = "Para um board que só serve para anotar e organizar: nada automático age nele.";
+
 // As palavras fixas dos tipos para o dono (a tabela mora em runner/board-pace.ts, que monta as frases do portão; aqui é a
 // porta das telas e das tools): Funcionalidade nova (user), Erro (bug), Trabalho técnico (technical), Manutenção (chore),
 // Investigação (spike).
