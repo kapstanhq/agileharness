@@ -4,7 +4,7 @@ import { collectBoardInbox } from "@/lib/storymap/inbox/collect";
 import { decodeInboxItemId, findInboxItem } from "@/lib/storymap/deep-links";
 import { governanceDraftIdFromItemId } from "@/lib/storymap/demands";
 import { readGovernanceDraft } from "@/lib/storymap/sidecars";
-import { InboxItemScreen } from "@/components/inicio/InboxItemScreen";
+import { InboxItemScreen } from "@/components/inbox/InboxItemScreen";
 import {
   approvalAbsentState,
   cardAbsentState,
@@ -12,7 +12,7 @@ import {
   inboxAbsentState,
   receiptAbsentState,
   systemDecisionAbsentState,
-} from "@/components/inicio/cockpit-labels";
+} from "@/components/inbox/cockpit-labels";
 import { isExpired, readApprovalRequest } from "@/lib/storymap/approvals";
 import { latestReceiptFor, undoneReceipts } from "@/lib/storymap/inbox/receipts";
 

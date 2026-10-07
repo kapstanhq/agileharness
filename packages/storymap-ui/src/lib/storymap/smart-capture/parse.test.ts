@@ -26,19 +26,18 @@ describe("parseProposal — dual-track OST (idea OST-light + story addresses)", 
       tempId: "i1", type: "idea", title: "Dor central",
       candidateSolutions: ["ideia A", "  ideia B  ", "", "ideia A"],
       keyAssumption: "  premissa  ", successSignal: "sinal",
-      valueSize: { reach: 100, impact: 2 },
     }] }));
     const o = p.items[0];
     expect(o.type).toBe("idea");
     expect(o.candidateSolutions).toEqual(["ideia A", "ideia B"]);
     expect(o.keyAssumption).toBe("premissa");
     expect(o.successSignal).toBe("sinal");
-    expect(o.valueSize).toEqual({ reach: 100, impact: 2 });
   });
 
-  it("drops valueSize when neither axis is a finite number", () => {
-    const p = parse(JSON.stringify({ items: [{ tempId: "i1", type: "idea", title: "Dor", valueSize: { reach: "x", impact: null } }] }));
-    expect(p.items[0].valueSize).toBeUndefined();
+  // A priorização saiu na fase 5: a nota de valor (valueSize) que um agente antigo ainda mande é descartada.
+  it("drops a legacy valueSize (no prioritization any more)", () => {
+    const p = parse(JSON.stringify({ items: [{ tempId: "i1", type: "idea", title: "Dor", valueSize: { reach: 100, impact: 2 } }] }));
+    expect(p.items[0]).not.toHaveProperty("valueSize");
   });
 
   // WS-9 (D15) retrocompat: capture no longer PROPOSES ◆, but a LEGACY sidecar may still carry one. The parser

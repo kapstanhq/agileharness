@@ -17,7 +17,7 @@ import { effectiveQuestionCategory, isOwnerDecisionQuestion, isPendingProxyAudit
 import { cardOwnerClass, isBusinessOnly } from "./decision-class";
 import { ownerClassLabel } from "./owner-classes";
 import { deliveryBeforeAfterOf, deliveryProofOf, isDeliveryApprovalStep, isPendingDeliveryAudit } from "./delivery-audit";
-import { draftTitle, isGovernanceDraftStale } from "./governance";
+import { draftTitle, isGovernanceDraftStale, retiredDraftChange } from "./governance";
 import { hasCanvasContent } from "./design-canvas";
 // type-only: apagado em runtime, então não cria ciclo (copilot/tier.ts não importa demands.ts) e mantém este
 // módulo puro. O TIER é a projeção canônica de (mode, riskMatrix.deploy) — ver copilot/tier.ts.
@@ -395,7 +395,7 @@ function awaitingDeployProof(card: Card, def: StatusDef | undefined): boolean {
 /**
  * True when an AGENT has already produced substantive WORK on the card — a design (wireframe), code
  * (a review run / findings / a commit range), QA, or a staged/released integration — as opposed to
- * mere planning (enrich/prioritize, which only fill narrative/RICE). This is the cockpit's entry
+ * mere planning (enrich, which only fills narrative/acceptance). This is the cockpit's entry
  * axis: a manual step the card reached AFTER work was produced is an APPROVAL the automation waits on
  * (aprovar design/entrega, publicar); a manual step reached with NOTHING run yet (triage intake, "a
  * fazer" after estimate) is BACKLOG the operator drives on the board — not a pilotage demand. Pure
@@ -701,7 +701,24 @@ export type CockpitItemKind =
   /** O PEDIDO DE AUTORIZAÇÃO do dono que o plano de publicação (só leitura) lista e que nenhum card registrou — a linha
    *  do livro de bloqueios nasceu do plano (deploy-blocks.ts `openPlanOwnerRows`): um board pausado nunca tenta publicar,
    *  então o pedido nunca chegava ao Inbox. Fato do BOARD que publica o pacote, não de um card. */
-  | "publish-approval";
+  | "publish-approval"
+  /** Fase 3 (a Esteira apagada) — um pedido de publicação SEGURADO pela guarda de trabalho concorrente: o motivo e as
+   *  alavancas que moravam na Esteira («Publicar mesmo assim», «Cancelar o pedido»). Fato do BOARD, não de um card. */
+  | "publish-held"
+  /** Fase 3 — entregas prontas na homologação há horas, sem pedido de publicação, num board que só publica quando
+   *  alguém pede (`release.mode: manual`): «Stage parado há N h», com o «Publicar» da Esteira. Fato do BOARD. */
+  | "stage-idle"
+  /** Fase 3 — a TRAVA do governador de capacidade engatada (cota no limite ou freio de mão): nenhum agente começa
+   *  trabalho novo até o operador soltar. Fato do HOST, uma faixa só. */
+  | "capacity-latch"
+  /** Fase 3 — a saúde da ferramenta VERMELHA na última leitura (health.jsonl). Fato do HOST, uma faixa só. */
+  | "host-health"
+  /** Fase 3 — o aviso no celular está desligado (push configurado, nenhum aparelho inscrito): «push só para o crítico».
+   *  Fato do HOST, uma faixa só. */
+  | "push-off"
+  /** Fase 6 — um diagnóstico da SENTINELA que não resolveu a causa (Mínima: ela só lê; Máxima: o conserto não pegou).
+   *  O item leva o diagnóstico e «Resolver no chat». Uma faixa por CAUSA (dois cards com o mesmo motivo = um item). */
+  | "sentinel";
 
 interface CockpitItemBase {
   /** stable id, unique within the board (e.g. `<cardId>:q:<questionId>`) */
@@ -814,8 +831,250 @@ export interface PublishApprovalCockpitItem extends CockpitItemBase {
   approvals: Array<{ hash: string; files: string[]; units: string[]; rules: string[] }>;
   /** o sistema está refazendo o pedido agora (a main mexeu nos arquivos): sem botão até o novo chegar. */
   rerequesting: boolean;
-  /** só sobraram pedidos que o sistema sabe velhos e não pôde refazer sozinho: a saída é a Esteira. */
+  /** só sobraram pedidos que o sistema sabe velhos e não pôde refazer sozinho: a saída é o «Refazer o pedido agora» do Inbox. */
   stale: boolean;
+}
+
+/**
+ * 🔴 Fase 3 — um pedido de publicação SEGURADO (runner/publish-queue: `waiting` com `heldSince`) — a guarda de trabalho
+ * concorrente adiou a publicação do board. Era o banner da Esteira; agora é item do Inbox, com o motivo que a fila
+ * escreveu e as duas alavancas (publicar por cima da guarda, cancelar o pedido). Sem card (`cardId` "").
+ */
+export interface PublishHeldCockpitItem extends CockpitItemBase {
+  kind: "publish-held";
+  requestId: string;
+  /** o motivo, palavra por palavra como a fila o escreveu (vai para Detalhes). */
+  reason: string | null;
+  heldCount: number;
+  /** quando o dreno tenta de novo sozinho (ISO), quando ele disse. */
+  nextAttemptAt: string | null;
+  /** espera longa com contagem alta — BLOQUEIO, não lentidão (delivery-view `isBlocked`): sobe para Decidir. */
+  blocked: boolean;
+}
+
+/**
+ * 🟡 Fase 3 — entregas prontas na homologação (o stage do board) há horas, sem pedido de publicação, num board que só
+ * publica quando alguém pede. Era a faixa «Stage» da Esteira com o botão «Publicar N». Sem card (`cardId` "").
+ */
+export interface StageIdleCockpitItem extends CockpitItemBase {
+  kind: "stage-idle";
+  /** quantas entregas esperam (o total real, não a lista capada). */
+  pending: number;
+  /** há quantas horas a mais antiga listada espera — um piso honesto («pelo menos isto»). */
+  hours: number;
+  /** a máquina de publicação existe agora (kill-switch global + staging)? Sem ela, o botão mostra o porquê. */
+  canPublish: boolean;
+}
+
+/**
+ * 🔴 Fase 3 — a TRAVA do governador de capacidade (runner/capacity-governor `latch`): engatada pela cota (7 dias, 5 horas,
+ * uso pago) ou pelo freio de mão. Só o operador solta (`clearCapacityLatchAction`). Fato do HOST: o mesmo item em todo
+ * board, enquanto durar — uma faixa.
+ */
+export interface CapacityLatchCockpitItem extends CockpitItemBase {
+  kind: "capacity-latch";
+  level: "soft" | "hard";
+  /** o motivo que a trava gravou (texto do governador ou de quem puxou o freio). */
+  reason: string;
+  /** quem engatou (`auto:week`, `auto:five-hour`, `operator`, …). */
+  trippedBy: string;
+  /** a trava vem do arquivo HALT do host: o painel não a solta — só apagar o arquivo. */
+  halt: boolean;
+}
+
+/** 🔴 Fase 3 — a saúde da ferramenta vermelha na última leitura do tick (health.jsonl). Fato do HOST — uma faixa. */
+export interface HostHealthCockpitItem extends CockpitItemBase {
+  kind: "host-health";
+  /**
+   * os sinais vermelhos: o nome curto e a linha do que o número diz hoje — e o que o tick FEZ por ele (o registro
+   * `cards` do health.jsonl): `card` = o card de conserto que cobre o episódio; `noCard` = por que nenhum foi aberto.
+   * Sem nenhum dos dois, o tick ainda não decidiu (o sinal não ficou vermelho em leituras seguidas). A faixa só diz o
+   * que de fato aconteceu a partir disto — nunca promete um card que não existe.
+   */
+  signals: Array<{ id: string; label: string; detail: string; card?: string; noCard?: string }>;
+  /** a hora da leitura (ISO). */
+  at: string;
+}
+
+/** 🟢 Fase 3 — o aviso no celular desligado: o push está configurado e nenhum aparelho se inscreveu. Fato do HOST. */
+export interface PushOffCockpitItem extends CockpitItemBase {
+  kind: "push-off";
+}
+
+/** 🔴 Fase 6 — o diagnóstico da Sentinela de uma causa que ficou aberta (runner/sentinel.ts `sentinelInboxItems`). */
+export interface SentinelDiagnosisCockpitItem extends CockpitItemBase {
+  kind: "sentinel";
+  /** a chave da causa (o registro) e o id curto dela (o ref do «Resolver no chat»). */
+  causeKey: string;
+  causeId: string;
+  /** o diagnóstico, em português (o texto final da sessão, ou o do próprio sinal). */
+  diagnosis: string;
+  /** os cards que a causa explica (pode ser vazio: causa do host). */
+  cardIds: string[];
+  /** a Sentinela só diagnosticou (Mínima / teto do dia), ou tentou consertar e a causa continuou (Máxima). */
+  tried: boolean;
+}
+
+/** Os itens da Sentinela para `boardId`, a partir dos itens puros do registro. O 1º card da causa ancora o item (o
+ *  título vem dele quando existe); causa sem card fica sem âncora, como a saúde do host. PURA. */
+export function sentinelCockpitItems(
+  rows: ReadonlyArray<{ id: string; causeKey: string; causeId: string; title: string; diagnosis: string; cardIds: string[]; at: string; did: string }>,
+  boardId: string,
+  titleOf: (cardId: string) => string | undefined = () => undefined,
+): SentinelDiagnosisCockpitItem[] {
+  return rows.map((r) => {
+    const cardId = r.cardIds[0] ?? "";
+    return {
+      id: r.id,
+      kind: "sentinel" as const,
+      boardId,
+      cardId,
+      cardTitle: (cardId && titleOf(cardId)) || r.title,
+      status: null,
+      lane: "travado" as const,
+      severity: "high" as const,
+      since: r.at,
+      causeKey: r.causeKey,
+      causeId: r.causeId,
+      diagnosis: r.diagnosis,
+      cardIds: r.cardIds,
+      tried: r.did === "repaired",
+    };
+  });
+}
+
+/** Id estável do item de um pedido de publicação segurado — `pub:<requestId>`. PURA. */
+export const publishHeldItemId = (requestId: string): string => `pub:${requestId}`;
+
+/**
+ * Os pedidos SEGURADOS deste board como itens (os `waiting` com `heldSince` — delivery-view `heldRequests`). `blocked` é
+ * a régua de `isBlocked` passada pelo coletor (uma régua só). PURA.
+ */
+export function publishHeldItems(
+  rows: ReadonlyArray<{ id: string; board: string; status: string; reason?: string; heldSince?: string; heldCount?: number; nextAttemptAt?: string }>,
+  boardId: string,
+  isBlocked: (row: { id: string }) => boolean,
+): PublishHeldCockpitItem[] {
+  return rows
+    .filter((r) => r.board === boardId && r.status === "waiting" && !!r.heldSince)
+    .map((r) => ({
+      id: publishHeldItemId(r.id),
+      kind: "publish-held" as const,
+      boardId,
+      cardId: "",
+      cardTitle: "Publicação do board",
+      status: null,
+      lane: "aprovar" as const,
+      severity: "high" as const,
+      since: r.heldSince ?? null,
+      requestId: r.id,
+      reason: r.reason ?? null,
+      heldCount: r.heldCount ?? 0,
+      nextAttemptAt: r.nextAttemptAt ?? null,
+      blocked: isBlocked(r),
+    }));
+}
+
+/** Horas que uma entrega pronta pode esperar a publicação antes de o Inbox avisar (a mesma régua do release-aging). */
+export const STAGE_IDLE_HOURS = 24;
+
+/**
+ * O item «Stage parado há N h» de um board — ou null. Só num board que publica quando alguém pede (`manual`; no `auto` o
+ * sistema pede sozinho, e um pedido segurado é o item {@link PublishHeldCockpitItem}), com entregas esperando, sem pedido
+ * aberto e a mais antiga além de {@link STAGE_IDLE_HOURS}. PURA.
+ */
+export function stageIdleItem(
+  frontier: { releaseMode: string; canPublish: boolean; organizeOnly?: boolean; stagedTotal: number; staged: ReadonlyArray<{ at: string }> } | null | undefined,
+  o: { boardId: string; now: number; openRequest: boolean },
+): StageIdleCockpitItem | null {
+  if (!frontier || frontier.organizeOnly || frontier.releaseMode !== "manual" || o.openRequest || frontier.stagedTotal <= 0) return null;
+  const oldest = frontier.staged.length ? Date.parse(frontier.staged[frontier.staged.length - 1].at) : NaN;
+  if (!Number.isFinite(oldest)) return null;
+  const hours = Math.floor((o.now - oldest) / 3_600_000);
+  if (hours < STAGE_IDLE_HOURS) return null;
+  return {
+    id: `stage:${o.boardId}`,
+    kind: "stage-idle",
+    boardId: o.boardId,
+    cardId: "",
+    cardTitle: "Entregas prontas",
+    status: null,
+    lane: "aprovar",
+    severity: "medium",
+    since: new Date(oldest).toISOString(),
+    pending: frontier.stagedTotal,
+    hours,
+    canPublish: frontier.canPublish,
+  };
+}
+
+/** O item da trava do governador para `boardId` — ou null sem trava. Id por episódio (`since`). PURA. */
+export function capacityLatchItem(
+  latch: { level: "soft" | "hard"; reason: string; trippedBy: string; at: number; source: "file" | "halt" } | null | undefined,
+  boardId: string,
+): CapacityLatchCockpitItem | null {
+  if (!latch || !Number.isFinite(latch.at)) return null;
+  return {
+    id: `host:latch:${latch.at}`,
+    kind: "capacity-latch",
+    boardId,
+    cardId: "",
+    cardTitle: "Cota da conta",
+    status: null,
+    lane: "travado",
+    severity: "high",
+    since: new Date(latch.at).toISOString(),
+    level: latch.level,
+    reason: latch.reason,
+    trippedBy: latch.trippedBy,
+    halt: latch.source === "halt",
+  };
+}
+
+/** O item da saúde vermelha para `boardId` — ou null quando nenhum sinal está vermelho. Id por leitura. PURA. */
+export function hostHealthItem(
+  record:
+    | {
+        at: string;
+        signals: Partial<Record<string, { level: string; detail?: string }>>;
+        cards?: Partial<Record<string, { outcome: string; cardId?: string; reason?: string }>>;
+      }
+    | null
+    | undefined,
+  boardId: string,
+  labelOf: (id: string) => string,
+): HostHealthCockpitItem | null {
+  if (!record) return null;
+  const red = Object.entries(record.signals)
+    .filter(([, s]) => s?.level === "red")
+    .map(([id, s]) => {
+      const c = record.cards?.[id];
+      const fix = c?.cardId ? { card: c.cardId } : c?.outcome === "skipped" ? { noCard: c.reason ?? "" } : {};
+      return { id, label: labelOf(id), detail: s?.detail ?? "", ...fix };
+    });
+  if (!red.length) return null;
+  return {
+    id: `host:health:${red.map((s) => s.id).join("+")}`,
+    kind: "host-health",
+    boardId,
+    cardId: "",
+    cardTitle: "Saúde da ferramenta",
+    status: null,
+    lane: "travado",
+    severity: "high",
+    since: record.at,
+    signals: red,
+    at: record.at,
+  };
+}
+
+/**
+ * O item «Ative o aviso no celular» — só com o push configurado, nenhum aparelho inscrito e a oferta não dispensada
+ * pelo dono («Agora não»: quem não quer push não é lembrado em todo Inbox). PURA.
+ */
+export function pushOffItem(o: { configured: boolean; subscriptions: number; dismissed?: boolean }, boardId: string): PushOffCockpitItem | null {
+  if (!o.configured || o.subscriptions > 0 || o.dismissed) return null;
+  return { id: "host:push-off", kind: "push-off", boardId, cardId: "", cardTitle: "Aviso no celular", status: null, lane: "aprovar", severity: "low", since: null };
 }
 
 /** O fato do governador que {@link meterStallItem} projeta (capacity-governor `snapshot().meterStall`). */
@@ -912,6 +1171,24 @@ export interface GateCockpitItem extends CockpitItemBase {
    * (decision-class.ts, ponto `gate`). Ausente/false = um gate qualquer.
    */
   deliveryApproval?: boolean;
+  /**
+   * Fase 7 — o card é item de um LOTE do condutor (`card.batch.id`) parado numa parada de entrega ou de publicação: os
+   * itens do mesmo lote no mesmo passo viram UM item ({@link groupBatchStops}), e a aprovação dele vale para todos
+   * (approveBatchDeliveryAction). Esparso.
+   */
+  batchId?: string;
+  /** a `## Prova da entrega` deste card (cortada), quando ele é item de lote — o Inbox a mostra item a item. */
+  proof?: string;
+  /** os OUTROS itens do lote no mesmo passo, cada um com a sua prova (o item fala por todos). Esparso. */
+  alsoCards?: BatchItemCard[];
+}
+
+/** Um item de um lote do condutor que um item do Inbox também representa (fase 7). */
+export interface BatchItemCard {
+  cardId: string;
+  cardTitle: string;
+  /** a `## Prova da entrega` dele (só nas paradas de entrega/publicação). */
+  proof?: string;
 }
 
 /** 🟢 O copiloto PEDIU sua aprovação para uma ação `ask` da matriz de risco (approvals.ts). Espera VOCÊ. */
@@ -988,6 +1265,14 @@ export interface StalledCockpitItem extends CockpitItemBase {
   retryable: boolean;
   /** o efeito do passo, quando ele declara um — o que «tentar de novo» roda. Presente sse `retryable`. */
   effect?: EntryEffect;
+  /** Fase 3 — o card é CONDUZIDO (`routing.driver: conductor`): o condutor encerrou (ou calou) e ninguém assumiu. O item
+   *  ganha «Devolver ao fluxo» e «Parar condutor» — decisões do operador. Esparso. */
+  conducted?: true;
+  /** Fase 7 — o card conduzido é item de um LOTE (`card.batch.id`): a sessão do lote morta vira UM aviso que nomeia
+   *  todos os itens ({@link groupBatchStops}); «Parar condutor»/«Devolver ao fluxo» valem para o lote. Esparso. */
+  batchId?: string;
+  /** os OUTROS itens do mesmo lote parados pelo mesmo motivo. Esparso. */
+  alsoCards?: BatchItemCard[];
 }
 
 /** 🟡 A low-confidence triage intake the agent flagged for a human decision (accept/decline/dedupe). */
@@ -1191,7 +1476,13 @@ export type CockpitItem =
   | EffectFailedCockpitItem
   | StalledCockpitItem
   | LockedExecCockpitItem
-  | PublishApprovalCockpitItem;
+  | PublishApprovalCockpitItem
+  | PublishHeldCockpitItem
+  | StageIdleCockpitItem
+  | CapacityLatchCockpitItem
+  | HostHealthCockpitItem
+  | PushOffCockpitItem
+  | SentinelDiagnosisCockpitItem;
 
 /**
  * 6.4 — quem pode ACIONAR cada kind do cockpit, POR TIER do copiloto. O princípio (herdado da F8) é um só:
@@ -1279,6 +1570,19 @@ const KIND_AUTONOMY: Record<CockpitItemKind, KindAutonomy> = {
   // O pedido de autorização do dono que o plano listou sem card: só o clique do DONO grava a autorização (dinheiro e o
   // resto que o alvo lhe reserva). Nenhum tier tem a alavanca.
   "publish-approval": "never",
+  // Fase 3 — as alavancas da Esteira e os avisos do host: publicar por cima da guarda, cancelar um pedido, publicar o
+  // que espera num board manual, soltar a trava da cota e ligar o aviso no celular são do OPERADOR (as actions recusam
+  // outro chamador — publishStagedAction com `overrideEmbargo`, cancelPublishAction, rerequestPublishRequestsAction); a
+  // saúde vermelha já virou card de conserto no board da ferramenta. Nenhum tier do copiloto tem a alavanca (o agente
+  // que publica usa a tool `publish_when_idle`, governada pelo riskMatrix — outra superfície, não este item).
+  "publish-held": "never",
+  "stage-idle": "never",
+  "capacity-latch": "never",
+  "host-health": "never",
+  "push-off": "never",
+  // fase 6 — o diagnóstico da Sentinela é o que SOBROU depois do conserto automático e do despertar dela: o próximo passo
+  // é o dono (ou o chat que ele abre). O tique antigo não existe mais para acordar por ele.
+  sentinel: "never",
   approval: "never", // é o pedido que o PRÓPRIO copiloto abriu — ele aguarda VOCÊ. Se fosse acionável, o tick
   // acordaria por causa de si mesmo, veria "trabalho", e re-acordaria: laço. O gate DO CARD (que ele PODE
   // empurrar) é o kind `gate` — outro item, outra semântica.
@@ -1509,7 +1813,9 @@ export function cardCockpitItems(card: Card, config: BoardConfig, boardId: strin
       kind: "question",
       lane: "pergunta",
       severity: "high",
-      since: q.askedAt ?? null,
+      // a pergunta sem carimbo (escrita à mão no arquivo — o ask_question carimba) herda a idade do passo, a mesma que
+      // o Kanban mostra: sem ela a linha de contexto do Inbox ficava sem «há N min»
+      since: q.askedAt ?? stepSince,
       questionId: q.id,
       prompt: q.text,
       options: q.options ?? [],
@@ -1601,6 +1907,7 @@ export function cardCockpitItems(card: Card, config: BoardConfig, boardId: strin
       stepName: def.name,
       retryable: Boolean(def.onEnter),
       ...(def.onEnter ? { effect: def.onEnter } : {}),
+      ...(card.routing?.driver === "conductor" ? { conducted: true as const, ...(card.batch?.id ? { batchId: card.batch.id } : {}) } : {}),
     });
   }
 
@@ -1608,6 +1915,10 @@ export function cardCockpitItems(card: Card, config: BoardConfig, boardId: strin
   // The "approve design" stop (gate hasWireframe) is covered by the richer `design` item (board-level
   // folding from the wireframe sidecar), so skip the generic approval there to avoid a duplicate.
   if (def.autorun !== true && def.gate !== "hasWireframe" && hasProducedWork(card) && !awaitingDeployProof(card, def) && !effectFailed && !stalled) {
+    // fase 7 — um item de LOTE do condutor parado na aprovação da entrega ou na publicação: marca o lote (o item do
+    // Inbox junta os do mesmo passo — groupBatchStops) e leva a prova dele, para a aprovação única mostrar cada uma
+    const batchStop = card.batch?.id && (isDeliveryApprovalStep(def) || !!def.onEnter) ? card.batch.id : null;
+    const batchProof = batchStop ? deliveryProofOf(card.body) : null;
     out.push({
       ...base,
       // WS-12.4 (D16) — o STATUS entra no id. Sem ele o item de gate é o mesmo `<card>:approval` em TODA parada
@@ -1624,6 +1935,7 @@ export function cardCockpitItems(card: Card, config: BoardConfig, boardId: strin
       // o pedido ao dono só quando NINGUÉM do sistema vai seguir: nem condutor (que move revisão → integrar ele mesmo no
       // só-negócio), nem run/reserva/sessão vivos no card.
       ...(isDeliveryApprovalStep(def) && card.routing?.driver !== "conductor" && !opts?.workedCardIds?.has(card.id) ? { deliveryApproval: true } : {}),
+      ...(batchStop ? { batchId: batchStop, ...(batchProof ? { proof: batchProof } : {}) } : {}),
     });
   }
 
@@ -1729,7 +2041,77 @@ export function compareCockpitItems(a: Pick<CockpitItem, "lane" | "severity" | "
 
 /** Every cockpit item on a board's cards, sorted by {@link compareCockpitItems}. */
 export function boardCockpitItems(cards: Card[], config: BoardConfig, boardId: string, opts?: DemandTimingOpts): CockpitItem[] {
-  return groupDeployStops(cards.flatMap((c) => cardCockpitItems(c, config, boardId, opts)).sort(compareCockpitItems));
+  // só vale a marca de um lote cujo LÍDER ainda a carrega (uma marca velha num card solto não junta entregas alheias)
+  const leads = new Map(cards.flatMap((c) => (c.batch?.id && c.batch.lead === c.id ? [[c.batch.id, c.id] as const] : [])));
+  const items = cards
+    .flatMap((c) => cardCockpitItems(c, config, boardId, opts))
+    .map((it) => ((it.kind === "gate" || it.kind === "stalled") && it.batchId && !leads.has(it.batchId) ? { ...it, batchId: undefined } : it))
+    .sort(compareCockpitItems);
+  return groupBatchStops(groupDeployStops(items), (id) => leads.get(id));
+}
+
+/**
+ * Fase 7 — os itens de um LOTE do condutor parados juntos viram UM item do Inbox (decisão do dono: «uma parada por lote»):
+ *   • a aprovação da entrega e a publicação (`gate` com `batchId`) — no MESMO passo; o item lista cada um com a prova;
+ *   • a sessão do lote que morreu ou calou (`stalled` conduzido com `batchId`) — o aviso nomeia todos os itens, que
+ *     seguem com o condutor marcado esperando o operador, como o card líder.
+ * O item que fica é o do LÍDER do lote quando ele está no grupo (as alavancas do card valem para o lote), senão o
+ * primeiro na ordem do Inbox. Itens do lote em passos diferentes seguem separados. PURA; preserva a ordem.
+ */
+export function groupBatchStops(items: CockpitItem[], leadOf: (batchId: string) => string | undefined = () => undefined): CockpitItem[] {
+  const keyOf = (it: CockpitItem): string | null =>
+    (it.kind === "gate" || it.kind === "stalled") && it.batchId ? `${it.boardId}::${it.kind}::${it.batchId}::${it.status ?? ""}` : null;
+  const groups = new Map<string, Array<GateCockpitItem | StalledCockpitItem>>();
+  for (const it of items) {
+    const key = keyOf(it);
+    if (!key) continue;
+    groups.set(key, [...(groups.get(key) ?? []), it as GateCockpitItem | StalledCockpitItem]);
+  }
+  const heads = new Map<string, GateCockpitItem | StalledCockpitItem>();
+  for (const [key, members] of groups) {
+    if (members.length < 2) continue;
+    const lead = leadOf(members[0].batchId as string);
+    const head = members.find((m) => m.cardId === lead) ?? members[0];
+    const others: BatchItemCard[] = members
+      .filter((m) => m !== head)
+      .map((m) => ({ cardId: m.cardId, cardTitle: m.cardTitle, ...(m.kind === "gate" && m.proof ? { proof: m.proof } : {}) }));
+    const n = others.length;
+    heads.set(
+      key,
+      head.kind === "stalled"
+        ? { ...head, alsoCards: others, findingTitle: `${head.findingTitle} — e mais ${n} ${n === 1 ? "item" : "itens"} do mesmo lote` }
+        : { ...head, alsoCards: others },
+    );
+  }
+  const out: CockpitItem[] = [];
+  const placed = new Set<string>();
+  for (const it of items) {
+    const key = keyOf(it);
+    const head = key ? heads.get(key) : undefined;
+    if (!key || !head) {
+      out.push(it);
+      continue;
+    }
+    // o grupo entra na posição do seu PRIMEIRO membro na ordem do Inbox (o mais urgente), uma vez só
+    if (placed.has(key)) continue;
+    placed.add(key);
+    out.push(head);
+  }
+  return out;
+}
+
+/** Os cards que um item do Inbox representa: o dele e os do lote dobrados nele (fase 7). PURA. */
+export function batchStopCards(item: CockpitItem): BatchItemCard[] {
+  if ((item.kind !== "gate" && item.kind !== "stalled") || !item.batchId || !item.alsoCards?.length) return [];
+  return [{ cardId: item.cardId, cardTitle: item.cardTitle, ...(item.kind === "gate" && item.proof ? { proof: item.proof } : {}) }, ...item.alsoCards];
+}
+
+/**
+ * O rótulo e a consequência da opção que APROVA um lote (a mesma opção de um card só, dita para os N itens). PURA —
+ * o Inbox (InboxItem) a aplica à opção de seguir do item de lote, que roda approveBatchDeliveryAction.
+ */
+export function batchApprovalWords<O extends { label: string; consequence: string }>(option: O, n: number): O {
+  return { ...option, label: `${option.label} (${n} itens)`, consequence: `Vale para os ${n} itens do lote, cada um com a sua prova. ${option.consequence}` };
 }
 
 /**
@@ -2116,6 +2498,8 @@ export function governanceItemsFromDrafts(
     // disco, auditável, e `list_pending_changes` segue mostrando — o que muda é só parar de cobrar
     // uma decisão do operador que o tempo já tomou. Ver isGovernanceDraftStale.
     if (isGovernanceDraftStale(draft, now)) continue;
+    // mirava uma seção do formato antigo de um documento: não tem onde aterrissar — sai como vencida (retiredDraftChange)
+    if (retiredDraftChange(draft)) continue;
     const conflicts = conflictsByDraftId.get(draft.id) ?? [];
     out.push({
       id: governanceItemId(draft.id),

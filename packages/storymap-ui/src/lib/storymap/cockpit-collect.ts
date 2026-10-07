@@ -13,6 +13,12 @@ import {
   governanceItemsFromDrafts,
   isCopilotActionable,
   meterStallItem,
+  capacityLatchItem,
+  hostHealthItem,
+  publishHeldItems,
+  pushOffItem,
+  sentinelCockpitItems,
+  stageIdleItem,
   proposalItemsFromContainers,
   stuckItemsFromFailures,
   type CockpitItem,
@@ -30,6 +36,7 @@ import { publishApprovalItems } from "@/lib/storymap/publish-approval-item";
 import { getLockedExecService } from "@/lib/storymap/runner/locked-exec-service";
 import type { BoardConfig, Card, GovernanceDraft, WireframeDoc } from "@/lib/storymap/types";
 import type { ProposalDoc } from "@/lib/storymap/smart-capture/types";
+import { agentMayTakeQuestion } from "@/lib/storymap/autonomy";
 import { getTelemetryStore, type CardMetrics } from "@/lib/storymap/runner/telemetry";
 import { getRunnerRegistry } from "@/lib/storymap/runner/registry";
 import { getProductDeploy } from "@/lib/storymap/runner/product-deploy";
@@ -124,9 +131,10 @@ async function workedCardIdsOf(boardId: string, cards: readonly Card[]): Promise
   }
   try {
     // só as sessões VIVAS: uma morta (sem batimento, ou com o óbito carimbado) não vai mover a entrega
-    const { allSessions, isSessionAlive } = await import("./runner/session-worktree");
+    const { allSessions, isSessionAlive, sessionCardIds } = await import("./runner/session-worktree");
     const now = Date.now();
-    for (const s of await allSessions()) if (s.board === boardId && s.cardId && isWorkingSession(s, now, isSessionAlive)) out.add(s.cardId);
+    // fase 7: TODOS os cards da sessão — o líder e os itens do lote (`sessionCardIds`)
+    for (const s of await allSessions()) if (s.board === boardId && isWorkingSession(s, now, isSessionAlive)) for (const id of sessionCardIds(s)) out.add(id);
   } catch {
     /* sem o registro de sessões */
   }
@@ -298,6 +306,10 @@ export async function collectBoardCockpit(boardId: string): Promise<BoardCockpit
     .then(async ({ readDeployBlocks }) => publishApprovalItems(await readDeployBlocks(), boardId, Date.now()))
     .catch(() => []);
 
+  // (7e) Fase 3 — as alavancas que moravam na Esteira (o pedido segurado, as entregas paradas) e os avisos do host (a
+  //      trava da cota, a saúde vermelha, o aviso no celular desligado). Cada fonte é tolerante: falhou ⇒ sem item.
+  const hostItems: CockpitItem[] = await collectHostAndPublishItems(boardId, cards, config, cardItems);
+
   // (8) WS-12.2 (D16) — stamp the items the autonomous copiloto GAVE UP on (per-item anti-noop backoff), so the
   //     cockpit can show the chip that makes the hand-off explicit ("this one is yours now"). Read-only over the
   //     durable orchestrator state; fail-open (an unreadable state just means no chips).
@@ -318,6 +330,7 @@ export async function collectBoardCockpit(boardId: string): Promise<BoardCockpit
     ...meterItems,
     ...lockedExecItems,
     ...publishApprovalList,
+    ...hostItems,
   ];
   // B6 — o aviso de sistema sobre a morte de um run vira EVIDÊNCIA do travado do mesmo card (um fato, um item).
   const folded = foldRunDiagnostics(items0, cardsById);
@@ -358,6 +371,71 @@ async function transitionFacts(
     }
   }
   return { lastTransitionAt, stepEnteredAt };
+}
+
+/** A leitura de saúde vale para o Inbox só enquanto é recente: um vermelho de horas atrás não é «agora». */
+const HEALTH_FRESH_MS = 30 * 60_000;
+/** A fronteira do board (git) é medida no máximo uma vez por este intervalo — o Inbox a lê a cada visita. */
+const FRONTIER_TTL_MS = 60_000;
+const frontierMemo = new Map<string, { at: number; value: Promise<import("./runner/delivery-view").BoardFrontier | null> }>();
+
+async function frontierCached(boardId: string, now: number): Promise<import("./runner/delivery-view").BoardFrontier | null> {
+  const hit = frontierMemo.get(boardId);
+  if (hit && now - hit.at < FRONTIER_TTL_MS) return hit.value;
+  const value = import("./runner/delivery-deps")
+    .then(async ({ frontierOf }) => frontierOf(boardId, (await import("./runner/worktree")).defaultExec))
+    .catch(() => null);
+  frontierMemo.set(boardId, { at: now, value });
+  return value;
+}
+
+/**
+ * Fase 3 — os itens que a Esteira e os painéis do host mostravam e o Inbox não: o pedido de publicação SEGURADO deste
+ * board, as entregas prontas paradas num board manual (sem pedido aberto e sem o release-aging de um card, que já diz o
+ * mesmo), a trava do governador, a saúde vermelha e o aviso no celular desligado. Cada leitura falha sozinha (sem item).
+ */
+async function collectHostAndPublishItems(boardId: string, cards: readonly Card[], config: BoardConfig, cardItems: readonly CockpitItem[]): Promise<CockpitItem[]> {
+  const now = Date.now();
+  const out: CockpitItem[] = [];
+  const requests = await import("./runner/publish-queue").then(({ listPublishRequests }) => listPublishRequests()).catch(() => []);
+  const { isBlocked } = await import("./runner/delivery-view");
+  out.push(...publishHeldItems(requests, boardId, (r) => isBlocked(r as (typeof requests)[number], now)));
+  const openRequest = requests.some((r) => r.board === boardId && (r.status === "waiting" || r.status === "publishing"));
+  const agingCard = cardItems.some((i) => i.kind === "release-aging");
+  if (!openRequest && !agingCard && cards.length && config) {
+    const stage = stageIdleItem(await frontierCached(boardId, now), { boardId, now, openRequest });
+    if (stage) out.push(stage);
+  }
+  const latch = await import("@/lib/storymap/runner/capacity-service")
+    .then(({ getCapacityGovernor }) => capacityLatchItem(getCapacityGovernor().snapshot().latch, boardId))
+    .catch(() => null);
+  if (latch) out.push(latch);
+  const health = await Promise.all([import("./health/health-deps"), import("./health/ah-health"), import("./health/health-view")])
+    .then(async ([{ readLastHealthRecord }, { healthSignalCatalog, DEFAULT_HEALTH_THRESHOLDS }, { humanDetail }]) => {
+      const record = await readLastHealthRecord();
+      if (!record || now - Date.parse(record.at) > HEALTH_FRESH_MS) return null;
+      const labels = new Map(healthSignalCatalog(DEFAULT_HEALTH_THRESHOLDS).map((s) => [s.id as string, s.label]));
+      const item = hostHealthItem(record, boardId, (id) => labels.get(id) ?? id);
+      return item ? { ...item, signals: item.signals.map((s) => ({ ...s, detail: s.detail ? humanDetail(s.detail) : "" })) } : null;
+    })
+    .catch(() => null);
+  if (health) out.push(health);
+  const push = await Promise.all([import("@/lib/notifications/server/channels/web-push-channel"), import("@/lib/notifications/server/push-store")])
+    .then(([{ isPushConfigured }, { loadSubscriptions, isPushOfferDismissed }]) =>
+      pushOffItem({ configured: isPushConfigured(), subscriptions: loadSubscriptions().length, dismissed: isPushOfferDismissed() }, boardId),
+    )
+    .catch(() => null);
+  if (push) out.push(push);
+  // fase 6 — os diagnósticos da Sentinela que ficaram abertos (do board e do host): um item por causa, com «Resolver no
+  // chat». Leitura defensiva: o registro ilegível é só um Inbox sem esses itens.
+  const sentinel = await Promise.all([import("./runner/sentinel-log"), import("./runner/sentinel")])
+    .then(async ([{ readSentinelLog }, { sentinelInboxItems }]) => {
+      const titles = new Map(cards.map((c) => [c.id, c.title]));
+      return sentinelCockpitItems(sentinelInboxItems(await readSentinelLog(), boardId), boardId, (id) => titles.get(id));
+    })
+    .catch(() => []);
+  out.push(...sentinel);
+  return out;
 }
 
 /**
@@ -447,7 +525,13 @@ export async function collectActionableCockpit(
     gate = null;
   }
   const items = actionableForScope(
-    all.filter((i) => isCopilotActionable(i, tier, { businessOnly }) && !(i.cardId && conducted.has(i.cardId))),
+    all.filter(
+      (i) =>
+        isCopilotActionable(i, tier, { businessOnly }) &&
+        !(i.cardId && conducted.has(i.cardId)) &&
+        // a pergunta que o perfil de autonomia deixa com o dono: o tick seria recusado nela (autonomy.ts agentMayTakeQuestion)
+        !(i.kind === "question" && !agentMayTakeQuestion(i.category, cards.find((c) => c.id === i.cardId), config)),
+    ),
     cards,
     gate,
   );

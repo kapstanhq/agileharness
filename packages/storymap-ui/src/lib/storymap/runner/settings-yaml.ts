@@ -14,6 +14,9 @@
 // nunca reescreve o que não entendeu. Um settings.yaml em fluxo (`orchestrator: {chat: …}`) ganharia um
 // bloco novo em vez de ser mutilado, e o `coerceRunnerSettings` do lado do leitor decide o que vale.
 
+import { isDeepStrictEqual } from "node:util";
+import { parseYamlMap } from "../frontmatter";
+
 /** Um escalar a gravar: o CAMINHO até ele (`["orchestrator","chat","model"]`) e o valor. */
 export interface YamlScalarPatch {
   path: readonly string[];
@@ -119,4 +122,139 @@ export function patchYamlScalars(text: string, patches: readonly YamlScalarPatch
   for (const p of patches) setPath(lines, p);
   const out = lines.join(eol);
   return out.endsWith(eol) ? out : `${out}${eol}`;
+}
+
+/** Uma chave a REMOVER do arquivo (a linha `chave: valor` some; um bloco nunca é removido por aqui). */
+export interface YamlScalarDelete {
+  path: readonly string[];
+  delete: true;
+}
+
+/** Remove a linha de UM escalar (só se ela existe e carrega valor na mesma linha). Muta `lines`. */
+function deletePath(lines: string[], path: readonly string[]): void {
+  let start = 0;
+  let end = lines.length;
+  let indent = 0;
+  for (let d = 0; d < path.length; d++) {
+    const at = findKey(lines, start, end, indent, path[d]);
+    if (at < 0) return;
+    if (d === path.length - 1) {
+      if (/^\s*[A-Za-z_][\w-]*:\s*[^\s#]/.test(lines[at])) lines.splice(at, 1);
+      return;
+    }
+    const childEnd = blockEnd(lines, at + 1, indent);
+    const sibling = lines.slice(at + 1, childEnd).find((l) => !isBlankOrComment(l));
+    if (!sibling) return;
+    start = at + 1;
+    end = childEnd;
+    indent = indentOf(sibling);
+  }
+}
+
+/**
+ * {@link patchYamlScalars} COM PROVA (e com remoção de chave): o texto novo, lido de volta, tem de ser exatamente o
+ * antigo com os escalares pedidos — nenhum outro valor mudou, nenhum se perdeu. Se a edição textual errou (um formato
+ * que ela não cobre), devolve `null` e quem chama decide (cair no caminho antigo, ou recusar) — nunca grava um valor
+ * errado. PURA.
+ */
+export function patchYamlScalarsChecked(text: string, patches: readonly (YamlScalarPatch | YamlScalarDelete)[]): string | null {
+  const sets = patches.filter((p): p is YamlScalarPatch => !("delete" in p));
+  const dels = patches.filter((p): p is YamlScalarDelete => "delete" in p);
+  try {
+    let out = text;
+    if (dels.length) {
+      const eol = text.includes("\r\n") ? "\r\n" : "\n";
+      const lines = text.split(/\r?\n/);
+      for (const d of dels) deletePath(lines, d.path);
+      out = lines.join(eol);
+    }
+    out = patchYamlScalars(out, sets);
+    const before = parseYamlMap(text, "settings.yaml");
+    const after = parseYamlMap(out, "settings.yaml");
+    const expected = structuredClone(before);
+    for (const p of patches) setIn(expected, p.path, "delete" in p ? undefined : p.value);
+    return isDeepStrictEqual(after, expected) ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+function setIn(obj: Record<string, unknown>, path: readonly string[], value: unknown): void {
+  let cur = obj;
+  for (const key of path.slice(0, -1)) {
+    if (!isPlainObject(cur[key])) {
+      if (value === undefined) return;
+      cur[key] = {};
+    }
+    cur = cur[key] as Record<string, unknown>;
+  }
+  const leaf = path[path.length - 1];
+  if (value === undefined) delete cur[leaf];
+  else cur[leaf] = value;
+}
+
+// ── a config INTEIRA gravada no lugar quando só escalares mudaram ───────────────────────────────────────
+
+const SAFE_KEY = /^[A-Za-z_][\w-]*$/;
+
+/** Um mapa YAML de verdade (não Date, não array, não null). */
+function isMapping(v: unknown): v is Record<string, unknown> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return false;
+  const proto = Object.getPrototypeOf(v);
+  return proto === Object.prototype || proto === null;
+}
+
+const isScalar = (v: unknown): v is string | number | boolean =>
+  typeof v === "boolean" || (typeof v === "number" && Number.isFinite(v)) || (typeof v === "string" && !/[\r\n]/.test(v));
+
+/**
+ * A diferença de `before` para `after` como patches de ESCALAR (trocar, criar, remover uma chave de valor simples, em
+ * qualquer profundidade de mapa). `null` quando mudou qualquer coisa que não é escalar — lista, bloco inteiro
+ * criado/removido, null, data, texto de várias linhas — ou quando uma chave tem forma que a edição textual não endereça.
+ * PURA.
+ */
+export function scalarPatchesBetween(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+  prefix: readonly string[] = [],
+): (YamlScalarPatch | YamlScalarDelete)[] | null {
+  const out: (YamlScalarPatch | YamlScalarDelete)[] = [];
+  for (const k of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    const b = before[k];
+    const a = after[k];
+    if (isDeepStrictEqual(a, b)) continue;
+    if (!SAFE_KEY.test(k)) return null;
+    const p = [...prefix, k];
+    if (isMapping(a) && isMapping(b)) {
+      const sub = scalarPatchesBetween(b, a, p);
+      if (!sub) return null;
+      out.push(...sub);
+    } else if (a === undefined && isScalar(b)) out.push({ path: p, delete: true });
+    else if (isScalar(a) && (b === undefined || isScalar(b))) out.push({ path: p, value: a });
+    else return null;
+  }
+  return out;
+}
+
+/**
+ * O texto de um YAML com o MÍNIMO de edição para que ele leia exatamente `target` — só quando a diferença é de
+ * escalares ({@link scalarPatchesBetween}); comentários, ordem e formatação do resto atravessam. Provado por leitura
+ * de volta contra o `target` inteiro; `null` quando não dá (quem chama reescreve o arquivo). PURA.
+ */
+export function patchYamlToMatch(text: string, target: Record<string, unknown>, label = "board.yaml"): string | null {
+  try {
+    const before = parseYamlMap(text, label);
+    const patches = scalarPatchesBetween(before, target);
+    if (!patches) return null;
+    if (!patches.length) return text;
+    const out = patchYamlScalarsChecked(text, patches);
+    if (out == null) return null;
+    return isDeepStrictEqual(parseYamlMap(out, label), target) ? out : null;
+  } catch {
+    return null;
+  }
 }

@@ -92,7 +92,7 @@ export function isBackboneStory(card: Card): boolean {
  * with a non-user storyType (technical/bug/chore/spike) — the "how", not the user-facing "what".
  * Delivery work doesn't sit on the backbone; it's attributed to the map node it serves and shown
  * on that node's collapsed delivery shelf (kanban is its primary home). `storyType` is the single
- * authority for this split (already so at pipeline-routing.ts/gates.ts/priority.ts) — never a
+ * authority for this split (already so at pipeline-routing.ts/gates.ts) — never a
  * stored classification, so the two helpers can't drift. coerceCard guarantees a story's storyType
  * is non-null (defaults "user"); the explicit null-guard keeps the predicate total for any input.
  */

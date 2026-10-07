@@ -48,3 +48,28 @@ export function addSubscription(sub: PushSubscription): void {
 export function removeSubscription(endpoint: string): void {
   persist(loadSubscriptions().filter((s) => s.endpoint !== endpoint));
 }
+
+// O «Agora não» do item «Ative o aviso no celular» do Inbox: o dono que não quer push não é lembrado em todo Inbox.
+// Um arquivo no estado do runner (gitignored), como as inscrições — durável entre reinícios, nunca no git.
+function offerDismissedPath(): string {
+  return path.join(runnerStateDir(), "push-offer-dismissed.json");
+}
+
+/** O dono dispensou a oferta de ativar o aviso? (arquivo ausente/ilegível = não — nunca lança.) */
+export function isPushOfferDismissed(): boolean {
+  try {
+    const v = JSON.parse(readFileSync(offerDismissedPath(), "utf8")) as { at?: unknown };
+    return typeof v?.at === "string";
+  } catch {
+    return false;
+  }
+}
+
+/** Grava a dispensa da oferta (escrita atômica, como `persist`). */
+export function dismissPushOffer(at: string): void {
+  const dir = runnerStateDir();
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const tmp = `${offerDismissedPath()}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ at }), "utf8");
+  renameSync(tmp, offerDismissedPath());
+}

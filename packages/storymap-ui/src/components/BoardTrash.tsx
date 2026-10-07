@@ -159,7 +159,7 @@ export function TrashDrawer({
                     onClick={() => revive(it.id)}
                     disabled={reviving === it.id}
                     title="Reviver — voltar ao fluxo"
-                    className="inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-[10px] font-medium text-accent opacity-0 transition hover:bg-accent/10 group-hover:opacity-100 disabled:opacity-50"
+                    className="inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-1 text-[10px] font-medium text-accent opacity-0 transition hover:bg-accent/10 group-hover:opacity-100 nohover:opacity-100 disabled:opacity-50 nohover:disabled:opacity-50"
                   >
                     <RotateCcw className="h-3 w-3" />
                     {reviving === it.id ? "…" : "Reviver"}

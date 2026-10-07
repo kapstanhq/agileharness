@@ -70,8 +70,8 @@ advance the pipeline — it enriches an existing card with a test plan.
 
 3. **Record as tasks + notes.** Append test tasks to the card's `tasks` array,
    each `{ id, title, done: false }` with a clear layer prefix in the title
-   (e.g. "test(unit): riceScore retorna null com effort<=0",
-   "test(integration): moveCardAction recusa entrar em priorizar sem acceptance").
+   (e.g. "test(unit): placementOrder põe o card no topo da coluna",
+   "test(integration): moveCardAction recusa entrar em pronta sem acceptance").
    Use ids like `test-u1`, `test-i1`, `test-e1` so they're distinct from build
    tasks. Then add a `## Plano de testes` section in the body summarizing the
    pyramid (which layer, what it proves, which acceptance criterion it covers).

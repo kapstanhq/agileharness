@@ -30,10 +30,10 @@ const card = (over: Partial<Card>): Card =>
 
 const COMPLETE_NARRATIVE = { role: "operador", want: "algo", soThat: "valor" };
 
-// The slice the advance helper walks: enrich → estimate(gate) → todo(gate) → design block → live.
+// The slice the advance helper walks: enrich → todo(gate) → design block → live.
 const board = cfg([
   { id: "enriquecer", name: "Spec", trigger: "harness-enrich", autorun: true },
-  { id: "priorizar", name: "Estimar", gate: "hasRefinement", trigger: "harness-prioritize", autorun: true },
+  { id: "pronta", name: "A fazer", gate: "hasRefinement", autorun: true },
   { id: "design-ux", name: "UX", trigger: "harness-ux", autorun: true, skipForTypes: ["technical", "chore", "spike", "bug"] },
   { id: "plano", name: "Plano", trigger: "harness-plan", autorun: true },
   { id: "concluida", name: "Live", terminal: true },
@@ -44,7 +44,7 @@ const board = cfg([
 describe("decideAdvance", () => {
   it("advances to the next step when its entry gate passes", () => {
     const c = card({ status: "enriquecer", narrative: COMPLETE_NARRATIVE, acceptance: ["dado/quando/então"] });
-    expect(decideAdvance(c, board)).toEqual({ action: "advance", from: "enriquecer", to: "priorizar" });
+    expect(decideAdvance(c, board)).toEqual({ action: "advance", from: "enriquecer", to: "pronta" });
   });
 
   it("blocks (does not advance) when the next step's gate is unmet", () => {
@@ -52,7 +52,7 @@ describe("decideAdvance", () => {
     const d = decideAdvance(c, board);
     expect(d.action).toBe("blocked");
     if (d.action === "blocked") {
-      expect(d.to).toBe("priorizar");
+      expect(d.to).toBe("pronta");
       expect(d.gate).toMatch(/narrativa/i);
     }
   });
@@ -96,34 +96,34 @@ describe("decideAdvance", () => {
   });
 
   it("is board-aware: a non-user story skips the design block in one hop", () => {
-    // A technical story past the gate at priorizar advances to plano, NOT design-ux.
+    // A technical story past the gate at pronta advances to plano, NOT design-ux.
     for (const t of ["technical", "chore", "spike", "bug"] as StoryType[]) {
-      const c = card({ status: "priorizar", storyType: t });
-      expect(decideAdvance(c, board)).toEqual({ action: "advance", from: "priorizar", to: "plano" });
+      const c = card({ status: "pronta", storyType: t });
+      expect(decideAdvance(c, board)).toEqual({ action: "advance", from: "pronta", to: "plano" });
     }
     // A user story DOES traverse design-ux.
-    const u = card({ status: "priorizar", storyType: "user" });
-    expect(decideAdvance(u, board)).toEqual({ action: "advance", from: "priorizar", to: "design-ux" });
+    const u = card({ status: "pronta", storyType: "user" });
+    expect(decideAdvance(u, board)).toEqual({ action: "advance", from: "pronta", to: "design-ux" });
   });
 
   it("is instance-aware: a refine[functionality] user story skips the design block (advance → plano)", () => {
     const c = card({
-      status: "priorizar",
+      status: "pronta",
       storyType: "user",
       mode: "refine",
       refinement: { brief: "ajustar copy", kinds: ["functionality"], target: null, screenshot: null, openedAt: null },
     });
-    expect(decideAdvance(c, board)).toEqual({ action: "advance", from: "priorizar", to: "plano" });
+    expect(decideAdvance(c, board)).toEqual({ action: "advance", from: "pronta", to: "plano" });
   });
 
   it("is instance-aware: a refine[ui] user story KEEPS the design block (advance → design-ux)", () => {
     const c = card({
-      status: "priorizar",
+      status: "pronta",
       storyType: "user",
       mode: "refine",
       refinement: { brief: "repensar layout", kinds: ["ui"], target: null, screenshot: null, openedAt: null },
     });
-    expect(decideAdvance(c, board)).toEqual({ action: "advance", from: "priorizar", to: "design-ux" });
+    expect(decideAdvance(c, board)).toEqual({ action: "advance", from: "pronta", to: "design-ux" });
   });
 });
 

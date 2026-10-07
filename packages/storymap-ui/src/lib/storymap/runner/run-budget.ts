@@ -29,7 +29,7 @@ import { TRIGGER_IDS, type OrchestratorSettings, type RunnerSettings, type Trigg
  *   • 25 — a construção (`harness-do`): a única skill que escreve código e roda a suíte, e a de turnos mais longos;
  *   • 15 — leitura profunda do diff ou do código: revisão, plano técnico, sincronização de card;
  *   • 8  — conserto e QA: leem pouco, mas executam comandos e sobem o ambiente;
- *   • 5  — as skills leves (grill, ui, ux, enrich, interview, prioritize, capture): leem o card e o board e escrevem.
+ *   • 5  — as skills leves (grill, ui, ux, enrich, interview, capture): leem o card e o board e escrevem.
  *
  * A regra de calibração de quem quiser apertar é max(2×p90, p99) do custo nocional que a SUA instalação observa — e o
  * resultado se declara em `settings.yaml → autorun.maxBudgetUSD` (um mapa skill → teto, que vence esta tabela). Os
@@ -47,7 +47,6 @@ export const DEFAULT_RUN_BUDGET_USD: Readonly<Partial<Record<TriggerId, number>>
   "harness-enrich": 5,
   "harness-ux": 5,
   "harness-interview": 5,
-  "harness-prioritize": 5,
   "harness-capture": 5,
 };
 

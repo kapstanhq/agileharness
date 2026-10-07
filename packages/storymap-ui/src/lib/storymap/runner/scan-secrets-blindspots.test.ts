@@ -15,9 +15,21 @@
 // Todos os valores abaixo são SINTÉTICOS: o SHAPE de credenciais de provedores, nenhum byte real. Eles
 // são propositalmente marker-less (sem `example`/`fake`/`mock`), porque um valor com marcador é
 // dispensado por desenho — usar um aqui tornaria o teste incapaz de detectar a regressão.
-import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { describePosix } from "./test-platform";
 // O scanner é um script compartilhado da raiz (o mesmo que o pre-commit, o merge train e o release chamam).
-import { looksLikeIdentifier, runScan } from "../../../../../../scripts/git-hooks/scan-secrets.mjs";
+import {
+  CAPABILITIES_LINE,
+  CLAUDE_SESSION_TRAILER,
+  EMPTY_TREE,
+  looksLikeIdentifier,
+  parseMessageLog,
+  runScan,
+} from "../../../../../../scripts/git-hooks/scan-secrets.mjs";
 
 /** Monta um diff unificado de UMA linha adicionada em `file` — o formato que o scanner consome. */
 function addedLine(file: string, line: string): string {
@@ -348,5 +360,273 @@ describe("Forma 3 — o handle/token MCP do próprio produto", () => {
 
   it.each(CONTROLES)("LIBERA (controle negativo): %s", (_nome, linha) => {
     expect(scanLine("docs/onboarding.md", linha).code).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// `--range … --messages`: a MENSAGEM do commit. O merge train compõe os commits que cria em main/stage com
+// as mensagens da própria entrada (texto livre, inclusive o trailer `Decision:` de um agente) — e o diff,
+// que é tudo o que as outras regras leem, nunca mostra a mensagem.
+// ---------------------------------------------------------------------------------------------
+describe("--messages: as mensagens dos commits do range", () => {
+  // montado em runtime: a forma de um PAT do GitHub, sintética, sem marcador de fixture
+  const TOKEN = ["gh", "p_", "Q7mZ2xK9vR4tL8nB3cW6yH1jF5dS0aGe2uPq"].join("");
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  // a forma de `git log -z --format=%H%x00%B`: sha NUL mensagem NUL (o `%B` termina em \n)
+  const gitWithMessage = (msg: string) => (args: string[]) => (args[0] === "log" ? `${SHA}\x00${msg}\n\x00` : "");
+
+  it("BLOQUEIA um token na mensagem, nomeando o commit e a linha — sem ecoar os bytes", () => {
+    const r = runScan({
+      argv: ["--range", "HEAD~2..HEAD", "--messages"],
+      git: gitWithMessage(`fix(ops): relatório\n\nDecision: autentiquei com ${TOKEN}`),
+      env: {},
+    });
+    expect(r.code).toBe(BLOCKED);
+    expect(r.findings?.[0]).toMatchObject({ file: "mensagem do commit 0123456789ab", line: 3, rule: "github-pat" });
+    expect(JSON.stringify(r.findings)).not.toContain(TOKEN);
+  });
+
+  it("LIBERA (controle negativo): mensagem de prosa com trailers", () => {
+    const msg = "fix(hooks): o guarda lê o dono\n\nCo-Authored-By: Pessoa Exemplo <p@example.test>\nRefs: story-ex9301";
+    expect(runScan({ argv: ["--range", "HEAD~1..HEAD", "--messages"], git: gitWithMessage(msg), env: {} }).code).toBe(0);
+  });
+
+  it("sem `--messages` a mensagem não é lida (o escopo do gate do merge integral não muda)", () => {
+    const git = gitWithMessage(`Decision: ${TOKEN}`);
+    expect(runScan({ argv: ["--range", "HEAD~1..HEAD"], git, env: {} }).code).toBe(0);
+  });
+
+  it("um byte \\x1e NA mensagem não esconde o token que vem depois dele (o separador antigo)", () => {
+    const r = runScan({
+      argv: ["--range", "HEAD~1..HEAD", "--messages"],
+      git: gitWithMessage(`feat: x\n\ncorpo\x1e\n${TOKEN}`),
+      env: {},
+    });
+    expect(r.code).toBe(BLOCKED);
+    expect(r.findings?.[0]).toMatchObject({ file: "mensagem do commit 0123456789ab", line: 4, rule: "github-pat" });
+  });
+
+  it("saída do log que não alterna sha/mensagem é ERRO INTERNO (fail-closed), nunca um registro pulado", () => {
+    for (const bad of [`${SHA}\x00msg\n`, `${SHA}\x00msg\n\x00extra\x00`, `nao-e-sha\x00msg\n\x00`]) {
+      const r = runScan({ argv: ["--range", "HEAD~1..HEAD", "--messages"], git: (a) => (a[0] === "log" ? bad : ""), env: {} });
+      expect(r).toMatchObject({ code: 1, internalError: true });
+    }
+  });
+
+  it("parseMessageLog: alternância estrita de NULs, vários commits, mensagem com \\x1e intacta", () => {
+    const SHA2 = "fedcba9876543210fedcba9876543210fedcba98";
+    expect(parseMessageLog("")).toEqual([]);
+    expect(parseMessageLog(`${SHA}\x00um\x1e dois\n\x00${SHA2}\x00tres\n\x00`)).toEqual([
+      { sha: SHA, message: "um\x1e dois\n" },
+      { sha: SHA2, message: "tres\n" },
+    ]);
+  });
+});
+
+// O mesmo \x1e num repositório REAL: o git guarda o byte na mensagem, e o `git log -z` que o scanner roda
+// tem de entregar o que vem depois dele para as regras.
+describePosix("--messages (git real): \\x1e na mensagem do commit", () => {
+  const TOKEN = ["gh", "p_", "Q7mZ2xK9vR4tL8nB3cW6yH1jF5dS0aGe2uPq"].join("");
+  let dir = "";
+  beforeAll(() => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "scan-msg-rs-"));
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  const gitIn = (cwd: string) => (args: string[]) =>
+    execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      env: { ...process.env, HOME: cwd, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: "1", GIT_CEILING_DIRECTORIES: dir },
+    });
+
+  it("o token DEPOIS do \\x1e é pego (antes: exit 0); sem token, o mesmo commit passa", () => {
+    const repo = path.join(dir, "r");
+    mkdirSync(repo);
+    const git = gitIn(repo);
+    git(["init", "-q"]);
+    git(["config", "user.email", "t@example.test"]);
+    git(["config", "user.name", "tester"]);
+    git(["commit", "-q", "--allow-empty", "-m", "base"]);
+    writeFileSync(path.join(dir, "msg-limpa.txt"), "feat: x\n\ncorpo\x1e\nnada aqui\n");
+    git(["commit", "-q", "--allow-empty", "-F", path.join(dir, "msg-limpa.txt")]);
+    expect(runScan({ argv: ["--range", "HEAD~1..HEAD", "--messages"], git, env: {} }).code).toBe(0);
+
+    writeFileSync(path.join(dir, "msg-token.txt"), `feat: x\n\ncorpo\x1e\n${TOKEN}\n`);
+    git(["commit", "-q", "--allow-empty", "-F", path.join(dir, "msg-token.txt")]);
+    expect(git(["log", "-1", "--format=%B"])).toContain("\x1e"); // o git guardou o byte
+    const r = runScan({ argv: ["--range", "HEAD~1..HEAD", "--messages"], git, env: {} });
+    expect(r.code).toBe(BLOCKED);
+    expect(r.findings?.[0]?.rule).toBe("github-pat");
+    // o range com os dois commits também pega (o registro limpo não "engole" o seguinte)
+    expect(runScan({ argv: ["--range", "HEAD~2..HEAD", "--messages"], git, env: {} }).code).toBe(BLOCKED);
+  });
+});
+
+// O que o PUSH publica são os BYTES de cada commit da história — não o texto decodificado da mensagem nem o
+// saldo líquido do range. Três formas medidas em que o token passava com exit 0, e o controle negativo da
+// assinatura (base64 por construção, que a régua do token nu não pode transformar em achado).
+describePosix("o objeto CRU e a história (git real): encoding, NUL na mensagem, adicionar-e-remover", () => {
+  const TOKEN = ["gh", "p_", "Q7mZ2xK9vR4tL8nB3cW6yH1jF5dS0aGe2uPq"].join("");
+  let dir = "";
+  let n = 0;
+  beforeAll(() => {
+    dir = mkdtempSync(path.join(os.tmpdir(), "scan-raw-"));
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  const gitIn = (cwd: string) => (args: string[], opts: { input?: string } = {}) =>
+    execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      input: opts.input,
+      env: { ...process.env, HOME: cwd, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: "1", GIT_CEILING_DIRECTORIES: dir },
+    });
+  const freshRepo = () => {
+    const repo = path.join(dir, `r${++n}`);
+    mkdirSync(repo);
+    const git = gitIn(repo);
+    git(["init", "-q"]);
+    git(["config", "user.email", "t@example.test"]);
+    git(["config", "user.name", "tester"]);
+    git(["commit", "-q", "--allow-empty", "-m", "base"]);
+    return { repo, git, base: git(["rev-parse", "HEAD"]).trim() };
+  };
+  const scan = (git: (a: string[]) => string, ...argv: string[]) => runScan({ argv, git, env: {} });
+
+  it("`i18n.commitEncoding=UTF-16` esvazia o %B — a leitura CRUA ainda pega o token", () => {
+    const { git, base } = freshRepo();
+    git(["-c", "i18n.commitEncoding=UTF-16", "commit", "-q", "--allow-empty", "-m", `feat: y\n\n${TOKEN}`]);
+    expect(git(["log", "-1", "--format=%B"])).not.toContain(TOKEN); // o bypass: o texto decodificado sumiu
+    const r = scan(git, "--range", `${base}..HEAD`, "--messages");
+    expect(r.code).toBe(BLOCKED);
+    expect(r.findings?.some((f) => f.rule === "github-pat")).toBe(true);
+  });
+
+  it("um objeto forjado com NUL na mensagem (o %B trunca nele) é BLOQUEADO — o NUL e o token depois dele", () => {
+    const { git, base } = freshRepo();
+    const tree = git(["rev-parse", "HEAD^{tree}"]).trim();
+    const raw = `tree ${tree}\nparent ${base}\nauthor t <t@example.test> 1 +0000\ncommitter t <t@example.test> 1 +0000\n\nfeat: x\0\n${TOKEN}\n`;
+    const forged = git(["hash-object", "-t", "commit", "-w", "--literally", "--stdin"], { input: raw }).trim();
+    git(["reset", "-q", "--hard", forged]);
+    const r = scan(git, "--range", `${base}..HEAD`, "--messages");
+    expect(r.code).toBe(BLOCKED);
+    expect(r.findings?.map((f) => f.rule)).toEqual(expect.arrayContaining(["nul-in-commit-object", "github-pat"]));
+    expect(JSON.stringify(r.findings)).not.toContain(TOKEN);
+  });
+
+  it("adicionar e remover em commits seguidos: o diff líquido passa, `--per-commit` BLOQUEIA", () => {
+    const { repo, git, base } = freshRepo();
+    writeFileSync(path.join(repo, "k.txt"), `k=${TOKEN}\n`);
+    git(["add", "k.txt"]);
+    git(["commit", "-q", "-m", "a"]);
+    writeFileSync(path.join(repo, "k.txt"), "k=redigido\n");
+    git(["commit", "-q", "-am", "b"]);
+    expect(scan(git, "--range", `${base}..HEAD`, "--messages").code).toBe(0); // o furo: o saldo é limpo
+    const r = scan(git, "--range", `${base}..HEAD`, "--messages", "--per-commit");
+    expect(r.code).toBe(BLOCKED);
+    expect(r.findings?.[0]).toMatchObject({ file: "k.txt", rule: "github-pat" });
+    // o achado diz DE QUAL COMMIT veio — o primeiro (o que adicionou), não o HEAD
+    const first = git(["rev-list", "--reverse", `${base}..HEAD`]).split("\n")[0].trim();
+    expect(r.findings?.[0]?.commit).toBe(first.slice(0, 12));
+  });
+
+  it("`<árvore vazia>..HEAD --per-commit` varre a história inteira, raiz incluída; limpa, passa", () => {
+    const { repo, git } = freshRepo();
+    expect(scan(git, "--range", `${EMPTY_TREE}..HEAD`, "--messages", "--per-commit").code).toBe(0);
+    writeFileSync(path.join(repo, "k.txt"), `k=${TOKEN}\n`);
+    git(["add", "k.txt"]);
+    git(["commit", "-q", "-m", "a"]);
+    expect(scan(git, "--range", `${EMPTY_TREE}..HEAD`, "--per-commit").code).toBe(BLOCKED);
+  });
+
+  it("a assinatura base64 de um `gpgsig` não é token nu (controle negativo); um prefixo de credencial nela é", () => {
+    const { git, base } = freshRepo();
+    const tree = git(["rev-parse", "HEAD^{tree}"]).trim();
+    // base64 de bytes pseudo-aleatórios, montado em runtime: a forma de uma linha de assinatura ASCII-armored
+    const sigLine = Buffer.from(Array.from({ length: 48 }, (_, i) => (i * 73 + 41) % 256)).toString("base64");
+    const forge = (extra: string) => {
+      const raw = `tree ${tree}\nparent ${base}\nauthor t <t@example.test> 1 +0000\ncommitter t <t@example.test> 1 +0000\ngpgsig -----BEGIN PGP SIGNATURE-----\n \n ${sigLine}\n ${sigLine.split("").reverse().join("")}${extra}\n -----END PGP SIGNATURE-----\n\nfeat: assinado\n`;
+      const sha = git(["hash-object", "-t", "commit", "-w", "--literally", "--stdin"], { input: raw }).trim();
+      git(["reset", "-q", "--hard", sha]);
+    };
+    forge("");
+    expect(scan(git, "--range", `${base}..HEAD`, "--messages").findings).toEqual([]);
+    git(["reset", "-q", "--hard", base]);
+    forge(` ${TOKEN}`);
+    const r = scan(git, "--range", `${base}..HEAD`, "--messages");
+    expect(r.code).toBe(BLOCKED);
+    expect(r.findings?.[0]).toMatchObject({ file: expect.stringMatching(/^cabeçalho do commit /), rule: "github-pat" });
+  });
+});
+
+describe("--per-commit: saída do rev-list fora de forma é ERRO INTERNO (fail-closed)", () => {
+  it("uma linha que não é só de shas não vira um commit pulado", () => {
+    const git = (args: string[]) => (args[0] === "rev-list" ? "nao-e-sha\n" : "");
+    expect(runScan({ argv: ["--range", "HEAD~1..HEAD", "--per-commit"], git, env: {} })).toMatchObject({ code: 1, internalError: true });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Os falsos-positivos MEDIDOS no alvo real pelo portão pré-push (por commit + mensagens). Cada um reteria TODA
+// publicação do checkout; as isenções são estreitas e têm o controle positivo ao lado.
+// ---------------------------------------------------------------------------------------------
+describe("portão pré-push: falsos-positivos medidos e a sonda --capabilities", () => {
+  const TOKEN = ["gh", "p_", "Q7mZ2xK9vR4tL8nB3cW6yH1jF5dS0aGe2uPq"].join("");
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  const gitWithMessage = (msg: string) => (args: string[]) => (args[0] === "log" ? `${SHA}\x00${msg}\n\x00` : "");
+  // um id aleatório com a forma do de uma sessão (32 alfanuméricos, as três classes), montado em runtime
+  const SESSION_ID = Array.from({ length: 32 }, (_, i) => "aB3cD9eF1gH7iJ5kL2mN8oP4qR6sT0uV"[(i * 7 + 3) % 32]).join("");
+
+  it("--capabilities imprime a linha e NÃO varre nada", () => {
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const git = () => {
+        throw new Error("a sonda não pode chamar o git");
+      };
+      expect(runScan({ argv: ["--capabilities"], git, env: {} })).toMatchObject({ code: 0 });
+      expect(write).toHaveBeenCalledWith(`${CAPABILITIES_LINE}\n`);
+    } finally {
+      write.mockRestore();
+    }
+    expect(CAPABILITIES_LINE.split(/\s+/)).toEqual(expect.arrayContaining(["per-commit", "messages", "range"]));
+  });
+
+  it("o trailer `Claude-Session:` de uma sessão na nuvem não é token nu — o mesmo id fora do trailer é", () => {
+    const trailer = `Claude-Session: https://claude.ai/code/session_${SESSION_ID}`;
+    expect(CLAUDE_SESSION_TRAILER.test(trailer)).toBe(true);
+    const msg = `fix(app): ajuste\n\nCo-Authored-By: Pessoa Exemplo <p@example.test>\n${trailer}`;
+    expect(runScan({ argv: ["--range", "HEAD~1..HEAD", "--messages"], git: gitWithMessage(msg), env: {} }).code).toBe(0);
+    // controle positivo: o mesmo valor numa linha que NÃO é exatamente o trailer segue achado
+    const other = `fix(app): ajuste\n\nchave=${SESSION_ID}`;
+    expect(runScan({ argv: ["--range", "HEAD~1..HEAD", "--messages"], git: gitWithMessage(other), env: {} }).code).toBe(BLOCKED);
+    // e o trailer não desculpa um prefixo de credencial na mesma mensagem
+    const both = `${msg}\nDecision: ${TOKEN}`;
+    expect(runScan({ argv: ["--range", "HEAD~1..HEAD", "--messages"], git: gitWithMessage(both), env: {} }).code).toBe(BLOCKED);
+  });
+
+  it("um id de anexo base64URL de 120+ caracteres (`_`/`-` no alfabeto) é blob, não token nu", () => {
+    const alfabeto = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-aBcDeFgHiJkLmNoPqRsTuVwXyZ";
+    const id = Array.from({ length: 127 }, (_, i) => alfabeto[(i * 29 + 11) % alfabeto.length]).join("");
+    expect(scanLine("fixtures/feed-exemplo.json", `  "link": "https://blog.example.test/img?attbid=${id}&k=1",`).code).toBe(0);
+    // controle: um token nu curto (fora da trava de blob) na mesma forma segue achado
+    expect(scanLine("fixtures/feed-exemplo.json", `  "link": "https://blog.example.test/img?attbid=${SESSION_ID}&k=1",`).code).toBe(BLOCKED);
+  });
+
+  const scanFile = (file: string, lines: string[]) => {
+    const diff = [`+++ b/${file}`, `@@ -0,0 +1,${lines.length} @@`, ...lines.map((l) => `+${l}`)].join("\n");
+    const git = (args: string[]) => (args.includes("--name-only") ? `${file}\n` : diff);
+    return runScan({ argv: ["--staged"], git, env: {} });
+  };
+
+  it("`.env.development` só com `NEXT_PUBLIC_*`, comentário e linha vazia passa; qualquer outra chave nele é `secret-file`", () => {
+    const publico = ["# valores públicos do front", "NEXT_PUBLIC_API_URL=https://api.example.test", "", "NEXT_PUBLIC_FLAG=1"];
+    expect(scanFile("packages/web/.env.development", publico).code).toBe(0);
+    const comChave = scanFile("packages/web/.env.development", [...publico, "DB_URL=postgres://localhost/app"]);
+    expect(comChave.code).toBe(BLOCKED);
+    expect(comChave.findings?.map((f) => f.rule)).toContain("secret-file");
+    // o nome não basta: `.env.production` e `.env` seguem proibidos mesmo só com NEXT_PUBLIC_*
+    expect(scanFile("packages/web/.env.production", publico).findings?.map((f) => f.rule)).toContain("secret-file");
+    expect(scanFile("packages/web/.env", publico).findings?.map((f) => f.rule)).toContain("secret-file");
   });
 });

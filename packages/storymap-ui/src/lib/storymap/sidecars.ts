@@ -421,8 +421,6 @@ function coerceProposedItem(raw: unknown, i: number): ProposedItem | null {
   const list = (v: unknown) => (Array.isArray(v) ? v.map((x) => String(x)).filter(Boolean) : []);
   const strOrNull = (v: unknown) => (v != null && String(v).trim() ? String(v).trim() : null);
   const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
-  const nv = o.valueSize && typeof o.valueSize === "object" ? (o.valueSize as Record<string, unknown>) : null;
-  const valueSize = nv ? { reach: num(nv.reach), impact: num(nv.impact) } : null;
   const nn = o.narrative && typeof o.narrative === "object" ? (o.narrative as Record<string, unknown>) : null;
   return {
     tempId: o.tempId != null && String(o.tempId) ? String(o.tempId) : `i${i + 1}`,
@@ -452,7 +450,6 @@ function coerceProposedItem(raw: unknown, i: number): ProposedItem | null {
     ...(o.candidateSolutions != null ? { candidateSolutions: list(o.candidateSolutions) } : {}),
     ...(strOrNull(o.keyAssumption) ? { keyAssumption: strOrNull(o.keyAssumption)! } : {}),
     ...(strOrNull(o.successSignal) ? { successSignal: strOrNull(o.successSignal)! } : {}),
-    ...(valueSize && (valueSize.reach != null || valueSize.impact != null) ? { valueSize } : {}),
     // 1.6 — WS7 pre-seeded tasks were DROPPED on the async Inbox round-trip (this coerce didn't copy them),
     // killing the "N ajustes MESMA superfície ⇒ 1 card com N tasks" gain. Passthrough mirroring parse.ts (the
     // sync in-modal path) so both paths agree: accept {id?,title} objects OR bare strings, drop empty titles.

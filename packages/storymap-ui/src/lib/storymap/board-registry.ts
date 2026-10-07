@@ -157,6 +157,13 @@ export async function registerBoard(input: RegisterBoardInput): Promise<Register
   // Nasce DESARMADO. Não é default nem opção: é invariante deste caminho.
   raw.autorunDisabled = true;
   if (deploy !== undefined) raw.deploy = deploy;
+  // Nasce COM CONDUTOR (o pipeline híbrido — types.ts `pipelineMode`): uma story que chega a «A fazer» ganha uma
+  // sessão que a carrega de ponta a ponta, na ordem da coluna, e Entrevista/Jornada/Telas não rodam skill sozinhas
+  // (as reaberturas Corrigir/Refinar também entram pelo condutor — CONDUCTOR_DEFAULT_FROM_STATUS). Só quando o `_base`
+  // desta árvore tem o passo de entrada (senão o despacho seria declarado e inerte). Desarmado como o resto: nada
+  // dispara enquanto `autorunDisabled` estiver no arquivo.
+  const fromStatus = await passosAtivosDoBase(CONDUCTOR_DEFAULT_FROM_STATUS);
+  if (fromStatus.includes(CONDUCTOR_DEFAULT_ENTRY)) raw.conductor = { enabled: true, fromStatus };
 
   const corpo = yaml.dump(raw, { lineWidth: 120, noRefs: true });
   const cabecalho = [
@@ -167,6 +174,10 @@ export async function registerBoard(input: RegisterBoardInput): Promise<Register
     `# \`autorunDisabled: true\` é o que faz este board nascer DESARMADO: a pipeline herdada traz passos`,
     `# com \`autorun\`, e sem esta linha entrar num deles dispararia um agente headless sozinho. ARMAR é um`,
     `# gesto separado e deliberado — remova a linha quando quiser que o board processe cards por conta.`,
+    `#`,
+    `# \`conductor\` faz o board nascer no modo CONDUTOR: uma story que entra em «A fazer» (ou é reaberta em Corrigir/`,
+    `# Refinar) ganha uma sessão que a carrega de ponta a ponta, e Entrevista, Jornada e Telas não rodam skill sozinhas.`,
+    `# Declare \`pipeline: columns\` para que esses três passos voltem a rodar a sua skill na cascata.`,
     ``,
   ].join("\n");
 
@@ -193,6 +204,32 @@ export async function registerBoard(input: RegisterBoardInput): Promise<Register
  * `statuses` produz o mesmo board surdo que a ausência dele. A pergunta é sobre o EFEITO, então ela é
  * respondida pelo conteúdo — e um `_base` quebrado cai no mesmo lado da recusa que um ausente.
  */
+/** O passo de entrada do condutor de um board recém-registrado: «A fazer», a fila do trabalho na ordem da coluna. */
+export const CONDUCTOR_DEFAULT_ENTRY = "pronta";
+/**
+ * Onde o condutor de um board recém-registrado assume o card: «A fazer» e as duas reaberturas (Corrigir, Refinar). As
+ * reaberturas entram porque, no modo condutor, os passos de design onde elas desembocam (Jornada, Telas) não rodam
+ * skill: sem condutor, um refino ou uma correção visual atravessaria esses passos e pararia no gate do desenho sem
+ * ninguém para escolhê-lo. É a mesma lista que os boards com condutor em uso já declaram.
+ */
+export const CONDUCTOR_DEFAULT_FROM_STATUS: readonly string[] = [CONDUCTOR_DEFAULT_ENTRY, "corrigir", "refinar"];
+
+/** Quais destes `ids` o `_base` desta árvore declara como passo NÃO terminal, na ordem dada. (Ilegível ⇒ nenhum.) */
+async function passosAtivosDoBase(ids: readonly string[]): Promise<string[]> {
+  try {
+    const raw = parseYamlMap(await fs.readFile(baseBoardConfigPath(), "utf8"), "_base/board.yaml");
+    if (!Array.isArray(raw.statuses)) return [];
+    const ativos = new Set(
+      raw.statuses
+        .filter((s) => !!s && typeof s === "object" && (s as { terminal?: unknown }).terminal !== true)
+        .map((s) => (s as { id?: unknown }).id),
+    );
+    return ids.filter((id) => ativos.has(id));
+  } catch {
+    return [];
+  }
+}
+
 export async function temPipelineHerdavel(): Promise<boolean> {
   try {
     // `parseYamlMap` e não `yaml.load` cru: é o chokepoint de YAML seguro desta casa (teto de bytes,

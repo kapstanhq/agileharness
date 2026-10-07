@@ -8,6 +8,7 @@
 // Usage:
 //   node scan-secrets.mjs --staged             # scan staged diff (pre-commit default)
 //   node scan-secrets.mjs --range HEAD~1..HEAD # scan a COMMITTED range (merge train, SM-08)
+//   node scan-secrets.mjs --range HEAD~2..HEAD --messages # ... plus the range's commit MESSAGES
 //
 // Exit codes: 0 = clean, 2 = secret found, 1 = INTERNAL error (fail-CLOSED, SM-08). The merge
 // train (worktree.ts / merge-queue.ts) treats ANY non-zero exit as a block — so a scan that
@@ -331,7 +332,16 @@ const HIGH_ENTROPY_BY_DESIGN =
 // construção, e o `/` do alfabeto base64 se disfarça de separador de path — sem esta trava, uma
 // fixture de teste com um JPEG embutido
 // gerava uma enxurrada de achados sozinha. As outras regras continuam valendo na linha.
-const EMBEDDED_BLOB = /data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,|[A-Za-z0-9+/]{120,}={0,2}/;
+// O alfabeto inclui o base64URL (`_`/`-`): um id de anexo de 120+ caracteres nesse alfabeto (o `attbid=` de um
+// feed RSS em fixture) é blob, não credencial — sem eles a trava não casava e cada pedaço virava token nu.
+const EMBEDDED_BLOB = /data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,|[A-Za-z0-9+/_-]{120,}={0,2}/;
+
+// O trailer `Claude-Session:` que o Claude Code (sessão na nuvem) põe na MENSAGEM do commit: o id é o caminho de
+// uma URL de sessão — não é credencial (abrir a URL exige login na conta dona). Só a régua do TOKEN NU deixa de
+// rodar nessa linha, e só quando a linha é EXATAMENTE o trailer (as de prefixo, palavra-chave e literal seguem).
+// Sem isto, todo commit de uma sessão na nuvem que passasse pelo portão pré-push RETERIA a publicação.
+export const CLAUDE_SESSION_TRAILER = /^Claude-Session: https:\/\/claude\.ai\/code\/session_[A-Za-z0-9]+\s*$/;
+const messageLineOpts = (text) => (CLAUDE_SESSION_TRAILER.test(text) ? { naked: false } : undefined);
 
 /** Candidatos a token nu na linha: em crase, como segmento de path/valor de query, ou linha sozinha. */
 function nakedTokenCandidates(text) {
@@ -432,8 +442,39 @@ export const BINARIO_POR_CONSTRUCAO =
 // é assim que alguém decide que o gate é o problema e o desliga. O teto continua existindo para
 // impedir que um repositório patológico consuma a memória da máquina; ele só deixou de disparar no
 // tamanho normal deste repo.
-function defaultGit(args) {
-  return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+// `opts.encoding`: `latin1` para ler um OBJETO CRU (`cat-file commit`) sem conversão nenhuma — cada byte vira
+// um caractere, então nada é trocado por U+FFFD nem some numa decodificação (ver `scanRawCommitObject`).
+function defaultGit(args, opts = {}) {
+  return execFileSync('git', args, { encoding: opts.encoding ?? 'utf8', maxBuffer: 256 * 1024 * 1024 });
+}
+
+// A árvore vazia do git: `<EMPTY_TREE>..<rev>` é a forma do range para "tudo o que <rev> alcança" — o
+// `git diff` aceita a árvore como lado velho (o diff vira a árvore inteira, como adicionada), e o `rev-list`
+// / `git log` recebem só `<rev>` (ver `revArgs`). É o range do primeiro push, quando não há nada em origin.
+export const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+
+/** Os argumentos de revisão do range para `rev-list`/`log` (que não aceitam uma árvore como ponta). */
+function revArgs(spec) {
+  const prefix = `${EMPTY_TREE}..`;
+  return spec.range.startsWith(prefix) ? [spec.range.slice(prefix.length)] : [spec.range];
+}
+
+/**
+ * Os commits do range, cada um com o PRIMEIRO pai (ou `null` na raiz). Toda linha do `rev-list --parents`
+ * tem de ser feita só de shas — qualquer outra coisa LANÇA (o INTERNAL_ERROR fail-closed).
+ * @returns {Array<{ sha: string, parent: string | null }>}
+ */
+function listCommits(spec, git) {
+  const out = [];
+  for (const line of git(['rev-list', '--parents', ...revArgs(spec)]).split('\n')) {
+    if (line.trim() === '') continue;
+    const shas = line.trim().split(' ');
+    if (!shas.every((s) => SHA_RE.test(s))) {
+      throw new Error('linha inválida na saída do git rev-list --parents — commits não varridos');
+    }
+    out.push({ sha: shas[0], parent: shas[1] ?? null });
+  }
+  return out;
 }
 
 // --- Diff selectors (SM-08) --------------------------------------------------
@@ -461,6 +502,106 @@ export function buildDiffArgs(spec) {
  */
 export function buildTextDiffArgs(spec, paths) {
   return [...buildDiffArgs(spec), '--text', '--', ...paths];
+}
+
+// --- MENSAGENS de commit (`--range A..B --messages`) ---------------------------------------------
+// O QUE ISTO IMPEDE: um segredo que viaja na MENSAGEM, não no diff. O merge train compõe os commits que
+// cria em main/stage a partir das mensagens da própria entrada (texto livre do autor, inclusive o trailer
+// `Decision:` que resume a resposta final de um agente) — e o diff, que é tudo o que as regras acima
+// leem, nunca mostra essa mensagem. Sem esta varredura, um token colado numa mensagem de sessão, que
+// antes ficava no branch local do agente, chegaria a main e a origin pelo gate fail-closed sem ser visto.
+// Opt-in (`--messages`) e só com `--range`: o pre-commit (`--staged`) não tem mensagem ainda, e o gate
+// do merge commit integral não muda de escopo.
+//
+// O SEPARADOR é o NUL, e só ele. Um separador "de banda" (o `\x1e` de antes) é um byte que a própria
+// mensagem pode carregar — o git o guarda — e tudo o que vinha depois dele caía num registro sem NUL,
+// descartado sem varredura: `body\x1e\nghp_…` saía exit 0. O NUL é o único byte que o git RECUSA numa
+// mensagem de commit, então com `-z` a saída é estritamente `sha NUL mensagem NUL sha NUL mensagem NUL…`.
+// O parser exige essa alternância: um campo de sha que não tem forma de sha (um objeto forjado com NUL na
+// mensagem, uma saída inesperada) LANÇA — e o lançamento é o INTERNAL_ERROR fail-closed, nunca um pulo.
+const SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+/** @param {{ range?: string }} spec @returns {string[]} */
+export function buildMessageLogArgs(spec) {
+  return ['log', '-z', '--no-color', '--format=%H%x00%B', ...revArgs(spec)];
+}
+
+/**
+ * Divide a saída de {@link buildMessageLogArgs} em `{ sha, message }` pela alternância estrita de NULs.
+ * Exportada para o teste afirmar a forma sem repo. Lança quando a alternância não fecha.
+ * @param {string} out @returns {Array<{ sha: string, message: string }>}
+ */
+export function parseMessageLog(out) {
+  if (out === '') return [];
+  const fields = out.split('\x00');
+  // `-z` TERMINA cada registro com NUL ⇒ o último campo é vazio; qualquer outra coisa é saída truncada
+  if (fields.pop() !== '') throw new Error('saída do git log -z sem o NUL final — mensagens não varridas');
+  if (fields.length % 2 !== 0) throw new Error('saída do git log -z com número ímpar de campos — mensagens não varridas');
+  const records = [];
+  for (let i = 0; i < fields.length; i += 2) {
+    const sha = fields[i];
+    if (!SHA_RE.test(sha)) throw new Error(`campo de sha inválido na saída do git log -z (#${i / 2}) — mensagens não varridas`);
+    records.push({ sha, message: fields[i + 1] });
+  }
+  return records;
+}
+
+/**
+ * Varre cada linha da mensagem de cada commit do range com as MESMAS regras das linhas adicionadas — em DUAS
+ * leituras, porque cada uma é cega onde a outra enxerga:
+ *  - a DECODIFICADA (`%B`): o texto como o git o apresenta, já convertido do `encoding` do commit (uma
+ *    mensagem gravada num encoding exótico só vira o texto do token depois da conversão);
+ *  - a CRUA (`cat-file commit`, ver `scanRawCommitObject`): os BYTES que o push publica. O `%B` é recodificado
+ *    a partir do cabeçalho `encoding` — um `git -c i18n.commitEncoding=UTF-16 commit -m "…token…"` grava os
+ *    bytes ASCII com o rótulo UTF-16 e o `%B` sai VAZIO — e é truncado no primeiro NUL de um objeto forjado
+ *    (`hash-object -t commit --literally`). Nas duas formas o token passava com exit 0.
+ */
+function scanCommitMessages(spec, git, findings, selfSecrets) {
+  for (const { sha, message } of parseMessageLog(git(buildMessageLogArgs(spec)))) {
+    const label = `mensagem do commit ${sha.slice(0, 12)}`;
+    message.split('\n').forEach((text, i) => aplicaRegras(findings, label, text, i + 1, selfSecrets, messageLineOpts(text)));
+  }
+  for (const { sha } of listCommits(spec, git)) {
+    scanRawCommitObject(sha, git(['cat-file', 'commit', sha], { encoding: 'latin1' }), findings, selfSecrets);
+  }
+}
+
+/**
+ * Varre o OBJETO CRU de um commit: todo cabeçalho (author/committer, `encoding`, `gpgsig`, `mergetag`…) e toda
+ * linha da mensagem, lido em `latin1` (byte a byte — nenhuma conversão pode descartar o que vem depois).
+ *  - As linhas da mensagem levam o MESMO rótulo/numeração da leitura decodificada (`mensagem do commit X`,
+ *    linha 1 = primeira linha da mensagem): o mesmo token lido pelas duas vias vira UM achado (a dedupe é por
+ *    rótulo + linha + valor). Os cabeçalhos levam `cabeçalho do commit X`.
+ *  - A continuação de um cabeçalho de ASSINATURA (`gpgsig`, `gpgsig-sha256`, `mergetag`) é base64 por
+ *    construção: nela a régua do token nu (entropia) não roda — as de prefixo, palavra-chave e literal sim.
+ *  - Um byte NUL no objeto é achado por si (`nul-in-commit-object`): o git RECUSA gravar NUL numa mensagem pelo
+ *    porcelain, então ele só existe num objeto forjado — e é ele que trunca o `%B`. A linha também é varrida SEM
+ *    os NULs (texto UTF-16 de ASCII é o ASCII intercalado com NULs).
+ */
+function scanRawCommitObject(sha, raw, findings, selfSecrets) {
+  const short = sha.slice(0, 12);
+  const nul = raw.indexOf('\x00');
+  if (nul >= 0) {
+    findings.push({
+      file: `objeto do commit ${short}`,
+      line: raw.slice(0, nul).split('\n').length,
+      rule: 'nul-in-commit-object',
+      preview: 'byte NUL no objeto do commit — o git log trunca a mensagem nele (o porcelain do git não grava isto)',
+      dedupe: `nul\x00${sha}`,
+    });
+  }
+  const linhas = raw.split('\n');
+  const fimCabecalho = linhas.indexOf('');
+  let assinatura = false;
+  linhas.forEach((text, i) => {
+    const noCabecalho = fimCabecalho < 0 || i < fimCabecalho;
+    if (!noCabecalho && i === fimCabecalho) return; // a linha em branco que separa cabeçalho e mensagem
+    if (noCabecalho && !text.startsWith(' ')) assinatura = /^(gpgsig|gpgsig-sha256|mergetag)\b/.test(text);
+    const label = noCabecalho ? `cabeçalho do commit ${short}` : `mensagem do commit ${short}`;
+    const lineNo = noCabecalho ? i + 1 : i - fimCabecalho;
+    const opts = noCabecalho ? (assinatura ? { naked: false } : undefined) : messageLineOpts(text);
+    aplicaRegras(findings, label, text, lineNo, selfSecrets, opts);
+    if (text.includes('\x00')) aplicaRegras(findings, label, text.replace(/\x00/g, ''), lineNo, selfSecrets, opts);
+  });
 }
 
 // --- COBERTURA: o NOME do arquivo não pode desligar o scanner (o quoting de caminho do git) ---------
@@ -579,8 +720,9 @@ function percorreLinhasAdicionadas(diff, visita) {
   return arquivosNoDiff;
 }
 
-/** Aplica as quatro camadas de regra a UMA linha adicionada, empilhando os achados. */
-function aplicaRegras(findings, file, text, here, selfSecrets) {
+/** Aplica as quatro camadas de regra a UMA linha adicionada, empilhando os achados. `opts.naked: false`
+ *  desliga só a régua do token nu (2d) — para a linha que é base64 por construção (assinatura de commit). */
+function aplicaRegras(findings, file, text, here, selfSecrets, opts = {}) {
   // 2a) Segredo do PRÓPRIO produto, por ocorrência LITERAL — ANTES do pragma, e de propósito.
   // O `pragma: allowlist secret` existe para desculpar FALSO-POSITIVO de heurística; um casamento
   // literal com um valor lido do AMBIENTE não pode ser falso-positivo — não há o que desculpar. Se
@@ -634,7 +776,7 @@ function aplicaRegras(findings, file, text, here, selfSecrets) {
   }
 
   // 2d) Token NU de alta entropia, sem palavra-chave nem aspas (crase, URL, linha de bloco).
-  if (!HIGH_ENTROPY_BY_DESIGN.test(file) && !EMBEDDED_BLOB.test(text)) {
+  if (opts.naked !== false && !HIGH_ENTROPY_BY_DESIGN.test(file) && !EMBEDDED_BLOB.test(text)) {
     for (const tok of nakedTokenCandidates(text)) {
       if (looksLikeNakedToken(tok)) {
         findings.push({ file, line: here, rule: 'naked-high-entropy-token', preview: redact(tok), dedupe: tok });
@@ -647,6 +789,52 @@ function scanDiff(spec, git, env) {
   const findings = [];
   const selfSecrets = selfSecretLiterals(env);
 
+  // `--per-commit` (só com `--range`): CADA commit do range contra o seu primeiro pai (a raiz contra a árvore
+  // vazia), em vez do diff LÍQUIDO `A..B`.
+  // O QUE ISTO IMPEDE: o push publica a HISTÓRIA, não o saldo. Um commit que adiciona `k=<token>` seguido de
+  // outro que o troca por `k=redacted` dá um diff líquido limpo (exit 0) — e o push leva os dois commits, o
+  // primeiro com o token. É o «conserto para a frente» de quem recebe um bloqueio: sem esta régua ele soltava o
+  // gate e publicava o segredo na história. O commit de merge entra pelo primeiro pai (o que o merge trouxe);
+  // os commits do lado mesclado que ainda não estão publicados entram no range por si e são varridos um a um.
+  if (spec.perCommit && spec.range) {
+    for (const { sha, parent } of listCommits(spec, git)) {
+      const before = findings.length;
+      scanOneDiff({ range: `${parent ?? EMPTY_TREE}..${sha}` }, git, findings, selfSecrets);
+      // o achado de arquivo diz DE QUAL COMMIT veio — é o que o operador precisa para tirá-lo da história
+      for (let k = before; k < findings.length; k++) findings[k].commit = sha.slice(0, 12);
+    }
+  } else {
+    scanOneDiff(spec, git, findings, selfSecrets);
+  }
+
+  // 4) As MENSAGENS dos commits do range — opt-in, ver `buildMessageLogArgs`.
+  if (spec.messages && spec.range) scanCommitMessages(spec, git, findings, selfSecrets);
+
+  // Um mesmo segredo casa em várias regras (prefixo + nome de env + forma nua) — reportar 3 vezes a
+  // mesma linha enterra os OUTROS achados. A dedupe é por linha + VALOR CRU (campo `dedupe`), e o campo
+  // é REMOVIDO aqui: deduplicar pelo `preview` deixou de servir quando a máscara passou a elidir os
+  // bytes (dois segredos DIFERENTES de mesmo comprimento na mesma linha mascaram igual e o segundo
+  // desapareceria do relatório), e o valor cru não pode sair desta função — o `findings[]` que ela
+  // devolve é serializado para o card.
+  const seen = new Set();
+  const out = [];
+  for (const f of findings) {
+    const key = `${f.file}:${f.line}:${f.dedupe}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const { dedupe: _valorCru, ...semValor } = f;
+    out.push(semValor);
+  }
+  return out;
+}
+
+// O `.env.development` versionado DE PROPÓSITO (Next.js: só `NEXT_PUBLIC_*`, valores públicos por construção).
+// Ver o passo 1b de `scanOneDiff`: o arquivo é julgado pelo conteúdo, nunca dispensado pelo nome.
+const PUBLIC_ENV_FILE = /(^|\/)\.env\.development$/;
+const PUBLIC_ENV_LINE = /^\s*(#.*)?$|^\s*(export\s+)?NEXT_PUBLIC_[A-Z0-9_]+\s*=/;
+
+/** Os passos 1–3 (arquivo proibido, linhas adicionadas, resgate do NUL) sobre UM diff (`--staged` ou um range). */
+function scanOneDiff(spec, git, findings, selfSecrets) {
   // 1) Block added .env / key files (defense-in-depth; .gitignore can be bypassed with -f).
   // `unquoteGitPath` em TODO nome: sem ele, um caminho com caractere não-ASCII chega aqui entre aspas e
   // com os bytes escapados — a régua de arquivo proibido não casa (`.env.produção"`) e o resgate `--text`
@@ -655,19 +843,28 @@ function scanDiff(spec, git, env) {
     .split('\n')
     .map((s) => unquoteGitPath(s.trim()))
     .filter(Boolean);
+  const secretFiles = [];
   for (const f of names) {
     const base = f.split('/').pop();
     const isEnv = /^\.env(\.[A-Za-z0-9_-]+)?$/.test(base) && !/\.(example|sample|template|dist)$/.test(base);
     const isKeyFile = /(-key\.json|service[-_]?account.*\.json|\.pem|\.p12|\.pfx)$/i.test(base);
-    if (isEnv || isKeyFile) {
-      findings.push({ file: f, line: 0, rule: 'secret-file', preview: base, dedupe: base });
-    }
+    if (isEnv || isKeyFile) secretFiles.push({ f, base });
   }
 
-  // 2) Scan added lines of the diff.
-  const noDiff = percorreLinhasAdicionadas(git(buildDiffArgs(spec)), (file, text, here) =>
-    aplicaRegras(findings, file, text, here, selfSecrets),
-  );
+  // 2) Scan added lines of the diff. As linhas de um `.env.development` são guardadas para o passo 1 julgá-lo.
+  const publicEnvLines = new Map();
+  const noDiff = percorreLinhasAdicionadas(git(buildDiffArgs(spec)), (file, text, here) => {
+    if (PUBLIC_ENV_FILE.test(file)) publicEnvLines.set(file, [...(publicEnvLines.get(file) ?? []), text]);
+    aplicaRegras(findings, file, text, here, selfSecrets);
+  });
+
+  // 1b) O veredito do arquivo proibido — depois das linhas, porque o `.env.development` é julgado pelo CONTEÚDO:
+  // passa só quando TODA linha adicionada é vazia, comentário ou `NEXT_PUBLIC_*=` (valor que vai ao navegador
+  // por construção — o Next.js o embute no bundle). Qualquer outra chave nele volta a ser `secret-file`.
+  for (const { f, base } of secretFiles) {
+    if (PUBLIC_ENV_FILE.test(f) && (publicEnvLines.get(f) ?? []).every((l) => PUBLIC_ENV_LINE.test(l))) continue;
+    findings.push({ file: f, line: 0, rule: 'secret-file', preview: base, dedupe: base });
+  }
 
   // 3) COBERTURA — os arquivos que o git NÃO apresentou como texto (o bypass do byte NUL).
   // Um arquivo listado pelo `--name-only` e AUSENTE do diff é conteúdo que nenhuma regra viu. A causa
@@ -699,29 +896,20 @@ function scanDiff(spec, git, env) {
       });
     }
   }
-  // Um mesmo segredo casa em várias regras (prefixo + nome de env + forma nua) — reportar 3 vezes a
-  // mesma linha enterra os OUTROS achados. A dedupe é por linha + VALOR CRU (campo `dedupe`), e o campo
-  // é REMOVIDO aqui: deduplicar pelo `preview` deixou de servir quando a máscara passou a elidir os
-  // bytes (dois segredos DIFERENTES de mesmo comprimento na mesma linha mascaram igual e o segundo
-  // desapareceria do relatório), e o valor cru não pode sair desta função — o `findings[]` que ela
-  // devolve é serializado para o card.
-  const seen = new Set();
-  const out = [];
-  for (const f of findings) {
-    const key = `${f.file}:${f.line}:${f.dedupe}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const { dedupe: _valorCru, ...semValor } = f;
-    out.push(semValor);
-  }
-  return out;
 }
 
+/** A linha que `--capabilities` imprime: o prefixo fixo e as capacidades separadas por espaço. */
+export const CAPABILITIES_LINE = 'scan-secrets-capabilities: range messages per-commit';
+
 // Parse the CLI selector: `--range A..B` (committed range) wins; otherwise `--staged` (the
-// pre-commit default, also assumed when neither flag is given).
+// pre-commit default, also assumed when neither flag is given). `--messages` (only with `--range`)
+// also scans the range's commit MESSAGES; `--per-commit` (only with `--range`) scans each commit's own
+// diff instead of the net `A..B` (ver `scanDiff`).
 function parseSpec(argv) {
   const i = argv.indexOf('--range');
-  if (i >= 0 && argv[i + 1]) return { range: argv[i + 1] };
+  if (i >= 0 && argv[i + 1]) {
+    return { range: argv[i + 1], messages: argv.includes('--messages'), perCommit: argv.includes('--per-commit') };
+  }
   return { staged: true };
 }
 
@@ -734,9 +922,16 @@ function parseSpec(argv) {
  * afirmar QUAL regra pegou o vazamento, e não só que o commit foi barrado.
  *
  * @param {{ argv?: string[], git?: (args: string[]) => string, env?: Record<string, string | undefined> }} [opts]
- * @returns {{ code: number, internalError?: boolean, findings?: Array<{ file: string, line: number, rule: string, preview: string }> }}
+ * @returns {{ code: number, internalError?: boolean, findings?: Array<{ file: string, line: number, rule: string, preview: string, commit?: string }> }}
  */
 export function runScan({ argv = [], git = defaultGit, env = process.env } = {}) {
+  // A SONDA do chamador (o portão pré-push do harness): diz o que esta cópia do scanner sabe fazer, sem varrer
+  // nada. Uma cópia ANTIGA ignora a flag e varre o índice (sem imprimir a linha) — o chamador lê a ausência da
+  // linha como «sem --per-commit/--messages» e cai no modo antigo, em vez de confiar em flags ignoradas.
+  if (argv.includes('--capabilities')) {
+    process.stdout.write(`${CAPABILITIES_LINE}\n`);
+    return { code: 0, findings: [] };
+  }
   if (env.SKIP_SECRET_SCAN === '1' || env.SKIP_PRECOMMIT === '1' || env.HUSKY_SKIP_HOOKS === '1') {
     return { code: 0, findings: [] };
   }
@@ -755,7 +950,7 @@ export function runScan({ argv = [], git = defaultGit, env = process.env } = {})
 
   process.stderr.write('\n🔒 secret scan BLOCKED the commit:\n\n');
   for (const f of findings) {
-    const loc = f.line ? `${f.file}:${f.line}` : f.file;
+    const loc = (f.line ? `${f.file}:${f.line}` : f.file) + (f.commit ? ` (commit ${f.commit})` : '');
     process.stderr.write(`  ✗ [${f.rule}] ${loc} → ${f.preview}\n`);
   }
   if (findings.some((f) => f.rule === 'nul-in-text-file')) {

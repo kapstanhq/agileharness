@@ -3,14 +3,15 @@
 // FULL, memória por sessão (--session-id/--resume), watchdog, e cancel real (mata o processo). A parte pura
 // (argv, classificação de evento) mora em protocol.ts; aqui é só processo + registries.
 //
-// SEGURANÇA: fora do estado `chat`, este é o processo MAIS PODEROSO do sistema (token MCP full + Bash nativo +
-// skip-permissions). É seguro SÓ porque a rota que o chama (/api/copilot/turn) cai no catch-all basic_auth do
-// Caddy — NUNCA expor /api/copilot/* fora do auth. Mesmo modelo de confiança de um `claude` interativo na VPS.
+// SEGURANÇA: a conversa do board (propósito `copilot`) é a CENTRAL DE COMANDO do dono (fase 6) — token MCP full + Bash
+// nativo + skip-permissions, em qualquer modo do board. É o processo MAIS PODEROSO do sistema e é seguro SÓ porque a
+// rota que o chama (/api/copilot/turn) fica atrás do login — NUNCA expor /api/copilot/* fora do auth. Mesmo modelo de
+// confiança de um `claude` interativo na VPS. O que o contém (copilot/chat-powers.ts): as tools nativas são uma lista
+// do PERMITIDO sem shell fora da trava dura do host; toda ação vai para a trilha de auditoria em nome do chat
+// (copilot/chat-audit.ts — MCP pela guarda, nativas pelo stream daqui); e a régua de confirmação da persona.
 //
-// No estado `chat` (o mais conservador do toggle) a superfície é PODADA por construção: token MCP `ro` (as tools
-// de escrita do board não são sequer registradas — mcp/register.ts) + `--disallowedTools Write,Edit,NotebookEdit`.
-// O LIMITE, dito em voz alta: Bash FICA (poder de diagnóstico, decisão do Operador), então a garantia do estado
-// chat é sobre o BOARD, não sobre o repositório — um shell continua alcançando o filesystem.
+// As conversas de TELA (documento, vocabulário) declaram `ro` + Write/Edit negadas no próprio propósito. O LIMITE, dito
+// em voz alta: Bash fica (poder de diagnóstico), então a garantia delas é sobre o BOARD, não sobre o repositório.
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { promises as fs } from "node:fs";
@@ -20,19 +21,24 @@ import os from "node:os";
 import { findRepoRoot } from "../paths";
 import { loadRunnerConfig } from "../runner/config";
 import { buildOrchestratorMcpConfig } from "../runner/orchestrator-spawn";
+import { docChatCaller } from "../mcp/caller";
 import { sanitizeSpawnEnv } from "../runner/spawn-env";
 import { createNdjsonParser } from "../runner/stream-json";
 import { hitlPurposeById, resolveHitlPrompt } from "../hitl/purpose-registry";
 import { readBoardConfig } from "../repo";
-import { copilotTier, tierPersonaClause } from "./tier";
+import { copilotTier } from "./tier";
+import { chatSpawnPlan } from "./chat-powers";
+import { createChatNativeRecorder } from "./chat-audit";
+import { hardDenyHookInstalled } from "../runner/claude-settings";
 import { resolveCopilotModelEffort } from "./model";
 import { rememberModelResolution } from "./model-resolution";
 import { getHelperRegistry } from "@/lib/vps/helper-registry";
 import {
   assistantContextTokens,
   buildCopilotTurnArgs,
-  CHAT_DENIED_TOOLS,
   createCopilotInterpreter,
+  mcpUnavailableText,
+  BOARD_UNCONFIGURED_CLAUSE,
   RESUME_SESSION_MISSING_RE,
   type CopilotSseEvent,
 } from "./protocol";
@@ -314,41 +320,39 @@ export async function runCopilotTurn(
   // idiom do engine) + config MCP (só a superfície storymap; token no arquivo, não no env do filho).
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "copilot-turn-"));
   const personaPath = path.join(dir, "persona.txt");
-  // Persona + a CLÁUSULA DO ESTADO atual do board (Copiloto defere decisões de produto e propõe/aguarda no
-  // deploy; Autônomo decide e publica sozinho quando o gate §4 abre). O estado vem da matriz do board (fonte
-  // única, a mesma que o guard lê) — fail-open a chat ⇒ stance conservadora se a leitura falhar.
   const scope = req.scope ?? boardScope(req.boardId);
-  const tier = copilotTier((await readBoardConfig(req.boardId).catch(() => null))?.orchestrator ?? null);
-  // A cláusula de TIER é do Jido do board — ela fala de decidir produto e publicar deploy, poderes que só o
-  // orquestrador tem. Colá-la num propósito que só explora uma Ideia daria ao explorador uma autoridade que
-  // ele não exerce (e um "## Modo atual: Autônomo" que ele leria como licença para agir).
-  const persona =
-    purposeId === "copilot"
-      ? `${resolveHitlPrompt(purpose)}\n\n${tierPersonaClause(tier)}`
-      : resolveHitlPrompt(purpose);
-  await fs.writeFile(personaPath, persona, "utf8");
-  // O TOKEN É FUNÇÃO DO ESTADO — é isto que torna o estado `chat` read-only DE VERDADE. Antes o chat montava
-  // SEMPRE o token full do operador e o único guardrail era a persona: o TIER_META admitia, por escrito, que "o
-  // chat continua com poder total". Agora o estado `chat` monta o token `ro` (settings.mcpTokens →
-  // AGILEHARNESS_MCP_TOKEN_RO), e o filtro server-side por nível (mcp/register.ts levelAllows) simplesmente NÃO
-  // REGISTRA as tools de escrita: elas não existem na superfície daquele run, então não há o que a persona
-  // precise resistir. Fora do `chat`, segue o token full — Copiloto/Autônomo agem por desenho.
-  //
-  // Duas portas DISTINTAS, e é bom que sejam: o TOKEN decide quais tools MCP existem naquele run (filtro
-  // server-side), e `deniedTools` decide quais tools NATIVAS o CLI recusa. O propósito manda quando opina —
-  // é assim que o Explorador é read-only no board mesmo com o board em estado Autônomo; sem opinião, quem
-  // decide é o estado (o comportamento histórico do Jido).
-  const mcpLevel = purpose.mcpLevel ?? (tier === "chat" ? "ro" : "full");
-  const deniedTools = purpose.deniedTools ?? (tier === "chat" ? CHAT_DENIED_TOOLS : undefined);
+  // A persona é a do propósito, com a régua de política que o registro anexa (a central de comando, no chat do board).
+  // A CLÁUSULA DE MODO do board (tier.ts `tierPersonaClause`: «Autônomo decide e publica sozinho», os playbooks do
+  // tique) NÃO entra mais aqui: ela é a régua dos agentes AUTÔNOMOS; nesta conversa o dono está presente e a régua é
+  // a de confirmação (decisão do dono, fase 6).
+  await fs.writeFile(personaPath, resolveHitlPrompt(purpose), "utf8");
+  // Duas portas DISTINTAS, e é bom que sejam: o TOKEN decide quais tools MCP existem naquele run (filtro server-side,
+  // mcp/register.ts levelAllows), e `tools`/`deniedTools` decidem quais tools NATIVAS o CLI monta. O propósito manda
+  // quando opina (o Jido do board declara `full`; as conversas de tela, `ro`); sem opinião, o modo do board decide.
+  // o modo só é lido quando decide algo (um propósito sem opinião); fail-open a `chat` ⇒ o recorte conservador
+  const tier = purpose.mcpLevel === undefined ? copilotTier((await readBoardConfig(req.boardId).catch(() => null))?.orchestrator ?? null) : "chat";
+  // A TRAVA DURA do host é a contenção dos poderes amplos (chat-powers.ts): ela é conferida nos settings que ESTA sessão
+  // carrega (o cwd é a raiz do alvo). Sem ela, a conversa roda só leitura e o turno diz o porquê.
+  const hardDeny = hardDenyHookInstalled(cwd);
+  const { mcpLevel, tools, deniedTools, guardMissing } = chatSpawnPlan(purpose, tier, { hardDeny });
   // Fail-CLOSED no nível read-only: sem o token `ro` provisionado, degradar para o full reabriria em silêncio
-  // exatamente o que este bloco fecha. Melhor rodar SEM MCP (o CLI degrada; o operador vê o aviso
-  // `mcp-unavailable`) do que rodar com mais poder do que o estado/propósito promete.
+  // exatamente o que este bloco fecha. Melhor rodar SEM MCP (o operador vê o aviso `mcp-unavailable`) do que
+  // rodar com mais poder do que o estado/propósito promete. "Sem MCP" é ZERO MCP: a argv leva
+  // `--strict-mcp-config` sempre (protocol.ts buildCopilotTurnArgs) — nunca os conectores do operador.
   const token = (mcpLevel === "ro" ? process.env.AGILEHARNESS_MCP_TOKEN_RO : process.env.AGILEHARNESS_MCP_TOKEN)?.trim();
   let mcpConfigPath: string | undefined;
   if (token) {
     mcpConfigPath = path.join(dir, "mcp.json");
-    // a conversa do board se nomeia (mcp/caller.ts): o que ela fizer não é confundido com uma sessão da frota
-    await fs.writeFile(mcpConfigPath, buildOrchestratorMcpConfig(token, port, { kind: "copilot-chat", id: req.boardId }), "utf8");
+    // a conversa do board se nomeia (mcp/caller.ts): o que ela fizer não é confundido com uma sessão da frota. A
+    // conversa da PÁGINA de um documento leva a página no rótulo: é ela, e só ela, que `write_doc` aceita no PRD
+    // (o dono está olhando aquela página) — um run ou a conversa de outra tela propõem.
+    const docView = purposeId === "doc-editor" && scope.startsWith(`view:${req.boardId}:`) ? scope.slice(`view:${req.boardId}:`.length) : null;
+    const caller = docView ? docChatCaller(req.boardId, docView) : ({ kind: "copilot-chat", id: req.boardId } as const);
+    await fs.writeFile(mcpConfigPath, buildOrchestratorMcpConfig(token, port, caller), "utf8");
+  } else {
+    // quick-fix chat-mcp: sem token, a persona diz que a conexão com o board não está configurada (e proíbe
+    // mandar "autorizar o conector do claude.ai"). Só acrescenta — não mexe na persona montada acima.
+    await fs.appendFile(personaPath, `\n\n${BOARD_UNCONFIGURED_CLAUSE}`, "utf8");
   }
 
   const cleanupFiles = () => {
@@ -361,7 +365,7 @@ export async function runCopilotTurn(
     // Uma tentativa de spawn. Resolve com {missing, sawFinal} p/ o orquestrador do fallback decidir.
     const attempt = (sessionId: string, resume: boolean): Promise<{ missing: boolean; sawFinal: boolean }> =>
       new Promise((resolveAttempt) => {
-        const args = buildCopilotTurnArgs({ model, effort, sessionId, resume, mcpConfigPath, systemPromptPath: personaPath, deniedTools });
+        const args = buildCopilotTurnArgs({ model, effort, sessionId, resume, mcpConfigPath, systemPromptPath: personaPath, deniedTools, tools });
         let child: ChildProcess;
         try {
           // story-#30 / WS-3: `detached` no POSIX faz o `claude` + os netos de tool que ele forka um PROCESS
@@ -389,7 +393,15 @@ export async function runCopilotTurn(
         if (child.pid) reg.setPid(helperId, child.pid);
 
         if (!mcpConfigPath) {
-          onEvent({ kind: "frame", level: "system", code: "mcp-unavailable", text: "⚠ MCP storymap indisponível (sem AGILEHARNESS_MCP_TOKEN) — só tools nativas" });
+          onEvent({ kind: "frame", level: "system", code: "mcp-unavailable", text: mcpUnavailableText(mcpLevel) });
+        }
+        if (guardMissing) {
+          onEvent({
+            kind: "frame",
+            level: "system",
+            code: "guard-missing",
+            text: "⚠ A trava dura do host não está instalada — esta conversa roda só leitura (sem shell, sem editar). Veja o item no Inbox.",
+          });
         }
 
         let stderr = "";
@@ -398,12 +410,16 @@ export async function runCopilotTurn(
         let emittedTerminal = false; // já mandamos final/error ao cliente? (evita "interrompido" duplicado no close)
         // Um interpretador POR SPAWN — o estado de streaming (índices de bloco, tool ids) vive só neste turno.
         const interp = createCopilotInterpreter();
+        // O REGISTRO das tools nativas que agem (shell, escrita de arquivo): a guarda do MCP nunca as vê — só este stream.
+        const nativeLog = createChatNativeRecorder(req.boardId);
         // MEDIDOR da sessão — o tamanho do contexto é o da ÚLTIMA chamada de modelo do turno, NÃO o agregado do
         // evento `result` (que soma o cache_read de cada iteração de tool e explodia p/ "1635k" num chat novo).
         let ctxTokens: number | null = null;
         const parser = createNdjsonParser((obj) => {
           const ctx = assistantContextTokens(obj);
           if (ctx !== null) ctxTokens = ctx;
+          // a trilha lê o stream CRU: o pedido grava na hora (antes de rodar) e a chamada de um subagente entra igual
+          nativeLog.feed(obj);
           for (const ev of interp.feed(obj)) {
             // QUAL Opus? O apelido pedido (`opus`) é uma promessa — "o mais recente da família"; o id de
             // fato só existe aqui, no init que o CLI anuncia. Anotamos o par para a tela poder mostrar a

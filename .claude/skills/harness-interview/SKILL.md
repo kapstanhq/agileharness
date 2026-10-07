@@ -10,8 +10,8 @@ description: >-
   reaction to the proposed story, VALIDATES/ADJUSTS the already-written narrative +
   acceptance where the conversation contradicts the hypothesis, then SYNTHESIZES the
   findings (pains, desires, risks, must-haves, short quotes) into a `## Entrevistas
-  (3 usuários)` section that feeds estimation (KANO/RICE) and UX/UI, and advances to
-  `priorizar` (Estimar). Only `user` stories pass here (the board's
+  (3 usuários)` section that feeds UX/UI and the build, and advances to the next
+  step of the pipeline (`pronta`, A fazer). Only `user` stories pass here (the board's
   `interview` step has `skipForTypes` for the non-user ones, so the cascade
   already skips them). With no id it processes the whole `interview` queue of
   every board. Use when the user says "/harness interview", "/harness-interview",
@@ -29,20 +29,22 @@ triggers:
   - usm interview
 ---
 
-# /harness-interview — AgileHarness: simulate user interviews (interview → priorizar)
+# /harness-interview — AgileHarness: simulate user interviews (interview → pronta)
 
 The `harness-interview` trigger automation for the AgileHarness pipeline. It runs **light
 discovery** on an ALREADY-SPECIFIED `user` story — AFTER `harness-enrich` wrote the
 narrative + acceptance as a hypothesis — three simulated user interviews grounded in
 the board's `personas` (one of them with a critical, devil's-advocate lens), to
 STRESS-TEST that hypothesis: it validates/adjusts the acceptance where the
-conversation contradicts it and synthesizes the findings so estimation (KANO/RICE)
-and UX/UI consume real needs, objections and jobs-to-be-done. At the end it advances
-the card board-aware (in `storymap` that is `interview → priorizar`; the helper, not
-this skill, names the target).
+conversation contradicts it and synthesizes the findings so UX/UI and the build
+consume real needs, objections and jobs-to-be-done. At the end it advances the card
+board-aware (on the `_base` pipeline that is `interview → pronta`, A fazer; the helper,
+not this skill, names the target).
 
 > Read `storymap/README.md` first — it is the canonical schema/pipeline source,
-> and `board.yaml` is the source of the `personas` you interview. This skill edits
+> and the PRD's «Personas» section (`storymap/boards/<board>/docs/prd.md`, one `###` per persona —
+> `get_vocabulary` returns them merged with the legacy `board.yaml` ids) is the source of the
+> `personas` you interview. This skill edits
 > ONLY the data files under `storymap/boards/<board>/cards/`. NEVER touch
 > `packages/storymap-ui/` (UI or data layer) and NEVER product code — this is
 > discovery, there is no code to write.
@@ -54,7 +56,7 @@ this skill, names the target).
   hypothesis (written by `harness-enrich`); the interview stress-tests and adjusts it.
 - The user runs `/harness interview [<board>/<id>]` or `/harness-interview [<board>/<id>]`.
 - The user asks to "entrevistar usuários", "ouvir as personas", or "fazer discovery"
-  of an AgileHarness story before it goes to design/estimation.
+  of an AgileHarness story before it goes to «A fazer» (and then to design).
 
 ## Input
 
@@ -84,9 +86,10 @@ Only a `storyType: user` card runs the full workflow below.
 
 ## Workflow
 
-1. **Locate the board + card.** Read `storymap/boards/<board>/board.yaml` to learn
-   the valid `personas` (each with `role`, `description`, `jobs[]`, `pains[]`,
-   `gains[]`) and confirm valid ids. Read the target card file: `title`, `storyType`,
+1. **Locate the board + card.** Learn the valid `personas` — who each one is lives in the PRD's
+   «Personas» section (`read_doc({board, docType:"prd"})`, one `###` per persona); their ids come
+   from `get_vocabulary` (or `personas` in `storymap/boards/<board>/board.yaml`, the legacy list,
+   which may still carry `role`, `description`, `jobs[]`, `pains[]`, `gains[]`). Read the target card file: `title`, `storyType`,
    `narrative` (role/want/soThat) and `acceptance` (the HYPOTHESIS that `harness-enrich`
    wrote — what you validate), and the card's `personas`.
 
@@ -125,7 +128,7 @@ Only a `storyType: user` card runs the full workflow below.
    decision-useful synthesis the next steps can consume:
    - **Dores** confirmed (and any the story missed),
    - **Desejos/ganhos** that anchor the value,
-   - **Must-haves** vs nice-to-haves (this directly informs KANO in `harness-prioritize`
+   - **Must-haves** vs nice-to-haves (this directly informs the acceptance you keep
      and the UX priorities in `harness-ux`),
    - **Riscos/objeções** surfaced by the critical lens (with the condition that would
      make the story fail for that persona),
@@ -170,11 +173,12 @@ Only a `storyType: user` card runs the full workflow below.
    add a missing must-have, drop a criterion the conversation invalidated, sharpen a
    vague one — and note WHY in the synthesis (this validation is the point of running
    the Entrevista after Especificar). Always leave ≥1 acceptance criterion + a complete
-   narrative (the `hasRefinement` gate at Estimar needs them). Keep the
+   narrative (the `hasRefinement` gate at A fazer needs them). Keep the
    board personas on the card coherent with whom you interviewed (you may set
    `personas` to the three you cast, using only valid board ids). Bump `updated` to
-   today (`YYYY-MM-DD`); keep one field per line; never touch `tasks`/`rice`/`kano`/
-   `funnelStage` (those belong to `harness-tasks`/`harness-prioritize`).
+   today (`YYYY-MM-DD`); keep one field per line; never touch `tasks` (they belong to
+   the plan step). There is no prioritization field to fill: the order of the work is
+   the card's position in its Kanban column.
 
 7. **Advance — board-aware, never hardcode the next status.** Write the
    `## Entrevistas (3 usuários)` section FIRST, directly into the card file. Do NOT
@@ -185,8 +189,8 @@ Only a `storyType: user` card runs the full workflow below.
    ```
 
    (the same `<board>` and `<id>` you received as the `<board>/<id>` argument). The
-   helper moves the card to the NEXT step of THAT board's pipeline — on `storymap`
-   that is `interview → priorizar` (Estimar), now that Especificar runs before the
+   helper moves the card to the NEXT step of THAT board's pipeline — on the `_base`
+   pipeline that is `interview → pronta` (A fazer), now that Especificar runs before the
    Entrevista — reusing the pipeline's `nextBuildStatus`
    + `checkGate`, so this skill never names a target status. If it exits non-zero, a
    gate one step ahead blocked the move — re-read the helper's message, fix the card,

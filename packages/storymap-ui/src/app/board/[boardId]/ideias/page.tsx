@@ -1,20 +1,11 @@
-import { notFound } from "next/navigation";
-import { getBoard, listBoards, readCards } from "@/lib/storymap/repo";
-import { IdeiasView } from "@/components/IdeiasView";
+import { permanentRedirect } from "next/navigation";
 
-export const dynamic = "force-dynamic";
-
-// 🟩 Produto · Ideias (OST) — a bancada do espaço do problema (Fase 3c). Server component:
-// busca board + cards e delega o CRUD à view (client), que cria/edita as ideias (statement/
-// evidência via AssistedEditor + status) e mostra quantas stories cada uma endereça (edge `addresses`).
-export default async function IdeiasPage(props: { params: Promise<{ boardId: string }> }) {
-  const params = await props.params;
-
-  const [board, boards, cards] = await Promise.all([
-    getBoard(params.boardId),
-    listBoards(),
-    readCards(params.boardId),
-  ]);
-  if (!board) notFound();
-  return <IdeiasView board={board} boards={boards} cards={cards} />;
+// A bancada de Ideias foi APAGADA na fase 2 (decisão do dono): uma ideia vira item da Triagem, no Kanban.
+//
+// A rota antiga sobrevive como redirecionamento porque ela está escrita em lugares que este código não alcança:
+// cards antigos, `SKILL.md` de terceiros, deep links de agentes, o histórico do navegador. 308 (permanente) é o
+// estado honesto — a tela não vai voltar.
+export default async function RedirectPage(props: { params: Promise<{ boardId: string }> }) {
+  const { boardId } = await props.params;
+  permanentRedirect(`/board/${boardId}/kanban`);
 }

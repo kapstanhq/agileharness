@@ -19,6 +19,7 @@ import type { InboxEntry } from "../inbox/entries";
 import type { SystemDecision } from "../system-decisions";
 import {
   attributionOf,
+  boardPauseOf,
   collectHealthInputs,
   demandLaneOf,
   fleetHealthOf,
@@ -325,6 +326,77 @@ describe("fleetHealthOf — quem está vivo, quieto, órfão ou com claim sem se
     const noTree = session({ sessionId: "s2", tmuxSession: "t2" });
     const out = run({ sessions: [withTree, noTree], liveTmux: new Set(["t1", "t2"]), worktreeExists: () => false });
     expect(out.fleet.map((r) => [r.agentId, r.worktreeMissing])).toEqual(expect.arrayContaining([["s1", true], ["s2", false]]));
+  });
+});
+
+describe("boardPauseOf — quem está pausado e quando saiu da pausa", () => {
+  const T = Date.parse("2026-05-19T12:00:00Z");
+  const H = 3_600_000;
+  const iso = (hoursAgo: number) => new Date(T - hoursAgo * H).toISOString();
+  const owner = { kind: "owner" as const };
+  const agent = { kind: "agent" as const };
+
+  it("pausa do dono OU dos agentes em vigor ⇒ pausado; sem retomada registrada", () => {
+    const r = boardPauseOf(
+      [
+        { board: "armazem", owner: { level: "paused", by: owner, at: iso(48) } },
+        { board: "loja", agent: { level: "paused", by: agent, at: iso(10), mode: "drain" } },
+        { board: "sebo", owner: { level: "slow", by: owner, at: iso(5) } },
+      ],
+      T,
+    );
+    expect(r.pausedBoards).toEqual(["armazem", "loja"]);
+    expect(r.resumedAt).toEqual({});
+  });
+
+  it("pausa com prazo VENCIDO não pausa mais, e a retomada é o prazo", () => {
+    const r = boardPauseOf([{ board: "armazem", owner: { level: "paused", by: owner, at: iso(30), until: iso(2) } }], T);
+    expect(r.pausedBoards).toEqual([]);
+    expect(r.resumedAt).toEqual({ armazem: T - 2 * H });
+  });
+
+  it("retomada pelo histórico: a primeira mudança não-pausa depois de uma pausa (a mais recente vence)", () => {
+    const history = [
+      { level: "paused" as const, by: owner, at: iso(100) },
+      { level: "normal" as const, by: owner, at: iso(90) },
+      { level: "slow" as const, by: owner, at: iso(50) },
+      { level: "paused" as const, by: owner, at: iso(20) },
+      { level: "normal" as const, by: owner, at: iso(3) },
+    ];
+    expect(boardPauseOf([{ board: "armazem", history }], T).resumedAt).toEqual({ armazem: T - 3 * H });
+    // devagar → normal sem pausa no meio não é retomada
+    expect(boardPauseOf([{ board: "loja", history: [{ level: "slow", by: owner, at: iso(5) }, { level: "normal", by: owner, at: iso(1) }] }], T).resumedAt).toEqual({});
+  });
+
+  it("dono e agentes misturados: a mudança do agente com o dono ainda pausado NÃO é retomada; a do dono é", () => {
+    // dono pausa → agente pede «devagar» (o board segue pausado pelo dono) → dono volta ao normal (apaga as duas camadas)
+    const history = [
+      { level: "paused" as const, by: owner, at: iso(40) },
+      { level: "slow" as const, by: agent, at: iso(30) },
+      { level: "normal" as const, by: owner, at: iso(5) },
+    ];
+    expect(boardPauseOf([{ board: "armazem", history }], T).resumedAt).toEqual({ armazem: T - 5 * H });
+    // agente pausa → dono pausa → agente volta ao normal (dono segue pausando) → dono volta ao normal
+    const both = [
+      { level: "paused" as const, by: agent, at: iso(50) },
+      { level: "paused" as const, by: owner, at: iso(40) },
+      { level: "normal" as const, by: agent, at: iso(30) },
+      { level: "normal" as const, by: owner, at: iso(4) },
+    ];
+    expect(boardPauseOf([{ board: "loja", history: both }], T).resumedAt).toEqual({ loja: T - 4 * H });
+    // dono pausa → dono volta ao normal: a pausa do agente posta DEPOIS também conta, e o fim dela é a retomada
+    const agentAfter = [
+      { level: "paused" as const, by: owner, at: iso(40) },
+      { level: "normal" as const, by: owner, at: iso(30) },
+      { level: "paused" as const, by: agent, at: iso(20) },
+      { level: "normal" as const, by: agent, at: iso(6) },
+    ];
+    expect(boardPauseOf([{ board: "sebo", history: agentAfter }], T).resumedAt).toEqual({ sebo: T - 6 * H });
+  });
+
+  it("pausa com prazo no histórico: a retomada é o prazo, mesmo antes de a varredura gravar o vencimento", () => {
+    const history = [{ level: "paused" as const, by: owner, at: iso(20), until: iso(8) }];
+    expect(boardPauseOf([{ board: "armazem", history }], T).resumedAt).toEqual({ armazem: T - 8 * H });
   });
 });
 

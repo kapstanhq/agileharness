@@ -76,3 +76,22 @@ describe("moveRiskClass — F5.3: a classe de risco pelo EFEITO da coluna-alvo",
     expect(["run-free", "destructive"]).not.toContain(moveRiskClass(board, "desenvolver", "revisar-codigo"));
   });
 });
+
+// O pipeline híbrido: num board com condutor, entrar num passo `autorunOnlyInColumns` não spawna skill nenhuma — a classe
+// é a de escrever no board, e o Inbox não promete «a automação do passo começa». No modo por colunas, o mesmo move é `run`.
+describe("moveRiskClass — autorun EFETIVO do board (stepAutoruns)", () => {
+  const hybrid = {
+    statuses: [
+      { id: "enriquecer", name: "Especificar", trigger: "harness-enrich", autorun: true },
+      { id: "interview", name: "Entrevista", trigger: "harness-interview", autorun: true, autorunOnlyInColumns: true },
+      { id: "pronta", name: "A fazer" },
+    ],
+    conductor: { enabled: true, fromStatus: ["pronta"] },
+  } as unknown as BoardConfig;
+
+  it("modo condutor: entrar na Entrevista não roda nada; modo por colunas: roda", () => {
+    expect(moveRiskClass(hybrid, "interview", "enriquecer")).toBe("write-board");
+    expect(moveRiskClass({ ...hybrid, pipeline: "columns" } as BoardConfig, "interview", "enriquecer")).toBe("run");
+    expect(moveRiskClass(hybrid, "enriquecer", "interview")).toBe("run");
+  });
+});

@@ -6,7 +6,10 @@ import { capturePane } from "@/lib/terminal/tmux";
 import { deliverToSession, pressOptionKey, sessionRunsClaude } from "@/lib/vps/tmux";
 import type { PurgeFilter } from "./board-pace-actions";
 import { admitConductorCard, isSlotWait } from "./conductor";
+import { updateCardOnDisk } from "@/lib/storymap/write";
+import { upsertFindingIfChanged } from "./findings";
 import {
+  PARK_IGNORED_FINDING_ID,
   parkBoardConductors,
   parkWaitingConductors,
   wakeConductor,
@@ -18,10 +21,13 @@ import {
 import { conductorQuiet, type ConductorQuiet } from "./conductor-quiet";
 import { loadRunnerConfig } from "./config";
 import { appendSystemDecision, newSystemDecisionId } from "./decision-log";
-import { defaultConductorDeps, pumpConductorsNow } from "./fleet-deps";
+import { cardDependencyWait, defaultConductorDeps, pumpConductorsNow } from "./fleet-deps";
 import { healPermissionPrompts, type PromptHealReport, type PromptHealState } from "./permission-prompt-heal";
 import { lastPendingToolUse, type PendingToolUse } from "./permission-prompt";
 import { QUIET_IO } from "./stall-watch-deps";
+import { sessionCardIds } from "./session-worktree";
+import { readCards } from "@/lib/storymap/repo";
+import type { Card } from "@/lib/storymap/types";
 
 function paneDeps() {
   const base = defaultConductorDeps();
@@ -36,6 +42,8 @@ function paneDeps() {
       readBoardConfig: base.readBoardConfig,
       runsClaude: (tmux: string) => sessionRunsClaude(tmux),
       deliver: async (tmux: string, text: string) => (await deliverToSession(tmux, text, { submit: true })).ok,
+      // fase 7: os outros cards do lote do líder (a marca `batch.id` no card) — a resposta a um item retoma o lote inteiro
+      batchItems: async (board: string, lead: Card) => (lead.batch ? (await readCards(board)).filter((c) => c.id !== lead.id && c.batch?.id === lead.batch?.id) : []),
     },
   };
 }
@@ -60,6 +68,12 @@ export async function resumeConductorNow(board: string, cardId: string): Promise
 
 const PARK_STATE_KEY = Symbol.for("agileharness.conductor.parkState");
 
+/** Algum dos cards passa no predicado do recorte? Um predicado que falha conta como «não». */
+async function anyCardMatches(cardIds: readonly string[], only: PurgeFilter): Promise<boolean> {
+  for (const id of cardIds) if (await Promise.resolve(only(id)).catch(() => false)) return true;
+  return false;
+}
+
 /**
  * O board foi pausado com «parar agora» (board-pace.ts): pede a cada condutor vivo dele que estacione. Com `only`, pede só
  * aos condutores cujo card o predicado aponta (um recorte por card). O ESCOPO DE TIPOS NÃO usa isto: estreitar o escopo
@@ -76,7 +90,8 @@ export async function parkBoardConductorsNow(board: string, only?: PurgeFilter):
   const mine = new Set<string>();
   for (const s of await pane.sessions().catch(() => [])) {
     if (s.driver !== "conductor" || s.board !== board || !s.tmuxSession) continue;
-    if (only && !(s.cardId && (await Promise.resolve(only(s.cardId)).catch(() => false)))) continue;
+    // fase 7: uma sessão de LOTE entra no recorte quando QUALQUER card dela (o líder ou um item) está nele
+    if (only && !(await anyCardMatches(sessionCardIds(s), only))) continue;
     mine.add(s.sessionId);
     if ((await conductorQuiet(s, attention.get(s.tmuxSession), now, QUIET_IO)).asking) asking.add(s.tmuxSession);
   }
@@ -115,6 +130,21 @@ export async function parkWaitingConductorsNow(): Promise<ConductorParkReport> {
     },
     record: appendSystemDecision,
     newId: newSystemDecisionId,
+    // fase 6 (6D): esperar OUTRA história estaciona com o driver; o pedido ignorado é repetido e depois vai ao operador
+    dependencyWait: (board, card, config) => cardDependencyWait(board, card, config),
+    escalateIgnoredPark: async (board, cardId, detail) => {
+      await updateCardOnDisk(board, cardId, (card) => {
+        const findings = upsertFindingIfChanged(card.findings ?? [], {
+          id: PARK_IGNORED_FINDING_ID,
+          lens: "general",
+          severity: "high",
+          title: "o condutor ignorou o pedido de estacionar",
+          detail,
+          status: "open",
+        });
+        return findings ? { ...card, findings } : null;
+      });
+    },
     state: (store[PARK_STATE_KEY] ??= new Map()),
   });
 }

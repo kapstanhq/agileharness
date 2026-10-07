@@ -23,29 +23,6 @@ acceptance:
     Dado que a operação falha, quando acompanhar o estorno, então vejo o motivo
     e o que fazer a seguir.
 tasks: []
-rice:
-  reach: null
-  impact: null
-  confidence: null
-  effort: null
-kano: null
-funnelStage: null
-priorityCall:
-  rank: 3
-  rationale: Estimado contra as âncoras já pontuadas do board.
-  source: agent
-  assessedAt: '2026-08-01'
-  wsjf:
-    value: 13
-    urgency: 2
-    unlock: 5
-    size: 1
-    basis:
-      - soThat
-      - aceite
-      - personas
-    cohortSize: 66
-    cohortAt: '2026-08-01T12:00:00.000Z'
 questions:
   - id: q1
     text: Vale cobrir o caso offline nesta fatia?

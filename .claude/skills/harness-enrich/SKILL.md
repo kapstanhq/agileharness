@@ -33,7 +33,7 @@ recommended) as the **first hypothesis** — drawn from the captured demand and 
 personas' pains/gains — then advances the card to `interview` (Entrevista). In the
 canonical pipeline Especificar comes BEFORE the Entrevista: enrich writes the aceite
 as a hypothesis and the Entrevista that runs next STRESS-TESTS it (USM: a conversa
-confirma/ajusta o aceite). The `hasRefinement` gate is checked one step later, at Estimar.
+confirma/ajusta o aceite). The `hasRefinement` gate is checked at A fazer (`pronta`).
 
 > Read `storymap/README.md` first — it is the canonical schema/pipeline source.
 > This skill edits ONLY the data files under `storymap/boards/<board>/cards/`.
@@ -66,7 +66,7 @@ report the current status and stop (the trigger only owns the `enriquecer` slot)
 On the UI, a human captures an item with only the **bare minimum**: the
 `storyType` and the three-part `narrative`. The `title` is optional (it may be a
 placeholder like `Novo item`), and everything else (`acceptance`, `tasks`,
-`rice`, `kano`, `funnelStage`, `personas`, `systems`, body) is typically empty.
+`personas`, `systems`, body) is typically empty.
 
 You have **full freedom to author AND improve every field** — including fields the
 human already filled. If the `title` is a placeholder or weak, rewrite it into a title
@@ -136,7 +136,7 @@ the board's brand voice — the `voice.lexicon` of its style guide (`storymap/bo
    **Eixo da SUPERFÍCIE de UI (`hasUiSurface`) — decide o QA visual, ORTOGONAL ao `storyType`.**
    Depois de decidir o type, decida se o card TOCA uma superfície visível ao usuário (tela/lista/
    componente) e grave `hasUiSurface: true|false` DIRETO no frontmatter (campo pipeline-owned, como
-   `priorityCall` — o `update_card` o rejeita; edite o `.md`). Regra: QUALQUER card com superfície
+   `routing` — o `update_card` o rejeita; edite o `.md`). Regra: QUALQUER card com superfície
    visível — INCLUSIVE um `bug` que conserta um glitch de UI — recebe `hasUiSurface: true` (força o
    sweep visual no gate `hasQaPassed`); um card sem tela (job/índice/migração, ou uma `user` story de
    API/push/voz) recebe `hasUiSurface: false` (isenta do QA visual, sem deadlock). Omita só quando
@@ -149,12 +149,11 @@ the board's brand voice — the `voice.lexicon` of its style guide (`storymap/bo
    frontmatter (campo pipeline-owned; o `update_card` o rejeita — edite o `.md`), copiando `skips` +
    `modelCap`/`effortCap` do perfil e registrando `profile`, `decidedBy: agent`, `decidedAt` (YYYY-MM-DD)
    e um `rationale` curto. Guia: um `technical`/`chore` TRIVIAL sem superfície de UI → `express`
-   (pula entrevista/design/priorizar, paga em sonnet/medium); uma `user` story com telas novas → `full`
+   (pula entrevista/design, paga em sonnet/medium); uma `user` story com telas novas → `full`
    (pipeline completo); na dúvida → `standard` (comportamento atual, só os skips por tipo). **NUNCA**
    liste em `routing.skips` um passo LOAD-BEARING (`plano-tecnico`/`desenvolver`/`revisar-codigo`/`qa-*`)
-   nem um passo já coberto pelo `skipForTypes` do tipo (ruído). **REGRA DE COERÊNCIA (dura):** se o
-   perfil escolhido pula `priorizar`, você DEVE gravar um `priorityCall` mínimo (rank + rationale) no
-   MESMO run — senão o card TRAVA no gate de prioridade (fail-closed). Omita `routing` por completo se
+   nem um passo já coberto pelo `skipForTypes` do tipo (ruído). Não há passo de priorização nem nota de
+   prioridade a gravar: a ordem do trabalho é a posição do card na coluna. Omita `routing` por completo se
    não tem certeza (a cascata decide a rota pelas regras determinísticas — comportamento byte-idêntico).
 
    **Regressão (corretivo) vs régua-nova (perfectivo) — você tem o CÓDIGO à vista; seja o árbitro.**
@@ -197,13 +196,13 @@ the board's brand voice — the `voice.lexicon` of its style guide (`storymap/bo
    outcome phrases ("Após X, o usuário vê Y") stay valid for simple rules. Keep it a
    confident hypothesis, not a guess — the Entrevista is the *Confirmation* step that
    challenges it. The narrative + `acceptance` together form the `hasRefinement` gate
-   (checked at Estimar).
+   (checked at A fazer).
 
 5. **Set coherent personas/systems — then ground the story in their pains/gains.**
    Use ONLY ids that exist in `board.yaml` (e.g. the `demo` board's systems
    `catalogo|busca|checkout`). Never invent an id — if none fits, leave the
    array empty rather than guess. A `user` story should name at least one persona
-   (it grounds the `role` clause).
+   (it grounds the `role` clause). Set `feature` to the PRD funcionalidade id from `get_vocabulary` → `features` (no fit ⇒ leave it empty: «Outros»; never invent one).
 
    Personas are NOT just ids to validate. After fixing the persona ids, read the
    `pains[]` and `gains[]` (and `jobs[]`) of each selected persona in `board.yaml`,
@@ -254,8 +253,8 @@ the board's brand voice — the `voice.lexicon` of its style guide (`storymap/bo
    Write the refinement FIRST — `narrative` complete (role + want + soThat) AND
    `acceptance` with >= 1 item — directly into the card file (the `hasRefinement`
    gate will be checked on advance). Bump `updated` to today (`YYYY-MM-DD`); keep
-   one field per line. Leave `tasks` / `rice` at their safe defaults — those belong
-   to `harness-tasks` and priorização. Do NOT hardcode the next status. THEN advance
+   one field per line. Leave `tasks` at its safe default — it belongs to the plan
+   step. Do NOT hardcode the next status. THEN advance
    the card board-aware by running:
 
    ```
@@ -265,7 +264,7 @@ the board's brand voice — the `voice.lexicon` of its style guide (`storymap/bo
    (same `<board>` and `<id>` you received as the `<board>/<id>` argument). The
    helper moves the card to the NEXT step of THAT board's pipeline — `enriquecer`
    lands in `interview` (Entrevista) for a `user` story; a non-`user` type skips the
-   Entrevista and forwards toward Estimar — reusing the pipeline's `nextBuildStatus`
+   Entrevista and forwards toward A fazer (`pronta`) — reusing the pipeline's `nextBuildStatus`
    + `checkGate`, so the skill never names a status.
    If it exits non-zero, the `hasRefinement` gate blocked the move: that means the
    narrative/acceptance weren't fully written before the advance — fix the card and

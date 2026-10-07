@@ -10,9 +10,11 @@ import { updateCardOnDisk } from "@/lib/storymap/write";
 import { deliverToSession, probeLiveTmuxSessions, sessionRunsClaude } from "@/lib/vps/tmux";
 import { readWorktreeSessionCost } from "@/lib/vps/session-cost";
 import { getCapacityGovernor } from "./capacity-service";
+import { autonomyProfileOf } from "@/lib/storymap/autonomy-profile";
 import {
   approveAsSystem,
   budgetQuestion,
+  cardCapUSD,
   budgetRaiseDecision,
   effectiveCardBudgetUSD,
   judgeBudgetRequest,
@@ -24,6 +26,7 @@ import {
   type QuotaReading,
 } from "./card-budget";
 import { isLiveConductor } from "./conductor";
+import { batchCapUSD } from "./conductor-batch";
 import { loadRunnerConfig } from "./config";
 import { appendSystemDecision } from "./decision-log";
 import { isSessionAlive } from "./session-liveness";
@@ -33,9 +36,45 @@ import { boardGateNow } from "./board-pace-store";
 
 const today = () => new Date().toISOString().slice(0, 10);
 
-function capUSD(): number | null {
+/** O teto do settings; com o card, o teto DESTE card — o menor entre o do settings e o do tipo dele (cardCapUSD). */
+function capUSD(card?: Card): number | null {
   const cap = loadRunnerConfig().autorun.cardBudgetUSD;
-  return typeof cap === "number" && cap > 0 ? cap : null;
+  const settingsCap = typeof cap === "number" && cap > 0 ? cap : null;
+  return card ? cardCapUSD(settingsCap, card) : settingsCap;
+}
+
+/**
+ * Fase 7 — os cards do LOTE de que `card` é o LÍDER (ele incluído), ou null quando ele não lidera um lote com itens.
+ * O lote é julgado UMA vez, no líder: teto do lote (US$ 10 por item, no máximo US$ 30) e o gasto de todos.
+ */
+async function batchMembers(board: string, card: Card): Promise<Card[] | null> {
+  const mark = card.batch;
+  if (!mark || mark.lead !== card.id) return null;
+  const all = await readCards(board).catch(() => null);
+  if (!all) return null;
+  const members = all.filter((c) => c.batch?.id === mark.id && c.batch.lead === card.id);
+  if (!members.some((c) => c.id === card.id)) members.unshift(card);
+  return members.length > 1 ? members : null;
+}
+
+/** O teto da linha: o do LOTE no líder dele, senão o do card. */
+async function capFor(board: string, card: Card, members?: Card[] | null): Promise<number | null> {
+  const batch = members === undefined ? await batchMembers(board, card) : members;
+  return batch ? batchCapUSD(capUSD(), batch) : capUSD(card);
+}
+
+/** O ledger da linha: o do lote inteiro no líder dele, senão o do card. */
+async function ledgerFor(board: string, card: Card, members: Card[] | null): Promise<number> {
+  if (!members) return ledgerUSD(board, card.id);
+  let total = 0;
+  for (const m of members) total += await ledgerUSD(board, m.id);
+  return total;
+}
+
+/** O gasto da linha AGORA: o ledger (do lote, no líder) mais a estimativa da sessão de condutor viva do card. */
+async function spentFor(board: string, card: Card, sessions: readonly AgentSession[], members: Card[] | null): Promise<number> {
+  if (!members) return spentUSD(board, card.id, sessions);
+  return (await ledgerFor(board, card, members)) + (await liveUSD(board, card.id, sessions));
 }
 
 function quota(): QuotaReading | null {
@@ -57,18 +96,27 @@ async function ledgerUSD(board: string, cardId: string): Promise<number> {
 
 /** O gasto do card AGORA: o ledger mais a estimativa das sessões de condutor vivas. */
 async function spentUSD(board: string, cardId: string, sessions: readonly AgentSession[]): Promise<number> {
+  return (await ledgerUSD(board, cardId)) + (await liveUSD(board, cardId, sessions));
+}
+
+/** A estimativa das sessões de condutor vivas do card (o líder, num lote — a sessão é dele). */
+async function liveUSD(board: string, cardId: string, sessions: readonly AgentSession[]): Promise<number> {
   let live = 0;
   for (const s of sessions) {
     if (s.board !== board || s.cardId !== cardId || s.driver !== "conductor") continue;
     live += (await readWorktreeSessionCost(s.worktreePath ?? s.cwd ?? null).catch(() => null))?.costUSD ?? 0;
   }
-  return (await ledgerUSD(board, cardId)) + live;
+  return live;
 }
 
 /** O teto do settings e o gasto do card AGORA (ledger + sessões vivas) — o que a régua do ciclo extra lê
  *  (runner/extra-cycle.ts) para saber se o ciclo cabe no teto ou precisa pedir aumento. */
 export async function cardSpendNow(board: string, cardId: string): Promise<{ capUSD: number | null; spentUSD: number }> {
-  return { capUSD: capUSD(), spentUSD: await spentUSD(board, cardId, await allSessions().catch(() => [])) };
+  const card = await readCard(board, cardId).catch(() => null);
+  const sessions = await allSessions().catch(() => []);
+  if (!card) return { capUSD: capUSD(), spentUSD: await spentUSD(board, cardId, sessions) };
+  const members = await batchMembers(board, card);
+  return { capUSD: await capFor(board, card, members), spentUSD: await spentFor(board, card, sessions, members) };
 }
 
 export type RequestBudgetResult =
@@ -87,15 +135,20 @@ export async function requestBudgetNow(input: { board: string; cardId: string; t
   if (!input.reason?.trim()) return { ok: false, error: "diga o que falta e quanto custa (reason)" };
   const card = await readCard(board, cardId).catch(() => null);
   if (!card) return { ok: false, error: `card não encontrado: ${cardId}` };
-  const cap = capUSD();
+  // fase 7 — no líder de um lote, o pedido sobe o teto do LOTE (o gasto é o do lote inteiro)
+  const members = await batchMembers(board, card);
+  const cap = await capFor(board, card, members);
   const settings = loadRunnerConfig().autorun.budgetRaise;
   const now = Date.now();
-  const spent = await spentUSD(board, cardId, await allSessions().catch(() => []));
+  const spent = await spentFor(board, card, await allSessions().catch(() => []), members);
   const pending = openBudgetRequests(card)[0];
   if (pending) {
     return { ok: true, verdict: "owner", approved: false, capUSD: effectiveCardBudgetUSD(cap, card), spentUSD: spent, questionId: pending.questionId, detail: "já há um pedido de teto aberto neste card — espere a resposta dele" };
   }
-  const verdict = judgeBudgetRequest({ capUSD: cap, card, toUSD, pace: quotaPace(quota(), now, settings), settings });
+  // a caixa «passar do teto de gasto» do perfil DESTE board (autonomy-profile.ts); sem config legível, a régua global
+  const config = await readBoardConfig(board).catch(() => null);
+  const spendRaise = config ? autonomyProfileOf(config, loadRunnerConfig()).spendRaise : undefined;
+  const verdict = judgeBudgetRequest({ capUSD: cap, card, toUSD, pace: quotaPace(quota(), now, settings), settings, spendRaise });
   if (verdict.kind === "no-cap") return { ok: true, verdict: verdict.kind, approved: true, capUSD: null, spentUSD: spent, detail: "este alvo não declara teto de gasto por card" };
   if (verdict.kind === "not-needed") return { ok: true, verdict: verdict.kind, approved: true, capUSD: verdict.capUSD, spentUSD: spent, detail: "o valor pedido já cabe no teto em vigor" };
 
@@ -122,10 +175,13 @@ export async function requestBudgetNow(input: { board: string; cardId: string; t
  * encerradas) chegou ao teto em vigor. É a metade em CÓDIGO do teto para card conduzido (antes era só texto da skill).
  */
 export async function conductorBudgetRefusal(board: string, card: Card): Promise<string | null> {
-  const cap = effectiveCardBudgetUSD(capUSD(), card);
+  // fase 7 — o líder de um lote (a retomada depois do train): o teto e o gasto são os do LOTE
+  const members = await batchMembers(board, card);
+  const cap = effectiveCardBudgetUSD(await capFor(board, card, members), card);
   if (cap == null) return null;
-  const spent = await ledgerUSD(board, card.id);
-  return spent >= cap ? `o card chegou ao teto de gasto (US$ ${spent.toFixed(2)} de US$ ${cap}) — só segue com um aumento aprovado` : null;
+  const spent = await ledgerFor(board, card, members);
+  const what = members ? `o lote de ${members.length} itens chegou ao teto de gasto` : "o card chegou ao teto de gasto";
+  return spent >= cap ? `${what} (US$ ${spent.toFixed(2)} de US$ ${cap}) — só segue com um aumento aprovado` : null;
 }
 
 const WARNED_KEY = Symbol.for("agileharness.card-budget.warned");
@@ -155,11 +211,15 @@ export async function maybeSweepCardBudgets(now: number = Date.now()): Promise<u
           // sem a sonda não se sabe quem está vivo: ninguém é avisado (os pedidos abertos seguem sendo julgados)
           const session = live && isConducted(card) ? sessions.find((s) => s.board === b.id && s.cardId === card.id && !!s.tmuxSession && isLiveConductor(s, live, (x) => isSessionAlive(x, now))) : undefined;
           if (!session && !openBudgetRequests(card).length) continue;
+          // fase 7 — o lote é julgado UMA vez, na linha do líder (os itens não têm sessão própria: só os pedidos deles)
+          const members = await batchMembers(b.id, card);
           out.push({
             board: b.id,
             card,
-            spentUSD: session ? await spentUSD(b.id, card.id, sessions) : await ledgerUSD(b.id, card.id),
+            spendRaise: autonomyProfileOf(config, loadRunnerConfig()).spendRaise,
+            spentUSD: session ? await spentFor(b.id, card, sessions, members) : await ledgerFor(b.id, card, members),
             liveConductor: session?.tmuxSession ? { sessionId: session.sessionId, tmuxSession: session.tmuxSession } : null,
+            ...(members ? { capUSD: await capFor(b.id, card, members) } : {}),
           });
         }
       }

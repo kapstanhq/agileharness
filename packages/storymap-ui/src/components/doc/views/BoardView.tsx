@@ -71,7 +71,19 @@ export function BoardView({ doc, schema, onChange, className }: BoardViewProps) 
   };
 
   return (
-    <div className={cn("grid gap-3", layout?.container ?? AUTO_BOARD_CONTAINER, className)}>
+    <div className={cn("flex flex-col gap-3", className)}>
+      {/* a LEGENDA das cores: sem ela o ponto colorido de cada nota não dizia de que segmento era */}
+      {tags.length > 0 && (
+        <ul aria-label="Legenda das etiquetas" className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[12.5px] text-fg-muted">
+          {tags.map((t) => (
+            <li key={t.id} className="inline-flex items-center">
+              <Dot color={t.color} />
+              {t.name}
+            </li>
+          ))}
+        </ul>
+      )}
+    <div className={cn("grid gap-3", layout?.container ?? AUTO_BOARD_CONTAINER)}>
       {tops.map((rule, i) => (
         <BoardSection
           key={rule.key}
@@ -95,6 +107,7 @@ export function BoardView({ doc, schema, onChange, className }: BoardViewProps) 
           onAdd={addItem}
         />
       ))}
+    </div>
     </div>
   );
 }
@@ -152,9 +165,9 @@ function BoardSection({
           {order}
         </span>
         {/* O rótulo é TRAVADO: um `<h2>`, nunca um campo. Quem edita, edita o conteúdo. */}
-        <h2 className="text-[11px] font-bold uppercase leading-none tracking-[0.07em] text-fg-muted">
-          {rule.label}
-        </h2>
+        {/* caixa normal (typography.ts: caixa-alta em lugar nenhum) — «RELACIONAMENTO COM CLIENTES» em caixa-alta
+            espaçada quebrava em duas linhas apertadas numa célula de duas colunas */}
+        <h2 className="text-[13px] font-semibold leading-tight text-fg-muted">{rule.label}</h2>
         <span className="flex-1" />
         {editable && <AddButton onClick={() => onAdd(rule.key)} label={`Adicionar em ${rule.label}`} />}
       </header>

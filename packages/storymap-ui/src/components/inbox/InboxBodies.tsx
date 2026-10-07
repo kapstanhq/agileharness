@@ -1,15 +1,20 @@
 "use client";
 
-// O CORPO de um item — a única parte do cartão que muda por kind, e só onde o item carrega algo para LER ou ESCOLHER
-// antes de decidir: as opções de uma pergunta, a árvore de uma proposta, o canvas de um design, o rascunho de uma
-// proposta de PRD, o antes/depois de uma entrega, a análise de um conflito, os argumentos de um pedido de agente. O
-// resto (a decisão, as opções e as consequências) vem do modelo e é desenhado pelo InboxItemCard — nenhum corpo tem
-// botão de decisão próprio: o que ele coleta vai no `payload` da opção.
+// OS CORPOS de um item — o que o item carrega para LER antes de decidir (fase 3). Duas portas:
+//   • InboxPreview — À VISTA, entre a pergunta e as opções, só onde aprovar sem ver seria às cegas (D12): os argumentos
+//     exatos do pedido de um agente e o comando exato de uma execução aprovada, com o desfazer dele;
+//   • InboxDetailsBody — dentro de «Mais detalhes»: a árvore de uma proposta (o que vai ser criado — tudo marcado,
+//     desmarque o que não serve), o canvas de um design, o antes/depois de uma proposta de PRD ou de uma entrega, a
+//     análise de um conflito, as conferências de um comando. (As alternativas de uma pergunta são opções do modelo, com
+//     os prós e contras na consequência — InboxOptions.)
+// Nenhum corpo tem botão de decisão próprio: o que ele coleta vai no `payload` da opção (InboxItem).
 
 import { useEffect, useMemo, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/cn";
-import type { CockpitItem } from "@/lib/storymap/demands";
+import { batchStopCards, type CockpitItem } from "@/lib/storymap/demands";
+import { cardHref } from "@/lib/storymap/deep-links";
 import type { InboxEntry } from "@/lib/storymap/inbox/entries";
 import type { CanvasBlock, CanvasTag, GovernanceChange } from "@/lib/storymap/types";
 import { blockToReviewText } from "@/lib/storymap/canvas";
@@ -17,34 +22,67 @@ import { applyReanchor, cascadeSelect, effectiveSelectedCount, selectAll, type R
 import type { ProposedItem } from "@/lib/storymap/smart-capture/types";
 import { ALL_OR_NOTHING_NOTE, summarizeAnalysis, type EntryResolutionAnalysis, type VerdictKind } from "@/lib/storymap/resolution-analysis";
 import { prettyCanonicalArgs } from "@/lib/storymap/quick-actions";
-import { dejargonText } from "@/lib/storymap/copilot/dejargon";
-import { governanceDecision, previewList } from "@/components/inicio/cockpit-labels";
+import { governanceDecision, previewList } from "@/components/inbox/cockpit-labels";
 import { chooseWireframeAction, submitDesignFeedbackAction } from "@/app/actions";
 import { ProposalTree } from "@/components/ProposalTree";
 import { DesignCanvas } from "@/components/wireframe/DesignCanvas";
 import { Markdown } from "@/components/Markdown";
 import { useToast } from "@/components/Toast";
 import type { InvokePayload } from "@/components/quick-action-run";
-import type { InboxBoardCtx } from "./InboxItemCard";
+import type { InboxBoardCtx } from "./InboxItem";
 
 type Setter = (fn: (p: InvokePayload) => InvokePayload) => void;
 
-export function InboxBody({
-  entry,
-  board,
-  payload,
-  setPayload,
-}: {
-  entry: InboxEntry;
-  board?: InboxBoardCtx;
-  payload: InvokePayload;
-  setPayload: Setter;
-}) {
+/** O que precisa ser VISTO antes do clique — o pedido exato de um agente, o comando exato de uma execução aprovada. */
+export function InboxPreview({ entry }: { entry: InboxEntry }) {
+  const item = entry.item;
+  if (item?.kind === "approval" && item.args) return <ApprovalArgs item={item} />;
+  if (item?.kind === "locked-exec") return <LockedExecPreview item={item} />;
+  if (item && batchStopCards(item).length > 0) return <BatchItemsPreview item={item} />;
+  return null;
+}
+
+// ── o lote do condutor: cada item, com a prova (fase 7) ───────────────────────────────────────────────
+
+/**
+ * Uma parada de um LOTE (a entrega, a publicação, a sessão que morreu) é UM item do Inbox que fala por todos os itens:
+ * à vista, antes das opções, cada um com o link do card e — na entrega — a `## Prova da entrega` dele, fechada.
+ */
+function BatchItemsPreview({ item }: { item: CockpitItem }) {
+  const cards = batchStopCards(item);
+  const delivery = item.kind === "gate";
+  return (
+    <div className="rounded-lg border border-line bg-inset px-3 py-2" data-batch-items={cards.length}>
+      <p className="text-[12.5px] font-semibold text-fg-subtle">
+        {delivery ? `Este lote tem ${cards.length} itens — a decisão vale para todos` : `A sessão cuidava de ${cards.length} itens deste lote`}
+      </p>
+      <ul className="mt-1 divide-y divide-line">
+        {cards.map((c) => (
+          <li key={c.cardId} className="py-1">
+            <Link href={cardHref(item.boardId, c.cardId)} prefetch={false} className="inline-flex min-h-11 items-center text-[13.5px] font-medium text-accent-ink underline-offset-2 hover:underline">
+              {c.cardTitle}
+            </Link>
+            {delivery &&
+              (c.proof ? (
+                <details>
+                  <summary className="flex min-h-11 cursor-pointer items-center text-[12.5px] font-semibold text-fg-subtle">A prova da entrega</summary>
+                  <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap font-sans text-[12.5px] leading-snug text-fg-muted">{c.proof}</pre>
+                </details>
+              ) : (
+                <p className="text-[12.5px] text-fg-subtle">Sem a prova da entrega no card.</p>
+              ))}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** O corpo de «Mais detalhes». */
+export function InboxDetailsBody({ entry, board, setPayload }: { entry: InboxEntry; board?: InboxBoardCtx; setPayload: Setter }) {
   const item = entry.item;
   if (!item) return null;
   switch (item.kind) {
-    case "question":
-      return <QuestionBody item={item} payload={payload} setPayload={setPayload} />;
     case "proposal":
       return item.items.length > 0 ? <ProposalBody item={item} board={board} setPayload={setPayload} /> : null;
     case "design":
@@ -55,101 +93,11 @@ export function InboxBody({
       return <DeliveryBody item={item} />;
     case "conflict":
       return item.resolutionAnalysis ? <ResolutionAnalysisPanel analysis={item.resolutionAnalysis} /> : null;
-    case "approval":
-      return item.args ? <ApprovalArgs item={item} /> : null;
     case "locked-exec":
-      return <LockedExecBody item={item} />;
+      return <LockedExecDetails item={item} />;
     default:
       return null;
   }
-}
-
-// ── pergunta ──────────────────────────────────────────────────────────────────────────────────────────
-
-function QuestionBody({ item, payload, setPayload }: { item: Extract<CockpitItem, { kind: "question" }>; payload: InvokePayload; setPayload: Setter }) {
-  const selected = payload.selectedOptionIds ?? [];
-  const hasOptions = item.options.length > 0;
-  const [writeOwn, setWriteOwn] = useState(!hasOptions);
-  const toggle = (id: string) =>
-    setPayload((p) => {
-      const cur = p.selectedOptionIds ?? [];
-      const next = item.mode === "multi" ? (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]) : cur.includes(id) ? [] : [id];
-      return { ...p, selectedOptionIds: next };
-    });
-  return (
-    <div className="space-y-3">
-      {item.context && (
-        <p className="text-[13.5px] leading-relaxed text-fg-muted">
-          <span className="font-semibold text-fg-subtle">Por que o agente pergunta:</span> {dejargonText(item.context)}
-        </p>
-      )}
-      {hasOptions && (
-        <fieldset className="space-y-2">
-          <legend className="mb-1 text-[11px] font-bold uppercase tracking-[0.08em] text-fg-subtle">
-            {item.mode === "multi" ? "Escolha uma ou mais" : "Escolha uma"}
-          </legend>
-          {item.options.map((opt) => {
-            const checked = selected.includes(opt.id);
-            return (
-              <label
-                key={opt.id}
-                className={cn(
-                  "flex min-h-12 cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 text-[14px] transition",
-                  checked ? "border-primary/60 bg-primary/10 text-fg" : "border-line bg-surface text-fg-muted hover:border-line-emphasis hover:text-fg",
-                )}
-              >
-                <input
-                  type={item.mode === "multi" ? "checkbox" : "radio"}
-                  name={`q-${item.id}`}
-                  checked={checked}
-                  onChange={() => toggle(opt.id)}
-                  className="mt-1 h-4 w-4 shrink-0 accent-[rgb(var(--primary))]"
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="flex flex-wrap items-center gap-1.5 font-medium">
-                    {opt.label}
-                    {opt.recommended && <span className="rounded border border-primary/50 px-1.5 py-px text-[11px] font-semibold text-fg">recomendada</span>}
-                  </span>
-                  {(opt.pros?.length ?? 0) + (opt.cons?.length ?? 0) > 0 && (
-                    <span className="mt-1 block space-y-0.5 text-[12.5px] leading-snug">
-                      {opt.pros?.map((p, i) => (
-                        <span key={`p${i}`} className="block text-fg-muted">
-                          + {p}
-                        </span>
-                      ))}
-                      {opt.cons?.map((c, i) => (
-                        <span key={`c${i}`} className="block text-fg-muted">
-                          − {c}
-                        </span>
-                      ))}
-                    </span>
-                  )}
-                </span>
-              </label>
-            );
-          })}
-        </fieldset>
-      )}
-      {item.recommendation && !hasOptions && (
-        <p className="text-[13px] leading-snug text-fg-muted">
-          <span className="font-semibold text-fg-subtle">Sugestão do agente:</span> {dejargonText(item.recommendation)}
-        </p>
-      )}
-      {writeOwn ? (
-        <textarea
-          rows={3}
-          value={payload.answer ?? ""}
-          onChange={(e) => setPayload((p) => ({ ...p, answer: e.target.value }))}
-          placeholder={hasOptions ? "Quer acrescentar algo? (opcional)" : "Escreva a sua resposta"}
-          className="w-full resize-y rounded-lg border border-line bg-inset px-3 py-2 text-[14px] text-fg placeholder:text-fg-subtle focus:border-accent focus:outline-none"
-        />
-      ) : (
-        <button type="button" onClick={() => setWriteOwn(true)} className="min-h-11 text-[13.5px] font-medium text-accent-ink hover:underline">
-          Escrever outra resposta
-        </button>
-      )}
-    </div>
-  );
 }
 
 // ── proposta de captura ───────────────────────────────────────────────────────────────────────────────
@@ -328,12 +276,33 @@ function ApprovalArgs({ item }: { item: Extract<CockpitItem, { kind: "approval" 
 
 // ── execução aprovada: o comando exato, o desfazer e as conferências ─────────────────────────────────
 
+const MONO = "mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded border border-line bg-surface px-2 py-1.5 font-mono text-[11.5px] leading-snug text-fg";
+
 /**
- * O que o dono precisa VER antes de aprovar um comando travado — e depois, o que aconteceu. O comando aparece EXATO (a
- * linha que a trava julgou e que o servidor roda), sem quebrar e sem nada para copiar: ninguém cola nada no terminal.
+ * O que o dono precisa VER antes de aprovar um comando travado: o comando EXATO (a linha que a trava julgou e que o
+ * servidor roda) e o desfazer dele — sem nada para copiar: ninguém cola nada no terminal.
  */
-function LockedExecBody({ item }: { item: Extract<CockpitItem, { kind: "locked-exec" }> }) {
-  const mono = "mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded border border-line bg-surface px-2 py-1.5 font-mono text-[11.5px] leading-snug text-fg";
+function LockedExecPreview({ item }: { item: Extract<CockpitItem, { kind: "locked-exec" }> }) {
+  return (
+    <div className="rounded-lg border border-line bg-inset px-3 py-2">
+      <p className="text-[12.5px] font-semibold text-fg-subtle">O que o servidor roda</p>
+      <p className="mt-1 break-all font-mono text-[11px] text-fg-muted">Programa: {item.program}</p>
+      <pre className={MONO}>{item.command}</pre>
+      {item.undoCommand ? (
+        <>
+          <p className="mt-2 text-[12.5px] font-semibold text-fg-subtle">Como desfazer</p>
+          <p className="mt-1 break-all font-mono text-[11px] text-fg-muted">Programa: {item.undoProgram ?? "?"}</p>
+          <pre className={MONO}>{item.undoCommand}</pre>
+        </>
+      ) : (
+        <p className="mt-2 rounded bg-danger/10 px-2 py-1.5 text-[12.5px] font-semibold text-danger">Sem desfazer. Plano B: {item.noUndoPlan ?? "—"}</p>
+      )}
+    </div>
+  );
+}
+
+/** As conferências do comando, as palavras do agente e, depois de rodar, o passo a passo. */
+function LockedExecDetails({ item }: { item: Extract<CockpitItem, { kind: "locked-exec" }> }) {
   const check = (c: (typeof item.verify)[number], key: string) => (
     <li key={key} className="text-[12.5px] text-fg">
       {c.label} <span className="break-all font-mono text-[11px] text-fg-muted">({c.command})</span>
@@ -342,31 +311,16 @@ function LockedExecBody({ item }: { item: Extract<CockpitItem, { kind: "locked-e
   );
   return (
     <div className="space-y-2">
-      {/* o BLOCO ESTRUTURADO primeiro: o que roda de fato, o desfazer, as conferências com o critério */}
-      <div className="rounded-lg border border-line bg-inset px-3 py-2">
-        <p className="text-[12.5px] font-semibold text-fg-subtle">O que o servidor roda</p>
-        <p className="mt-1 break-all font-mono text-[11px] text-fg-muted">Programa: {item.program}</p>
-        <pre className={mono}>{item.command}</pre>
-        {item.undoCommand ? (
-          <>
-            <p className="mt-2 text-[12.5px] font-semibold text-fg-subtle">Como desfazer</p>
-            <p className="mt-1 break-all font-mono text-[11px] text-fg-muted">Programa: {item.undoProgram ?? "?"}</p>
-            <pre className={mono}>{item.undoCommand}</pre>
-          </>
-        ) : (
-          <p className="mt-2 rounded bg-rose-500/10 px-2 py-1.5 text-[12.5px] font-semibold text-rose-700 dark:text-rose-300">
-            Sem desfazer. Plano B: {item.noUndoPlan ?? "—"}
-          </p>
-        )}
-        {item.preflight.length > 0 && (
-          <>
-            <p className="mt-2 text-[12.5px] font-semibold text-fg-subtle">Antes de rodar, o servidor confere</p>
-            <ul className="mt-1 space-y-1">{item.preflight.map((c, i) => check(c, `p${i}`))}</ul>
-          </>
-        )}
-        <p className="mt-2 text-[12.5px] font-semibold text-fg-subtle">Depois de rodar, o servidor confere</p>
+      {item.preflight.length > 0 && (
+        <div>
+          <p className="text-[12.5px] font-semibold text-fg-subtle">Antes de rodar, o servidor confere</p>
+          <ul className="mt-1 space-y-1">{item.preflight.map((c, i) => check(c, `p${i}`))}</ul>
+        </div>
+      )}
+      <div>
+        <p className="text-[12.5px] font-semibold text-fg-subtle">Depois de rodar, o servidor confere</p>
         <ul className="mt-1 space-y-1">{item.verify.map((c, i) => check(c, `v${i}`))}</ul>
-        <p className="mt-2 text-[11.5px] text-fg-subtle">Conferências: só comandos que o servidor liberou para conferir.</p>
+        <p className="mt-1 text-[11.5px] text-fg-subtle">Conferências: só comandos que o servidor liberou para conferir.</p>
       </div>
       {/* as palavras do agente por último, rotuladas: elas explicam, não descrevem o que roda */}
       <div className="rounded-lg border border-dashed border-line px-3 py-2">
@@ -375,8 +329,8 @@ function LockedExecBody({ item }: { item: Extract<CockpitItem, { kind: "locked-e
         {item.why && <p className="mt-1 whitespace-pre-line break-words text-[12px] text-fg-muted">Por que agora: {item.why}</p>}
       </div>
       {item.steps.length > 0 && (
-        <details className="rounded-lg border border-line bg-inset px-3 py-2" open={item.execStatus !== "done"}>
-          <summary className="flex min-h-11 cursor-pointer items-center text-[12.5px] font-semibold text-fg-subtle">O que aconteceu, passo a passo</summary>
+        <div>
+          <p className="text-[12.5px] font-semibold text-fg-subtle">O que aconteceu, passo a passo</p>
           <ul className="mt-1 space-y-1.5">
             {item.steps.map((st, i) => (
               <li key={`${st.step}:${i}`} className="rounded border border-line bg-surface p-1.5">
@@ -389,7 +343,7 @@ function LockedExecBody({ item }: { item: Extract<CockpitItem, { kind: "locked-e
               </li>
             ))}
           </ul>
-        </details>
+        </div>
       )}
     </div>
   );

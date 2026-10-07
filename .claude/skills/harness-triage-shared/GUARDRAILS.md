@@ -3,7 +3,7 @@
 > **Fonte única** referenciada pelas skills de triagem de reabertura (`harness-refine`,
 > `harness-fix`) para os **guardrails comuns**, e por `harness-review` + `harness-qa` para o
 > **ciclo de vida do `mode`**. Conteúdo específico de cada skill (a reprodução do bug
-> no fix, o WSJF por eixo, as lentes do review, o sweep do QA) permanece no respectivo
+> no fix, a severidade do bug, as lentes do review, o sweep do QA) permanece no respectivo
 > `SKILL.md`.
 
 ## Guardrails comuns
@@ -22,11 +22,12 @@ DIAGNOSTICAM uma story já entregue e a ROTEIAM de volta ao pipeline:
    (`tasks: []`) para re-derivação após o design (rota `design-ux`) — um `harness-do` a
    jusante nunca pode re-executar uma task de build obsoleta.
 
-3. **Uma reabertura NÃO re-prioriza a story entregue.** Para uma REABERTURA (o card já
-   tem `rice`/`kano`/`funnelStage` da feature entregue): **PRESERVE-os intactos** — o
-   card mantém o `priorityScore` original. Um item NOVO vindo da Triagem (sem rice)
-   carrega os eixos WSJF do seu tipo (melhoria: `rice.impact` + `rice.effort`; bug:
-   `severity` + `frequency` + `hasWorkaround`) — preencha esses, nunca invente um RICE.
+3. **Uma reabertura NÃO ganha nota de prioridade.** Não há passo nem campo de
+   priorização: a ordem do trabalho é a POSIÇÃO do card na coluna do Kanban (o dono a
+   muda com «Fazer antes» / «Pode esperar»). Um bug carrega `bugReport.severity` — um
+   FATO (quão grave), que o condutor usa para passar um bug grave na frente; nunca o
+   infle para furar a fila. Nunca invente RICE/KANO/funil (não existem mais; um card
+   antigo pode ainda trazê-los no frontmatter — deixe, nada os lê).
    Se a reabertura for grande o bastante para mudar a aposta inteira (ou for uma
    capacidade nunca construída), é uma feature/story NOVA, não um refino/fix — diga-o e
    pare, sem reaproveitar o card.
@@ -48,13 +49,13 @@ DIAGNOSTICAM uma story já entregue e a ROTEIAM de volta ao pipeline:
 7. **Nunca toque em `packages/storymap-ui/`** a menos que a própria AgileHarness UI SEJA o
    alvo da reabertura.
 
-### Por que não rotear por `quebrar-tasks` / `priorizar`?
+### Por que não rotear por `quebrar-tasks`?
 
-No board default essas colunas são `autorun: true` — pousar um card de refino/fix ali
-cascateia para o `harness-prioritize`, que **sobrescreve** o `rice`/`kano`/`funnelStage` já
-decidido (ferindo o guardrail #3). Por isso refino/fix mantêm a priorização original e
-reconciliam as tasks **in-place** na própria coluna de triagem (`refinar`/`corrigir`),
-em vez de repassar por `quebrar-tasks`/`priorizar`.
+A story entregue já passou pela especificação e pelo plano: repassá-la por essas colunas
+re-roda passos que não descrevem o delta/fix (e, nos boards que ainda a têm, a coluna
+`quebrar-tasks` auto-roda e regeraria as tasks do zero). Por isso refino/fix reconciliam
+as tasks **in-place** na própria coluna de triagem (`refinar`/`corrigir`) e roteiam direto
+para `design-ux`/`desenvolver`.
 
 ## Ciclo de vida do `mode` {#mode-lifecycle}
 

@@ -74,6 +74,8 @@ export function getDispatcher(): Dispatcher {
       recordDecision: appendSystemDecision,
       // o auditor técnico carrega o spawn do revisor: import tardio, só quando uma entrega técnica cai na amostra.
       startTechnicalAudit: (p) => import("@/lib/storymap/runner/technical-audit-deps").then((m) => m.startTechnicalAuditNow(p)),
+      // fase 6 (6D): o registro diz «verificador» só se o verificador lançado pelo serviço aprovou ESTA mudança.
+      verifiedDelivery: (board, card) => import("@/lib/storymap/runner/critics-deps").then((m) => m.verifiedDeliveryNow(board, card)),
     }),
   );
   // Always registered; gated LIVE per event by autorun.enabled (settings.yaml)

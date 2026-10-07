@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  conductorBatchTask,
   conductorCommand,
   conductorConfigProblem,
   CONDUCTOR_SCOPE_WAIT_KIND,
@@ -146,6 +147,13 @@ describe("conductor.fromStatus em LISTA — o aceite manda o card a status difer
     expect(conductorEntryVerdict(story, multi)).toEqual({ dispatch: true });
     expect(conductorEntryVerdict({ ...story, status: "enriquecer" }, multi)).toEqual({ dispatch: true });
     expect(conductorEntryVerdict({ ...story, status: "desenvolver" }, multi).dispatch).toBe(false);
+  });
+
+  it("fase 6 (6D): reabertura pendente não chama o condutor — a skill da reabertura roda primeiro", () => {
+    const v = conductorEntryVerdict({ ...story, status: "enriquecer", reopenPending: true }, multi);
+    expect(v.dispatch).toBe(false);
+    expect(v.dispatch === false && v.reason).toMatch(/reabertura pendente/);
+    expect(conductorEntryVerdict({ ...story, status: "enriquecer", reopenPending: false }, multi)).toEqual({ dispatch: true });
   });
 
   it("a forma string segue valendo sozinha (retrocompatível)", () => {
@@ -309,5 +317,19 @@ describe("conductorModelFor — o teto de modelo do CARD vale para o condutor (p
   it("um teto fora dos tiers conhecidos não é teto — e jamais vira o modelo", () => {
     expect(conductorModelFor("opus[1m]", "haiku" as never)).toBe("opus[1m]");
     expect(conductorModelFor("opus", "" as never)).toBe("opus");
+  });
+});
+
+describe("conductorBatchTask — fase 7: o líder recebe os ids dos candidatos, e a sessão escolhe", () => {
+  it("nomeia os candidatos (sem o líder, sem repetição, ids seguros) e manda pegar com claim_batch antes do plano", () => {
+    const t = conductorBatchTask("b", "story-ex9501", ["story-ex9502", "story-ex9501", "story-ex9502", "x; rm -rf", "story-ex9503"]);
+    expect(t.startsWith(conductorTask("b", "story-ex9501"))).toBe(true);
+    expect(t).toMatch(/LOTE possível: story-ex9502, story-ex9503 esperam/);
+    expect(t).toMatch(/claim_batch ANTES de submeter o plano/);
+    expect(t).not.toMatch(/rm -rf/);
+  });
+  it("sem candidato é a tarefa de sempre", () => {
+    expect(conductorBatchTask("b", "story-ex9501", [])).toBe(conductorTask("b", "story-ex9501"));
+    expect(conductorBatchTask("b", "story-ex9501", ["story-ex9501"])).toBe(conductorTask("b", "story-ex9501"));
   });
 });

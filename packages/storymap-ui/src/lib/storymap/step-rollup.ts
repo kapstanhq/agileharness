@@ -2,7 +2,7 @@
 //
 // Deciding "should I RUN this card or MOVE it" needs two things the system keeps apart, read
 // together: the DURABLE run ledger (telemetry — when each skill ran, its cost/turns, its outcome)
-// and the card's OWN FIELDS (what each step LEFT — narrative, RICE, wireframe, blockers, qaPassed,
+// and the card's OWN FIELDS (what each step LEFT — narrative, wireframe, blockers, qaPassed,
 // i.e. whether its gate is satisfied). This module folds both, per pipeline STEP, into one ordered
 // `StepRollup[]` that three render densities consume (full table / compact stage-trail / tooltip).
 //
@@ -18,7 +18,6 @@ import { terminalStatusIds } from "./views";
 import { liveOpenBlockers } from "./runner/findings";
 import { hasUiSurface } from "./gate-core";
 import { isDispensable, routeSkip } from "./skip-routing";
-import { formatRiceScore, riceScore } from "./rice";
 import { openQuestions } from "./questions";
 import type { StoryType } from "./frameworks";
 import type { BoardConfig, Card, StatusDef, ToolConfigDef } from "./types";
@@ -159,7 +158,7 @@ export interface StepRollup {
   /** outcome of the most-recent settled run, or null when it never ran. */
   lastStatus: RunOutcome | null;
   /** what the step LEFT — the signal from the card's fields ("narrativa + 3 AC", "2 bloqueadores",
-   *  "RICE 8.4", "QA aprovado"…), falling back to the latest run's decision summary, or null. */
+   *  "QA aprovado"…), falling back to the latest run's decision summary, or null. */
   left: string | null;
   /** ✓/✗/·/–/⊘ verdict — derived from the step's deliverable (gate) + whether it ran + this card's route. */
   gate: StepGate;
@@ -214,7 +213,6 @@ export const STEP_LABEL_BY_TRIGGER: Record<string, string> = {
   "harness-grill": "Dúvidas",
   "harness-enrich": "Especificar",
   "harness-interview": "Entrevista",
-  "harness-prioritize": "Estimar",
   "harness-ux": "Jornada",
   "harness-ui": "Telas",
   "harness-plan": "Plano & Tarefas",
@@ -316,13 +314,6 @@ const STEP_SPEC: Record<string, StepSpec> = {
       return ac ? `${ac} AC` : null;
     },
     state: (c, ran) => (GATES.hasRefinement.ok(c) ? "ok" : ran ? "blocked" : "pending"),
-  },
-  "harness-prioritize": {
-    left: (c) => {
-      const score = formatRiceScore(riceScore(c.rice));
-      return score != null ? `RICE ${score}` : null;
-    },
-    state: (c, ran) => (GATES.hasPrioritization.ok(c) ? "ok" : ran ? "blocked" : "pending"),
   },
   "harness-ux": {
     left: (c) => (c.wireframeChosen ? "wireframe escolhido" : null),

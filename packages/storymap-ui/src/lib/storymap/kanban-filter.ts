@@ -93,59 +93,9 @@ export function isKanbanFilterActive(filter: KanbanFilter): boolean {
   return filter.q.trim().length > 0 || filter.types.length > 0;
 }
 
-function matchesTypes(card: Card, types: readonly StoryType[]): boolean {
-  return types.length === 0 || cardTypeKeys(card).some((t) => types.includes(t));
-}
 
-/** O filtro inteiro: texto E (qualquer um dos chips ligados). */
-export function matchesKanbanFilter(card: Card, filter: KanbanFilter, ctx?: KanbanFilterContext): boolean {
-  return matchesTypes(card, filter.types) && matchesCardQuery(card, filter.q, ctx);
-}
-
-export interface KanbanTypeFacet {
-  type: StoryType;
-  label: string;
-  /** quantos cards deste tipo passam no TEXTO atual (os chips não se recortam entre si) */
-  count: number;
-}
-
-/**
- * Os chips de tipo: só os tipos presentes no board (um chip que nunca acha nada é ruído), na ordem canônica.
- * A contagem aplica o texto mas não a seleção de chips — o chip diz quanto ele traria. Um tipo que o texto
- * zerou continua na fileira (com 0): a barra não pula enquanto se digita. Um tipo LIGADO (`selected`) fica
- * na fileira mesmo sem card no board — senão um `?tipo=` de link velho recortaria tudo sem chip para desligar.
- */
-export function kanbanTypeFacets(
-  stories: readonly Card[],
-  query: string,
-  ctx?: KanbanFilterContext,
-  selected: readonly StoryType[] = [],
-): KanbanTypeFacet[] {
-  const present = new Set<StoryType>(selected);
-  const counts = new Map<StoryType, number>();
-  for (const c of stories) {
-    const keys = cardTypeKeys(c);
-    for (const t of keys) present.add(t);
-    if (!matchesCardQuery(c, query, ctx)) continue;
-    for (const t of keys) counts.set(t, (counts.get(t) ?? 0) + 1);
-  }
-  return STORY_TYPE_IDS.filter((t) => present.has(t)).map((t) => ({
-    type: t,
-    label: STORY_TYPE_BY_ID[t].name,
-    count: counts.get(t) ?? 0,
-  }));
-}
-
-/**
- * Recorta cada coluna/raia SEM remover a chave: uma coluna que o filtro esvaziou continua existindo (e mostra
- * "nenhum card"), em vez de sumir e fazer o board pular. Devolve um mapa novo; o original fica intacto — o
- * arrasto calcula a ordem de destino sobre a coluna inteira, não sobre o recorte.
- */
-export function filterCardGroups<K>(groups: ReadonlyMap<K, Card[]>, keep: (card: Card) => boolean): Map<K, Card[]> {
-  const out = new Map<K, Card[]>();
-  for (const [key, list] of groups) out.set(key, list.filter(keep));
-  return out;
-}
+// (O recorte por chips de tipo — `matchesKanbanFilter`, `kanbanTypeFacets`, `filterCardGroups` — saiu na fase 1 com a
+// barra de busca antiga: o Kanban novo busca por texto, `matchesCardQuery`, e recorta pelo estado, o «Mostrar».)
 
 /** Lê o filtro da URL. Tipo desconhecido é descartado em silêncio (link velho abre a tela, nunca quebra). */
 export function readKanbanFilter(params: { get(name: string): string | null }): KanbanFilter {

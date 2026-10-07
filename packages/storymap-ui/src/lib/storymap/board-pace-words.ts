@@ -1,10 +1,10 @@
-// AS PALAVRAS DO RITMO DO BOARD (runner/board-pace.ts) — o que o botão do cabeçalho mostra. PURO.
+// AS PALAVRAS DO RITMO DO BOARD (runner/board-pace.ts) — o que a pílula de ritmo do Kanban e o seu painel mostram. PURO.
 
 import type { StoryType } from "./frameworks";
 import { sinceWords, untilWords } from "./card-live-status";
-import type { BoardPaceView, PaceActor, PaceChange, ScopePreset, ScopeRecord } from "./runner/board-pace";
+import type { BoardPaceView, PaceActor, ScopePreset } from "./runner/board-pace";
 import type { GovernorSnapshot } from "./runner/capacity-governor";
-import { FIXES_ONLY_TYPES, paceLabel, SCOPE_TYPE_ORDER, SCOPE_TYPE_WORDS, scopePresetOf, scopeTypesPhrase } from "./runner/board-pace";
+import { FIXES_ONLY_TYPES, SCOPE_TYPE_ORDER, SCOPE_TYPE_WORDS, scopePresetOf, scopeTypesPhrase } from "./runner/board-pace";
 
 /** O selo do board só de organização (organize-only.ts) — a mesma frase no chip e no painel. */
 export const ORGANIZE_ONLY_SEAL = "Só organização — nada roda sozinho";
@@ -71,14 +71,16 @@ export const SCOPE_PRESETS: ReadonlyArray<{ id: Exclude<ScopePreset, "custom">; 
 ];
 
 /**
- * O texto do botão do cabeçalho: o ritmo e, quando o board limita o que começa, o escopo — «Normal · só consertos»,
- * «Devagar · só consertos». Desarmado e ilegível não levam escopo (seguram tudo antes de olhar tipo). PURA.
+ * A frase do escopo depois da linha de estado do painel. PAUSADO, nada novo começa (de tipo nenhum): a frase diz isso
+ * e que o escopo vale quando o board voltar — «Pausado… Só começa consertos» contradizia a pausa. PURA.
  */
-export function paceChipValue(view: Pick<BoardPaceView, "level" | "source" | "scope">): string {
-  if (view.source === "organize-only") return "Só organização";
-  if (view.source === "disarmed") return "Desligado";
-  const suffix = view.source === "unreadable" ? null : scopeChipSuffix(view);
-  return suffix ? `${paceLabel(view.level)} · ${suffix}` : paceLabel(view.level);
+export function scopeSentenceWords(preset: ScopePreset, paused: boolean): string {
+  if (paused) {
+    return preset === "fixes"
+      ? "Nada novo começa enquanto estiver pausado; ao retomar, só começa consertos e manutenção."
+      : "Nada novo começa enquanto estiver pausado.";
+  }
+  return preset === "fixes" ? "Só começa consertos e manutenção." : "Pode começar qualquer tipo de trabalho.";
 }
 
 /** A frase de cards que esperam por causa do escopo («3 cards de funcionalidade esperando»). Null quando nenhum espera. PURA. */
@@ -90,15 +92,6 @@ export function scopeWaitingWords(view: Pick<BoardPaceView, "scope" | "scopeWait
   return `${n} ${n === 1 ? `card${kind} esperando` : `cards${kind} esperando`}`;
 }
 
-/** Uma frase que separa os dois eixos, para o painel não sugerir que o escopo poupa cota sozinho. */
-export const SCOPE_AXIS_HELP = "O ritmo muda QUANTO o board anda; o escopo muda O QUE ele pode começar sozinho.";
-
-/** O aviso de que limitar o que o board começa não é economizar: o gasto é do ritmo. */
-export const SCOPE_QUOTA_HELP = "Limitar o escopo não gasta menos por si: o board anda na mesma velocidade, só com outro tipo de trabalho. Para poupar cota, use o ritmo.";
-
-/** O que fica de pé quando o escopo limita: a captura, a triagem e a especificação seguem, e a entrega não é segurada. */
-export const SCOPE_BOUNDS_HELP = "Só segura a construção: capturar, triar e especificar seguem, e o que já foi construído é publicado normalmente. O que já está rodando termina.";
-
 /** O nome do escopo: «Tudo», «Só consertos e manutenção» ou «Só erro e manutenção». `null` = sem limite. PURA. */
 export function scopeLabel(types: readonly StoryType[] | null): string {
   const preset = scopePresetOf(types);
@@ -107,12 +100,6 @@ export function scopeLabel(types: readonly StoryType[] | null): string {
   const words = SCOPE_TYPE_ORDER.filter((t) => (types ?? []).includes(t)).map((t) => SCOPE_TYPE_WORDS[t].toLowerCase());
   if (!words.length) return "Só nada";
   return `Só ${words.length === 1 ? words[0] : `${words.slice(0, -1).join(", ")} e ${words[words.length - 1]}`}`;
-}
-
-/** O complemento curto do botão do cabeçalho: «só consertos» / «só erro e manutenção». Null sem limite. PURA. */
-export function scopeChipSuffix(view: Pick<BoardPaceView, "scope">): string | null {
-  if (!view.scope) return null;
-  return scopePresetOf(view.scope.types) === "fixes" ? "só consertos" : scopeLabel(view.scope.types).toLowerCase();
 }
 
 /**
@@ -128,28 +115,6 @@ export function scopeStatusLine(view: Pick<BoardPaceView, "scope">, now: number,
   const until = s.until ? Date.parse(s.until) : NaN;
   if (Number.isFinite(until) && until > now) parts.push(`tudo ${untilWords(until, now, timeZone)}`);
   return parts.join(" · ");
-}
-
-/** Uma linha do histórico de escopo: «Só consertos e manutenção por um agente · há 2 h — motivo». PURA. */
-export function scopeHistoryLine(r: ScopeRecord, now: number): string {
-  const head = r.expired ? `${scopeLabel(r.types)} (o prazo venceu)` : `${scopeLabel(r.types)} ${paceWhoWords(r.by)}`;
-  const at = Date.parse(r.at);
-  return [Number.isFinite(at) ? `${head} · ${sinceWords(at, now)}` : head, r.reason].filter(Boolean).join(" — ");
-}
-
-/** O aviso de que o escopo não segura o que já foi construído. Null quando nada espera. PURA. */
-export function featuresToShipWords(n: number): string | null {
-  if (n <= 0) return null;
-  return n === 1
-    ? "1 funcionalidade pronta na entrega vai junto na próxima publicação."
-    : `${n} funcionalidades prontas na entrega vão junto na próxima publicação.`;
-}
-
-/** Uma linha do histórico: «Pausado por um agente · há 2 h — motivo». PURA. */
-export function paceHistoryLine(c: PaceChange, now: number): string {
-  const head = c.expired ? `${paceLabel(c.level)} (o prazo venceu)` : `${paceLabel(c.level)} ${paceWhoWords(c.by)}`;
-  const at = Date.parse(c.at);
-  return [Number.isFinite(at) ? `${head} · ${sinceWords(at, now)}` : head, c.reason].filter(Boolean).join(" — ");
 }
 
 /** Quantos minutos faltam até a próxima manhã (hora local de quem chama) — o prazo «até amanhã cedo». PURA. */
@@ -180,11 +145,9 @@ export function pauseMinutes(id: "none" | "hour" | "morning", now: Date): number
 // o chip para decidir se gasta cota. Sem leitura o chip diz que está lendo (sem texto de NÍVEL e sem o ícone de «anda»);
 // se a leitura falhar, diz «Ritmo indisponível» — nunca «Normal».
 
-/** Em que pé está a leitura do ritmo: lendo pela primeira vez, falhou sem nada para mostrar, ou há ritmo. */
-export type PaceReadState = "loading" | "unavailable" | "ready";
-
-/** O texto do chip enquanto a primeira leitura não chega: sem nível. */
-export const PACE_LOADING_VALUE = "Ritmo…";
+/** O texto do chip enquanto a primeira leitura não chega: sem nível. Uma frase INTEIRA — «Ritmo…» lia como rótulo
+ *  cortado (em 390px parecia a pílula truncada, não «lendo»). */
+export const PACE_LOADING_VALUE = "Lendo o ritmo…";
 /** O texto do chip quando a leitura falhou e não há nenhuma anterior para mostrar. */
 export const PACE_UNAVAILABLE_VALUE = "Ritmo indisponível";
 /** O painel enquanto lê. */
@@ -193,26 +156,22 @@ export const PACE_PANEL_LOADING = "Lendo o ritmo do board…";
 export const PACE_PANEL_UNAVAILABLE = "Ritmo indisponível: não consegui ler o ritmo do board agora. Tento de novo em instantes.";
 
 /**
- * Em que pé está a leitura. Uma leitura BOA anterior vale mais que um erro novo (o ritmo muda por ação de gente, não a cada
- * segundo): se já há `view`, o estado é «ready» mesmo que a última tentativa tenha falhado. PURA.
+ * O rosto da pílula de ritmo do Kanban (fase 1): o que o board está FAZENDO — «Rodando», «Devagar», «Pausado» —, não a
+ * posição do botão («Normal»). A mesma regra do chip: sem leitura, nenhum nível (lendo / indisponível). PURA.
  */
-export function paceReadState(view: unknown, failed: boolean): PaceReadState {
-  if (view) return "ready";
-  return failed ? "unavailable" : "loading";
+export function paceRunningFace(view: Pick<BoardPaceView, "level" | "source"> | null, failed: boolean): string {
+  if (!view) return failed ? PACE_UNAVAILABLE_VALUE : PACE_LOADING_VALUE;
+  if (view.source === "disarmed") return "Desligado";
+  if (view.source === "organize-only") return "Só organização";
+  if (view.source === "unreadable") return "Ritmo ilegível";
+  if (view.level === "paused") return "Pausado";
+  if (view.level === "slow") return "Devagar";
+  return "Rodando";
 }
 
-/** O que o chip do cabeçalho mostra: texto, dica e rótulo de acessibilidade — por estado de leitura. PURA. */
-export function paceChipFace(view: BoardPaceView | null, failed: boolean, now: number, timeZone?: string): { state: PaceReadState; value: string; title: string; ariaLabel: string } {
-  const state = paceReadState(view, failed);
-  if (state === "ready" && view) {
-    const value = paceChipValue(view);
-    return { state, value, title: paceStatusLine(view, now, timeZone), ariaLabel: `Ritmo do board — ${value}` };
-  }
-  if (state === "unavailable") {
-    return { state, value: PACE_UNAVAILABLE_VALUE, title: PACE_PANEL_UNAVAILABLE, ariaLabel: "Ritmo do board — indisponível" };
-  }
-  return { state: "loading", value: PACE_LOADING_VALUE, title: PACE_PANEL_LOADING, ariaLabel: "Ritmo do board — lendo" };
-}
+/** A confirmação de LIGAR um board desligado — a pílula de ritmo e o `/retomar` do Jido dizem a MESMA frase. */
+export const PACE_ARM_CONFIRM =
+  "Este board está desligado. Ligar faz os passos automáticos dele dispararem agentes sozinhos, o que gasta cota. Ligar agora?";
 
 // ── a tela de COTA: «uso da semana» é uma coisa, «trava engatada» é outra ────────────────────────────────────
 //
@@ -234,7 +193,7 @@ export function quotaUsageWords(i: { pct: number | null; estimate: boolean; stal
     ? `Uso Claude — número defasado (proxy atualizou ${i.ageWords ?? "há tempos"})`
     : n != null
       ? `Uso Claude — ${n}% da semana${i.estimate ? " (estimativa local)" : ""}`
-      : "Uso Claude — sessão · semana · Sonnet";
+      : "Uso Claude — sem dado da cota ainda";
   return { value, title, ariaLabel: `Uso Claude${n != null ? ` — ${n}% da semana` : ""}` };
 }
 

@@ -3,6 +3,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { McpLevel, RiskClass } from "@/lib/storymap/types";
 import { guardToolCall } from "./guard";
+import { currentMcpActor } from "./actor";
+import { featureAnchorSkipsApproval, featureOnlyToolRefusal } from "./handle-scope";
+import { toolsetAllows, type McpToolset } from "./toolsets";
 
 /**
  * Thin, NON-overloaded wrapper over `McpServer.registerTool`.
@@ -56,6 +59,8 @@ const TOOL_ANNOTATIONS: Record<string, ToolHints> = {
   //     autorado pelo humano/agente, sem tool de aprovação/opções.
   get_styleguide: RO,
   styleguide_drift: RO,
+  // A escrita de um agente numa seção do guia (decisão do dono, 06/10) — reescreve UMA seção, idempotente.
+  write_styleguide: WRITE_IDEM,
   runner_status: RO,
   list_claims: RO, // WS-4.3 — quem está com qual card (reservas vivas); leitura pura, nunca reserva nada
   list_system_decisions: RO, // o registro do que o sistema decidiu em nome do dono (leitura)
@@ -102,6 +107,8 @@ const TOOL_ANNOTATIONS: Record<string, ToolHints> = {
   // retomar volta a disparar agentes sozinho — o mesmo efeito standing de armar, classe `run`. A regra de QUEM pode
   // retomar (um agente só desfaz a pausa de agente) mora na ação, não aqui.
   board_pace: RO,
+  // A AUTONOMIA do board (autonomy-profile.ts): só LEITURA. Não há tool de escrita — agente nunca muda autonomia.
+  board_autonomy: RO,
   pause_board: WRITE_IDEM,
   resume_board: EXEC_EXT,
   create_card: WRITE,
@@ -214,6 +221,10 @@ const TOOL_ANNOTATIONS: Record<string, ToolHints> = {
   // soltar (ao terminar). Escrevem só no registro de claims, nunca em git nem em card. Classe `session` abaixo.
   claim_card: WRITE_IDEM,
   release_claim: WRITE_IDEM,
+  // fase 7 — o LOTE do condutor: pegar itens da mesma funcionalidade (todos ou nenhum) e soltar um item que falhou.
+  // Escrevem no registro de claims, na fila do condutor e na marca `batch` dos cards — a mesma natureza do claim_card.
+  claim_batch: WRITE_IDEM,
+  batch_drop: WRITE,
   // WS-6.5 — READ-ONLY por construção: só ranqueia cards livres. A exclusão real acontece na AQUISIÇÃO do
   // claim, não aqui — se esta tool reservasse algo, seria um lock fantasma (ver suggest-work.ts).
   suggest_work: RO,
@@ -270,7 +281,7 @@ const TOOL_ANNOTATIONS: Record<string, ToolHints> = {
   // these are destructive/deploy, so all pass the `write` level.
   card_diff: RO,
   accept_triage: WRITE_IDEM, // advances a low-confidence triage card into the pipeline
-  create_idea: WRITE,
+  create_idea: WRITE, // atalho da captura: cria um card na Triagem (não idempotente, como create_card)
   update_idea: WRITE_IDEM,
   // A escrita do Explorador. Idempotente no sentido que importa aqui: ela só ACRESCENTA (ver a tool).
   write_idea: WRITE_IDEM,
@@ -315,6 +326,21 @@ const SERVER_LEVEL = new WeakMap<McpServer, McpLevel>();
 /** 6.5 — stamp the authority level for a server instance (route.ts calls this before register*). */
 export function setServerLevel(server: McpServer, level: McpLevel): void {
   SERVER_LEVEL.set(server, level);
+}
+
+// O CONJUNTO POR PAPEL (mcp/toolsets.ts) — carimbado por instância como o nível, e pelo mesmo motivo (duas construções
+// concorrentes não disputam um global). ESTREITA o que o nível monta; nunca alarga. Ausente ⇒ a superfície inteira do nível.
+const SERVER_TOOLSET = new WeakMap<McpServer, McpToolset>();
+
+/** Carimba o papel de uma instância (route.ts, a partir do cabeçalho da sessão) ANTES de registrar as tools. */
+export function setServerToolset(server: McpServer, toolset: McpToolset | undefined): void {
+  if (toolset) SERVER_TOOLSET.set(server, toolset);
+  else SERVER_TOOLSET.delete(server);
+}
+
+/** A tool é montada para esta instância? O NÍVEL (autoridade) E o PAPEL (superfície). PURA sobre o estado carimbado. */
+export function serverMounts(server: McpServer, name: string): boolean {
+  return levelAllows(SERVER_LEVEL.get(server) ?? "full", name, TOOL_ANNOTATIONS[name]) && toolsetAllows(SERVER_TOOLSET.get(server), name);
 }
 
 /**
@@ -383,6 +409,14 @@ const RISK_CLASS_EXCEPTIONS: Record<string, RiskClass> = {
   // junto a armadilha do default (`defaultDisposition`) e três `Record<RiskClass,…>` exaustivos a manter.
   // Um board que queira humano no loop declara `doc-write: ask` e a matriz vence — para os dois.
   write_vocab: "doc-write",
+  // Escrever numa SEÇÃO do guia de estilo — `doc-write` pelo mesmo argumento: o guia vive fora do pipeline, a
+  // escrita não move entrega, e a tool é estreita (uma seção; o tom é do dono; regressão de AA recusada).
+  write_styleguide: "doc-write",
+  // PROPOR uma mudança num campo do dono (PRD, BMC, releases) — `doc-write`, e não `write-board`: a proposta não
+  // toca o canônico (vira um rascunho no Inbox que SÓ o dono aprova — approve_change segue full-only), não move
+  // entrega nem dispara autorun. É o que deixa a conversa de uma página de documento (token `ro`) cumprir a regra de
+  // dono — «no BMC e nas personas, o agente propõe» — em vez de só poder escrever direto ou calar.
+  propose_change: "doc-write",
   // move benigno é write-board; a escalação run/deploy do ALVO (coluna) vive só no moveCardAction (moveRiskClass).
   move_card: "write-board",
   // F3 — o hint diz "não é readOnly" (é verdade: a listagem reconcilia a frota), mas a CLASSE é `read`
@@ -438,6 +472,8 @@ const RISK_CLASS_EXCEPTIONS: Record<string, RiskClass> = {
   // `write-board` e um token `write` (que não é da frota) poderia reservar cards em nome de sessões.
   claim_card: "session",
   release_claim: "session",
+  claim_batch: "session",
+  batch_drop: "session",
   // O relato de progresso (`report_progress`) é um HEARTBEAT com texto: escreve só a linha da própria sessão no
   // registro de sessões (nada de board, nada de código, nada que spawne). Classe `read` porque o limite de ações por
   // hora do board freia toda classe acima dela — e o relato mais importante é justamente «estou esperando a janela
@@ -546,7 +582,8 @@ export function defineTool<S extends z.ZodRawShape>(
   const annotations = TOOL_ANNOTATIONS[name];
   // 6.5 — the single chokepoint: EVERY tool routes through here, so filtering by level here filters the whole
   // surface. A tool the level can't mount is simply never registered → the client can't even see or call it.
-  if (!levelAllows(SERVER_LEVEL.get(server) ?? "full", name, annotations)) return;
+  // The ROLE toolset (mcp/toolsets.ts) narrows it further at the same point — a context cut, never more authority.
+  if (!serverMounts(server, name)) return;
   const fullMeta = annotations ? { ...meta, annotations: { title: meta.title, ...annotations } } : meta;
   // F5.2 — wrap EVERY handler with the per-call guard. `cls` is computed once at registration; guardToolCall
   // short-circuits to allow (returns null) for a `full`/internal actor BEFORE any IO, so the human/paired chat
@@ -554,6 +591,13 @@ export function defineTool<S extends z.ZodRawShape>(
   // null ⇒ run the real handler; a CallToolResult ⇒ the guard's own reply (pending-approval or refusal).
   const cls = riskClassForTool(name);
   const guarded = async (args: z.infer<z.ZodObject<S>>, extra?: unknown): Promise<CallToolResult> => {
+    // Fase 7 — a cerca do handle da ÂNCORA vem ANTES da matriz do board: num board que pede aprovação para escrever, a
+    // chamada proibida viraria um pedido de aprovação em vez de uma recusa (handle-scope.ts). Fora desse handle ⇒ null.
+    const named = args as { board?: unknown; boardId?: unknown };
+    const fence = featureOnlyToolRefusal(name, cls, currentMcpActor(), named?.board ?? named?.boardId);
+    if (fence) return { isError: true, content: [{ type: "text", text: fence }] };
+    // decisão do dono (07/10): a âncora pendurar o card na funcionalidade é organização — sem passar pela aprovação do board
+    if (featureAnchorSkipsApproval(name, currentMcpActor(), args as Record<string, unknown>)) return handler(args, extra);
     const intercept = await guardToolCall(name, cls, args);
     return intercept ?? handler(args, extra);
   };

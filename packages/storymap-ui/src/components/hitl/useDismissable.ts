@@ -1,7 +1,7 @@
 "use client";
 
 // Hook MÍNIMO de overlay reutilizável — Escape + (opcional) fechar no scroll/resize + autofocus. É a UNIÃO
-// exata dos handlers que ConfirmDialog/MoveToPopover/HealthPill já reimplementam; usado pelo HitlSurface por
+// exata dos handlers que ConfirmDialog e os popovers da barra já reimplementam; usado pelo HitlSurface por
 // ora (adotável pelos outros depois, sem refatorar agora). Fecha a lacuna "cada overlay reimplementa shell".
 
 import { useEffect } from "react";

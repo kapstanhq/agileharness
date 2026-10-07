@@ -315,6 +315,36 @@ describe("guardToolCall (F5.2) — per-call enforcement", () => {
     expect(actions.at(-1)).toMatchObject({ outcome: "throttled", disposition: "auto" });
   });
 
+  // Fase 6 — o limite por hora é POR PAPEL: num caso real a sessão externa e os condutores somaram 54 de 60 numa hora, e um
+  // papel freava o outro. Agora cada papel tem o seu balde (o teto é o do board).
+  describe("limite por hora POR PAPEL", () => {
+    const now = Date.now();
+    const key = new Date(now).toISOString().slice(0, 13);
+    const asRole = <T>(caller: { kind: "session" | "sentinel" | "external"; id: string }, fn: () => Promise<T>) =>
+      runWithMcpActor({ level: "write", tokenEnv: "AGILEHARNESS_MCP_TOKEN_ORCH", caller }, fn);
+    const move = () => guardToolCall("move_card", "write-board", { board: "acme", cardId: "c1" });
+    beforeEach(() => readBoardConfig.mockResolvedValue({ orchestrator: policy({ riskMatrix: { "write-board": "auto" }, maxActionsPerHour: 2 }) }));
+
+    it("o balde dos condutores cheio NÃO freia a Sentinela — e freia o próximo condutor", async () => {
+      sessionLoad.mockResolvedValue([{ sessionId: "s1", driver: "conductor", cardId: "c1" }]);
+      readOrchestratorState.mockResolvedValue({ ...emptyOrchestratorState(now), actionsByRole: { conductor: { hourKey: key, count: 2 } } });
+      expect(await asRole({ kind: "sentinel", id: "acme" }, move)).toBeNull();
+      expect(actions.at(-1)).toMatchObject({ outcome: "executed", role: "sentinel" });
+      // a Sentinela contou no balde DELA, não no dos condutores
+      expect(writeOrchestratorState.mock.calls.at(-1)?.[1]).toMatchObject({ actionsByRole: { conductor: { count: 2 }, sentinel: { hourKey: key, count: 1 } } });
+      const r = await asRole({ kind: "session", id: "s1" }, move);
+      expect(JSON.parse(String((r?.content as { text: string }[])[0].text))).toMatchObject({ throttled: true, role: "conductor" });
+      expect(actions.at(-1)).toMatchObject({ outcome: "throttled", role: "conductor:c1" });
+    });
+
+    it("o agente de fora tem o balde de antes (`actions`), separado dos papéis da ferramenta", async () => {
+      readOrchestratorState.mockResolvedValue({ ...emptyOrchestratorState(now), actions: { hourKey: key, count: 2 } });
+      const r = await asRole({ kind: "external", id: "meu-script" }, move);
+      expect(JSON.parse(String((r?.content as { text: string }[])[0].text))).toMatchObject({ throttled: true, role: "external" });
+      expect(await asRole({ kind: "sentinel", id: "acme" }, move)).toBeNull();
+    });
+  });
+
   // O FREIO nunca é freado (runner/board-pace.ts): a hora em que o limite do board estourou, ou em que a matriz pede
   // aprovação para escrever, é exatamente a hora em que um agente precisa conseguir PARAR o board.
   it("pause_board passa com o limite por hora estourado E com a matriz em `ask` — auditado, sem contar no limite", async () => {

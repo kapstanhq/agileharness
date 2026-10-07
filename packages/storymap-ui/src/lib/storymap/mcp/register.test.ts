@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { levelAllows, setServerLevel, riskClassForTool, annotatedToolNames } from "./register";
+import { levelAllows, setServerLevel, riskClassForTool, annotatedToolNames, defineTool } from "./register";
+import { runWithMcpActor } from "./actor";
 import { registerStorymapTools } from "./tools";
 import { registerDevTools } from "./dev-tools";
 import { RISK_CLASSES, type RiskClass } from "@/lib/storymap/types";
@@ -118,6 +119,9 @@ const PIPELINE_SURFACE = [
   // é da sessão. Fora de `write` (um token que não é da frota não reserva card em nome de sessão), dentro de `orch`.
   "claim_card",
   "release_claim",
+  // fase 7 — o lote do condutor: a mesma natureza do claim da própria sessão (classe `session`).
+  "claim_batch",
+  "batch_drop",
 ];
 const MERGE_SURFACE = ["resolve_merge", "reconcile_stage"]; // classe `merge-resolve`
 // classe `deploy` — publica o app DO BOARD (≠ update_vps, que é o serviço). As tools de estilo
@@ -268,7 +272,7 @@ describe("F8 — o nível `orch`: entrega o pipeline, não entrega um shell", ()
     // ficam fora. A diferença não é "o filho tem shell" (tem, nos dois) — é QUEM escolhe o prompt.
     for (const write of ["run_task", "claude_new", "claude_send", "term_new"])
       expect(orch.has(write), `${write}: texto livre + Bash é a fronteira que o tick não cruza`).toBe(false);
-    // O teto do argv (Bash/Write/Edit no --disallowedTools do spawn) é provado em orchestrator-spawn.test.ts;
+    // O teto do argv (a lista branca `--tools Read,Grep,Glob` do spawn) é provado em orchestrator-spawn.test.ts;
     // aqui provamos a outra metade — que ele não FICA travado, porque despacha.
   });
 
@@ -281,10 +285,10 @@ describe("F8 — o nível `orch`: entrega o pipeline, não entrega um shell", ()
   });
 });
 
-// O guia de estilo não tem mais fluxo de aprovação: é um documento de consulta, escrito por pessoas
-// e lido pelos agentes enquanto trabalham num card. Nenhuma tool de escrita ou de escolha de
-// direção sobrou, e o estilo nunca bloqueia o avanço de um card — só as duas leituras permanecem.
-describe("WS-4 — style guide tools (só LEITURA: get_styleguide/styleguide_drift)", () => {
+// O guia de estilo não tem fluxo de aprovação: é um documento de consulta, e o estilo nunca bloqueia o avanço
+// de um card. Desde a decisão do dono de 06/10 os agentes MANTÊM as seções que não são o tom (write_styleguide,
+// classe `doc-write`, a mesma caneta estreita do write_doc); as tools de escolha de direção seguem fora.
+describe("WS-4 — style guide tools (leituras + a escrita estreita write_styleguide)", () => {
   it("get_styleguide e styleguide_drift MONTAM em ro (preset READ-ONLY)", () => {
     const ro = mountedAt("ro");
     expect(ro.has("get_styleguide"), "get_styleguide deve estar em ro").toBe(true);
@@ -294,6 +298,11 @@ describe("WS-4 — style guide tools (só LEITURA: get_styleguide/styleguide_dri
   it("riskClassForTool deriva 'read' das duas — sem exceção nominal de estilo", () => {
     expect(riskClassForTool("get_styleguide")).toBe("read");
     expect(riskClassForTool("styleguide_drift")).toBe("read");
+  });
+
+  it("write_styleguide é `doc-write`: monta em ro (a conversa da página de Design) e nunca é `write-board`", () => {
+    expect(riskClassForTool("write_styleguide")).toBe("doc-write");
+    expect(mountedAt("ro").has("write_styleguide")).toBe(true);
   });
 
   // GUARDA DE REGRESSÃO: nenhuma das tools de aprovação pode voltar a montar em nível nenhum sem
@@ -351,5 +360,36 @@ describe("F5.2 — riskClassForTool (a classe de risco por chamada)", () => {
     for (const name of annotatedToolNames()) {
       expect(valid.has(riskClassForTool(name)), `${name} deve ter classe válida`).toBe(true);
     }
+  });
+});
+
+// Fase 7 — a cerca do handle da ÂNCORA vem ANTES da matriz do board (a guarda por chamada): num board que pede aprovação
+// para escrever, a tool proibida viraria um pedido de aprovação. Aqui o handler nunca roda e a resposta é recusa.
+describe("defineTool — o handle da âncora é cercado antes da guarda", () => {
+  function captureHandlers() {
+    const handlers = new Map<string, (args: unknown) => Promise<{ isError?: boolean; content: Array<{ text: string }> }>>();
+    const server = new Proxy(
+      {},
+      { get: (_t, prop) => (prop === "registerTool" ? (name: string, _m: unknown, h: never) => void handlers.set(name, h) : () => {}) },
+    ) as unknown as McpServer;
+    return { server, handlers };
+  }
+
+  it("move_card de um handle anchor:<board> é recusado sem chegar ao handler; o de outro handle passa à guarda", async () => {
+    const { server, handlers } = captureHandlers();
+    setServerLevel(server, "full");
+    let ran = 0;
+    defineTool(server, "move_card", { title: "t", description: "d", inputSchema: {} }, async () => {
+      ran++;
+      return { content: [{ type: "text", text: "ok" }] };
+    });
+    const h = handlers.get("move_card")!;
+    const refused = await runWithMcpActor({ level: "orch", credentialLabel: "anchor:tb" }, () => h({}));
+    expect(refused.isError).toBe(true);
+    expect(refused.content[0].text).toContain("só liga cards às funcionalidades do PRD");
+    expect(ran).toBe(0);
+    const operator = await runWithMcpActor({ level: "full" }, () => h({}));
+    expect(operator.content[0].text).toBe("ok");
+    expect(ran).toBe(1);
   });
 });

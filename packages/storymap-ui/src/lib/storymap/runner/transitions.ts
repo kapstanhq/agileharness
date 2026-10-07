@@ -14,8 +14,38 @@ import { transitionsPath } from "@/lib/storymap/paths";
 
 export const TRANSITIONS_VERSION = 1;
 
-/** Who caused a transition. `run:<trigger>` names the skill that advanced the card on settle. */
-export type TransitionActor = "human" | "cascade" | "system" | "merge" | `run:${string}`;
+/**
+ * Who caused a transition. `run:<trigger>` names the skill that advanced the card on settle. Fase 6 — um agente pelo MCP
+ * grava o seu PAPEL (mcp/actor.ts `actorRole`): `conductor:<card>`, `sentinel`, `chat`, `proxy`, `critic`,
+ * `external:<nome>`, `session:<nome>`. `run:orch` só existe nas linhas antigas (todo agente era ele).
+ */
+export type TransitionActor =
+  | "human"
+  | "cascade"
+  | "system"
+  | "merge"
+  | "sentinel"
+  | "chat"
+  | "proxy"
+  | "critic"
+  | `run:${string}`
+  | `conductor:${string}`
+  | `external:${string}`
+  | `session:${string}`;
+
+/** O salto foi de um AGENTE (não do dono, nem do motor)? Inclui o legado `run:orch`. PURA. */
+export function isAgentTransitionActor(actor: string): boolean {
+  return (
+    actor === "sentinel" ||
+    actor === "chat" ||
+    actor === "proxy" ||
+    actor === "critic" ||
+    actor === "run:orch" ||
+    actor.startsWith("conductor:") ||
+    actor.startsWith("external:") ||
+    actor.startsWith("session:")
+  );
+}
 
 export interface Transition {
   v: number;

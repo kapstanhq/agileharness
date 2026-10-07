@@ -114,7 +114,7 @@ describePosix("gate de dados (real git) — a metade do split que vai para main 
     await write("packages/app/x.ts", "export const x = 1;\n");
     await write("tools/housekeeping/lib.mjs", "export const add = (a, b) => a + b;\n");
     await write("tools/housekeeping/lib.test.mjs", TEST_OK);
-    await write(CARD, card(["title: Título base", "status: priorizar"]));
+    await write(CARD, card(["title: Título base", "status: interview"]));
     await git(`init -q -b main`);
     await git(`config user.email t@example.test`);
     await git(`config user.name tester`);
@@ -143,7 +143,7 @@ describePosix("gate de dados (real git) — a metade do split que vai para main 
     expect(e.split, "entrou no split — algo aterrissou antes do veredito").toBeUndefined();
     // main intocada: nem o ferramental quebrado nem o card
     expect(await show(`main:tools/housekeeping/lib.mjs`)).toContain("a + b");
-    expect(await show(`main:${CARD}`)).toContain("status: priorizar");
+    expect(await show(`main:${CARD}`)).toContain("status: interview");
     // e o código NÃO foi para stage (o gate de dados roda ANTES das duas metades)
     expect(await show(`stage:packages/app/x.ts`)).toBeNull();
     // o relatório diz o que rodou contra main

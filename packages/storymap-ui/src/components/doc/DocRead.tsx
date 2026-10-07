@@ -397,8 +397,13 @@ function PropValueView({ value }: { value: PropValue }) {
 function SectionBlockView({ block }: { block: Extract<DocBlock, { kind: "section" }> }) {
   const hero = block.tone === "hero";
   return (
-    <section className="mt-10 first:mt-0">
-      {block.label && <h2 className={cn("mb-2 text-fg", DOC.h1)}>{block.label}</h2>}
+    <section className={cn(block.tone === "note" ? "mt-3" : "mt-10", "first:mt-0")}>
+      {block.label &&
+        (block.tone === "note" ? (
+          <p className="mb-1.5 text-[12.5px] font-medium text-fg-subtle">{block.label}</p>
+        ) : (
+          <h2 className={cn("mb-2 text-fg", DOC.h1)}>{block.label}</h2>
+        ))}
       <BlockList blocks={block.body} lead={hero} />
     </section>
   );

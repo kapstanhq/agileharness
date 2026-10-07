@@ -20,12 +20,11 @@ Routes a StoryMap subcommand to its `harness-*` skill. The StoryMap pipeline liv
 | `setup` | `harness-setup` | Guided install and first run — measures the host, fixes what it can, asks only the real decisions, and **proves** the install | (no card) |
 | `story "<texto livre>"` | `harness-story` | Author/edit cards from free text — **confirms the CRUD via AskUserQuestion** before writing | new cards at `triage` |
 | `sync <app>` | `harness-sync` | Reconcile a board with the app's real code; propose new/updated stories — **confirms before writing** | per-card |
-| `enrich    [<board>/<id>]` | `harness-enrich` | Write narrative + `acceptance[]` + context, set coherent personas/systems | `enriquecer` → `priorizar` |
+| `enrich    [<board>/<id>]` | `harness-enrich` | Write narrative + `acceptance[]` + context, set coherent personas/systems | `enriquecer` → `interview` (or `pronta` for non-`user` types) |
 | `tasks     [<board>/<id>]` | `harness-tasks`  | Decompose acceptance into technical `tasks[]` | `quebrar-tasks` → `desenvolver` |
-| `prioritize [<board>/<id>]` | `harness-prioritize` | Classify: fill `rice` + `kano` + `funnelStage` (rubric in `frameworks.md`) | `priorizar` → `pronta` |
 | `tests     [<board>/<id>]` | `harness-tests`  | Plan the unit/integration/e2e pyramid as test `tasks[]` + notes | (no move) |
 | `grill     [<board>/<id>]` | `harness-grill` | Raise the open questions a card cannot be built without | `grill` → `enriquecer` |
-| `interview [<board>/<id>]` | `harness-interview` | Turn answered questions into spec context | `interview` → `priorizar` |
+| `interview [<board>/<id>]` | `harness-interview` | Turn answered questions into spec context | `interview` → `pronta` |
 | `capture   [<board>/<id>]` | `harness-capture` | Free text → a proposal of cards, reviewed in the Inbox | stops in `capturando` |
 | `plan      [<board>/<id>]` | `harness-plan`  | Write the technical plan sidecar | `plano-tecnico` → `desenvolver` |
 | `ux        [<board>/<id>]` | `harness-ux`    | Journey + wireframe options for the card | `design-ux` → `design-ui` |
@@ -63,9 +62,14 @@ Scan `storymap/boards/*/cards/*.md` and process every card sitting in a **trigge
 status**, advancing it through the pipeline. Process in **pipeline order** so a
 card can flow forward within one pass:
 
-1. **`enriquecer`** cards → run **`harness-enrich`** (→ `priorizar`).
-2. **`priorizar`** cards → run **`harness-prioritize`** (→ `pronta`).
-   — `pronta` is a **PARADA go/no-go** (`autorun:false`): a human approves the build and moves the card to `design-ux`.
+1. **`enriquecer`** cards → run **`harness-enrich`** (→ `interview`, or `pronta` for non-`user` types).
+2. **`interview`** cards → run **`harness-interview`** (→ `pronta`).
+   — `pronta` (A fazer) is `autorun:false` and is the queue of the work, in the card's POSITION in its Kanban column
+     («Fazer antes» / «Pode esperar» in the card menu) — there is no prioritization step. What happens there depends on
+     the board's mode: on a board WITH a conductor (the default for a new board) entering `pronta` is the «go» — the
+     conductor picks the card up when a slot frees, and Entrevista/Jornada/Telas run no skill (they are passed through);
+     in the COLUMNS mode (`pipeline: columns`, or no conductor) `pronta` is a go/no-go stop: a human approves the build
+     and moves the card to `design-ux`.
 3. **`design-ux`** cards → run **`harness-ux`** (→ `com-design`).
    — `com-design` is a **PARADA** (`autorun:false`): a human reviews the design and moves the card to `plano-tecnico`.
 4. **`plano-tecnico`** cards → run **`harness-plan`** (→ `quebrar-tasks`).
@@ -77,14 +81,11 @@ card can flow forward within one pass:
 
 Notes:
 - The pass-through landing columns were removed; each gate now guards a **producer
-  column's entry**: `hasRefinement`→`priorizar`, `hasPrioritization`→`pronta`,
-  `hasWireframe`→`com-design`, `hasTechPlan`→`quebrar-tasks`, `hasTasks`→`desenvolver`,
+  column's entry**: `hasRefinement`→`pronta`, `hasWireframe`→`com-design`, `hasTechPlan`→`quebrar-tasks`, `hasTasks`→`desenvolver`,
   `hasNoBlockers`→`qa-automatizado`, `hasQaPassed`→`revisao`. The only human MOVES are
   out of the paradas: `pronta` → `design-ux` and `com-design` → `plano-tecnico`.
   `/harness run` processes only cards already sitting in a trigger status; it does not
   invent those human moves.
-- `harness-prioritize` ESTIMATES RICE/KANO/funil (the human refines RICE later in the
-  priorização view) — it does not require human input to run.
 - Respect every gate — never flip a status whose gate isn't satisfied; the
   `validate-storymap-gate` hook (and the app's `checkGate`) will reject the write.
 - If a `<board>/<id>` is given to `/harness run`, restrict the loop to that one card.

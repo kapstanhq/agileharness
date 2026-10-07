@@ -322,9 +322,9 @@ describe("makeMergeQueue — git push after merge-back (story-ex0082)", () => {
     const { mq } = makeQueue({ exec });
     const done: Array<{ board: string; cardId: string; trigger?: string }> = [];
     mq.onMergeDone((ev) => done.push(ev));
-    await mq.enqueueMerge({ ...input({ board: "storymap", cardId: "story-1" }), trigger: "harness-prioritize" });
+    await mq.enqueueMerge({ ...input({ board: "storymap", cardId: "story-1" }), trigger: "harness-plan" });
     await mq.whenIdle();
-    expect(done).toEqual([{ board: "storymap", cardId: "story-1", trigger: "harness-prioritize" }]);
+    expect(done).toEqual([{ board: "storymap", cardId: "story-1", trigger: "harness-plan" }]);
   });
 });
 
@@ -3027,6 +3027,36 @@ describe("makeMergeQueue — Fase 4a staged release (split)", () => {
     expect(read()[0]?.status).toBe("done");
   });
 
+  it("fase 4: o diff do código que aterrissou marca o card — cobrança e teste existente são do dono (markCodeChange)", async () => {
+    const base = stagingExec({ changed: "packages/acmeapp/billing/charge.ts\npackages/acmeapp/x.test.ts\nstorymap/boards/acme/cards/story-1.md" });
+    const exec: typeof base.exec = async (cmd, o) =>
+      cmd.includes("diff --name-status")
+        ? { stdout: "M\tpackages/acmeapp/billing/charge.ts\nM\tpackages/acmeapp/x.test.ts\nM\tstorymap/boards/acme/cards/story-1.md\n", stderr: "" }
+        : base.exec(cmd, o);
+    const marked: Array<{ cardId: string; paths: string[] }> = [];
+    const { mq } = makeQueue({
+      exec,
+      staging: STAGING,
+      stampStaged: async () => {},
+      markCodeChange: async (_b, cardId, _r, files) => void marked.push({ cardId, paths: files.map((f) => f.path) }),
+    });
+    await mq.enqueueMerge(input({ runId: "s1", branch: "run/s1", board: "acme", cardId: "story-1" }));
+    await mq.whenIdle();
+    // só o CÓDIGO do card conta (o card .md é dado, não código)
+    expect(marked).toEqual([{ cardId: "story-1", paths: ["packages/acmeapp/billing/charge.ts", "packages/acmeapp/x.test.ts"] }]);
+  });
+
+  it("fase 4: um diff de código sem cobrança nem teste existente não marca nada", async () => {
+    const base = stagingExec({ changed: "packages/acmeapp/x.ts\nstorymap/boards/acme/cards/story-1.md" });
+    const exec: typeof base.exec = async (cmd, o) =>
+      cmd.includes("diff --name-status") ? { stdout: "M\tpackages/acmeapp/x.ts\nA\tpackages/acmeapp/x.test.ts\n", stderr: "" } : base.exec(cmd, o);
+    const marked: string[] = [];
+    const { mq } = makeQueue({ exec, staging: STAGING, stampStaged: async () => {}, markCodeChange: async (_b, c) => void marked.push(c) });
+    await mq.enqueueMerge(input({ runId: "s1", branch: "run/s1", board: "acme", cardId: "story-1" }));
+    await mq.whenIdle();
+    expect(marked).toEqual([]);
+  });
+
   it("verify-integration: a FALSE codeStaged flag (code not on stage despite apply) PAUSES as conflict, branch PRESERVED (#38)", async () => {
     // The lost-impl class: the split reports the code staged while `stage` has no delta.
     // #38 confirms `git diff --quiet base HEAD -- <code>` shows a delta BEFORE marking done; absent → pause.
@@ -3323,7 +3353,7 @@ describe("makeMergeQueue — Fase 4a staged release (split)", () => {
     // cascade. Cover BOTH strand branches (already-ancestor whole-branch + split-both-landed), and
     // assert the event carries the trigger (the suppress-guard plumbing, audit #12).
     const seed: MergeQueueEntry[] = [
-      { ...input({ runId: "s1", branch: "run/s1", board: "storymap", cardId: "story-1" }), status: "merging", enqueuedAt: 1, trigger: "harness-prioritize" },
+      { ...input({ runId: "s1", branch: "run/s1", board: "storymap", cardId: "story-1" }), status: "merging", enqueuedAt: 1, trigger: "harness-plan" },
       { ...input({ runId: "s2", branch: "run/s2", board: "acme", cardId: "story-2" }), status: "merging", enqueuedAt: 2, trigger: "harness-do", split: { dataLanded: true, codeStaged: true } },
     ];
     const { store } = makeStore(seed);
@@ -3335,7 +3365,7 @@ describe("makeMergeQueue — Fase 4a staged release (split)", () => {
     await mq.whenIdle();
     expect(done).toEqual(
       expect.arrayContaining([
-        { board: "storymap", cardId: "story-1", trigger: "harness-prioritize" },
+        { board: "storymap", cardId: "story-1", trigger: "harness-plan" },
         { board: "acme", cardId: "story-2", trigger: "harness-do" },
       ]),
     );

@@ -28,7 +28,6 @@ import {
   type DeployBlocksSweepDeps,
   type RemeasureVerdict,
 } from "./deploy-blocks";
-import { publishRequestsSummary } from "./owner-approval";
 
 const BOARD = "feira";
 const HEAD = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
@@ -236,40 +235,5 @@ describe("sweepDeployBlocks — o pedido do plano chega ao livro sem card, e sai
   it("board só de organização: a re-medição pode até responder, a linha não nasce", async () => {
     await sweepDeployBlocks(BOARD, deps({ readConfig: async () => ({ ...config, organizeOnly: true }) as BoardConfig }));
     expect(blocks).toEqual([]);
-  });
-});
-
-describe("publishRequestsSummary — a Esteira conta com a régua do Inbox", () => {
-  const NOW = Date.UTC(2026, 9, 6, 1, 0);
-  const base: DeployBlockRow = {
-    board: BOARD,
-    causeKey: `${BOARD}:owner:?`,
-    pkg: BOARD,
-    phase: "needs-human",
-    decider: "owner",
-    ownerClass: null,
-    units: ["outro:servico"],
-    rules: ["unidade-de-fora"],
-    command: null,
-    firstAt: "t",
-    lastAt: "t",
-    cardIds: ["c1"],
-    planHead: null,
-    attributedCard: null,
-  };
-  const req = (report([ENTREGA]).ownerApprovals ?? [])[0];
-
-  it("a linha que só espera outra publicação (o dono já autorizou) NÃO é «decisão no Inbox»: diz o que espera", () => {
-    const s = publishRequestsSummary([{ ...base, granted: [hashOf("e")] }], BOARD, NOW);
-    expect(s).toEqual({ pending: 1, decide: 0, stale: 0, waitingOn: ["outro:servico"], rerequesting: false });
-  });
-  it("pedido que vale ⇒ decisão; pedido que o sistema sabe velho ⇒ refazer; refazendo ⇒ nem um nem outro", () => {
-    const asks = { ...base, causeKey: "k1", approvals: [req] };
-    const stale = { ...base, causeKey: "k2", approvals: [req], staleApprovals: [req.subject.hash] };
-    const redo = { ...base, causeKey: "k3", approvals: [req], rerequestedAt: new Date(NOW - 60_000).toISOString() };
-    expect(publishRequestsSummary([asks, stale, redo], BOARD, NOW)).toEqual({ pending: 3, decide: 1, stale: 1, waitingOn: [], rerequesting: true });
-  });
-  it("só as linhas do board, e só as que pedem alguém", () => {
-    expect(publishRequestsSummary([{ ...base, board: "outro" }, { ...base, phase: "needs-units", decider: "system" }], BOARD, NOW).pending).toBe(0);
   });
 });

@@ -1,5 +1,5 @@
 // O DESPACHANTE das ações de servidor que um botão de ação dispara — UM mapeamento de `invoke` para a ação de servidor
-// que o executa, compartilhado pelo botão do Kanban (QuickActionButton) e pelo cartão do Inbox (InboxItemCard). Antes
+// que o executa, compartilhado pelo botão do Kanban (QuickActionButton) e pelas opções do item do Inbox (inbox/InboxOptions). Antes
 // ele vivia dentro do botão, e o Inbox precisaria de uma segunda cópia do switch: duas cópias de "o que este clique
 // faz" divergem no primeiro kind novo.
 //
@@ -9,6 +9,7 @@
 import {
   ackLockedCommandAction,
   approveLockedCommandAction,
+  explainLockedCommandRejectionAction,
   keepLockedCommandAction,
   rejectLockedCommandAction,
   undoLockedCommandAction,
@@ -38,19 +39,28 @@ import {
   runCardSkillAction,
   undoSystemDecisionAction,
   updateFindingStatusAction,
+  clearCapacityLatchAction,
+  stopConductorAction,
+  dismissPushOfferAction,
+  returnCardToFlowAction,
 } from "@/app/actions";
+import { cancelPublishAction, publishStagedAction, rerequestPublishRequestsAction } from "@/app/delivery-actions";
 import { logHumanActionAction } from "@/app/audit-actions";
 import { encodeEscalationRef, type EscalationRef } from "@/lib/storymap/copilot/escalation";
 import { SENSITIVE_AUDIT_CLASSES, type QuickActionInvoke } from "@/lib/storymap/quick-actions";
 import type { OptionInvoke } from "@/lib/storymap/inbox/decision";
 import type { ActionOutcome } from "@/lib/storymap/action-outcome";
-import { meterRenewMessage } from "@/components/inicio/cockpit-labels";
+import { meterRenewMessage } from "@/components/inbox/cockpit-labels";
 import type { ProposedItem } from "@/lib/storymap/smart-capture/types";
 import type { RiskClass } from "@/lib/storymap/types";
 
 export type ActionResult = { ok: true; data?: unknown } | { ok: false; error: string };
 
-/** O que o clique precisa além do invoke: o que o dono escreveu ou escolheu no corpo do item. */
+/**
+ * O que o clique leva além do invoke: o que o dono escreveu ou escolheu no corpo do item. VENCE o que o invoke já traz
+ * (a alternativa do agente, a sugestão dele, o texto padrão de um «Pedir ajustes», todos os itens de uma proposta) — o
+ * invoke sozinho é o clique único; o payload é a pessoa tendo escrito/marcado algo antes.
+ */
 export interface InvokePayload {
   answer?: string;
   selectedOptionIds?: string[];
@@ -58,8 +68,9 @@ export interface InvokePayload {
   items?: ProposedItem[];
 }
 
-/** Os invokes que são GESTO DE TELA (navegar, abrir o Jido, mostrar instruções) — nunca vão ao servidor. */
-export type ScreenInvoke = Extract<OptionInvoke, { kind: "link" | "escalate" | "howto" | "show-publish-status" }>;
+/** Os invokes que são GESTO DE TELA (navegar, abrir o Jido, mostrar instruções, pedir a permissão de aviso ao navegador)
+ *  — nunca vão ao servidor. */
+export type ScreenInvoke = Extract<OptionInvoke, { kind: "link" | "escalate" | "howto" | "show-publish-status" | "enable-push" }>;
 export type ServerInvoke = Exclude<OptionInvoke, ScreenInvoke>;
 
 /** invoke.kind → o nome da ação de servidor que entra na trilha D7 do clique humano. */
@@ -95,15 +106,27 @@ export const TOOL_OF: Record<OptionInvoke["kind"], string> = {
   "fix-finding": "fixFindingAction",
   "approve-locked-exec": "approveLockedCommandAction",
   "reject-locked-exec": "rejectLockedCommandAction",
+  "explain-locked-exec": "explainLockedCommandRejectionAction",
   "undo-locked-exec": "undoLockedCommandAction",
   "keep-locked-exec": "keepLockedCommandAction",
   "ack-locked-exec": "ackLockedCommandAction",
+  "publish-staged": "publishStagedAction",
+  "cancel-publish": "cancelPublishAction",
+  "rerequest-publish": "rerequestPublishRequestsAction",
+  "clear-latch": "clearCapacityLatchAction",
+  "enable-push": "enablePush",
+  "dismiss-push-offer": "dismissPushOfferAction",
+  "stop-conductor": "stopConductorAction",
+  "return-to-flow": "returnCardToFlowAction",
   howto: "howto",
 };
 
+/** O motivo PADRÃO das ações que o servidor registra com um motivo (soltar a trava) — o clique não pede texto antes. */
+export const DEFAULT_LATCH_REASON = "solta pelo dono no Inbox";
+
 /** É um gesto de tela (não vai ao servidor)? */
 export function isScreenInvoke(invoke: OptionInvoke): invoke is ScreenInvoke {
-  return invoke.kind === "link" || invoke.kind === "escalate" || invoke.kind === "howto" || invoke.kind === "show-publish-status";
+  return invoke.kind === "link" || invoke.kind === "escalate" || invoke.kind === "howto" || invoke.kind === "show-publish-status" || invoke.kind === "enable-push";
 }
 
 /** Roda a ação de servidor de um invoke. Nunca lança: a recusa volta como `{ ok: false, error }`. */
@@ -134,14 +157,19 @@ export async function runServerInvoke(invoke: ServerInvoke, payload: InvokePaylo
         return await republishCardAction({ boardId: invoke.boardId, cardId: invoke.cardId });
       case "approve-data-deletion":
         return await approveDataDeletionAction({ boardId: invoke.boardId, cardId: invoke.cardId });
-      case "answer-question":
+      case "answer-question": {
+        // o que a pessoa escreveu/marcou vence; sem nada, a resposta de um clique que o invoke traz
+        const typed = payload.answer !== undefined || payload.selectedOptionIds !== undefined;
+        const answer = (typed ? payload.answer : invoke.answer) ?? "";
+        const picks = typed ? payload.selectedOptionIds : invoke.selectedOptionIds;
         return await answerQuestionAction({
           boardId: invoke.boardId,
           cardId: invoke.cardId,
           questionId: invoke.questionId,
-          answer: (payload.answer ?? "").trim(),
-          ...(payload.selectedOptionIds?.length ? { selectedOptionIds: payload.selectedOptionIds } : {}),
+          answer: answer.trim(),
+          ...(picks?.length ? { selectedOptionIds: picks } : {}),
         });
+      }
       case "approve-governance":
         return await approveGovernanceDraftAction({ boardId: invoke.boardId, draftId: invoke.draftId });
       case "reject-governance":
@@ -157,12 +185,12 @@ export async function runServerInvoke(invoke: ServerInvoke, payload: InvokePaylo
           boardId: invoke.boardId,
           cardId: invoke.cardId,
           outcome: invoke.outcome,
-          ...(invoke.outcome === "reopened" ? { note: payload.note ?? "" } : {}),
+          ...(invoke.outcome === "reopened" ? { note: payload.note?.trim() || invoke.note || "" } : {}),
         });
       case "accept-proposal":
-        return await acceptProposalAction({ boardId: invoke.boardId, containerId: invoke.containerId, items: payload.items ?? [] });
+        return await acceptProposalAction({ boardId: invoke.boardId, containerId: invoke.containerId, items: payload.items ?? invoke.items ?? [] });
       case "refine-proposal":
-        return await refineProposalAction({ boardId: invoke.boardId, containerId: invoke.containerId, feedback: (payload.note ?? "").trim() });
+        return await refineProposalAction({ boardId: invoke.boardId, containerId: invoke.containerId, feedback: (payload.note?.trim() || invoke.note || "").trim() });
       case "request-redesign":
         return await requestDesignChangeAction({ boardId: invoke.boardId, cardId: invoke.cardId, feedback: "" });
       case "renew-meter": {
@@ -181,15 +209,38 @@ export async function runServerInvoke(invoke: ServerInvoke, payload: InvokePaylo
       case "approve-locked-exec":
         return await approveLockedCommandAction({ boardId: invoke.boardId, id: invoke.id, hash: invoke.hash });
       case "reject-locked-exec":
-        return await rejectLockedCommandAction({ boardId: invoke.boardId, id: invoke.id, reason: payload.note?.trim() || null });
+        return await rejectLockedCommandAction({ boardId: invoke.boardId, id: invoke.id, reason: payload.note?.trim() || invoke.note || null });
+      case "explain-locked-exec":
+        return await explainLockedCommandRejectionAction({ boardId: invoke.boardId, id: invoke.id, reason: payload.note?.trim() ?? "" });
       case "undo-locked-exec":
         return await undoLockedCommandAction({ boardId: invoke.boardId, id: invoke.id });
       case "keep-locked-exec":
         return await keepLockedCommandAction({ boardId: invoke.boardId, id: invoke.id });
       case "ack-locked-exec":
         return await ackLockedCommandAction({ boardId: invoke.boardId, id: invoke.id });
+      case "publish-staged":
+        return await publishStagedAction({ board: invoke.boardId, ...(invoke.override ? { overrideEmbargo: true } : {}) });
+      case "cancel-publish":
+        return await cancelPublishAction({ id: invoke.requestId, board: invoke.boardId });
+      case "rerequest-publish": {
+        // a medição devolve a frase do que fez («refazendo…», «nada a refazer»): ela vira o recibo
+        const res = await rerequestPublishRequestsAction({ board: invoke.boardId });
+        if (!res.ok) return res;
+        const outcome: ActionOutcome = { status: "done", message: res.data?.message ?? "Refazendo o pedido." };
+        return { ok: true, data: { outcome } };
+      }
+      case "clear-latch": {
+        const res = await clearCapacityLatchAction({ reason: payload.note?.trim() || DEFAULT_LATCH_REASON });
+        return res.ok ? { ok: true } : res;
+      }
+      case "dismiss-push-offer":
+        return await dismissPushOfferAction();
+      case "stop-conductor":
+        return await stopConductorAction({ boardId: invoke.boardId, cardId: invoke.cardId });
+      case "return-to-flow":
+        return await returnCardToFlowAction({ boardId: invoke.boardId, cardId: invoke.cardId });
       case "undo-system-decision":
-        return await undoSystemDecisionAction({ boardId: invoke.boardId, decisionId: invoke.decisionId, note: payload.note?.trim() || null });
+        return await undoSystemDecisionAction({ boardId: invoke.boardId, decisionId: invoke.decisionId, note: payload.note?.trim() || invoke.note || null });
       default: {
         const never: never = invoke;
         return { ok: false, error: `ação desconhecida: ${(never as { kind: string }).kind}` };

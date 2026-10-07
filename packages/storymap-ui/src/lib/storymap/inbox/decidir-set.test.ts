@@ -113,7 +113,7 @@ describe("ownerDecisionsFromEntries — o botão do card é a principal do Inbox
   } as unknown as BoardConfig;
   const NOW = Date.parse("2026-10-01T22:45:00Z");
   const card = (id: string, over: Partial<Card>): Card =>
-    ({ id, type: "story", title: `Story ${id}`, storyType: "user", parent: "step-1", release: null, personas: [], systems: [], links: [], narrative: { role: "", want: "", soThat: "" }, acceptance: [], tasks: [], rice: {}, kano: null, funnelStage: null, findings: [], order: 10, created: "2026-09-30", updated: null, body: "", ...over }) as unknown as Card;
+    ({ id, type: "story", title: `Story ${id}`, storyType: "user", parent: "step-1", release: null, personas: [], systems: [], links: [], narrative: { role: "", want: "", soThat: "" }, acceptance: [], tasks: [], findings: [], order: 10, created: "2026-09-30", updated: null, body: "", ...over }) as unknown as Card;
   const item = (cardId: string, kind: CockpitItem["kind"], over: Record<string, unknown>): CockpitItem =>
     ({ id: `${cardId}:${kind}`, boardId: "b", cardId, cardTitle: `Story ${cardId}`, lane: "travado", severity: "high", since: "2026-10-01T21:00:00Z", kind, ...over }) as CockpitItem;
   const decide = (items: CockpitItem[], cards: Card[]) => {
@@ -147,5 +147,31 @@ describe("ownerDecisionsFromEntries — o botão do card é a principal do Inbox
     expect(main).toMatchObject({ invoke: { kind: "accept-triage" } });
     expect(main?.disabled).toBeUndefined();
     expect(d.cards[0].primary).toMatchObject({ id: main!.id, label: main!.label, invoke: { kind: "accept-triage" } });
+  });
+
+  // INVARIANTE (revisão da fase 3): uma alternativa do agente que ele NÃO recomendou nunca é a principal nem o botão
+  // do card — o card fechado oferecia um toque que respondia uma pergunta (às vezes de dinheiro) com a primeira da lista.
+  const question = (options: { id: string; label: string; recommended?: boolean }[]) =>
+    item("q", "question", { lane: "pergunta", status: "interview", questionId: "qx1", prompt: "Como cobrar a assinatura do clube do livro?", options, mode: "single" });
+  it("pergunta com alternativas e SEM recomendação: nenhuma principal, nenhum botão no card", () => {
+    const { entries, d } = decide([question([{ id: "o1", label: "Cobrar no cartão" }, { id: "o2", label: "Gratuito no primeiro mês" }])], [card("q", { status: "interview" })]);
+    const main = primaryOption(entries[0].decision);
+    expect(main?.invoke.kind === "answer-question" && main.invoke.selectedOptionIds?.length).toBeFalsy();
+    expect(d.cards[0].primary).toBeNull();
+  });
+  it("pergunta com a alternativa recomendada: ela (e só ela) é a principal; o card não responde por botão", () => {
+    const { entries, d } = decide([question([{ id: "o1", label: "Cobrar no cartão" }, { id: "o2", label: "Gratuito no primeiro mês", recommended: true }])], [card("q", { status: "interview" })]);
+    expect(primaryOption(entries[0].decision)).toMatchObject({ invoke: { kind: "answer-question", selectedOptionIds: ["o2"] } });
+    // responder não é um invoke do botão do Kanban (QUICK_INVOKE_KINDS): a resposta, até a recomendada, é dada no Inbox
+    expect(d.cards[0].primary).toBeNull();
+  });
+
+  // INVARIANTE: liberar um problema da revisão sem consertar nunca é a principal — sem confirmação (fase 3), um toque
+  // soltaria um bloqueio (até de segurança). Sem nada seguro que mude o desfecho, não há botão cheio.
+  it("problema da revisão (blocker): a principal nunca é «Liberar sem consertar» nem «Já foi consertado»; o card não tem botão", () => {
+    const { entries, d } = decide([item("r", "blocker", { status: "interview", findingId: "fx1", title: "Falta conferir quem pode ver a lista" })], [card("r", { status: "interview" })]);
+    expect(primaryOption(entries[0].decision)).toBeNull();
+    expect(entries[0].decision.ask).not.toMatch(/^Liberar/);
+    expect(d.cards[0].primary).toBeNull();
   });
 });

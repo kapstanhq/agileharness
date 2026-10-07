@@ -2,7 +2,7 @@
 
 // 🟥 Style Guide (bloco de Design, WS-2) — a thin presentational grid of colour-role swatches. The
 // colour VALUES are DATA (per board), so they ride as inline `style` — never a Tailwind class (the
-// scanner can't generate a computed class from board data; canonical comment `canvas-blocks.ts:30-39`).
+// scanner can't generate a computed class from board data; Tailwind scans source text only).
 // AA badges carry TEXT (never colour-only, accessibility of the view itself) and read an AAReport that
 // was ALREADY computed server-side (checkAA) — this component never recomputes contrast.
 //
@@ -25,37 +25,45 @@ const AA_BADGE_LABEL: Record<AALevel, string> = {
   fail: "falha AA",
 };
 
-/** A 4-column grid of colour-role swatches (mobile 375px included — spec calls for 4-col there too). */
+/**
+ * The colour-role swatches — 2 columns on a phone, 4 from `sm`. EVERY swatch reads the same way: the sample, the role
+ * and a TEXT badge — the AA level when the token declares the text colour on top of it (`on`), else «sem par de
+ * texto» (a background or a line has nothing to measure; a blank where the others carry a badge read as missing data).
+ */
 export function StyleSwatches({ tokens, aa }: { tokens: ColorToken[]; aa?: AAReport }) {
   if (tokens.length === 0) {
-    return <p className="text-[11.5px] italic text-fg-subtle">Nenhum papel de cor ainda.</p>;
+    return <p className="text-[13px] italic text-fg-subtle">Nenhum papel de cor ainda.</p>;
   }
   const byRole = new Map((aa?.pairs ?? []).map((p) => [p.role, p] as const));
   return (
-    <div className="grid grid-cols-4 gap-1.5">
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
       {tokens.map((t) => {
         const pair = byRole.get(t.role);
         return (
           <div key={t.role} className="flex min-w-0 flex-col gap-1 rounded-lg border border-line-muted p-1.5">
             <div
-              className="flex h-9 items-center justify-center rounded-md text-[11px] font-medium"
+              className="flex h-10 items-center justify-center rounded-md border border-line-muted text-[13px] font-medium"
               style={{ backgroundColor: t.value, color: t.on || undefined }}
               title={`${t.role}: ${t.value}${t.on ? ` sobre ${t.on}` : ""}`}
             >
               {t.on ? "Aa" : ""}
             </div>
-            <span className="truncate text-[10.5px] font-semibold text-fg" title={t.role}>
+            <span className="truncate text-[12px] font-semibold text-fg" title={t.role}>
               {t.role}
             </span>
-            {pair && (
+            {pair ? (
               <span
                 title={`contraste ${pair.ratio.toFixed(2)}:1`}
                 className={cn(
-                  "inline-flex w-fit items-center rounded px-1 py-0.5 text-[9px] font-semibold",
+                  "inline-flex w-fit items-center rounded px-1.5 py-0.5 text-[12px] font-semibold",
                   AA_BADGE_CLS[pair.level],
                 )}
               >
                 {AA_BADGE_LABEL[pair.level]}
+              </span>
+            ) : (
+              <span className="inline-flex w-fit items-center rounded bg-inset px-1.5 py-0.5 text-[12px] text-fg-muted">
+                sem par de texto
               </span>
             )}
           </div>

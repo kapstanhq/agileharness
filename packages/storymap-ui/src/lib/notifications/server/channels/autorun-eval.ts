@@ -22,6 +22,7 @@
 import { readBoardConfig, readCards } from "@/lib/storymap/repo";
 import { updateCardOnDisk } from "@/lib/storymap/write";
 import { resolveStaleQuestions } from "@/lib/storymap/questions";
+import { arrivalOrder } from "@/lib/storymap/kanban-features";
 import { AUTORUN_DEDUPE_MS, getRunnerEngine, isCodeSkill } from "@/lib/storymap/runner/engine";
 import { getRunnerRegistry } from "@/lib/storymap/runner/registry";
 import { getTelemetryStore, latestRunRecord } from "@/lib/storymap/runner/telemetry";
@@ -74,7 +75,7 @@ const forwarding = new Set<string>();
 
 /**
  * Session threading (the "one agent, many hats" theme — e.g. Discovery: Especificar →
- * Entrevista → Estimar). When a run COMPLETES and the cascade decides to run the NEXT step
+ * Entrevista). When a run COMPLETES and the cascade decides to run the NEXT step
  * IN THE SAME column, and that column opts in via `threadSession: true`, the next spawn
  * REUSES the just-finished run's `claude` session (`--resume <sessionId>`) instead of a
  * fresh one — so the agent keeps its context + reasoning across the steps and the warm
@@ -126,6 +127,9 @@ async function forward(board: string, card: Card, toStatusId: string, config: Bo
     // cascade shipped the card without the human answer, so they must not strand as "precisa de você"
     // on a concluded card (orphan-questions bug; same rule as moveCardAction).
     const intoTerminal = !!config.statuses.find((s) => s.id === toStatusId)?.terminal;
+    // A posição na coluna é a ordem do trabalho: um card que a cascata leva a OUTRA coluna chega no FIM dela
+    // (kanban-features.ts `arrivalOrder` — a mesma régua do move manual). Leitura que falha ⇒ o `order` fica.
+    const neighbours = await readCards(board).catch(() => null);
     const written = await updateCardOnDisk(board, card.id, (fresh) => {
       // Anti-clobber: decideCascade chose toStatusId from a card read OUTSIDE this lock. If another writer
       // re-routed the card in the read→write window — e.g. a fast deploy-failure revert reopened a card in
@@ -139,9 +143,11 @@ async function forward(board: string, card: Card, toStatusId: string, config: Bo
       // selo "Bloqueio" para sempre (um terminal nunca re-integra → withRunBlockersResolved nunca dispara).
       const terminalStamp = { by: `terminal:${toStatusId}`, at: new Date().toISOString().slice(0, 10) };
       const superseded = intoTerminal ? supersedeStaleTerminalBlockers(fresh.findings ?? [], terminalStamp) : null;
+      const arrival = neighbours ? arrivalOrder(neighbours, config, fresh, fresh.status, toStatusId) : null;
       return {
         ...fresh,
         status: toStatusId,
+        ...(arrival != null ? { order: arrival } : {}),
         questions: intoTerminal ? resolveStaleQuestions(fresh.questions ?? [], terminalStamp.at) : fresh.questions,
         ...(superseded ? { findings: superseded } : {}),
       };
@@ -308,7 +314,7 @@ export async function evaluateAutorunOnEntry(
 
   // O ESCOPO DE TIPOS (board-pace.ts, segundo eixo do ritmo): o que o board pode COMEÇAR sozinho. Só barra a CONSTRUÇÃO — o
   // despacho do condutor e as colunas de plano e desenvolvimento em diante; captura, triagem, dúvidas, especificação,
-  // entrevista e priorização seguem andando para o tipo ser decidido (um erro recém-capturado nasce `user`: barrar a
+  // e entrevista seguem andando para o tipo ser decidido (um erro recém-capturado nasce `user`: barrar a
   // especificação o deixaria sem nunca ser classificado). Um card JÁ conduzido não é barrado (o que já executa termina:
   // condutores vivos não são estacionados). O card fica onde está e o disparo recusado é ANOTADO — alargar o escopo o devolve
   // por este mesmo caminho. A recusa do condutor em coluna de CLASSIFICAÇÃO não para o card: a skill da coluna (enriquecer)

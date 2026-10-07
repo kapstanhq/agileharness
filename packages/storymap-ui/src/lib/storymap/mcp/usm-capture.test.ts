@@ -64,9 +64,6 @@ function card(overrides: Partial<Card> = {}): Card {
     narrative: { role: null, want: null, soThat: null },
     acceptance: [],
     tasks: [],
-    rice: { reach: null, impact: null, confidence: null, effort: null },
-    kano: null,
-    funnelStage: null,
     findings: [],
     order: 0,
     created: null,
@@ -282,5 +279,33 @@ describe("usm_capture — apply mode (wraps commitProposalAction, writes hierarc
       items,
     })) as CallToolResult;
     expect((out.content[0] as { text: string }).text).toMatch(/fora da hierarquia/);
+  });
+});
+
+describe("create_idea — atalho da captura: um card na Triagem", () => {
+  it("cria pelo caminho da captura uma user story sem lugar no mapa, com a exploração no texto", async () => {
+    commitProposalAction.mockResolvedValue({ ok: true, data: { created: [card({ id: "story-ex9101", title: "Lista de espera" })], warnings: [] } });
+    const out = (await captureHandlers().get("create_idea")!({
+      board: "livraria",
+      title: "Lista de espera",
+      statement: "Avisar o leitor quando o livro volta ao estoque",
+      keyAssumption: "o leitor quer ser avisado",
+    })) as CallToolResult;
+    expect(commitProposalAction).toHaveBeenCalledTimes(1);
+    const arg = commitProposalAction.mock.calls[0][0] as { boardId: string; via: string; items: Array<Record<string, unknown>> };
+    expect(arg.boardId).toBe("livraria");
+    expect(arg.via).toBe("capture");
+    expect(arg.items).toHaveLength(1);
+    expect(arg.items[0]).toMatchObject({ type: "story", storyType: "user", parent: null, title: "Lista de espera" });
+    expect(String(arg.items[0].body)).toMatch(/Avisar o leitor[\s\S]*\*\*Premissa mais arriscada:\*\* o leitor quer ser avisado/);
+    const parsed = parseResult(out) as { ok: boolean; card: { id: string; status: string } };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.card).toMatchObject({ id: "story-ex9101", status: "triage" });
+  });
+
+  it("sem título nem frase, recusa sem escrever", async () => {
+    const out = (await captureHandlers().get("create_idea")!({ board: "livraria" })) as CallToolResult;
+    expect(out.isError).toBe(true);
+    expect(commitProposalAction).not.toHaveBeenCalled();
   });
 });

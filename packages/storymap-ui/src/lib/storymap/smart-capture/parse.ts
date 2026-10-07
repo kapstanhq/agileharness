@@ -51,31 +51,19 @@ function asStringArrayFree(raw: unknown): string[] {
   return [...new Set(raw.map((x) => String(x).trim()).filter((x) => x.length > 0))];
 }
 
-/** Parse an OST value-size {reach,impact} → null when neither axis is a finite number (sparse). */
-function parseValueSize(raw: unknown): { reach: number | null; impact: number | null } | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const v = raw as Record<string, unknown>;
-  const num = (n: unknown): number | null => (typeof n === "number" && Number.isFinite(n) ? n : null);
-  const reach = num(v.reach);
-  const impact = num(v.impact);
-  if (reach == null && impact == null) return null;
-  return { reach, impact };
-}
-
 /**
- * Sanitize the OST-light fields (candidateSolutions/keyAssumption/successSignal/valueSize) — only
- * meaningful on an `idea` item. Returns only fields with real content; absent/empty → omitted.
+ * Sanitize the OST-light fields (candidateSolutions/keyAssumption/successSignal) — only meaningful on
+ * an `idea` item. Returns only fields with real content; absent/empty → omitted. (A antiga nota de valor
+ * `valueSize` saiu com a priorização, na fase 5: um sidecar legado que ainda a traga é ignorado.)
  */
 function parseIdeaFields(
   o: Record<string, unknown>,
-): Pick<ProposedItem, "candidateSolutions" | "keyAssumption" | "successSignal" | "valueSize"> {
-  const result: Pick<ProposedItem, "candidateSolutions" | "keyAssumption" | "successSignal" | "valueSize"> = {};
+): Pick<ProposedItem, "candidateSolutions" | "keyAssumption" | "successSignal"> {
+  const result: Pick<ProposedItem, "candidateSolutions" | "keyAssumption" | "successSignal"> = {};
   const cs = asStringArrayFree(o.candidateSolutions);
   if (cs.length) result.candidateSolutions = cs;
   if (typeof o.keyAssumption === "string" && o.keyAssumption.trim()) result.keyAssumption = o.keyAssumption.trim();
   if (typeof o.successSignal === "string" && o.successSignal.trim()) result.successSignal = o.successSignal.trim();
-  const vs = parseValueSize(o.valueSize);
-  if (vs) result.valueSize = vs;
   return result;
 }
 

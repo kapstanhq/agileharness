@@ -21,44 +21,55 @@ describe("a linha de estado do card — uma régua, três superfícies", () => {
     expect(c).toMatch(/useOwnerTimeZone\(\)/);
   });
 
-  it("o card do Kanban mostra a linha e pinta o filete pela MESMA presença", () => {
-    const k = src("./KanbanCard.tsx");
+  // O card por funcionalidade (fase 1) desenha a linha no SEU desenho (a mensagem ao vivo de quem roda, o motivo do
+  // erro, o rodapé quieto), mas a frase continua saindo da MESMA régua, e o estado que pinta o card também: o Kanban
+  // calcula as linhas do board uma vez e reduz cada uma ao estado do desenho — nunca um palpite por status.
+  it("o card do Kanban mostra a linha e pinta o estado pela MESMA régua", () => {
+    const k = src("./kanban/FeatureCard.tsx");
     expect(k).toMatch(/const live = useCardLiveStatus\(config\.id, card, config\)/);
-    expect(k).toMatch(/<CardLiveStatusLine boardId=\{config\.id\} card=\{card\} config=\{config\} status=\{live\}/);
-    // O filete sai da PRESENÇA (presence-tone.ts), a mesma cor do nav — o «tom» próprio da linha saiu.
-    expect(k).toMatch(/cardLiveRail\(live\)/);
+    expect(k).toMatch(/const message = live \? \(live\.note \?\? live\.label\) : "";/);
+    const board = src("./KanbanBoard.tsx");
+    expect(board).toMatch(/const live = useBoardLiveStatuses\(config\.id, stories, config, ownerMap\)/);
+    expect(board).toMatch(/live: l \? \{ kind: l\.kind, presence: l\.presence \} : null/);
+    expect(board).toMatch(/<BoardLiveProvider value=\{live\}>/);
   });
 
   it("o selo de execução velho saiu do card — «Terminou» de uma execução antiga não é estado atual", () => {
-    const k = src("./KanbanCard.tsx");
+    const k = src("./kanban/FeatureCard.tsx");
     expect(k).not.toMatch(/<RunSubstateBadge/);
     expect(k).not.toMatch(/<CardIdleDiffBadge/);
   });
 
-  it("o cabeçalho da página do card e a linha de Acompanhar usam a mesma linha", () => {
+  // A linha de Acompanhar (InboxList, com a linha de estado do card) saiu na fase 3: «Os agentes estão cuidando» mostra
+  // cada item no formato curto — o que acontece e QUEM CUIDA (decision.next, o mesmo modelo que alimenta a linha do
+  // card). A garantia «quem age agora, sem botão» segue lá; a da página do card fica aqui.
+  it("o cabeçalho da página do card usa a linha de estado; «Os agentes estão cuidando» diz quem cuida de cada item", () => {
     expect(src("./CardDocument.tsx")).toMatch(/<CardLiveStatusLine boardId=\{boardId\} card=\{card\} config=\{config\} variant="header"/);
-    const list = src("./inbox/InboxList.tsx");
-    expect(list).toMatch(/sectionLabel === "Acompanhar"/);
-    expect(list).toMatch(/<CardLiveStatusLine [^>]*variant="row"/);
+    const item = src("./inbox/InboxItem.tsx");
+    const short = item.slice(item.indexOf('if (variant === "short")'), item.indexOf("// ── a anatomia inteira"));
+    expect(short).toMatch(/\{d\.next\.label\}/);
+    expect(short).toMatch(/d\.options\.filter\(isUndoLike\)/);
   });
 
-  it("os botões do card têm NOME visível e aria-label (o dono não sabia o que eram os três ícones)", () => {
+  // Os ÍCONES do card antigo (Histórico · Mover · Rodar · Console, no RunnerStatusProvider) saíram com ele na fase 1. A
+  // garantia que eles davam — o dono sabe o que cada botão faz — vale para o card novo: o único ícone (o chevron) tem
+  // nome e diz se está aberto, e as ações são TEXTO por extenso no menu (as palavras moram em kanban-copy.ts).
+  it("os botões do card têm NOME (o dono não sabia o que eram os três ícones)", () => {
+    const k = src("./kanban/FeatureCard.tsx");
+    expect(k).toMatch(/title="Ações"/);
+    // o nome do card sem a etiqueta de máquina do começo (display-title.ts) — o leitor de tela lê o que a tela mostra
+    expect(k).toMatch(/aria-label=\{`Ações do card \$\{displayTitle\(card\.title\)\}`\}/);
+    expect(k).toMatch(/aria-expanded=\{menuOpen\}/);
+    expect(k).toMatch(/\{m\.label\}/);
     const p = src("./RunnerStatusProvider.tsx");
-    for (const [label, aria] of [
-      ["Histórico", "Ver o histórico do card"],
-      ["Mover", "Mover o card para outra etapa"],
-      ["Rodar", "Rodar o agente desta etapa"],
-      ["Console", "Abrir o console da execução"],
-    ]) {
-      expect(p, label).toMatch(new RegExp(`<span>${label}</span>`));
-      expect(p, aria).toMatch(new RegExp(`aria-label="${aria}"`));
-    }
+    expect(p).not.toMatch(/export function (KanbanCardHistoryButton|KanbanCardRunButton|KanbanCardConsoleButton|MoveToPopover)\b/);
   });
 
-  it("«Rodar» some quando outro ator já está no card (conduzido, sessão viva, fila, integração)", () => {
-    const k = src("./KanbanCard.tsx");
-    expect(k).toMatch(/isConducted\(card\)/);
-    expect(k).toMatch(/<KanbanCardRunButton [^>]*busy=\{busy\}/);
-    expect(src("./RunnerStatusProvider.tsx")).toMatch(/if \(!hasTrigger \|\| busy\) return null;/);
+  it("«Rodar» some quando outro ator já está no card (conduzido, rodando, na fila do condutor, integração)", () => {
+    const k = src("./kanban/FeatureCard.tsx");
+    expect(k).toMatch(/const busy = isConducted\(card\) \|\| state === "waiting" \|\| state === "delivering";/);
+    // rodando: só «Parar o condutor» (e só no conduzido); fora disso «Rodar» exige gatilho e ninguém no card
+    expect(k).toMatch(/const runItem = running\s*\? isConducted\(card\)/);
+    expect(k).toMatch(/: hasTrigger && !busy && !organizeOnly/);
   });
 });

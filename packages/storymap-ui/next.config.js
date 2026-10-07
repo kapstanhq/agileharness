@@ -179,6 +179,16 @@ const nextConfig = {
         destination: "/board/:boardId/inbox/:itemId",
         permanent: true,
       },
+      // A ESTEIRA saiu na fase 3: o trem mora na coluna Entrega do Kanban, e as alavancas dela (publicar o que está
+      // pronto, publicar por cima da guarda, cancelar ou refazer um pedido, o stage parado) viraram itens do Inbox. Os
+      // links antigos (um push, um bookmark) são redirecionados AQUI, antes de qualquer render: um `redirect()` numa
+      // página renderizava dentro do layout do board e estourava o React #310 na navegação. O atalho sem board vai ao
+      // Inbox (onde as alavancas estão), não ao Kanban de um board qualquer. 307: o destino pode mudar de novo.
+      { source: "/board/:boardId/entrega", destination: "/board/:boardId/kanban", permanent: false },
+      { source: "/entrega", destination: "/inbox", permanent: false },
+      // /board/<b>/acompanhar saiu na fase 3 (virou «Os agentes estão cuidando», no fim do Inbox do board): o link
+      // antigo abre a seção — pelo mesmo motivo, antes de qualquer render.
+      { source: "/board/:boardId/acompanhar", destination: "/board/:boardId/inbox?cuidando=1", permanent: false },
     ];
   },
   // O TERMINAL passou a ser servido pelo app. Antes ele era um `file_server` do Caddy

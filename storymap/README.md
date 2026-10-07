@@ -22,8 +22,8 @@ isso) — está em **não re-investigar o que o step anterior já descobriu**:
 - **Investigue o mínimo.** Nada de `grep`/leitura ampla "para entender o todo" quando o
   handoff já aponta os arquivos exatos. Re-descoberta é o maior custo NÃO-cacheado dos runs.
 - **Skills de PLANEJAMENTO não leem código de produto.** `harness-grill`, `harness-enrich`,
-  `harness-interview`, `harness-prioritize`, `harness-tasks` escrevem só dados do board
-  (narrativa/aceite/RICE/KANO/funil/tasks) — elas NÃO escrevem código, então NÃO abram
+  `harness-interview`, `harness-tasks` escrevem só dados do board
+  (narrativa/aceite/tasks) — elas NÃO escrevem código, então NÃO abram
   arquivos `.ts`/`.tsx` de produto para "entender" a feature. Trabalhe sobre o card
   (escopo + respostas do grill) + o `board.yaml` + os sidecars. Investigar o código aqui
   estoura os turns sem necessidade (já cortou um `harness-enrich` no `--max-turns`, deixando
@@ -42,8 +42,10 @@ storymap/
    └─ <board>/                 # um board por app (ex.: demo)
       ├─ board.yaml            # vocabulários do board (statuses, releases, personas, systems, linkTypes)
       ├─ docs/                 # DOCUMENTOS do board — vivem FORA do pipeline (sem status, sem coluna)
-      │  ├─ prd.md             # o documento MAIS ALTO: tudo abaixo desce dele (ver "Documentos")
-      │  └─ lean-canvas.md     # a compressão de uma página, DERIVADA do PRD
+      │  ├─ prd.md             # o PRODUTO, do dono, em linguagem de negócio (ver "Documentos")
+      │  ├─ business-model-canvas.md  # o NEGÓCIO, do dono: os nove blocos do BMC
+      │  ├─ contexto.md        # o contexto dos AGENTES: decisões, pronto quando, requisitos, riscos…
+      │  └─ .archive/          # os originais de uma migração de formato (prd-v1.md, lean-canvas.md)
       ├─ cards/
       │  └─ <id>.md            # 1 card por arquivo (id == nome do arquivo)
       ├─ plans/                # sidecar: plano técnico por card (harness-plan) — plans/<id>.md
@@ -63,25 +65,36 @@ que tipo de conteúdo cada uma aceita (prosa, itens, checklist, tabela, grupos) 
 declarado no código. As três portas de escrita — editor rico, fonte markdown e agente (`write_doc`)
 — passam pela MESMA validação, e um rótulo renomeado é recusado nas três.
 
-| documento | `docType` | o que é |
-|---|---|---|
-| **PRD** | `prd` | O documento mais alto do board. Dezesseis seções, seis obrigatórias (`resumo`, `problema`, `publico`, `posicionamento`, `objetivos`, `escopo`). Absorveu a escada estratégica que era três strings soltas no `board.yaml` (`positioning`/`businessMetric`/`desiredOutcome`, hoje as seções `posicionamento`/`metricaNegocio`/`resultadoAlvo`). |
-| **Lean Canvas** | `lean-canvas` | A compressão de uma página, **derivada** do PRD. Doze blocos na ordem canônica de preenchimento. |
+| documento | `docType` | de quem | o que é |
+|---|---|---|---|
+| **PRD** | `prd` | dono | O produto, em linguagem de NEGÓCIO (nada de tecnologia), formato 2 (`format: 2` no cabeçalho): sete seções — `problema`, `personas` (um `###` por persona), `propostaValor`, `funcionalidades`, `fluxoUso`, `metricasSucesso`, `foraEscopo`. Página: `/board/<b>/produto`. |
+| **Business Model Canvas** | `business-model-canvas` | dono | O negócio: `customerSegments`, `valuePropositions`, `channels`, `customerRelationships`, `revenueStreams`, `keyResources`, `keyActivities`, `keyPartners`, `costStructure`. Página: `/board/<b>/negocio`. Substituiu o Lean Canvas. |
+| **Contexto para os agentes** | `contexto` | agentes | O que os agentes precisam e o dono não: `decisoes`, `prontoQuando`, `requisitos`, `restricoes`, `riscos`, `modeloNegocio`, `lancamento`, `glossario`, `outros`. Sem página — `read_doc`/`write_doc`, o motor e as skills. |
 
-**O que desce do PRD:** o Lean Canvas (compressão), o backbone do USM (da seção `jornadas`), as
-personas (de `publico`) e o **digest** que todo run herda como norte — `resumo`, `posicionamento`,
-`resultadoAlvo`, `metricaNegocio` e `escopo`, com teto por seção. O documento inteiro em todo prompt
-afogaria a pergunta; quem precisa do resto chama `read_doc`.
+**O que sai do PRD:** o backbone do USM (do `fluxoUso` e das `funcionalidades`), as **personas**
+(a seção `personas`; o `personas[]` do `board.yaml` virou piso legado — ids, cor, avatar) e o
+**digest** que todo run herda como norte — `propostaValor`, `problema`, `personas`,
+`metricasSucesso`, `funcionalidades` e `foraEscopo`, com teto por seção. O documento inteiro em todo
+prompt afogaria a pergunta; quem precisa do resto chama `read_doc`. Os juízes (triagem, admissão) e o
+procurador leem o PRD **e** o contexto.
 
-**Três seções existem para o AGENTE, não para o leitor** — e são elas que separam este PRD de um PRD
-humano: `decisoes` (o que JÁ foi decidido; um agente que não sabe que a decisão foi tomada toma a
-dele, e a toma plausivelmente), `jornadas` (o que a captura transforma em backbone em vez de lista
-plana) e `prontoQuando` (critérios verificáveis — "funciona" não é um).
+**O contexto existe para o AGENTE:** `decisoes` (o que JÁ foi decidido; um agente que não sabe que a
+decisão foi tomada toma a dele, e a toma plausivelmente) e `prontoQuando` (critérios verificáveis —
+"funciona" não é um). Os agentes o mantêm com `write_doc`; mudança que toque classe do dono (dinheiro,
+marca, dados de pessoas) vira pergunta.
 
-**O PRD é `owner:human`.** Um `Write`/`Edit` direto em `docs/prd.md` é BLOQUEADO pelo guard de
-propriedade; o caminho de um agente é `propose_change({artifact:'prd', field:'<chave da seção>'})`,
-que abre rascunho para aprovação. A conversa da TELA escreve direto, porque ali já existe humano
-lendo cada palavra.
+**PRD e BMC são `owner:human`.** Um `Write`/`Edit` direto em `docs/prd.md` ou
+`docs/business-model-canvas.md` é BLOQUEADO pelo guard de propriedade; o caminho de um agente é
+`propose_change({artifact:'prd', field:'<chave da seção>'})` ou `propose_change({artifact:'canvas',
+field:'<chave do bloco>'})`, que abre rascunho para aprovação. A conversa da TELA escreve direto,
+porque ali já existe humano lendo cada palavra.
+
+**Migração dos formatos antigos** (`lib/storymap/doc/migrate-board-docs.ts`, no boot do serviço,
+idempotente): um `prd.md` sem `format: 2` vira o PRD novo + `contexto.md` (o original fica em
+`docs/.archive/prd-v1.md`); um board com Lean Canvas (o `docs/lean-canvas.md` ou o `canvas:` do
+`board.yaml`) ganha o `business-model-canvas.md`. Nada some: o que não tem lugar natural vai como
+grupo com o nome de origem. O `board.yaml` nunca é tocado. Até o boot, `loadDoc` entrega a projeção
+nova em memória.
 
 ## Contexto por app
 
@@ -132,7 +145,7 @@ Cada story percorre um **pipeline** de 11 status de build (de `enriquecer` a `re
   Depois da reforma, os gates ficam na **entrada das colunas produtoras** (as colunas
   de pouso pass-through `refinada`/`com-tasks`/`com-plano` foram removidas).
 - **Trigger** (enquanto o card **SENTA** no status): uma skill `harness-*` processa o card
-  automaticamente — enriquece, prioriza, desenha, planeja, quebra, desenvolve, revisa, QA —
+  automaticamente — enriquece, desenha, planeja, quebra, desenvolve, revisa, QA —
   e ao concluir avança o status (**produzir-e-avançar**).
 - **Parada** (`autorun: false`): o card PARA no status e só avança quando um humano o move.
   As três paradas do fluxo são `pronta` (go/no-go), `com-design` e `revisao`.
@@ -140,16 +153,15 @@ Cada story percorre um **pipeline** de 11 status de build (de `enriquecer` a `re
 | # | id | nome | gate (ao entrar) | trigger (automação) |
 |---|----|------|------------------|---------------------|
 | 1 | `enriquecer` | Enriquecer | — | `harness-enrich` |
-| 2 | `priorizar` | Priorizar | `hasRefinement` | `harness-prioritize` |
-| 3 | `pronta` | Pronta p/ build | `hasPrioritization` | — *(PARADA go/no-go)* |
-| 4 | `design-ux` | Design UI/UX | — | `harness-ux` |
-| 5 | `com-design` | Com design | `hasWireframe` | — *(PARADA)* |
-| 6 | `plano-tecnico` | Plano técnico | — | `harness-plan` |
-| 7 | `quebrar-tasks` | Quebrar em tasks | `hasTechPlan` | `harness-tasks` |
-| 8 | `desenvolver` | Em desenvolvimento | `hasTasks` | `harness-do` |
-| 9 | `revisar-codigo` | Revisar código | — | `harness-review` |
-| 10 | `qa-automatizado` | QA automatizado | `hasNoBlockers` | `harness-qa` |
-| 11 | `revisao` | Revisão | `hasQaPassed` | — *(PARADA)* |
+| 2 | `pronta` | A fazer | `hasRefinement` | — *(PARADA go/no-go)* |
+| 3 | `design-ux` | Design UI/UX | — | `harness-ux` |
+| 4 | `com-design` | Com design | `hasWireframe` | — *(PARADA)* |
+| 5 | `plano-tecnico` | Plano técnico | — | `harness-plan` |
+| 6 | `quebrar-tasks` | Quebrar em tasks | `hasTechPlan` | `harness-tasks` |
+| 7 | `desenvolver` | Em desenvolvimento | `hasTasks` | `harness-do` |
+| 8 | `revisar-codigo` | Revisar código | — | `harness-review` |
+| 9 | `qa-automatizado` | QA automatizado | `hasNoBlockers` | `harness-qa` |
+| 10 | `revisao` | Revisão | `hasQaPassed` | — *(PARADA)* |
 | — | `refinar` | Refinar | `hasRefineBrief` | `harness-refine` |
 | — | `corrigir` | Corrigir | `hasBugReport` | `harness-fix` |
 | — | `concluida` | Concluída | — | — |
@@ -212,10 +224,8 @@ short-circuit se acionado na mão sobre um card não-`user` (encaminha sem gerar
 | gate | passa quando |
 |------|--------------|
 | `hasNarrative` | `narrative.role`, `narrative.want` e `narrative.soThat` todos preenchidos |
-| `hasRefinement` | `hasNarrative` **e** `acceptance.length >= 1` — gate de entrada em `priorizar` |
+| `hasRefinement` | `hasNarrative` **e** `acceptance.length >= 1` — gate de entrada em `pronta` (A fazer) |
 | `hasTasks` | `tasks.length >= 1` — gate de entrada em `desenvolver` |
-| `hasRice` | `rice` tem `reach`, `impact`, `confidence` e `effort` preenchidos, com `effort > 0` |
-| `hasPrioritization` | **type-aware** (Fase 2): feature → `hasRice`+`kano`+`funnelStage`; bug → `severity`+`frequency`; melhoria → `impact`+`effort` — gate de entrada em `pronta`. Ver `frameworks.md` §4 (WSJF `priorityScore`). |
 | `hasTechPlan` | `techPlanReady: true` (o `harness-plan` escreveu `plans/<id>.md`) — gate de entrada em `quebrar-tasks` |
 | `hasWireframe` | `wireframeChosen` preenchido (o artefato de tela PRIMÁRIO do canvas — ou uma opção legada — de `wireframes/<id>.json`) — gate de entrada em `com-design` |
 | `hasNoBlockers` | nenhum `findings[]` com `severity: blocker` **e** `status: open` — gate de entrada em `qa-automatizado` |
@@ -224,7 +234,7 @@ short-circuit se acionado na mão sobre um card não-`user` (encaminha sem gerar
 | `hasBugReport` | `bugReport.brief` preenchido — gate de `corrigir` (modo correção) |
 
 > O `hasNarrative`/`hasRefinement` é o **gate brando** do template: o card pode
-> nascer sem narrativa (captura rápida), mas para entrar em `priorizar` a story precisa
+> nascer sem narrativa (captura rápida), mas para entrar em `pronta` a story precisa
 > da narrativa completa **+** ≥1 critério de aceite. A UI avisa (sem bloquear) enquanto
 > a narrativa estiver incompleta.
 
@@ -248,12 +258,9 @@ retorna `null` quando permitido ou a mensagem PT-BR de bloqueio).
 | `personas` | lista de ids de `board.yaml.personas` | |
 | `systems` | lista de ids de `board.yaml.systems` | sistemas genéricos do board (sem marca) |
 | `links` | lista de `{ rel, to }` | `rel` = id de `linkTypes`, `to` = id de outro card |
-| `narrative` | `{ role, want, soThat }` | só stories. A user story Agile (3 partes). Parte do gate `hasRefinement` (entrada em `priorizar`). Preenchida por `harness-enrich`. |
-| `acceptance` | lista de strings | critérios de aceite (Gherkin recomendado). Parte do gate `hasRefinement` (entrada em `priorizar`). Preenchido por `harness-enrich`. |
+| `narrative` | `{ role, want, soThat }` | só stories. A user story Agile (3 partes). Parte do gate `hasRefinement` (entrada em `pronta`). Preenchida por `harness-enrich`. |
+| `acceptance` | lista de strings | critérios de aceite (Gherkin recomendado). Parte do gate `hasRefinement` (entrada em `pronta`). Preenchido por `harness-enrich`. |
 | `tasks` | lista de `{ id, title, done }` | quebra em tarefas. Gate `hasTasks` (entrada em `desenvolver`). Preenchido por `harness-tasks`. |
-| `rice` | `{ reach, impact, confidence, effort }` | inputs RICE (número ou `null`). Parte do gate de `pronta`. |
-| `kano` | `must-be`\|`performance`\|`attractive`\|`indifferent`\|`reverse`\|`null` | categoria KANO (forma da satisfação). Parte do gate de `pronta`. Ver `frameworks.md`. |
-| `funnelStage` | `awareness`\|`acquisition`\|`activation`\|`retention`\|`referral`\|`revenue`\|`null` | estágio do funil AAARRR (objetivo). Parte do gate de `pronta`. Ver `frameworks.md`. |
 | `techPlanReady` | `true` (omitido se não) | ponteiro leve: o `harness-plan` escreveu `plans/<id>.md`. Gate `hasTechPlan` (entrada em `quebrar-tasks`). |
 | `wireframeChosen` | id do artefato/opção \| omitido | ponteiro leve: o artefato de tela PRIMÁRIO do canvas (ou a opção legada escolhida) em `wireframes/<id>.json`. Gate de `com-design`. |
 | `findings` | lista de `{ id, lens, severity, title, status, detail?, file?, line?, suggestion? }` | achados do `harness-review`. `lens`=um id de lente de revisão — as embutidas (`security`, `testing`, `perf`, `general`, `design`) mais as que o alvo declara em `target.reviewLenses` (a lista válida vem do `target_profile`); `severity`=blocker\|high\|medium\|low; `status`=open\|acknowledged\|fixed\|wontfix. Um `blocker` `open` trava o gate `hasNoBlockers` (entrada em `qa-automatizado`). Só emitido quando ≥1. |
@@ -293,21 +300,19 @@ narrativa é o contrato Agile, separada do título.
 em cada item de `acceptance` (testável, mapeia direto p/ `harness-tasks`/`harness-tests`); frases de
 resultado ("Após X, o usuário vê Y") seguem válidas para regras simples.
 
-**Qualidade (INVEST + Definition of Ready).** Antes de avançar para `priorizar`, a story deve ser
+**Qualidade (INVEST + Definition of Ready).** Antes de avançar para `pronta`, a story deve ser
 **I**ndependente, **N**egociável, **V**aliosa, **E**stimável, **S**mall e **T**estável; e
 estar *pronta* = narrativa completa + ≥1 critério de aceite + persona/sistemas coerentes.
 
-### `riceScore` é derivado
+### A ordem do trabalho é a posição na coluna
 
-O **score RICE não é armazenado**. Ele é calculado a partir de `rice`:
-
-```
-riceScore = (reach * impact * confidence) / effort
-```
-
-Retorna `null` enquanto algum dos quatro inputs faltar ou `effort <= 0`.
-Implementação: `packages/storymap-ui/src/lib/storymap/rice.ts` (`riceScore(rice)`).
-A view de priorização ordena pelas stories que já têm `riceScore`.
+Não há priorização (nem RICE, KANO, funil ou WSJF): a **ordem do trabalho é o `order` do card
+dentro da sua coluna** do Kanban — o card de cima vai antes. No menu do card, **«Fazer antes»**
+leva ao topo da coluna e **«Pode esperar»** ao fim (só o card movido é regravado; um `order`
+repetido empata pelo id, sem reescrever o board). O condutor e o `suggest_work` leem a mesma
+posição; só um bug grave (`bugReport.severity` alta — um fato do card, não uma nota) passa na
+frente. Cards antigos com `rice:`/`kano:`/`funnelStage:`/`priorityCall:` no frontmatter
+continuam abrindo — nada lê esses campos.
 
 ### Exemplo de story com os campos novos
 
@@ -317,7 +322,7 @@ id: story-ex0001
 type: story
 title: Reservar uma bancada da oficina comunitária
 storyType: user
-status: priorizar
+status: pronta
 parent: step-ex0003
 release: r2
 personas: [voluntaria]
@@ -336,13 +341,6 @@ tasks:
   - { id: t1, title: Grade de turnos com bancadas livres, done: true }
   - { id: t2, title: Confirmar e cancelar reserva, done: false }
   - { id: t3, title: Lembrete na véspera, done: false }
-rice:
-  reach: 150
-  impact: 1
-  confidence: 0.9
-  effort: 3
-kano: performance
-funnelStage: activation
 order: 5
 created: "2026-03-17"
 updated: "2026-04-02"
@@ -404,8 +402,8 @@ name: Demo
 package: packages/<app>      # opcional: pasta de código relacionada
 statuses:                    # pipeline; cada status pode ter gate, trigger e/ou autorun
   - { id, name, color }
-  - { id, name, color, gate: <hasRefinement|hasTasks|hasPrioritization|hasTechPlan|hasWireframe|hasNoBlockers|hasRefineBrief|hasBugReport> }
-  - { id, name, color, trigger: <harness-enrich|harness-tasks|harness-prioritize|harness-plan|harness-ux|harness-do|harness-review|harness-refine|harness-fix> }
+  - { id, name, color, gate: <hasRefinement|hasTasks|hasTechPlan|hasWireframe|hasNoBlockers|hasRefineBrief|hasBugReport> }
+  - { id, name, color, trigger: <harness-enrich|harness-tasks|harness-plan|harness-ux|harness-do|harness-review|harness-refine|harness-fix> }
   - { id, name, color, autorun: true }   # toggle do Kanban: roda a skill / encaminha (ver "Auto-run e cascata")
   - { id, name, color, trigger: harness-do, model: opus, effort: max, maxTurns: 30, costGuard: true }  # policy por coluna (Fase A): model sonnet|opus; effort low|medium|high|xhigh|max
 releases:   [{ id, name, order }]   # linhas (slices); order define a sequência
@@ -416,7 +414,7 @@ conductor:                   # opcional: UMA sessão condutora por story (ver "C
   fromStatus: pronta         # a ENTRADA neste status é o "vai"
   maxSessions: 2             # condutores vivos por board (padrão 2); o excedente espera numa fila durável
   model: opus                # opcional (padrão opus)
-  # fromStatus aceita também uma LISTA: [priorizar, corrigir, refinar] — o aceite manda o card a
+  # fromStatus aceita também uma LISTA: [pronta, corrigir, refinar] — o aceite manda o card a
   # status diferentes por tipo, e a entrada em QUALQUER um deles é o "vai".
 view:                        # opcional: o Kanban em RAIAS (ver "Vista em raias", abaixo) — ausente = Kanban de sempre
   lanes:
@@ -445,11 +443,11 @@ As skills de automação operam sobre os status que declaram `trigger`:
 
 1. **`harness-enrich`** (status `enriquecer`): lê título + corpo, classifica o `storyType`,
    escreve a `narrative` (no template do tipo) + `acceptance[]` (Gherkin recomendado) e
-   move o card para `priorizar` (o gate `hasRefinement` então passa na entrada).
-2. **`harness-prioritize`** (status `priorizar`): classifica a story preenchendo `rice`,
-   `kano` e `funnelStage` (rubrica em **`frameworks.md`**) e move para `pronta` (o gate
-   `hasPrioritization` então passa). `pronta` é **PARADA go/no-go** — o humano aprova o build.
-3. **`harness-ux` + `harness-ui`** (status `design-ux` → `design-ui`): **só rodam para stories
+   move o card para o passo seguinte — `interview` (Entrevista) numa story `user`, ou direto
+   para `pronta` (A fazer; o gate `hasRefinement` então passa na entrada). `pronta` é **PARADA
+   go/no-go** — o humano aprova o build. Não há passo de priorização: a vez do card é a posição
+   na coluna.
+2. **`harness-ux` + `harness-ui`** (status `design-ux` → `design-ui`): **só rodam para stories
    `user`**. O `harness-ux` desenha a JORNADA como grafo estruturado (nós/arestas, renderizado
    como diagrama SVG real) + narrativa no bloco `journey`; o `harness-ui` (mesma sessão,
    threadSession) compõe o CANVAS de artefatos (telas com estados-chave, componentes,
@@ -462,48 +460,48 @@ As skills de automação operam sobre os status que declaram `trigger`:
    direto de `design-ux` para `plano-tecnico` (ver "Ramificação por storyType"), e o
    `harness-ux`, se acionado na mão, faz short-circuit (não gera jornada, só encaminha com uma
    nota).
-4. **`harness-plan`** (status `plano-tecnico`): escreve o plano técnico no sidecar
+3. **`harness-plan`** (status `plano-tecnico`): escreve o plano técnico no sidecar
    `plans/<id>.md`, marca `techPlanReady: true` e move para `quebrar-tasks` (gate `hasTechPlan`).
    (O plano é escrito ANTES da quebra em tasks — o `harness-tasks` decompõe informado por ele.)
-5. **`harness-tasks`** (status `quebrar-tasks`): gera `tasks[]` a partir dos critérios de
+4. **`harness-tasks`** (status `quebrar-tasks`): gera `tasks[]` a partir dos critérios de
    aceite + o plano técnico e move para `desenvolver` (o gate `hasTasks` então passa na entrada).
-6. **`harness-do`** (status `desenvolver`): implementa as tasks (TDD), marca `done` e move
+5. **`harness-do`** (status `desenvolver`): implementa as tasks (TDD), marca `done` e move
    para `revisar-codigo`.
-7. **`harness-review`** (status `revisar-codigo`): roda lentes de review no diff, auto-corrige o
+6. **`harness-review`** (status `revisar-codigo`): roda lentes de review no diff, auto-corrige o
    seguro (guardado por testes) e escala segurança/arquitetura como `findings` `blocker:open`;
    move para `qa-automatizado` quando não há blocker aberto (gate `hasNoBlockers`).
-8. **`harness-qa`** (status `qa-automatizado`): **ramifica por storyType**. `user` → sobe o stack
+7. **`harness-qa`** (status `qa-automatizado`): **ramifica por storyType**. `user` → sobe o stack
    dev seedado, roda os critérios de aceite de ponta a ponta (E2E) + sweep visual headless, marca
    `qaPassed` e move para `revisao` (gate `hasQaPassed`). `technical`/`chore`/`spike`/`bug` → o
    gate concreto é a **suíte do pacote** (o check `test` do perfil do alvo) verde + as lentes do `harness-review` —
    sem seed/E2E/visual; o carimbo registra `qaEvidence.suite: true`, que é o que o gate exige de um
    card com código. Suíte vermelha vira um finding `testing: blocker` e NÃO destrava o gate.
    `revisao` é a **PARADA** final — revisão humana do que foi entregue.
-9. **`harness-refine`** (status `refinar`, **modo melhoria**): triagem de uma story já entregue,
+8. **`harness-refine`** (status `refinar`, **modo melhoria**): triagem de uma story já entregue,
    reaberta pelo botão **Refinar**. Diagnostica a implementação que JÁ existe (read-only),
    reescreve `acceptance` como um DELTA e **reconcilia as `tasks`** (as do build estão
    `done`/obsoletas: regenera-as do delta na rota `desenvolver`; limpa-as p/ re-derivar no
    build na rota `design-ux`) antes de ROTEAR o card — UI/UX gera novas opções e cai em
    `design-ux`; copy/funcionalidade cai em `desenvolver`. NÃO repassa por
-   `quebrar-tasks`/`priorizar` (evita re-priorizar). Mantém `mode: refine`; as `harness-*` a
+   `quebrar-tasks` (reconcilia as tasks in-place). Mantém `mode: refine`; as `harness-*` a
    jusante melhoram in-place. Ver **["Modo refino"](#modo-refino-melhoria-de-stories-prontas)**.
-10. **`harness-fix`** (status `corrigir`, **modo correção**): triagem de uma story já entregue que
+9. **`harness-fix`** (status `corrigir`, **modo correção**): triagem de uma story já entregue que
    QUEBROU, reaberta pelo botão **Reportar bug**. Diagnostica e **REPRODUZ** a regressão no
    código que já existe (read-only), reescreve `acceptance` como esperado×atual e **reconcilia
    as `tasks`** (regenera-as com um teste de reprodução como #1 na rota `desenvolver`; limpa-as
    p/ re-derivar no build na rota `design-ux`) antes de ROTEAR — regressão visual → `design-ux`;
-   comportamento/copy → `desenvolver`. NÃO repassa por `quebrar-tasks`/`priorizar` (evita
-   re-priorizar). Mantém `mode: fix`; as `harness-*` a jusante corrigem in-place com guard de
+   comportamento/copy → `desenvolver`. NÃO repassa por `quebrar-tasks` (reconcilia as tasks
+   in-place). Mantém `mode: fix`; as `harness-*` a jusante corrigem in-place com guard de
    regressão. Ver **["Modo correção"](#modo-correção-bug-em-stories-prontas)**.
 
 Regra de ouro: **gates bloqueiam o avanço sem os critérios**. Uma automação que tente
 mover um card para um status com gate sem preencher o campo correspondente é recusada
-(`checkGate` retorna a mensagem). Por isso a sequência é sempre enriquecer → priorizar →
+(`checkGate` retorna a mensagem). Por isso a sequência é sempre enriquecer → (entrevista) →
 pronta → design UI/UX → com design → plano técnico → quebrar tasks → desenvolver →
 revisar código → QA automatizado → revisão.
 
-> Priorização (RICE · KANO · funil AAARRR): a rubrica de classificação está em
-> **`storymap/frameworks.md`** — leia antes de preencher `kano`/`funnelStage`.
+> Tipo de story e narrativa: a rubrica de classificação está em
+> **`storymap/frameworks.md`** — leia antes de escrever a `narrative` de um card.
 
 ### Auto-run e cascata (toggle `autorun` por coluna)
 
@@ -511,7 +509,7 @@ Cada status tem um campo **`autorun`** (toggle no Kanban — pílula "⚡ auto" 
 serviço do AgileHarness rodando, quando um card **entra** num status `autorun: true`, o channel
 **`trigger-runner`** (`lib/notifications/server/channels/`) faz uma de duas coisas:
 
-- status **com `trigger`** (enriquecer/priorizar/design-ux/plano-tecnico/quebrar-tasks/
+- status **com `trigger`** (enriquecer/interview/design-ux/plano-tecnico/quebrar-tasks/
   desenvolver/revisar-codigo/qa-automatizado) → **roda a skill**
   (spawna `claude -p "/<trigger> <board>/<id>"` via shell, headless);
 - status **de pouso** (gate, sem trigger) → **encaminha** o card pra próxima coluna (a ponte da
@@ -521,7 +519,7 @@ serviço do AgileHarness rodando, quando um card **entra** num status `autorun: 
 `autorun` ≠ true = **manual**: o card para ali — **exceto** o bloco de design para stories
 não-`user`, que a cascata pula mesmo sob `autorun: false` (ver "Ramificação por storyType").
 Compondo os toggles você monta a cascata. O
-**default** (`board.yaml`) roda **enriquecer → priorizar** sozinho e **PARA em `pronta`** (go/no-go);
+**default** (`board.yaml`) roda **enriquecer → entrevista** sozinho e **PARA em `pronta`** (go/no-go);
 depois das paradas que o humano libera (`pronta`, `com-design`) a cascata segue pelos produtores
 até a parada final `revisao`. Num board conservador as colunas de design/código nascem manuais.
 
@@ -531,7 +529,7 @@ A skill também roda em modo **pull** quando você a chama (`/harness-enrich …
   `packages/storymap-ui/.env.local` (o Next carrega no runtime; env de shell nem sempre sobrevive
   ao hop turbo → next dev no Windows). Requer **SSE ativo** (aba do board aberta) + `claude` no PATH.
 - **Permissões:** `harness-do`/`harness-review` (código+testes) e `harness-enrich` (edita o card in place) rodam com
-  `--dangerously-skip-permissions`; `harness-tasks`/`harness-prioritize`/`harness-plan`/`harness-ux` com `acceptEdits`.
+  `--dangerously-skip-permissions`; `harness-tasks`/`harness-plan`/`harness-ux` com `acceptEdits`.
 - **Sem loop:** a skill move o card pra fora do trigger e o forward só avança (monotônico); lock
   por card + cap de concorrência. Atua em `card.moved` E `card.created` (cobre o card renomeado).
 - **Pegou o código novo?** O dispatcher é singleton (cache `globalThis`) → **reinicie** o
@@ -791,13 +789,12 @@ o que funciona, aqui você RESTAURA o que regrediu.
    - Escolha um `id` único no charset `a-z0-9-`; ele é o nome do arquivo.
    - Defina `parent` correto (story→step, step→activity) e, para story, `release`.
    - Inicie em `triage` (a Triagem, staging — porta única de entrada); arrays vazios (`acceptance: []`, `tasks: []`),
-     `narrative: { role: null, want: null, soThat: null }` e
-     `rice: { reach: null, impact: null, confidence: null, effort: null }` são o default seguro.
+     `narrative: { role: null, want: null, soThat: null }` são o default seguro.
      Para story, defina `storyType` (default `user`) e, sempre que possível, já escreva a narrativa.
    - Para inserir no fim de um grupo, use um `order` maior que o dos irmãos (ex.: último + 10).
 3. **Editar:** altere o frontmatter/corpo do arquivo do card.
-4. **Avançar de status:** preencha o gate antes (narrativa + aceite → tasks → priorização) e então mude `status`.
-5. **Mover/reordenar:** mude `parent`, `release` e/ou `order`.
+4. **Avançar de status:** preencha o gate antes (narrativa + aceite → plano → tasks) e então mude `status`.
+5. **Mover/reordenar:** mude `parent`, `release` e/ou `order` (o `order` é também a vez do card na coluna).
 6. **Excluir:** apague o arquivo e remova referências (`parent`/`links`) em outros cards.
 
 Mantenha um campo por linha quando possível para diffs limpos. Não invente ids de

@@ -108,7 +108,7 @@ describe("rerequestPublishRequestsAction — só o operador refaz os pedidos de 
   });
 });
 
-describe("por construção: a porta é o botão da Esteira", () => {
+describe("por construção: a porta é o botão do Inbox (a Esteira saiu na fase 3)", () => {
   it("nenhum arquivo das tools MCP chama a action", () => {
     const mcpDir = path.join(__dirname, "..", "lib", "storymap", "mcp");
     const files = readdirSync(mcpDir, { recursive: true }).map(String).filter((f) => /\.(ts|tsx)$/.test(f) && !/\.test\.tsx?$/.test(f));
@@ -116,11 +116,13 @@ describe("por construção: a porta é o botão da Esteira", () => {
     expect(files.filter((f) => readFileSync(path.join(mcpDir, f), "utf8").includes("rerequestPublishRequestsAction"))).toEqual([]);
   });
 
-  it("a Esteira mostra o botão quando há pedido do board e o troca por «refazendo o pedido…» enquanto refaz", () => {
-    const src = readFileSync(path.join(__dirname, "..", "components", "EntregaScreen.tsx"), "utf8");
-    expect(src).toContain("data.publishRequests && data.publishRequests.pending > 0");
-    expect(src).toContain("rerequestPublishRequestsAction({ board: b })");
-    expect(src).toContain("Refazer os pedidos de publicação");
-    expect(src).toMatch(/requests\.rerequesting \?[\s\S]*refazendo o pedido…/);
+  it("o despachante do Inbox é quem a chama: o «Refazer o pedido agora» do item envelhecido, com o board do item", () => {
+    const src = readFileSync(path.join(__dirname, "..", "components", "quick-action-run.ts"), "utf8");
+    expect(src).toContain("rerequestPublishRequestsAction({ board: invoke.boardId })");
+    const model = readFileSync(path.join(__dirname, "..", "lib", "storymap", "inbox", "decision.ts"), "utf8");
+    expect(model).toContain('label: "Refazer o pedido agora"');
+    expect(model).toContain('invoke: { kind: "rerequest-publish", boardId }');
+    // enquanto refaz, o item não oferece botão: diz o estado (o botão de antes autorizaria o que já mudou)
+    expect(model).toMatch(/next: \{ who: "sistema", label: "refazendo o pedido…" \}/);
   });
 });

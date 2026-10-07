@@ -74,7 +74,7 @@ the full workflow.
      of one). Cover the path end to end (entry, steps, empty/error, exit). Link each screen to
      the flow node it realizes via `journeyRef: "<nodeId>"`.
    - **Interview synthesis + personas** — the must-haves/dores drive what each screen must show
-     and prioritize.
+     and put first.
    - **Grounding de estilo — cascata única de precedência**: ① o guia de estilo do board
      (`storymap/boards/<board>/design/style-guide.md`, quando `board.yaml` tiver `styleGuide:`)
      → ② a skill `*-ui-aesthetics` do app (60/30/10, depth, anti-patterns) → ③ derive dos

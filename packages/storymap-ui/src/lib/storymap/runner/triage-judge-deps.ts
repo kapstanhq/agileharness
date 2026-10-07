@@ -2,10 +2,10 @@
 // limites e o binário vêm do settings VIVO, então ligar/desligar não pede restart.
 
 import { ORGANIZE_ONLY_WHY, isOrganizeOnly, organizeOnlyNow } from "@/lib/storymap/organize-only";
-import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { evaluateAutorunOnEntry } from "@/lib/notifications/server/channels/autorun-eval";
-import { boardDocPath, runnerStateDir } from "@/lib/storymap/paths";
+import { runnerStateDir } from "@/lib/storymap/paths";
+import { readPrdWithContext } from "@/lib/storymap/board-strategy";
 import { listBoards, readBoardConfig, readCards } from "@/lib/storymap/repo";
 import { runClaudeJson } from "@/lib/storymap/smart-capture/claude";
 import { planTriageJudgement, type TriageJudgePlan, type TriageOtherBoard } from "@/lib/storymap/triage/judge";
@@ -38,7 +38,8 @@ export function defaultTriageJudgeDeps(): TriageJudgeDeps {
     listBoards: async () => (await listBoards()).map((b) => b.id),
     readBoardConfig: (board) => readBoardConfig(board).catch(() => null),
     readCards: (board) => readCards(board),
-    readPrd: (board) => fsp.readFile(boardDocPath(board, "prd"), "utf8").catch(() => null),
+    // o PRD + o contexto dos agentes (o PRD antigo virou os dois; um formato 1 ainda não migrado já chega no novo)
+    readPrd: (board) => readPrdWithContext(board).catch(() => null),
     masterEnabled: () => loadRunnerConfig().autorun.enabled,
     boardGate: boardGateNow,
     admission: automationAdmission,
@@ -66,7 +67,7 @@ export function defaultTriageJudgeDeps(): TriageJudgeDeps {
         if (!cfg) continue;
         // Board SÓ DE ORGANIZAÇÃO (organize-only.ts) nunca é destino do roteamento: nada chega nele sozinho.
         if (isOrganizeOnly(cfg)) continue;
-        const prd = await fsp.readFile(boardDocPath(b.id, "prd"), "utf8").catch(() => null);
+        const prd = await readPrdWithContext(b.id).catch(() => null);
         out.push({
           id: b.id,
           name: b.name,

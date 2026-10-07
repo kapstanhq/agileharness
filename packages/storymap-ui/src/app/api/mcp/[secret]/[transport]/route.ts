@@ -80,9 +80,10 @@ import { registerStorymapTools } from "@/lib/storymap/mcp/tools";
 import { registerDevTools } from "@/lib/storymap/mcp/dev-tools";
 import { registerOnboarding, MCP_INSTRUCTIONS } from "@/lib/storymap/mcp/onboarding";
 import { registerResources } from "@/lib/storymap/mcp/resources";
-import { setServerLevel } from "@/lib/storymap/mcp/register";
+import { setServerLevel, setServerToolset } from "@/lib/storymap/mcp/register";
+import { MCP_TOOLSET_HEADER, parseToolset, type McpToolset } from "@/lib/storymap/mcp/toolsets";
 import { runWithMcpActor, type McpActor } from "@/lib/storymap/mcp/actor";
-import { MCP_CALLER_HEADER, parseCallerTag } from "@/lib/storymap/mcp/caller";
+import { MCP_CALLER_HEADER, credentialBoundCaller, demoteUnprovenServiceCaller, parseCallerTag } from "@/lib/storymap/mcp/caller";
 import { SESSION_PROOF_HEADER, parseSessionProof } from "@/lib/storymap/mcp/session-proof";
 import type { McpLevel } from "@/lib/storymap/types";
 
@@ -159,7 +160,12 @@ async function resolveActor(presented: string): Promise<ActorResolution> {
     // campo por IGUALDADE com o tokenEnv do run, e trocá-lo por um rótulo quebraria a atribuição do
     // copiloto. Handle entra como `handle:<id>` (`mcpActorLabel`): identifica a credencial usada sem
     // carregar um byte de segredo, que é o que faz um incidente ser reconstruível.
-    actor: { level: c.level, tokenEnv: c.via === "handle" ? mcpActorLabel(c) : c.tokenEnv },
+    actor: {
+      level: c.level,
+      tokenEnv: c.via === "handle" ? mcpActorLabel(c) : c.tokenEnv,
+      // o rótulo do handle viaja no ator: é ele que PROVA um papel do serviço (a Sentinela — mcp/caller.ts)
+      ...(c.via === "handle" && c.label ? { credentialLabel: c.label } : {}),
+    },
   };
 }
 
@@ -171,15 +177,18 @@ async function resolveActor(presented: string): Promise<ActorResolution> {
 // independently. Só credencial JÁ autenticada chega aqui, então o mapa não cresce por tentativa.
 const handlerCache = new Map<string, (req: Request) => Promise<Response>>();
 
-function handlerFor(secret: string, level: McpLevel): (req: Request) => Promise<Response> {
+function handlerFor(secret: string, level: McpLevel, toolset?: McpToolset): (req: Request) => Promise<Response> {
   // basePath = everything BEFORE the [transport] segment, so mcp-handler derives the
   // streamable endpoint as `${basePath}/mcp` = /api/mcp/<credencial>/mcp (what you paste).
   const basePath = `/api/mcp/${secret}`;
-  const cached = handlerCache.get(basePath);
+  // O PAPEL (mcp/toolsets.ts) entra na chave: a superfície montada depende dele. Limitado (credenciais × papéis fixos).
+  const cacheKey = toolset ? `${basePath}#${toolset}` : basePath;
+  const cached = handlerCache.get(cacheKey);
   if (cached) return cached;
   const handler = createMcpHandler(
     (server) => {
       setServerLevel(server, level); // 6.5 — stamp BEFORE registering so defineTool filters this build by level
+      setServerToolset(server, toolset); // o papel só ESTREITA o que o nível monta (contexto, não autoridade)
       registerOnboarding(server); // first, so it surfaces at the top of the tool list
       registerStorymapTools(server);
       registerDevTools(server);
@@ -197,7 +206,7 @@ function handlerFor(secret: string, level: McpLevel): (req: Request) => Promise<
     // Redis requirement we deliberately avoid).
     { basePath, maxDuration, disableSse: true, verboseLogs: false },
   );
-  handlerCache.set(basePath, handler);
+  handlerCache.set(cacheKey, handler);
   return handler;
 }
 
@@ -258,12 +267,22 @@ async function handle(req: Request, ctx: RouteCtx): Promise<Response> {
   // cacheado por level (a superfície montada não muda por request); a identidade vem do ALS, não do cache.
   // O rótulo que o agente declarou de si (mcp/caller.ts) entra no ator só como ATRIBUIÇÃO — o nível continua vindo do
   // token, e nada autoriza por este cabeçalho.
-  const declared = parseCallerTag(req.headers.get(MCP_CALLER_HEADER));
+  // O PAPEL PROVADO PELA CREDENCIAL vence o rótulo declarado: o handle efêmero da Sentinela é ela, com o cabeçalho ou sem.
+  // Um papel do serviço DECLARADO sem essa prova vira um agente de fora (mcp/caller.ts demoteUnprovenServiceCaller): ele
+  // não escolhe o balde do limite por hora nem fala na trilha como a Sentinela, o procurador ou o crítico.
+  const bound = credentialBoundCaller(portao.value.credentialLabel);
+  const parsed = parseCallerTag(req.headers.get(MCP_CALLER_HEADER));
+  const declared = bound ?? (parsed ? demoteUnprovenServiceCaller(parsed, portao.value.level) : null);
   // a prova de sessão (mcp/session-proof.ts) viaja ao lado do rótulo — quem decide por sessão a VERIFICA; aqui é só dado
   const proof = declared?.kind === "session" ? parseSessionProof(req.headers.get(SESSION_PROOF_HEADER)) : null;
   const caller = declared && proof ? { ...declared, proof } : declared;
   const actor: McpActor = caller ? { ...portao.value, caller } : portao.value;
-  return runWithMcpActor(actor, () => handlerFor(presented, actor.level)(req));
+  // O papel declarado pela sessão (o arquivo de MCP que o serviço escreve): só ESTREITA a superfície do nível — um
+  // cabeçalho mentido daria MENOS tools, nunca mais; ausente/desconhecido ⇒ a superfície inteira do nível (o de antes).
+  // A credencial DA SENTINELA monta só as tools dela, com o cabeçalho ou sem: aí o recorte é CONTENÇÃO (o servidor nem
+  // registra mover card, responder pergunta ou publicar para ela), não cortesia do cliente.
+  const toolset = bound?.kind === "sentinel" ? "sentinel" : parseToolset(req.headers.get(MCP_TOOLSET_HEADER));
+  return runWithMcpActor(actor, () => handlerFor(presented, actor.level, toolset)(req));
 }
 
 // Streamable HTTP uses POST for calls, GET for stream resumption, DELETE to end a

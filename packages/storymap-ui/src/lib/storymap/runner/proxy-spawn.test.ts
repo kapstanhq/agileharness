@@ -43,7 +43,9 @@ const asked: ProxyQuestion[] = [
 ];
 
 describe("blindQuestion — a opinião de quem perguntou NÃO chega ao proxy", () => {
-  it("tira `recommended` das opções e a `recommendation` em prosa; mantém prós/contras e contexto", () => {
+  // Fase 4 (decisão do dono): o procurador é CEGO — prós e contras são o argumento de quem perguntou (escritos para levar à
+  // opção dele) e saem junto com a recomendação; a ordem das opções é embaralhada. Ficam o texto, o contexto e as opções.
+  it("tira `recommended`, a `recommendation` em prosa, os prós/contras e a marca no rótulo; mantém o contexto", () => {
     const q: CardQuestion = {
       id: "q2",
       text: "Qual variante?",
@@ -56,13 +58,26 @@ describe("blindQuestion — a opinião de quem perguntou NÃO chega ao proxy", (
       ],
     };
     const b = blindQuestion(q)!;
-    expect(JSON.stringify(b)).not.toMatch(/recommend/);
-    expect(b.options).toEqual([
-      { id: "o1", label: "A", pros: ["simples"] },
-      { id: "o2", label: "B", cons: ["denso"] },
+    expect(JSON.stringify(b)).not.toMatch(/recommend|simples|denso|pros|cons/);
+    expect([...(b.options ?? [])].sort((x, y) => x.id.localeCompare(y.id))).toEqual([
+      { id: "o1", label: "A" },
+      { id: "o2", label: "B" },
     ]);
     expect(b.context).toBe("o card muda a home");
+    const marked = blindQuestion({ ...q, options: [{ id: "o1", label: "Lista simples (recomendado)" }, { id: "o2", label: "Grade" }] })!;
+    expect(marked.options?.find((o) => o.id === "o1")?.label).toBe("Lista simples");
     expect(blindQuestion({ id: "q9", text: "?", status: "open", category: "interview", recommendation: "faça X" })).not.toHaveProperty("recommendation");
+  });
+
+  it("embaralha a ordem das opções de forma DETERMINÍSTICA (a mesma a cada chamada; os ids não mudam)", () => {
+    const options = Array.from({ length: 6 }, (_, i) => ({ id: `o${i + 1}`, label: `opção ${i + 1}` }));
+    const q: CardQuestion = { id: "q7", text: "Qual estante destacar?", status: "open", category: "technical", options };
+    const a = blindQuestion(q)!.options!.map((o) => o.id);
+    expect(blindQuestion(q)!.options!.map((o) => o.id)).toEqual(a);
+    expect([...a].sort()).toEqual(options.map((o) => o.id));
+    // em alguma pergunta a ordem muda (o embaralhamento existe de fato)
+    const orders = ["q1", "q2", "q3", "q4", "q5"].map((id) => blindQuestion({ ...q, id })!.options!.map((o) => o.id).join());
+    expect(orders.some((o) => o !== options.map((x) => x.id).join())).toBe(true);
   });
 
   it("só o que é do proxy vira pergunta do proxy (money/owner/sem categoria ⇒ null; delivery é do proxy em só-negócio)", () => {
@@ -339,5 +354,13 @@ describe("spawnProxy — contenção e contrato do arquivo", () => {
     const r = await spawnProxy({ ...REQ, questions: [] }, { claudeBin: "claude", resolvePosture: (cwd) => posturaContida(cwd), spawn: spawnFalso(capturado) });
     expect(capturado.args).toBeUndefined();
     expect(r.error).toBeTruthy();
+  });
+});
+
+describe("integração da fase 6 — o procurador sem a régua e com o pacote de contexto", () => {
+  it("o prompt não revela o limiar da auditoria", () => {
+    const p = buildProxyPrompt("/tmp/x/answers.json", []);
+    expect(p).toMatch(/confidence/);
+    expect(p).not.toMatch(/0\.5|vai para a auditoria/);
   });
 });

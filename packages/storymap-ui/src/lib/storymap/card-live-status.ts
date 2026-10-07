@@ -343,7 +343,6 @@ const RUN_VERB: Record<string, string> = {
   "harness-tasks": "planejando",
   "harness-grill": "investigando",
   "harness-interview": "entrevistando",
-  "harness-prioritize": "priorizando",
   "harness-fix": "diagnosticando",
   "harness-refine": "diagnosticando",
   "harness-ux": "desenhando",

@@ -6,7 +6,7 @@ import type { Card, CardQuestion } from "./types";
  * Pipeline-owned fields the editor drawer must NEVER clobber on save.
  *
  * The drawer owns only the human-authored product fields (title, narrative,
- * acceptance, tasks, RICE/KANO/funnel, links, body, status, parent, release,
+ * acceptance, tasks, links, body, status, parent, release,
  * vocab). These fields, by contrast, are mutated by their OWN actions / harness-*
  * skills (chooseWireframeAction, updateFindingStatusAction, the plan/review/QA
  * runs, the reopen flows) and may have advanced AFTER the drawer loaded its
@@ -30,7 +30,7 @@ export const PIPELINE_OWNED_FIELDS = [
   "refinement",
   "bugReport",
   "retirement",
-  // Bug priority axes (Fase 2) — set by the triage agent / harness-fix, not the drawer.
+  // Bug triage metadata — set by the triage agent / harness-fix, not the drawer.
   "frequency",
   "hasWorkaround",
   // Fase 4b staged release — set by the merge train (stagedAt) / release action (releasedAt).
@@ -38,10 +38,7 @@ export const PIPELINE_OWNED_FIELDS = [
   "releasedAt",
   // Per-instance routing override — set by the deterministic skip rules / harness-refine, never the drawer.
   "routing",
-  // Prioridade argumentada — set by /harness-prioritize or the bench's "Avaliar/Ajustar", never the drawer's
-  // Save (a stale draft would wipe an agent/human-assessed priority — the same clobber class this guards).
-  "priorityCall",
-  // UI-surface flag — set by /harness-enrich (frontmatter-direct, mirrors priorityCall) and the regression
+  // UI-surface flag — set by /harness-enrich (frontmatter-direct) and the regression
   // flip, never the drawer; preserving it from disk keeps a Save from wiping the QA-regime signal.
   "hasUiSurface",
   // Superfície MEDIDA pelo engine + o QUE o QA provou: o drawer não tem campo para nenhum dos dois,
@@ -77,6 +74,9 @@ export const PIPELINE_OWNED_FIELDS = [
   // A marca de cadeia de conserto de revisão (runner/review-rounds.ts): só o servidor a grava, na criação do conserto.
   // O drawer não a mostra; o update_card do agente a recusa — sem isto um agente reescrevia a raiz e zerava o teto.
   "reviewChain",
+  // A marca de LOTE do condutor (fase 7): só o servidor a grava (`claim_batch`/`batch_drop`) — o drawer não a mostra e
+  // o update_card do agente a recusa; um rascunho anterior à marca a apagaria no Save e soltaria o item do lote.
+  "batch",
 ] as const satisfies readonly (keyof Card)[];
 
 /**
@@ -313,7 +313,7 @@ export function isOwnerStateQuestion(q: Pick<CardQuestion, "category" | "text" |
 
 /**
  * O ESTADO DO DONO não vem do run. O worktree é escrita de um agente: uma pergunta do dono que ele «responde», cria ou
- * apaga no frontmatter, e a marca de cadeia de revisão (`reviewChain`) que ele muda, não podem aterrissar na main pelo
+ * apaga no frontmatter, e as marcas de cadeia de revisão (`reviewChain`) e de lote (`batch`) que ele muda, não podem aterrissar na main pelo
  * merge — senão um agente forjava a resposta do dono (ou zerava o teto de rodadas) só editando o próprio card. Para
  * esses, o lado da MAIN vence sempre: a marca é a de main; cada pergunta do dono é a versão de main (ausente em main ⇒
  * não entra; presente em main e apagada no run ⇒ volta). As outras perguntas seguem o 3-way por elemento. PURA.
@@ -322,6 +322,10 @@ export function withOwnerStateFromMain(merged: Card, main: Card): Card {
   const out: Card = { ...merged };
   if (main.reviewChain) out.reviewChain = main.reviewChain;
   else delete out.reviewChain;
+  // Fase 7 — a marca de LOTE do condutor também é do servidor (`claim_batch`/`batch_drop`, sempre na main): um worktree
+  // que a forja ou apaga no próprio card não a muda na main.
+  if (main.batch) out.batch = main.batch;
+  else delete out.batch;
   const mainQs = main.questions ?? [];
   const mainById = new Map(mainQs.map((q) => [q.id, q] as const));
   const questions: CardQuestion[] = [];

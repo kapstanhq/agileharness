@@ -251,6 +251,24 @@ describe("ownerDecisions — o proxy imita o DONO, nunca a si mesmo", () => {
   });
 });
 
+describe("integração da fase 6 — precedentes por relevância, as correções do dono no topo", () => {
+  it("correção do dono primeiro; depois a mais parecida com a pergunta de agora; depois a mais recente", () => {
+    const cards = [
+      card("Vitrine de livros", [
+        q("q1", { text: "Qual a ordem da vitrine de lançamentos?", status: "answered", answer: "por data", answeredAt: "2026-09-01" }),
+        q("q2", { text: "Cor do botão de compra?", status: "answered", answer: "verde", answeredAt: "2026-09-20" }),
+      ]),
+      card("Carrinho", [
+        q("q3", { text: "Mostrar frete no carrinho?", status: "answered", answer: "sim", answeredAt: "2026-09-10", proxy: { auditOutcome: "reopened" } as CardQuestion["proxy"] }),
+      ]),
+    ];
+    const ranked = ownerDecisions(cards, "Como ordenar a vitrine de lançamentos da livraria?");
+    expect(ranked.map((d) => d.answer)).toEqual(["sim", "por data", "verde"]);
+    expect(ranked[0].correction).toBe(true);
+    expect(ranked[1]).not.toHaveProperty("correction");
+  });
+});
+
 describe("proxyAdmissionReason — a janela da CONTA antes da caixa", () => {
   const admit = { admit: true, reason: "admit" as const, detail: "", retryAt: null };
   const held = { admit: false, reason: "latch" as const, detail: "trava 92/90", retryAt: null };

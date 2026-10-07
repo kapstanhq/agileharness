@@ -49,7 +49,8 @@ export type DocBlock =
       kind: "section";
       id: string;
       label: string;
-      tone: "hero" | "neutral";
+      /** `note` = uma região SÓ-LEITURA anotada: o rótulo é uma legenda discreta, não um título de seção. */
+      tone: "hero" | "neutral" | "note";
       body: DocBlock[];
       binding?: string;
     };
@@ -140,7 +141,7 @@ export const DocBlockSchema: z.ZodType<DocBlock> = z.lazy(() =>
       kind: z.literal("section"),
       id: z.string(),
       label: z.string(),
-      tone: z.union([z.literal("hero"), z.literal("neutral")]),
+      tone: z.union([z.literal("hero"), z.literal("neutral"), z.literal("note")]),
       body: z.array(DocBlockSchema),
       binding: z.string().optional(),
     }),

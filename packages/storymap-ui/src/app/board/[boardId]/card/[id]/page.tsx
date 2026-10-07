@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { getBoard, listBoards } from "@/lib/storymap/repo";
 import { decodeRouteParam } from "@/lib/storymap/deep-links";
 import { CardDocScreen } from "@/components/CardDocScreen";
-import { boardStrategy } from "@/lib/storymap/board-strategy";
+import { boardStrategy, boardWithPersonas } from "@/lib/storymap/board-strategy";
 
 export const dynamic = "force-dynamic";
 
@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export default async function CardPage(props: { params: Promise<{ boardId: string; id: string }> }) {
   const params = await props.params;
 
-  const [board, boards] = await Promise.all([getBoard(params.boardId), listBoards()]);
+  const [board, boards] = await Promise.all([getBoard(params.boardId).then((b) => b && boardWithPersonas(b)), listBoards()]);
   if (!board) notFound();
 
   // Next does not decode App-Router params — see decodeRouteParam. Safe today only because card ids

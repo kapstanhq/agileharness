@@ -27,11 +27,11 @@ const CODE_TRIGGERS: TriggerId[] = [
   "harness-resolve",
 ];
 // Skills that write ONLY the card .md (no Bash / no code) → run WITHOUT --dangerously-skip-permissions.
-const NO_AUTONOMY: TriggerId[] = ["harness-grill", "harness-tasks", "harness-prioritize", "harness-plan"];
+const NO_AUTONOMY: TriggerId[] = ["harness-grill", "harness-tasks", "harness-plan"];
 // Linear data skills whose successful run ALWAYS advances the card → a clean exit that left it in
 // place is a sucesso-fantasma (no-op). Excludes HITL (grill, AND harness-capture — it proposes cards in the
 // sidecar and RESTS in `capturando` for the human to accept in Inbox) and conditional-advance skills.
-const ADVANCE_ON_SUCCESS: TriggerId[] = ["harness-enrich", "harness-tasks", "harness-prioritize", "harness-plan"];
+const ADVANCE_ON_SUCCESS: TriggerId[] = ["harness-enrich", "harness-tasks", "harness-plan"];
 
 const entries = Object.entries(AGENTS) as [
   TriggerId,

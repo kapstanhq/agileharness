@@ -1,104 +1,202 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { usePathname, useRouter } from "next/navigation";
-import Link from "next/link";
+// O KANBAN — o quadro por FUNCIONALIDADE com o fluxo como cabeçalho (desenho 6a da fase 1).
+//
+// Três faixas, de cima para baixo: os controles (a barra do topo + a 2ª barra do Kanban: ritmo · atividade · busca ·
+// Mostrar), ONDE está cada coisa (o trecho do fluxo em cima de cada raia, com uma caixinha por item) e O QUE FAZER (os
+// cards). Cada informação aparece uma vez só: o nome e o total da raia moram no trecho do fluxo, que é o cabeçalho
+// da coluna; o card mostra a funcionalidade e o item que anda nela; «precisa de você» é estado do card, não raia.
+//
+// As raias são as do board (`view.lanes`; o `_base` declara as seis do desenho; quem não declara ganha uma raia por
+// coluna). A Entrega mostra o TREM — o que está nele fica só no fluxo e no trem; o que espera FORA dele (a aprovação
+// do dono, um erro) aparece como card embaixo — e o No ar mostra o que chegou desde a sua última visita (a chegada é a
+// transição para o status terminal, do ledger — nunca a última escrita do card). O padrão do «Mostrar» é
+// EXCEÇÕES: cards só para o que roda, deu erro, precisa de você ou está pausado — o resto são caixinhas no fluxo.
+//
+// O ESTADO de cada item sai de UMA régua: a linha de estado viva (useBoardLiveStatuses → card-live-status.ts), o
+// Decidir do Inbox (useOwnerDecisions) e o ritmo do board — reduzidos em kanban-features.ts `designState`. O quadro só
+// guarda o que é da tela: a busca (na URL), o recorte, o item aceso e o popover aberto. Sem arrastar nesta fase: mover
+// um card é pedido ao Jido pelo menu do card.
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
-import { Info, Search, SlidersHorizontal, X } from "lucide-react";
-import { cn } from "@/lib/cn";
+import Link from "next/link";
+import { kanbanStories } from "@/lib/storymap/views";
+import type { OwnerDecisions } from "@/lib/storymap/inbox/decidir-set";
+import { matchesCardQuery } from "@/lib/storymap/kanban-filter";
 import {
-  DndContext,
-  DragOverlay,
-  pointerWithin,
-  useDroppable,
-  type DragEndEvent,
-  type DragStartEvent,
-} from "@dnd-kit/core";
-import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { useBoardDragSensors } from "@/lib/drag-sensors";
-import { countChipCls } from "@/lib/ui";
-import { byUpdatedDesc, midpoint } from "@/lib/storymap/order";
-import { makeDraftCard } from "@/lib/storymap/draft";
-import {
-  entryStatusId,
-  KANBAN_LOOSE_COLUMN,
-  kanbanColumnOf,
-  kanbanColumnStatuses,
-  kanbanStories,
-} from "@/lib/storymap/views";
-import { boardLanes, groupStoriesByLane, laneDropStatus, laneSections, laneStatusTags, laneViewProblems, type ResolvedLane } from "@/lib/storymap/lanes";
-import { ownerDecisionsFromEntries, type OwnerDecisions } from "@/lib/storymap/inbox/decidir-set";
-import type { CardLiveStatus, CardPresence } from "@/lib/storymap/card-live-status";
-import { filterCardGroups, isKanbanFilterActive, kanbanTypeFacets, matchesKanbanFilter } from "@/lib/storymap/kanban-filter";
-import { useLocalToggle } from "@/lib/useLocalToggle";
-import { navItemForView, type BoardView, type NavItem } from "@/components/nav/nav-groups";
-import type { Board, BoardConfig, BoardSummary, Card, ColumnDef, StatusDef } from "@/lib/storymap/types";
-import { evaluateGate, GATE_LABELS, placementViolation } from "@/lib/storymap/gates";
-// WS-2 — the move-rejected toast escalation (?copilot=move-blocked).
-import { encodeEscalationRef } from "@/lib/storymap/copilot/escalation";
-import { forceReleaseRunAction, moveCardAction, updateBoardConfigAction } from "@/app/actions";
+  crateDashed,
+  crateFill,
+  crateProgress,
+  DELIVERY_CRATES,
+  featureTitleHref,
+  flowCaption,
+  groupByFeature,
+  kanbanLanes,
+  kindOf,
+  laneIndexOf,
+  laneStep,
+  matchesShowMode,
+  mixLabel,
+  p5place,
+  quietBoardWords,
+  quietLaneWords,
+  showModeCounts,
+  visibleEntries,
+  type FlowState,
+  type KanbanLane as LaneDef,
+} from "@/lib/storymap/kanban-features";
+import { isConducted, resolveConductorPolicy } from "@/lib/storymap/driver";
+import { agentPulse } from "@/lib/storymap/agent-presence";
 import { cardHref, inboxHref } from "@/lib/storymap/deep-links";
+import { featureCtx, type FeatureNameRef } from "@/lib/storymap/feature-key";
+import type { CardMetrics } from "@/lib/storymap/runner/telemetry";
+import type { Board, BoardSummary, Card } from "@/lib/storymap/types";
+import { getBoardMetricsAction } from "@/app/actions";
+import { getLiveArrivalsAction } from "@/app/activity-actions";
 import { BoardHeader } from "./BoardHeader";
 import { useBoardLiveStatuses } from "./CardLiveStatus";
 import { BoardLiveProvider, OwnerDecisionsProvider, ownerByCard } from "./OwnerDecisionsContext";
-import { KanbanPulse } from "./KanbanPulse";
-import { useInboxSummary } from "./useInboxSummary";
-import { ColumnPolicyPopover } from "./ColumnPolicyControls";
-import { KanbanCard } from "./KanbanCard";
-import { KanbanSearchBar, useKanbanFilter } from "./KanbanSearchBar";
-import { ToastProvider, UNDO_TOAST_MS, useToast } from "./Toast";
+import { useOwnerTimeZone } from "./OwnerTimeZone";
+import { useAgentPresence, useMergeQueue } from "./RunnerStatusProvider";
+// O relógio do quadro (o «há X», o esquecido, o «hoje» do No ar): 0 no servidor e no 1º render — a hidratação não
+// discorda de um «3 min» × «4 min» —, carimbado no mount. Com 0, as idades somem e ninguém é «esquecido».
+import { useNow } from "./inbox/useNow";
+import { useKanbanFilter } from "./KanbanSearchBar";
+import { ToastProvider } from "./Toast";
+import { FeatureCard } from "./kanban/FeatureCard";
+import { DotList, FlowSegment, type FlowCrate, type LiveSummary } from "./kanban/FlowBand";
+import { KanbanLane } from "./kanban/KanbanLane";
+import { KANBAN_DEFAULT_MODE, KanbanToolbar, isKanbanShowMode, type KanbanShowMode } from "./kanban/KanbanToolbar";
+import { useKanbanBoardPace } from "./kanban/KanbanPaceControl";
+import { LiveColumn } from "./kanban/LiveColumn";
+import { boardTrain, TrainColumn, trainAvgMinutes } from "./kanban/TrainColumn";
+import { flowStatesOf, useOwnerDecisions } from "./kanban/use-flow-states";
 
-// Q2 — SmartCaptureModal renders only behind a runtime guard ({smartOpen}),
-// so load their chunks lazily (client-only) instead of eagerly with the board. Behavior is unchanged — the
-// guards already gate mounting; this just defers the download/parse until the modal is actually opened.
+// Q2 — SmartCaptureModal renders only behind a runtime guard ({capture}), so load its chunk lazily (client-only)
+// instead of eagerly with the board. The guard already gates mounting; this just defers the download until it opens.
+// Quem a abre é o `/criar` do compositor do Jido (via BoardHeader `onSmartCapture`): este modal leva os cards do board.
 const SmartCaptureModal = dynamic(() => import("./SmartCaptureModal").then((m) => m.SmartCaptureModal), { ssr: false });
 
-const NO_STATUS = KANBAN_LOOSE_COLUMN;
+const DAY = 86_400_000;
+const METRICS_POLL_MS = 5 * 60_000;
 
-// story-ex0160: a terminal lane (No ar) accumulates dozens of cards. Render only the N most-recent
-// (already byUpdatedDesc-sorted) and move the rest behind a "ver todas" drawer so the column stays legible.
-const TERMINAL_LANE_CAP = 10;
+/** As funcionalidades do PRD do board (id + nome) e se a 1ª passada da âncora já terminou — a chave dos cards. */
+export interface KanbanFeatures {
+  /** vazio ⇒ o board não tem funcionalidades no PRD: os cards se agrupam pelo passo do mapa (o modo antigo). */
+  list: FeatureNameRef[];
+  anchoredOnce: boolean;
+}
 
-// NOTE: Focus mode (1st-click column-highlight) was DELIBERATELY REMOVED — one click now
-// opens the card directly. The 6-column redesign then folded the per-step automation pills (auto/manual ·
-// gate · skip · policy) into the discreet per-phase `ColumnAutomationMenu`, so columns read Notion-clean.
+const NO_FEATURES: KanbanFeatures = { list: [], anchoredOnce: false };
 
-/** Rótulo curto de cada gate — DERIVADO de GATES (gates.ts), não mais um Record paralelo aqui. */
-const GATE_LABEL = GATE_LABELS;
-
-export function KanbanBoard({ board, boards, owner }: { board: Board; boards: BoardSummary[]; owner: OwnerDecisions | null }) {
-  // RunnerStatusProvider now wraps the whole board via app/board/[boardId]/layout.tsx
-  // (one SSE connection for every view + the navbar runner menu). Only Toast is local.
+export function KanbanBoard({
+  board,
+  boards,
+  owner,
+  features = NO_FEATURES,
+}: {
+  board: Board;
+  boards: BoardSummary[];
+  owner: OwnerDecisions | null;
+  features?: KanbanFeatures;
+}) {
+  // RunnerStatusProvider wraps the whole board via app/board/[boardId]/layout.tsx (one SSE connection for every view).
+  // Only Toast is local.
   return (
     <ToastProvider>
-      <KanbanBoardInner board={board} boards={boards} initialOwner={owner} />
+      <KanbanBoardInner board={board} boards={boards} initialOwner={owner} features={features} />
     </ToastProvider>
   );
 }
 
-/**
- * O DECIDIR deste board, vivo: o que a página server leu do coletor do Inbox (boardDecidirCardIds) até a primeira
- * leitura do cliente, e depois a MESMA leitura do chip do Inbox (useInboxSummary, que relê a cada `inbox.changed`),
- * pela MESMA função pura. A raia do dono, a pílula do card e o botão do rodapé leem daqui — nunca por status.
- */
-function useOwnerDecisions(boardId: string, initial: OwnerDecisions | null): OwnerDecisions | null {
-  const summary = useInboxSummary();
-  return useMemo(() => (summary ? ownerDecisionsFromEntries(summary.entries, boardId) : initial), [summary, boardId, initial]);
+/** O custo e os turnos de cada card (a telemetria do board, UMA leitura em lote). Falhou ⇒ sem números, nunca erro. */
+function useBoardMetrics(boardId: string): ReadonlyMap<string, CardMetrics> {
+  const [byCard, setByCard] = useState<ReadonlyMap<string, CardMetrics>>(new Map());
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      const r = await getBoardMetricsAction({ boardId }).catch(() => null);
+      if (alive && r?.ok && r.data) setByCard(new Map(r.data.summary.cards.map((m) => [m.cardId, m] as const)));
+    };
+    void load();
+    const t = setInterval(() => void load(), METRICS_POLL_MS);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [boardId]);
+  return byCard;
 }
 
-function KanbanBoardInner({ board, boards, initialOwner }: { board: Board; boards: BoardSummary[]; initialOwner: OwnerDecisions | null }) {
-  const router = useRouter();
-  const pathname = usePathname();
-  const toast = useToast();
-  const [cards, setCards] = useState<Card[]>(board.cards);
-  const [config, setConfig] = useState<BoardConfig>(board.config);
-  const [smartOpen, setSmartOpen] = useState(false);
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const [showMeta, toggleMeta] = useLocalToggle("storymap.showMeta", false);
+/**
+ * QUANDO cada card chegou ao ar (a transição para o status terminal, do ledger — getLiveArrivalsAction), relido a
+ * cada mudança do conjunto de cards no ar e a cada 5 min. Sem leitura ainda (ou falhou) ⇒ mapa vazio: a raia No ar e o
+ * resumo omitem os números em vez de usar a última escrita do card.
+ */
+function useLiveArrivals(boardId: string, liveKey: string): ReadonlyMap<string, number> {
+  const [byCard, setByCard] = useState<ReadonlyMap<string, number>>(new Map());
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      const r = await getLiveArrivalsAction(boardId).catch(() => null);
+      if (alive && r?.ok) setByCard(new Map(Object.entries(r.data)));
+    };
+    void load();
+    const t = setInterval(() => void load(), METRICS_POLL_MS);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [boardId, liveKey]);
+  return byCard;
+}
 
-  // C2 — a STABLE onOpen passed to every column/card: an inline `(id) => router.push(...)` per render
-  // would give each card a new prop identity, defeating KanbanCard's React.memo. Deps: router + board id.
-  const handleOpen = useCallback((id: string) => router.push(cardHref(config.id, id)), [router, config.id]);
+const dayKey = (at: number, timeZone?: string) => new Date(at).toLocaleDateString("pt-BR", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" });
+
+/** O resumo da raia No ar: hoje, nas 24 h, a média dos 7 dias e a mistura do que chegou. A chegada é a transição para
+ *  o status terminal (`arrivals`, do ledger). Sem nenhum card datado, a média é omitida. */
+function liveSummaryOf(cards: readonly Card[], arrivals: ReadonlyMap<string, number>, now: number, timeZone?: string): LiveSummary {
+  const today = dayKey(now, timeZone);
+  const dated = cards.flatMap((c) => {
+    const at = arrivals.get(c.id);
+    return at != null ? [{ c, at }] : [];
+  });
+  const last24 = dated.filter((d) => now - d.at <= DAY).map((d) => d.c);
+  const week = dated.filter((d) => now - d.at <= 7 * DAY).length;
+  const kinds = { n: 0, c: 0, k: 0 };
+  for (const c of last24) {
+    const k = kindOf(c);
+    if (k === "Correção") kinds.c++;
+    else if (k === "Manutenção") kinds.k++;
+    else kinds.n++;
+  }
+  return {
+    today: dated.filter((d) => dayKey(d.at, timeZone) === today).length,
+    last24: last24.length,
+    perDay: dated.length ? week / 7 : null,
+    mix: mixLabel(kinds.n, kinds.c, kinds.k),
+    total: cards.length,
+  };
+}
+
+function KanbanBoardInner({
+  board,
+  boards,
+  initialOwner,
+  features,
+}: {
+  board: Board;
+  boards: BoardSummary[];
+  initialOwner: OwnerDecisions | null;
+  features: KanbanFeatures;
+}) {
+  const router = useRouter();
+  const timeZone = useOwnerTimeZone();
+  const [cards, setCards] = useState<Card[]>(board.cards);
+  const [config, setConfig] = useState(board.config);
+  const [capture, setCapture] = useState<{ initialText?: string } | null>(null);
 
   useEffect(() => {
     setCards(board.cards);
@@ -111,1526 +209,472 @@ function KanbanBoardInner({ board, boards, initialOwner }: { board: Board; board
     return () => window.removeEventListener("focus", onFocus);
   }, [router]);
 
-  const sensors = useBoardDragSensors();
+  const now = useNow(60_000);
+  // Só as STORIES andam no quadro (passos e atividades são as funcionalidades); o adiado («não agora») fica fora.
+  const stories = useMemo(() => kanbanStories(cards, config).filter((c) => !c.deferred), [cards, config]);
+  const cardsById = useMemo(() => new Map(cards.map((c) => [c.id, c] as const)), [cards]);
 
-  // Which statuses render as COLUMNS: everything except (a) `system`-column statuses (the archive
-  // tombstones, reached via the header trash drawer) and (b) `hidden` statuses (the reentry executors
-  // refinar/corrigir/descontinuar + the capture/style container lanes). This keeps the reentry column
-  // ELIMINATED (story-ex0118) — but it no longer decides which CARDS render.
-  const visibleStatuses = useMemo(() => kanbanColumnStatuses(config), [config]);
-  const columnStatusIds = useMemo(() => new Set(visibleStatuses.map((s) => s.id)), [visibleStatuses]);
-
-  // Only stories flow through the kanban (activities/steps are backbone-only). A story is dropped ONLY
-  // when it is an archived terminal (trash drawer) or an ephemeral capture/style container (own surface);
-  // a story in a HIDDEN reentry status (a bug being fixed in `corrigir`) or an unknown/future status is
-  // KEPT — it lands in the loose lane below rather than vanishing. `kanbanStories` is the single source of
-  // that "never lose an active card" rule (unit-tested in views.test.ts).
-  const stories = useMemo(() => kanbanStories(cards, config), [cards, config]);
-  // story-ex0160 widget: how many stories are HOMOLOGATED but not yet live — i.e. sitting in a delivery
-  // step (laneStep, the Entrega column) on the way to `concluida`. Shown atop the No ar lane as the
-  // stage↔main signal ("o que está em stage/homologado vs já no ar"). 0 when nothing is mid-delivery.
-  const stagedCount = useMemo(() => {
-    const laneStepIds = new Set(config.statuses.filter((s) => s.laneStep).map((s) => s.id));
-    return stories.filter((c) => c.status && laneStepIds.has(c.status)).length;
-  }, [stories, config.statuses]);
-  // Lookup so a card resolves the backbone node it serves (servesTarget = serves ?? parent) for the
-  // story↔item breadcrumb — ALL cards (steps/activities too), not just stories, so a served step resolves.
-  const cardsById = useMemo(() => new Map(cards.map((c) => [c.id, c])), [cards]);
-
-  const byStatus = useMemo(() => {
-    const m = new Map<string, Card[]>();
-    for (const s of visibleStatuses) m.set(s.id, []);
-    m.set(NO_STATUS, []);
-    // A story whose status has no rendered column (hidden reentry, unknown/future, or none)
-    // resolves to the loose lane instead of being dropped — see kanbanColumnOf.
-    for (const c of stories) m.get(kanbanColumnOf(c, columnStatusIds))!.push(c);
-    // Each column shows the most-recently-updated card on top (file mtime, bumped by
-    // every edit/drag/skill run). `updated` desc, not the manual `order` key.
-    for (const list of m.values()) list.sort(byUpdatedDesc);
-    return m;
-  }, [stories, visibleStatuses, columnStatusIds]);
-
-  const hasUnstatused = (byStatus.get(NO_STATUS)?.length ?? 0) > 0;
-
-  const columns: { id: string; def: StatusDef | null }[] = useMemo(() => {
-    const cols: { id: string; def: StatusDef | null }[] = visibleStatuses.map((def) => ({
-      id: def.id,
-      def,
-    }));
-    if (hasUnstatused) cols.push({ id: NO_STATUS, def: null });
-    return cols;
-  }, [visibleStatuses, hasUnstatused]);
-
-  // STAGE grouping (Stage→Step): when board.yaml declares `columns`, group the
-  // step-columns under their stage header (`StatusDef.column` → `ColumnDef.id`).
-  // Steps with no/unknown column (and the synthetic NO_STATUS) fall into a trailing
-  // headerless group. No `columns` declared → one flat headerless group (legacy).
-  const stageGroups = useMemo(() => {
-    type Col = { id: string; def: StatusDef | null };
-    type Group = { stage: ColumnDef | null; cols: Col[] };
-    const stages = config.columns ?? [];
-    if (stages.length === 0) return [{ stage: null, cols: columns }] as Group[];
-    const known = new Set(stages.map((s) => s.id));
-    const byStage = new Map<string, Col[]>();
-    const ungrouped: Col[] = [];
-    for (const c of columns) {
-      const cid = c.def?.column;
-      if (cid && known.has(cid)) {
-        const arr = byStage.get(cid) ?? [];
-        arr.push(c);
-        byStage.set(cid, arr);
-      } else {
-        ungrouped.push(c);
-      }
-    }
-    const groups: Group[] = [];
-    for (const stage of stages) {
-      const gc = byStage.get(stage.id);
-      if (gc && gc.length) groups.push({ stage, cols: gc });
-    }
-    if (ungrouped.length) groups.push({ stage: null, cols: ungrouped });
-    return groups;
-  }, [config.columns, columns]);
-
-  // O DECIDIR do board (a raia do dono, a pílula e o botão de resolver dos cards) — o MESMO do Inbox.
   const owner = useOwnerDecisions(config.id, initialOwner);
   const ownerMap = useMemo(() => ownerByCard(owner), [owner]);
-  // The LANE VIEW (board.yaml `view.lanes`, lanes.ts): when declared, the board renders lanes instead of the
-  // status/phase columns — a VIEW, the cards keep their statuses (shown as tags). Absent ⇒ null and nothing below
-  // changes: the legacy Kanban renders exactly as before.
-  const declaredLanes = useMemo(() => boardLanes(config), [config]);
-  const laneView = useMemo(
-    () => (declaredLanes ? groupStoriesByLane(stories, declaredLanes, { owner }) : null),
-    [declaredLanes, stories, owner],
-  );
-  // As LINHAS DE ESTADO de todos os cards, uma vez: o pulso, a legenda, as seções das raias e cada card leem esta.
+  // As LINHAS DE ESTADO de todos os cards, uma vez: o estado do desenho, as caixinhas e cada card leem esta.
   const live = useBoardLiveStatuses(config.id, stories, config, ownerMap);
-  // A legenda filtra por presença (um toque em «Agindo» mostra só quem age).
-  const [presenceFilter, setPresenceFilter] = useState<CardPresence | null>(null);
-  const laneProblems = useMemo(() => (declaredLanes ? laneViewProblems(config) : []), [declaredLanes, config]);
+  const pace = useKanbanBoardPace(config.id);
+  const paused = pace.view?.level === "paused" && pace.view.source !== "disarmed" && pace.view.source !== "organize-only";
+  // desligado (nunca armado) ou só de organização: nada começa sozinho — o «o que vem a seguir» de quem está na fila
+  const paceOff = pace.view?.source === "disarmed" || pace.view?.source === "organize-only";
+  const pauseMode = pace.view?.mode ?? "drain";
 
-  // A BUSCA (KanbanSearchBar) recorta o que se DESENHA, nunca o que se calcula: colunas, raias, o arrasto e a
-  // ordem de destino continuam sobre o board inteiro (byStatus/laneView). Só as listas passam pelo filtro — e
-  // a coluna que ele esvazia fica no lugar dizendo "nenhum card", para o board não pular enquanto se digita.
-  const [filter, setFilter] = useKanbanFilter();
-  const filtering = isKanbanFilterActive(filter) || presenceFilter != null;
-  const matchCtx = useMemo(() => ({ cardsById }), [cardsById]);
-  const shownIds = useMemo(
+  // Condutores trabalhando DE FATO neste board (a régua única da presença) e as vagas — do despacho, senão da config.
+  const { presence } = useAgentPresence();
+  const agentsUsed = agentPulse({ ...presence, agents: presence.agents.filter((a) => a.kind === "conductor") }, config.id).working;
+  const slotFact = presence.slots.find((s) => s.board === config.id);
+  const slots = slotFact?.max ?? resolveConductorPolicy(config)?.maxSessions ?? 0;
+
+  const lanes = useMemo(() => kanbanLanes(config), [config]);
+  const laneOfCard = useMemo(() => stories.map((c) => laneIndexOf(c.status, lanes, config)), [stories, lanes, config]);
+  const byLane = useMemo(() => {
+    const out: Card[][] = lanes.map(() => []);
+    stories.forEach((c, k) => {
+      const i = laneOfCard[k];
+      if (i >= 0) out[i].push(c);
+    });
+    return out;
+  }, [stories, lanes, laneOfCard]);
+
+  // O estado do desenho de cada item: a MESMA redução da página da funcionalidade (kanban/use-flow-states.ts) — a
+  // linha viva, o Decidir do Inbox e o ritmo, depois a vez pela raia.
+  const states = useMemo(
     () =>
-      filtering
-        ? new Set(
-            stories
-              .filter((c) => matchesKanbanFilter(c, filter, matchCtx))
-              .filter((c) => presenceFilter == null || live.get(c.id)?.presence === presenceFilter)
-              .map((c) => c.id),
+      flowStatesOf(
+        stories,
+        (c) => {
+          const l = live.get(c.id) ?? null;
+          return { live: l ? { kind: l.kind, presence: l.presence } : null, owner: ownerMap.has(c.id) };
+        },
+        { boardPaused: paused, pauseMode, now, lanes, laneOf: (_c, k) => laneOfCard[k], slots },
+      ),
+    [stories, live, ownerMap, paused, pauseMode, now, lanes, laneOfCard, slots],
+  );
+  const stateOf = useCallback((id: string): FlowState => states.get(id) ?? "queued", [states]);
+
+  // A FUNCIONALIDADE de cada card: a do PRD (com «Outros (fora do PRD)» para o que não cabe em nenhuma); board sem
+  // funcionalidades no PRD ⇒ o passo do mapa (feature-key.ts `featureKeyOf`, a MESMA chave do despacho do condutor).
+  const featCtx = useMemo(() => featureCtx(cardsById, features.list, features.anchoredOnce), [cardsById, features]);
+  const entries = useMemo(() => byLane.map((list) => groupByFeature(list, stateOf, featCtx)), [byLane, stateOf, featCtx]);
+
+  // A BUSCA (na URL, a mesma de antes) procura no título do item e da funcionalidade; com texto, ela vence o recorte.
+  const [filter, setFilter] = useKanbanFilter();
+  const query = filter.q;
+  const onQuery = useCallback((q: string) => setFilter({ ...filter, q }), [filter, setFilter]);
+  // O RECORTE «Mostrar». O padrão é TUDO (decisão do dono, 07/10): abrir o board em «Exceções» deixava as colunas vazias
+  // num board parado ou sem nada fora do trilho — estranho e inesperado. A escolha da pessoa fica lembrada por board,
+  // neste navegador (preferência de quem vê, nunca estado do board); lida DEPOIS da montagem para não divergir do SSR.
+  const [mode, setModeState] = useState<KanbanShowMode>(KANBAN_DEFAULT_MODE);
+  const modeKey = `ah.kanban.mode.${config.id}`;
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(modeKey);
+      if (saved && isKanbanShowMode(saved)) setModeState(saved);
+    } catch {
+      // armazenamento bloqueado (aba privada, política do navegador): segue o padrão
+    }
+  }, [modeKey]);
+  const setMode = useCallback(
+    (m: KanbanShowMode) => {
+      setModeState(m);
+      try {
+        window.localStorage.setItem(modeKey, m);
+      } catch {
+        // idem: a escolha vale só nesta visita
+      }
+    },
+    [modeKey],
+  );
+  const searching = query.trim().length > 0;
+  const matchCtx = useMemo(() => ({ cardsById }), [cardsById]);
+  const pass = useCallback(
+    (c: Card) => (searching ? matchesCardQuery(c, query, matchCtx) : matchesShowMode(stateOf(c.id), mode)),
+    [searching, query, matchCtx, stateOf, mode],
+  );
+  // O que está NO TREM não vira card (o trem o mostra na coluna Entrega): fica fora das contagens do «Mostrar», para o
+  // número de cada recorte ser o que o recorte mostra.
+  const mq = useMergeQueue();
+  const trainIds = useMemo(() => new Set(boardTrain(mq?.entries, config.id).flatMap((e) => (e.cardId ? [e.cardId] : []))), [mq, config.id]);
+  const counts = useMemo(() => showModeCounts(byLane.flat().filter((c) => !trainIds.has(c.id)).map((c) => stateOf(c.id))), [byLane, stateOf, trainIds]);
+  // No recorte «Exceções», um board sem exceção nenhuma (pausado, ou tudo andando) parecia VAZIO — «Nada fora do
+  // trilho» em toda coluna. Uma linha só, sob a barra, diz quantos itens andam e leva ao «Tudo». O No ar não conta
+  // (já chegou); o que está no trem conta — ele anda. Com decisão do BOARD no Inbox (uma proposta para o PRD — o ícone
+  // do Inbox diz «1»), a linha diz que nada nos CARDS precisa do dono e leva ao Inbox, em vez de «nada precisa de você».
+  const inboxDecisions = owner?.total ?? 0;
+  const quiet = useMemo(
+    () =>
+      mode === "exc" && !searching
+        ? quietBoardWords(
+            byLane.flatMap((list, i) => (lanes[i]?.role === "live" ? [] : list.map((c) => stateOf(c.id)))),
+            inboxDecisions,
           )
         : null,
-    [filtering, stories, filter, matchCtx, presenceFilter, live],
+    [mode, searching, byLane, lanes, stateOf, inboxDecisions],
   );
-  const shownByStatus = useMemo(
-    () => (shownIds ? filterCardGroups(byStatus, (c) => shownIds.has(c.id)) : byStatus),
-    [shownIds, byStatus],
+  const showAll = useCallback(() => setMode("all"), [setMode]);
+
+  const [hoverId, setHoverId] = useState<string | null>(null);
+  const [popId, setPopId] = useState<string | null>(null);
+  const metrics = useBoardMetrics(config.id);
+  const terminalIds = useMemo(() => new Set(config.statuses.filter((s) => s.terminal === true).map((s) => s.id)), [config]);
+  const liveKey = useMemo(
+    () => stories.filter((c) => c.status != null && terminalIds.has(c.status)).map((c) => c.id).sort().join(","),
+    [stories, terminalIds],
   );
-  const shownByLane = useMemo(
-    () => (laneView && shownIds ? filterCardGroups(laneView.byLane, (c) => shownIds.has(c.id)) : (laneView?.byLane ?? null)),
-    [laneView, shownIds],
-  );
-  const typeFacets = useMemo(
-    () => kanbanTypeFacets(stories, filter.q, matchCtx, filter.types),
-    [stories, filter.q, filter.types, matchCtx],
-  );
+  const arrivals = useLiveArrivals(config.id, liveKey);
+  const avgTrain = useMemo(() => trainAvgMinutes(mq?.entries, config.id), [mq, config.id]);
 
-  const activeCard = activeId ? cards.find((c) => c.id === activeId) ?? null : null;
-  // The ColumnDef id of the card being dragged — so a phase can suppress its "valid drop" highlight when
-  // the dragged card already belongs to it (a same-phase drop is a no-op; don't promise a drop we won't honor).
-  const activeColumnId = activeCard?.status
-    ? (config.statuses.find((s) => s.id === activeCard.status)?.column ?? null)
-    : null;
-
-  const columnOfOver = (overId: string): string | null => {
-    if (byStatus.has(overId)) return overId; // dropped on the column itself
-    const card = stories.find((c) => c.id === overId); // dropped on another card
-    if (card) return kanbanColumnOf(card, columnStatusIds);
-    return null;
-  };
-
-  const onDragStart = (e: DragStartEvent) => {
-    setActiveId(String(e.active.id));
-  };
-  const onDragCancel = () => setActiveId(null);
-
-  // WS-2 (cenário move-gate-blocked) — a move rejected by a GATE gets an ACTIONABLE toast (2 buttons) instead
-  // of a mute reason. Discrimination is MACHINE-LEGIBLE (never the error text): the gate is isomorphic, so if
-  // the target reproves in the client the server rejection WAS the gate. A non-gate failure (runner off / IO)
-  // keeps the plain toast. Used by BOTH the drag (onDragEnd) and the DeliveryStepper (onAdvance).
-  const moveRejectedToast = (card: Card, toStatus: string | null, error: string) => {
-    // A recusa por HIERARQUIA vem do chokepoint de escrita, não de um gate: sair da quarentena (Triagem)
-    // exige que o card tenha finalmente um lugar. Discriminação MACHINE-LEGIBLE (nunca pelo texto do erro),
-    // igual ao ramo do gate: a invariante é pura, então reavaliá-la aqui com o board na mão diz se FOI ela.
-    // Sem esta ação o operador lia "falta parent" e tinha de caçar o card para decidir — a decisão fica a
-    // um clique de onde ela é cobrada.
-    const placement = placementViolation(card, (id) => cards.find((c) => c.id === id) ?? null, config);
-    if (placement) {
-      return toast(placement.message, "error", {
-        label: "Definir o lugar",
-        // Direto na visão CAMPOS da página: é lá que Pai/Release moram, e mandar para a leitura
-        // deixaria a decisão que o erro cobra a mais um clique de distância.
-        onClick: () => router.push(cardHref(config.id, card.id, { view: "campos" })),
-      });
-    }
-    // um card que estava no FIM do fluxo chega ao quadro reduzido à face (sem critérios/tarefas — kanban-payload.ts):
-    // avaliar o gate com ele mentiria sobre o que falta; o servidor já disse o motivo.
-    const fromTerminal = config.statuses.find((s) => s.id === card.status)?.terminal === true;
-    const verdict = toStatus && !fromTerminal ? evaluateGate(card, toStatus, config) : null;
-    if (!verdict || !toStatus) return toast(error);
-    toast(error, "error", [
-      // B11 — o que falta para o gate está no CARD (os campos), não num item do Inbox (esta recusa não gera um).
-      { label: "Ver o que falta", onClick: () => router.push(cardHref(config.id, card.id, { view: "campos" })) },
-      {
-        label: "Destravar com o Jido",
-        onClick: () => {
-          // Sobre a query ATUAL: a busca do Kanban (?q=/?tipo=) não pode sumir porque o Jido foi chamado.
-          const next = new URLSearchParams(window.location.search);
-          next.set(
-            "copilot",
-            encodeEscalationRef({ kind: "move-blocked", boardId: config.id, cardId: card.id, target: toStatus, templateId: "move-gate-blocked" }),
-          );
-          router.replace(`${pathname}?${next}`);
-        },
-      },
-    ]);
-  };
-
-  // DESFAZER um move que DEU CERTO. Sem isto, o arrasto acidental (a queixa que originou o ajuste dos
-  // sensores) é irreversível pelo operador: o status mudou, o gate aprovou e um run pode já ter sido
-  // spawnado. A reversão vai pela MESMA action, marcada `isUndo` — restaura o status SEM re-disparar
-  // autorun/entry-effects — e depois libera o run que a entrada porventura criou.
-  const offerUndo = (card: Card, snapshot: Card[], toStatus: string | null) => {
-    const nameOf = (id: string | null) =>
-      id ? (config.statuses.find((s) => s.id === id)?.name ?? id) : "Sem fase";
-    const fromName = nameOf(card.status ?? null);
-    toast(
-      `“${card.title}” foi para ${nameOf(toStatus)}.`,
-      "success",
-      {
-        label: "Desfazer",
-        onClick: async () => {
-          const back = await moveCardAction({
-            boardId: config.id,
-            cardId: card.id,
-            status: card.status ?? null,
-            order: card.order,
-            isUndo: true,
-          });
-          if (!back.ok) return toast(`Não consegui devolver para ${fromName}: ${back.error}`);
-          setCards(snapshot);
-          // A ida pode ter spawnado/enfileirado um run na coluna de destino; a volta não o mata.
-          // Best-effort: sem run para liberar, a action apenas responde que não havia nada.
-          void forceReleaseRunAction({ boardId: config.id, cardId: card.id });
-          toast(`“${card.title}” voltou para ${fromName}.`, "success");
-        },
-      },
-      UNDO_TOAST_MS,
-    );
-  };
-
-  const onDragEnd = async (e: DragEndEvent) => {
-    setActiveId(null);
-    const { active, over } = e;
-    if (!over) return;
-    const card = cards.find((c) => c.id === String(active.id));
-    if (!card || card.type !== "story") return;
-
-    // LANE VIEW: a drop means "put this card in this LANE" ⇒ the lane's first droppable status (the gate still
-    // decides, in moveCardAction). A same-lane drop is a no-op; "Outros" accepts no drop.
-    if (laneView) {
-      const overId = String(over.id);
-      const laneOf = (id: string): string | null => {
-        if (id.startsWith(LANE_DROP_PREFIX)) return id.slice(LANE_DROP_PREFIX.length);
-        for (const [laneId, list] of laneView.byLane) if (list.some((c) => c.id === id)) return laneId;
-        return null;
-      };
-      const toLane = laneView.lanes.find((l) => l.id === laneOf(overId));
-      if (!toLane || toLane.id === laneOf(card.id)) return;
-      const laneStatus = laneDropStatus(toLane, config);
-      if (!laneStatus || laneStatus === card.status) return;
-      const siblings = (laneView.byLane.get(toLane.id) ?? []).filter((c) => c.id !== card.id);
-      const laneOrder = midpoint(siblings[siblings.length - 1]?.order, undefined);
-      const moved: Card = { ...card, status: laneStatus, order: laneOrder, updatedMs: Date.now() };
-      const before = cards;
-      setCards((cs) => cs.map((c) => (c.id === moved.id ? moved : c)));
-      const r = await moveCardAction({ boardId: config.id, cardId: moved.id, status: laneStatus, order: laneOrder });
-      if (!r.ok) {
-        setCards(before);
-        moveRejectedToast(card, laneStatus, r.error);
-        return;
-      }
-      offerUndo(card, before, laneStatus);
-      return;
-    }
-
-    const overCol = columnOfOver(String(over.id));
-    if (!overCol) return;
-    const overStatus = overCol === NO_STATUS ? null : overCol;
-
-    // 6-column kanban: a column is ONE flat list (its steps are shown on the card, not as sub-lanes), so a
-    // drop means "put this card in this PHASE". Map a cross-column drop to the destination column's ENTRY
-    // step; a same-column drop keeps the card's current step (autorun/runs drive intra-column progress — use
-    // "Mover para" for a precise step). The entry step's gate is still enforced by moveCardAction.
-    let destStatus = overStatus;
-    if (overStatus) {
-      const destColumnId = config.statuses.find((s) => s.id === overStatus)?.column ?? null;
-      const curColumnId = card.status ? (config.statuses.find((s) => s.id === card.status)?.column ?? null) : null;
-      if (destColumnId && destColumnId === curColumnId) {
-        destStatus = card.status ?? null; // same phase → no step change
-      } else if (destColumnId) {
-        destStatus = visibleStatuses.find((s) => s.column === destColumnId)?.id ?? overStatus;
-      }
-    }
-
-    if (destStatus === (card.status ?? null)) return; // no phase change → nothing to persist (sort is by mtime)
-
-    // Append to the destination column + stamp recency so the moved card jumps to the top immediately
-    // (Date.now() and stat().mtimeMs share the epoch-ms unit, matching the server's fresh mtime).
-    const dest = (byStatus.get(destStatus ?? NO_STATUS) ?? []).filter((c) => c.id !== card.id);
-    const order = midpoint(dest[dest.length - 1]?.order, undefined);
-    const updated: Card = { ...card, status: destStatus, order, updatedMs: Date.now() };
-    const snapshot = cards;
-    setCards((cs) => cs.map((c) => (c.id === updated.id ? updated : c)));
-
-    const res = await moveCardAction({
-      boardId: config.id,
-      cardId: updated.id,
-      status: destStatus,
-      order,
-    });
-    if (!res.ok) {
-      // Gate blocked the move: roll back optimistic update + show the reason (with the 2 unblock actions).
-      setCards(snapshot);
-      moveRejectedToast(card, destStatus, res.error);
-      return;
-    }
-    offerUndo(card, snapshot, destStatus);
-  };
-
-  // Delivery stepper: advance a card to the next delivery step — Aprovar (revisao→merge) and
-  // Publicar (release→deploy, which fires onEnter promote-and-deploy + autoEnterTerminal→concluida). Reuses
-  // the SAME moveCardAction path as drag/MoveToPopover (gate-validated, dispatches ENTRY_EFFECTS), with the
-  // optimistic update + rollback. ZERO deploy logic in the UI — the button is just a gated status move.
-  const onAdvance = async (cardId: string, toStatus: string) => {
-    const card = cards.find((c) => c.id === cardId);
-    if (!card) return;
-    const siblings = (byStatus.get(toStatus) ?? []).filter((c) => c.id !== cardId);
-    const order = midpoint(siblings[siblings.length - 1]?.order, undefined);
-    const updated: Card = { ...card, status: toStatus, order, updatedMs: Date.now() };
-    const snapshot = cards;
-    setCards((cs) => cs.map((c) => (c.id === cardId ? updated : c)));
-    const res = await moveCardAction({ boardId: config.id, cardId, status: toStatus, order });
-    if (!res.ok) {
-      setCards(snapshot);
-      moveRejectedToast(card, toStatus, res.error);
-    }
-  };
-
-  // Per-column auto-pilot toggle: flip a status's `autorun` and persist to
-  // board.yaml. The trigger-runner channel reads it to decide run-skill / forward.
-  const toggleAutorun = async (statusId: string) => {
-    const prev = config;
-    const next: BoardConfig = {
-      ...config,
-      statuses: config.statuses.map((s) =>
-        s.id === statusId ? { ...s, autorun: !(s.autorun === true) } : s,
-      ),
-    };
-    setConfig(next); // optimistic
-    const res = await updateBoardConfigAction({ boardId: config.id, config: next });
-    if (!res.ok) {
-      setConfig(prev);
-      toast(res.error);
-    }
-  };
-
-  // Per-column automation POLICY (model/effort/maxTurns/costGuard): patch a status
-  // and persist board.yaml. A cleared field arrives as undefined → delete the key
-  // so the YAML stays clean (the column then falls back to the global defaults).
-  const updateColumnPolicy = async (statusId: string, patch: Partial<StatusDef>) => {
-    const prev = config;
-    const next: BoardConfig = {
-      ...config,
-      statuses: config.statuses.map((s) => {
-        if (s.id !== statusId) return s;
-        const ns: StatusDef = { ...s, ...patch };
-        (Object.keys(patch) as (keyof StatusDef)[]).forEach((k) => {
-          if (patch[k] === undefined) delete ns[k];
-        });
-        return ns;
-      }),
-    };
-    setConfig(next); // optimistic
-    const res = await updateBoardConfigAction({ boardId: config.id, config: next });
-    if (!res.ok) {
-      setConfig(prev);
-      toast(res.error);
-    }
-  };
+  const hrefOf = useCallback((id: string) => cardHref(config.id, id), [config.id]);
 
   return (
     <OwnerDecisionsProvider value={ownerMap}>
-    <BoardLiveProvider value={live}>
-    <div className="flex h-screen flex-col">
-      <BoardHeader
-        boards={boards}
-        config={config}
-        view="kanban"
-        onSmartCapture={() => setSmartOpen(true)}
-        showMeta={showMeta}
-        onToggleMeta={toggleMeta}
-        subnav
-      />
+      <BoardLiveProvider value={live}>
+        {/* `--jido-fade`: o degradê do compositor do Jido (fixo no rodapé) sobe da cor do QUADRO, não da do papel. */}
+        <div className="flex h-[100dvh] flex-col bg-board" style={{ "--jido-fade": "var(--board)" } as React.CSSProperties}>
+          <BoardHeader
+            boards={boards}
+            config={config}
+            view="kanban"
+            onSmartCapture={(initialText) => setCapture({ initialText })}
+            toolbar={
+              <KanbanToolbar
+                boardId={config.id}
+                config={config}
+                query={query}
+                onQuery={onQuery}
+                mode={mode}
+                onMode={setMode}
+                counts={counts}
+                agentsUsed={agentsUsed}
+                slots={slots}
+                pace={pace}
+                onFocusCard={(_id, title) => onQuery(title)}
+              />
+            }
+          />
 
-      <KanbanSearchBar
-        filter={filter}
-        onChange={setFilter}
-        facets={typeFacets}
-        shown={shownIds?.size ?? stories.length}
-        total={stories.length}
-      />
+          {quiet && lanes.length > 0 && (
+            <div className="flex-none border-b border-line-muted bg-board px-4 py-1.5 text-[12px] text-fg-subtle max-md:py-0.5">
+              <DotList
+                className={QUIET_CLIP}
+                parts={[
+                  <b key="t" className="font-semibold text-fg">
+                    {quiet.text}
+                  </b>,
+                  quiet.inbox && (
+                    <Link key="i" href={inboxHref(config.id)} className={QUIET_LINK}>
+                      {quiet.inbox} <span aria-hidden>→</span>
+                    </Link>
+                  ),
+                  quiet.rest,
+                  <button key="a" type="button" onClick={showAll} className={QUIET_LINK}>
+                    {quiet.link}
+                  </button>,
+                ]}
+              />
+            </div>
+          )}
 
-      <KanbanPulse boardId={config.id} statuses={live} ownerTotal={owner?.total ?? null} filter={presenceFilter} onFilter={setPresenceFilter} />
-
-      <DndContext
-        sensors={sensors}
-        collisionDetection={pointerWithin}
-        onDragStart={onDragStart}
-        onDragEnd={onDragEnd}
-        onDragCancel={onDragCancel}
-      >
-        <div className="board-scroll flex-1 overflow-auto bg-canvas p-4">
-          {/* Fit-to-screen: phases FLEX to share the width (empty ones collapse to compact strips), so on
-              desktop all columns fit without horizontal scroll; it still scrolls on narrow/many-column boards. */}
-          {laneView ? (
-            <LaneBoard
-              lanes={laneView.lanes}
-              byLane={shownByLane ?? laneView.byLane}
-              boardByLane={laneView.byLane}
-              filtering={filtering}
-              problems={laneProblems}
-              config={config}
-              cardsById={cardsById}
-              onOpen={handleOpen}
-              onAdvance={onAdvance}
-              showMeta={showMeta}
-              activeLaneId={activeId ? ([...laneView.byLane].find(([, l]) => l.some((c) => c.id === activeId))?.[0] ?? null) : null}
-              owner={owner}
-              outside={laneView.outside}
-              live={live}
-            />
+          {lanes.length === 0 ? (
+            <p className="m-4 rounded-lg border border-dashed border-line p-4 text-[13px] text-fg-subtle">
+              Este board não tem nenhum passo para o Kanban (board.yaml `statuses`) — o quadro não tem onde pôr os cards.
+            </p>
           ) : (
-          <div className="flex h-full gap-4">
-            {stageGroups.map((group, gi) =>
-              group.stage ? (
-                <StageColumn
-                  key={group.stage.id}
-                  group={{ stage: group.stage, cols: group.cols }}
-                  byStatus={shownByStatus}
-                  boardByStatus={byStatus}
-                  filtering={filtering}
+            // Mais de seis raias declaradas (um `view.lanes` próprio e longo) não se espremem: cada coluna tem 220px no
+            // mínimo e o quadro rola de lado. As derivadas nunca passam de seis (kanban-features `derivedLanes`).
+            <div
+              className={`flex min-h-0 flex-1 snap-x snap-mandatory overflow-x-auto overflow-y-hidden md:grid md:snap-none ${lanes.length > 6 ? "md:overflow-x-auto" : "md:overflow-x-hidden"}`}
+              style={{ gridTemplateColumns: `repeat(${lanes.length}, minmax(${lanes.length > 6 ? "220px" : "0"}, 1fr))` }}
+            >
+              {lanes.map((lane, i) => (
+                <LaneView
+                  key={lane.id}
+                  boardId={config.id}
+                  lane={lane}
+                  index={i}
+                  lanes={lanes}
+                  cards={byLane[i]}
+                  entries={entries[i]}
                   config={config}
+                  stateOf={stateOf}
+                  live={live}
+                  pass={pass}
+                  searching={searching}
+                  mode={mode}
+                  onShowAll={showAll}
+                  paused={paused}
+                  paceOff={paceOff}
+                  slots={slots}
+                  now={now}
+                  timeZone={timeZone}
+                  avgTrain={avgTrain}
+                  hoverId={hoverId}
+                  onHover={setHoverId}
+                  popId={popId}
+                  onPop={setPopId}
+                  onFind={onQuery}
+                  hrefOf={hrefOf}
+                  metrics={metrics}
                   cardsById={cardsById}
-                  onOpen={handleOpen}
-                  onToggleAutorun={toggleAutorun}
-                  onUpdatePolicy={updateColumnPolicy}
-                  onAdvance={onAdvance}
-                  stagedCount={stagedCount}
-                  showMeta={showMeta}
-                  activeColumnId={activeColumnId}
+                  ownerMap={ownerMap}
+                  query={matchCtx}
+                  queryText={query}
+                  trainIds={trainIds}
+                  arrivals={arrivals}
                 />
-              ) : (
-                // Loose group (NO_STATUS / steps with no declared column) — keep flat columns.
-                <section key={`loose-${gi}`} className="flex h-full min-w-0 flex-1 gap-4">
-                  {group.cols.map((col) => (
-                    <KanbanColumn
-                      key={col.id}
-                      columnId={col.id}
-                      def={col.def}
-                      cards={shownByStatus.get(col.id) ?? []}
-                      boardCount={byStatus.get(col.id)?.length ?? 0}
-                      filtering={filtering}
-                      config={config}
-                      cardsById={cardsById}
-                      onOpen={handleOpen}
-                      onToggleAutorun={toggleAutorun}
-                      onUpdatePolicy={updateColumnPolicy}
-                      showMeta={showMeta}
-                    />
-                  ))}
-                </section>
-              ),
-            )}
-          </div>
+              ))}
+            </div>
+          )}
+
+          {capture && (
+            <SmartCaptureModal
+              boardId={config.id}
+              config={config}
+              cards={cards}
+              initialText={capture.initialText}
+              onClose={() => {
+                setCapture(null);
+                router.refresh();
+              }}
+              // the modal owns the success UI (it stays open showing what was created); here we just refresh the board
+              // behind it so the new cards show through.
+              onCreated={() => router.refresh()}
+              onOpenCard={(id) => router.push(`/board/${config.id}/card/${id}`)}
+            />
           )}
         </div>
-
-        <DragOverlay>
-          {activeCard ? (
-            <div className="w-[248px] rotate-1">
-              <KanbanCard card={activeCard} config={config} onOpen={() => {}} overlay />
-            </div>
-          ) : null}
-        </DragOverlay>
-      </DndContext>
-
-
-      {smartOpen && (
-        <SmartCaptureModal
-          boardId={config.id}
-          config={config}
-          cards={cards}
-          onClose={() => {
-            setSmartOpen(false);
-            router.refresh();
-          }}
-          // the modal owns the success UI now (it stays open showing what was created); here we just
-          // refresh the board behind it so the new cards/ideas show through.
-          onCreated={() => router.refresh()}
-          onOpenCard={(id) => router.push(`/board/${config.id}/card/${id}`)}
-          onOpenIdeas={() => router.push(`/board/${config.id}/ideias`)}
-        />
-      )}
-    </div>
-    </BoardLiveProvider>
+      </BoardLiveProvider>
     </OwnerDecisionsProvider>
   );
 }
 
-/** Droppable ids of the lane view are namespaced so a lane id can never collide with a status or card id. */
-const LANE_DROP_PREFIX = "lane:";
+type LiveMap = ReturnType<typeof useBoardLiveStatuses>;
 
-/**
- * The LANE VIEW (board.yaml `view.lanes`): one flat column per lane, each card tagged with its REAL status. The step
- * detail lives on the card as a tag, not as a column. The owner's lane holds exactly the Inbox's Decidir (lanes.ts),
- * in the Inbox's order. A declared map that is wrong (a status in no lane, in two, unknown, a status in the owner's
- * lane…) is SAID here, above the lanes, in the lint's own words — the cards it strands sit in the visible "Outros" lane.
- */
-function LaneBoard({
-  lanes,
-  byLane,
-  boardByLane,
-  filtering,
-  problems,
-  config,
-  cardsById,
-  onOpen,
-  onAdvance,
-  showMeta,
-  activeLaneId,
-  owner,
-  outside,
-  live,
-}: {
-  lanes: ResolvedLane[];
-  /** os cards DESENHADOS por raia (o recorte da busca) */
-  byLane: Map<string, Card[]>;
-  /** todos os cards por raia — decide se a raia está vazia de fato (compacta) ou só sem resultado */
-  boardByLane: Map<string, Card[]>;
-  filtering?: boolean;
-  problems: string[];
-  config: BoardConfig;
-  cardsById?: Map<string, Card>;
-  onOpen: (id: string) => void;
-  onAdvance?: (cardId: string, toStatus: string) => void;
-  showMeta?: boolean;
-  activeLaneId: string | null;
-  /** o Decidir do board (null = o Inbox não pôde ser lido). */
-  owner: OwnerDecisions | null;
-  /** as decisões de Decidir que não põem card na raia do dono (lanes.ts `outside`). */
-  outside: number;
-  /** as linhas de estado dos cards — as seções por atividade. */
-  live: ReadonlyMap<string, CardLiveStatus | null>;
-}) {
-  return (
-    <div className="flex h-full flex-col gap-3">
-      {problems.length > 0 && <LaneProblems problems={problems} />}
-      <div className="flex min-h-0 flex-1 gap-4">
-        {lanes.map((lane) => (
-          <LaneColumn
-            key={lane.id}
-            lane={lane}
-            cards={byLane.get(lane.id) ?? []}
-            boardCount={boardByLane.get(lane.id)?.length ?? 0}
-            filtering={filtering}
-            config={config}
-            cardsById={cardsById}
-            onOpen={onOpen}
-            onAdvance={onAdvance}
-            showMeta={showMeta}
-            acceptsActive={!lane.others && !lane.demand && activeLaneId !== lane.id}
-            owner={lane.demand ? owner : undefined}
-            outside={lane.demand ? outside : 0}
-            live={live}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
+/** O atalho de texto (sublinhado, na tinta do texto) das linhas quietas — o mesmo na coluna e na linha do board. */
+const QUIET_LINK =
+  "rounded-sm text-fg underline decoration-line-emphasis underline-offset-2 transition hover:decoration-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent max-md:py-2.5";
+/** A caixa das linhas quietas (DotList): corta o «·» do começo da linha só na horizontal, com 4px de folga para o anel
+ *  de foco do atalho não ser cortado. */
+const QUIET_CLIP = "-ml-1 overflow-x-clip pl-1";
 
-/** The lint of the lane map, legible to whoever declared it (collapsed to one line; opens to the list). */
-function LaneProblems({ problems }: { problems: string[] }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="shrink-0 rounded-lg border border-line bg-inset px-3 py-2 text-[12px] text-fg-muted">
-      <button type="button" onClick={() => setOpen((o) => !o)} className="w-full text-left font-medium text-fg">
-        {problems.length === 1 ? "1 problema" : `${problems.length} problemas`} no mapa de raias (board.yaml `view.lanes`){open ? "" : " — ver"}
-      </button>
-      {open && (
-        <ul className="mt-1.5 list-disc space-y-0.5 pl-5">
-          {problems.map((p) => (
-            <li key={p}>{p}</li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function LaneColumn({
+/** Uma raia: o trecho do fluxo (as caixinhas, a legenda) em cima e, embaixo, os cards / o trem / o No ar. */
+function LaneView({
+  boardId,
   lane,
+  index,
+  lanes,
   cards,
-  boardCount,
-  filtering,
+  entries,
   config,
-  cardsById,
-  onOpen,
-  onAdvance,
-  showMeta,
-  acceptsActive,
-  owner,
-  outside,
+  stateOf,
   live,
-}: {
-  lane: ResolvedLane;
-  cards: Card[];
-  boardCount: number;
-  filtering?: boolean;
-  config: BoardConfig;
-  cardsById?: Map<string, Card>;
-  onOpen: (id: string) => void;
-  onAdvance?: (cardId: string, toStatus: string) => void;
-  showMeta?: boolean;
-  acceptsActive?: boolean;
-  /** só a raia do dono: o Decidir do board (null = ilegível). */
-  owner?: OwnerDecisions | null;
-  outside: number;
-  live: ReadonlyMap<string, CardLiveStatus | null>;
-}) {
-  const dropId = `${LANE_DROP_PREFIX}${lane.id}`;
-  const { setNodeRef, isOver } = useDroppable({ id: dropId, disabled: lane.others === true || lane.demand });
-  // A raia do dono segue a ORDEM DO INBOX (já vem assim de groupStoriesByLane); as outras, o mais recente primeiro.
-  const sorted = useMemo(() => (lane.demand ? cards : [...cards].sort(byUpdatedDesc)), [cards, lane.demand]);
-  // As SEÇÕES por atividade (lanes.ts): «Construindo 9» passa a dizer quem age, quem parou e quem espera vaga. A raia
-  // do dono não se divide — ela inteira espera você, na ordem do Inbox.
-  const sections = useMemo(
-    () => (lane.demand ? [] : laneSections(sorted, (id) => live.get(id)?.kind ?? null)),
-    [lane.demand, sorted, live],
-  );
-  const [openFila, setOpenFila] = useState(false);
-  // A raia do FIM do fluxo («No ar») acumula centenas de cards num board maduro e, desenhada inteira, era a maior parte
-  // da página (HTML do servidor e hidratação). Mostra os mais recentes; o resto abre no lugar. Uma busca mostra tudo o
-  // que casou.
-  const terminalLane =
-    !lane.demand && !lane.others && lane.statuses.length > 0 && lane.statuses.every((id) => config.statuses.find((st) => st.id === id)?.terminal === true);
-  const [showAllDone, setShowAllDone] = useState(false);
-  const capDone = terminalLane && !filtering && !showAllDone && sorted.length > TERMINAL_LANE_CAP;
-  const shown = capDone ? sorted.slice(0, TERMINAL_LANE_CAP) : sorted;
-  const showSections = !terminalLane && (sections.length > 1 || sections.some((s) => s.collapsed));
-  const rendered = showSections ? sections.flatMap((s) => (s.collapsed && !openFila ? [] : s.cards)) : shown;
-  const ownerTotal = owner?.total ?? null;
-  // Compacta só a raia vazia DE FATO; a que a busca esvaziou fica larga, dizendo "nenhum card". A raia do dono vazia
-  // fica larga também quando há decisão fora do quadro — senão o «+K» sumiria com ela.
-  if (boardCount === 0 && !lane.others && !(lane.demand && outside > 0)) {
-    return <CompactColumn name={lane.label} dropId={dropId} acceptsActive={acceptsActive} />;
-  }
-  const card = (c: Card) => (
-    <KanbanCard key={c.id} card={c} config={config} cardsById={cardsById} onOpen={onOpen} onAdvance={onAdvance} showMeta={showMeta} laneTags={laneStatusTags(c, config)} />
-  );
-  return (
-    <section className="group flex h-full min-w-[180px] max-w-[420px] flex-1 flex-col px-1">
-      <header className="mb-2 shrink-0 px-0.5">
-        <div className="flex items-center gap-1.5">
-          {lane.demand && <span aria-hidden className="h-2 w-2 shrink-0 rounded-full bg-state-owner" />}
-          <span className="min-w-0 shrink truncate text-[13.5px] font-semibold tracking-tight text-fg">{lane.label}</span>
-          <CountChip n={sorted.length} of={filtering ? boardCount : undefined} />
-        </div>
-        <div className="mt-2 flex min-h-[26px] flex-wrap items-start gap-x-1.5 text-[11.5px] leading-snug text-fg-subtle">
-          {lane.deferred ? (
-            <span>Guardado para depois — nada daqui roda sozinho nem aparece no Inbox.</span>
-          ) : lane.others ? (
-            <span>Cards cujo status nenhuma raia declara — confira o mapa de raias.</span>
-          ) : lane.demand ? (
-            <>
-              {/* «N decisões suas · ver no Inbox» — o MESMO número do Inbox; o que Decidir conta sem card aqui é dito. */}
-              <Link href={inboxHref(config.id)} className="font-medium text-fg-muted underline-offset-2 hover:text-fg hover:underline">
-                {ownerTotal == null
-                  ? "Inbox indisponível · ver no Inbox"
-                  : `${ownerTotal} ${ownerTotal === 1 ? "decisão sua" : "decisões suas"} · ver no Inbox`}
-              </Link>
-              {outside > 0 && (
-                <span title="Decisões que não estão num card deste quadro: uma proposta, um pedido de agente, ou uma segunda decisão de um card que já está aqui.">
-                  · +{outside} fora do quadro
-                </span>
-              )}
-            </>
-          ) : (
-            <span className="truncate" title={lane.statuses.join(", ") || undefined}>
-              {lane.statuses.length} etapa{lane.statuses.length === 1 ? "" : "s"}
-            </span>
-          )}
-        </div>
-      </header>
-      <div
-        ref={setNodeRef}
-        className={cn(
-          "col-scroll flex min-h-[56px] flex-1 flex-col gap-2 overflow-y-auto rounded-lg p-1.5 transition",
-          isOver && acceptsActive !== false && "bg-accent/10 ring-1 ring-inset ring-accent/40",
-        )}
-      >
-        {sorted.length === 0 && (lane.demand && outside > 0 ? <p className="px-1 py-4 text-center text-[11px] text-fg-subtle">nenhum card aqui — veja no Inbox</p> : <NoMatch />)}
-        <SortableContext id={dropId} items={rendered.map((c) => c.id)} strategy={verticalListSortingStrategy}>
-          {showSections
-            ? sections.map((sec) => (
-                <Fragment key={sec.id}>
-                  {sec.collapsed ? (
-                    <button
-                      type="button"
-                      onClick={() => setOpenFila((o) => !o)}
-                      aria-expanded={openFila}
-                      className="mt-1 flex min-h-8 items-center gap-1.5 px-0.5 text-left text-[11px] font-semibold uppercase tracking-wide text-fg-subtle transition hover:text-fg"
-                    >
-                      <span aria-hidden>{openFila ? "▾" : "▸"}</span>
-                      {sec.label} · {sec.cards.length}
-                    </button>
-                  ) : (
-                    <p className="mt-1 px-0.5 text-[11px] font-semibold uppercase tracking-wide text-fg-subtle">
-                      {sec.label} · {sec.cards.length}
-                    </p>
-                  )}
-                  {(!sec.collapsed || openFila) && sec.cards.map(card)}
-                </Fragment>
-              ))
-            : shown.map(card)}
-        </SortableContext>
-        {capDone && (
-          <button
-            type="button"
-            onClick={() => setShowAllDone(true)}
-            className="mt-1 min-h-8 rounded-md px-1 text-left text-[12px] font-medium text-fg-muted underline-offset-2 transition hover:text-fg hover:underline"
-          >
-            Mostrar todos ({sorted.length})
-          </button>
-        )}
-      </div>
-    </section>
-  );
-}
-
-/** Stage ownership as a quiet text label (Notion-clean — no icon): who acts in this phase. */
-const OWNER_LABEL: Record<"human" | "agent" | "system", string> = {
-  human: "você",
-  agent: "agente",
-  system: "sistema",
-};
-
-/**
- * The phase's STEP TRAIL — the internal steps (etapas) of a phase as a LINEAR row of compact CHIPS, in
- * pipeline order. Each chip shows the step's `short` sigla (DEV/QA/SPEC…, falling back to `name`); a chip
- * holding ≥1 card is FILLED (bg-fg) — where the work currently sits — the rest are quiet outlines. One
- * line, scrollable if it overflows a narrow column (no wrap → the header stays short). The full step name
- * is on each chip's tooltip. Renders only when the phase has >1 visible step (Triagem has none to draw).
- */
-function StepTrail({
-  cols,
-  byStatus,
-}: {
-  cols: { id: string; def: StatusDef | null }[];
-  byStatus: Map<string, Card[]>;
-}) {
-  const steps = cols.filter((c): c is { id: string; def: StatusDef } => !!c.def);
-  if (steps.length <= 1) return null;
-  // Trilha de NÓS (um ponto + a sigla do passo embaixo). A tinta responde à pergunta "onde está o
-  // trabalho?" — e ela estava INVERTIDA: o passo VAZIO desenhava `bg-fg` (~12:1 sobre papel, o
-  // aglomerado mais escuro da tela) e o passo COM trabalho saía em âmbar a 2.19:1. Numa captura do
-  // Kanban com quatro colunas zeradas, treze pontos pretos gritavam "nada aqui" e o que importava
-  // quase desaparecia. Agora: OCUPADO = ponto cheio + sigla em `fg` semibold; VAZIO = anel vazado +
-  // sigla `fg-subtle`. A diferença passa a ser MASSA DE TINTA, que é o que se lê de longe — e é a
-  // regra que a identidade do pacote já declarava ("hierarquia por tamanho/peso/espaço, não por cor").
-  return (
-    <div className="flex w-full items-start px-0.5">
-      {steps.map((s, i) => {
-        const has = (byStatus.get(s.id)?.length ?? 0) > 0;
-        return (
-          <Fragment key={s.id}>
-            {i > 0 && <div className="mt-[6px] h-0.5 flex-1 bg-line" />}
-            <div className="flex shrink-0 flex-col items-center gap-1" title={s.def.name}>
-              <span
-                className={cn(
-                  "h-3.5 w-3.5 rounded-full transition",
-                  has ? "bg-fg" : "border border-line-emphasis bg-transparent",
-                )}
-              />
-              <span
-                className={cn(
-                  "text-[8px] uppercase leading-none tracking-wide transition",
-                  has ? "font-bold text-fg" : "font-semibold text-fg-subtle",
-                )}
-              >
-                {s.def.short ?? s.def.name}
-              </span>
-            </div>
-          </Fragment>
-        );
-      })}
-    </div>
-  );
-}
-
-/** Notion-style count chip — a soft recessed pill carrying a column's card count (design-system primitive).
- *  `of` = o total da coluna enquanto a busca recorta: o chip mostra o que passou, o tooltip diz de quantos. */
-function CountChip({ n, of }: { n: number; of?: number }) {
-  return (
-    // o número da raia conta CARDS (user stories e entregas) — o mapa conta só os itens do mapa, e a Esteira, publicações
-    <span className={countChipCls} title={of != null ? `${n} de ${of} cards` : `${n} ${n === 1 ? "card" : "cards"} (user stories e entregas)`}>
-      {n}
-    </span>
-  );
-}
-
-/** A coluna/raia que a BUSCA esvaziou — continua no lugar (o board não pula), só diz que nada passou. */
-function NoMatch() {
-  return <p className="px-1 py-4 text-center text-[11px] text-fg-subtle">nenhum card</p>;
-}
-
-/**
- * The discreet ⓘ that reveals a phase's authored description in a popover — the board.yaml `description`
- * was rendered only on the legacy KanbanColumn, so on the 6-column StageColumn the single best IA artefact
- * (what each phase means + its steps) was invisible. Also documents who acts (owner) in plain words.
- */
-function PhaseInfo({
-  name,
-  text,
-  owner,
-}: {
-  name: string;
-  text?: string;
-  owner?: "human" | "agent" | "system";
-}) {
-  const [open, setOpen] = useState(false);
-  if (!text && !owner) return null;
-  return (
-    <div className="relative inline-flex shrink-0">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        title={`Sobre a fase ${name}`}
-        aria-label={`Sobre a fase ${name}`}
-        className="text-fg-subtle transition hover:text-fg"
-      >
-        <Info className="h-3.5 w-3.5" />
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-[65]" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full z-[70] mt-1 w-72 rounded-xl border border-line bg-surface p-3 shadow-lg">
-            <p className="text-[12px] font-semibold text-fg">{name}</p>
-            {owner && (
-              <p className="mt-0.5 text-[11px] text-fg-subtle">Quem atua: {OWNER_LABEL[owner]}</p>
-            )}
-            {text && <p className="mt-1.5 text-[11px] leading-snug text-fg-muted">{text}</p>}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-/**
- * An EMPTY column/phase, collapsed to a SLIM HORIZONTAL strip (story-IA redesign): keeps the
- * left→right reading rhythm and symmetry (the rotated vertical strip broke it), reclaiming most of the
- * width while still reading like a phase. Stays a live droppable (drop here → the phase's entry step);
- * the dashed body is the drop affordance. Shared by the StageColumn (storymap) and KanbanColumn
- * (loose / product boards) empty states.
- */
-function CompactColumn({
-  name,
-  dropId,
-  acceptsActive,
-  info,
-  automation,
-  trail,
-}: {
-  name: string;
-  dropId: string;
-  acceptsActive?: boolean;
-  info?: ReactNode;
-  /** o ⚙ da fase — o MESMO nó da coluna cheia. Ver o comentário do slot no header. */
-  automation?: ReactNode;
-  /** a trilha de steps da fase — idem. */
-  trail?: ReactNode;
-}) {
-  const { setNodeRef, isOver } = useDroppable({ id: dropId });
-  const active = isOver && acceptsActive !== false;
-  // Design-faithful empty PHASE: a FULL-width column (not a collapsed strip) whose body is a dashed
-  // "solte aqui" drop affordance — so an empty column reads like the others, just waiting for a card.
-  return (
-    <section className="group flex h-full min-w-[110px] max-w-[260px] flex-[0.6] flex-col px-1">
-      <header className="mb-2 shrink-0 px-0.5">
-        <div className="flex items-center gap-1.5">
-          <span className="min-w-0 shrink truncate text-[13.5px] font-semibold tracking-tight text-fg">{name}</span>
-          <CountChip n={0} />
-          <span className="flex-1" />
-          {/* O ⚙ da automação vive aqui TAMBÉM. Ele sumia quando a fase esvaziava — e é exatamente aí que se
-              precisa dele: configurar o autorun de uma etapa é o que faz a fase COMEÇAR a receber trabalho.
-              Ter de arrastar um card para dentro só para poder abrir a engrenagem era um ovo-e-galinha. */}
-          {automation}
-          {info}
-        </div>
-        {/* ROW 2 — o MESMO slot de altura fixa das colunas cheias (mantém o alinhamento). A trilha de steps é
-            desenhada aqui também: os steps de uma fase são a ESTRUTURA do pipeline, não um resumo de onde os
-            cards estão. Escondê-los na fase vazia apagava justamente a informação de que aquela fase TEM
-            etapas — com zero card, todos os nós ficam quietos, que é a leitura correta. */}
-        <div className="mt-2 flex h-[26px] items-start">{trail}</div>
-      </header>
-      {/* The drop affordance is a fixed-height dashed well at the top of the column (design spec ~120px) —
-          NOT a full-height box; the rest of the empty column is just whitespace, like the reference. */}
-      <div
-        ref={setNodeRef}
-        className={cn(
-          "flex h-[120px] shrink-0 items-center justify-center rounded-[10px] border border-dashed text-center text-[12px] transition",
-          active ? "border-accent/50 bg-accent/5 text-accent" : "border-line text-fg-subtle",
-        )}
-      >
-        solte aqui
-      </div>
-    </section>
-  );
-}
-
-function KanbanColumn(props: {
-  columnId: string;
-  def: StatusDef | null;
-  cards: Card[];
-  /** quantos cards a coluna tem sem a busca — só a coluna vazia DE FATO compacta */
-  boardCount: number;
-  filtering?: boolean;
-  config: BoardConfig;
-  cardsById?: Map<string, Card>;
-  onOpen: (id: string) => void;
-  onToggleAutorun?: (statusId: string) => void;
-  onUpdatePolicy?: (statusId: string, patch: Partial<StatusDef>) => void;
-  showMeta?: boolean;
-}) {
-  // The loose lane (def === null) is the safe catch-all: it holds any story whose status maps to no
-  // rendered column — a hidden reentry executor (corrigir/refinar/descontinuar), an unknown/future
-  // status, or none. Labelled so it reads as "needs attention / out of the normal flow", never hidden.
-  const name = props.def?.name ?? "Fora do fluxo";
-  // Empty → compact vertical strip (droppable). Non-empty → the full bordered panel. Splitting avoids
-  // registering two droppables with the same id (the empty strip owns its own useDroppable).
-  if (props.boardCount === 0) return <CompactColumn name={name} dropId={props.columnId} />;
-  return <KanbanColumnFull {...props} name={name} />;
-}
-
-function KanbanColumnFull({
-  columnId,
-  def,
-  cards,
-  boardCount,
-  filtering,
-  name,
-  config,
+  pass,
+  searching,
+  mode,
+  onShowAll,
+  paused,
+  paceOff,
+  slots,
+  now,
+  timeZone,
+  avgTrain,
+  hoverId,
+  onHover,
+  popId,
+  onPop,
+  onFind,
+  hrefOf,
+  metrics,
   cardsById,
-  onOpen,
-  onToggleAutorun,
-  onUpdatePolicy,
-  showMeta,
+  ownerMap,
+  query,
+  queryText,
+  trainIds,
+  arrivals,
 }: {
-  columnId: string;
-  def: StatusDef | null;
+  boardId: string;
+  lane: LaneDef;
+  index: number;
+  lanes: readonly LaneDef[];
   cards: Card[];
-  boardCount: number;
-  filtering?: boolean;
-  name: string;
-  config: BoardConfig;
-  cardsById?: Map<string, Card>;
-  onOpen: (id: string) => void;
-  onToggleAutorun?: (statusId: string) => void;
-  onUpdatePolicy?: (statusId: string, patch: Partial<StatusDef>) => void;
-  showMeta?: boolean;
+  entries: ReturnType<typeof groupByFeature>;
+  config: Board["config"];
+  stateOf: (id: string) => FlowState;
+  live: LiveMap;
+  pass: (c: Card) => boolean;
+  searching: boolean;
+  mode: KanbanShowMode;
+  /** troca o recorte global para «Tudo» (o atalho «ver os N itens» da coluna sem exceção). */
+  onShowAll: () => void;
+  paused: boolean;
+  paceOff: boolean;
+  slots: number;
+  now: number;
+  timeZone?: string;
+  avgTrain: number | null;
+  hoverId: string | null;
+  onHover: (id: string | null) => void;
+  popId: string | null;
+  onPop: (id: string | null) => void;
+  onFind: (title: string) => void;
+  hrefOf: (id: string) => string;
+  metrics: ReadonlyMap<string, CardMetrics>;
+  cardsById: ReadonlyMap<string, Card>;
+  ownerMap: ReturnType<typeof ownerByCard>;
+  query: { cardsById: ReadonlyMap<string, Card> };
+  queryText: string;
+  /** os cards que estão no trem deste board (a coluna Entrega os mostra no trem, não como card). */
+  trainIds: ReadonlySet<string>;
+  /** quando cada card chegou ao ar (epoch ms). */
+  arrivals: ReadonlyMap<string, number>;
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: columnId });
-  return (
-    <div className="group flex h-full min-w-[180px] max-w-[420px] flex-1 flex-col px-1">
-      <div className="mb-2 px-0.5">
-        {/* Notion-clean header (same language as StageColumn): black name + count + the automação ⚙. */}
-        <div className="flex items-center gap-1.5">
-          <span className="min-w-0 shrink truncate text-[13.5px] font-semibold tracking-tight text-fg">{name}</span>
-          <CountChip n={cards.length} of={filtering ? boardCount : undefined} />
-          <span className="flex-1" />
-          {def && (def.trigger || def.gate) && (
-            <ColumnAutomationMenu steps={[{ id: def.id, def }]} onToggleAutorun={onToggleAutorun} onUpdatePolicy={onUpdatePolicy} />
-          )}
-        </div>
-        <ColumnDescription text={def?.description ?? ""} />
-      </div>
-      <div
-        ref={setNodeRef}
-        className={cn(
-          "col-scroll flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto rounded-lg p-1.5 transition",
-          isOver && "bg-accent/10 ring-1 ring-inset ring-accent/40",
-        )}
-      >
-        {cards.length === 0 && <NoMatch />}
-        <SortableContext id={columnId} items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
-          {cards.map((c) => (
-            <KanbanCard key={c.id} card={c} config={config} cardsById={cardsById} onOpen={onOpen} showMeta={showMeta} />
-          ))}
-        </SortableContext>
-      </div>
-    </div>
-  );
-}
+  const stepOf = useCallback((c: Card) => laneStep(c.status, lane, config), [lane, config]);
 
-/**
- * STAGE column = ONE phase (Triagem/Descoberta/Design/Construção/Entrega/No ar). The phase's steps are
- * NOT stacked sub-lanes anymore: the column is a SINGLE flat card list and each card shows its own active
- * step (the status line). Header = black name + count + who acts (owner) + a folded "automação" menu. The
- * entrega phase renders the DeliveryStepperLane (per-card 2-touch stepper); other phases the flat list. A
- * drop = "put this card in this phase" (onDragEnd maps it to the entry step); a same-phase drop is a no-op,
- * so the phase suppresses its drop highlight when the dragged card already belongs to it (`acceptsActive`).
- */
-function StageColumn({
-  group,
-  byStatus,
-  boardByStatus,
-  filtering,
-  config,
-  cardsById,
-  onOpen,
-  onToggleAutorun,
-  onUpdatePolicy,
-  onAdvance,
-  stagedCount,
-  showMeta,
-  activeColumnId,
-}: {
-  group: { stage: ColumnDef; cols: { id: string; def: StatusDef | null }[] };
-  /** os cards DESENHADOS por status (o recorte da busca) */
-  byStatus: Map<string, Card[]>;
-  /** todos os cards por status — decide se a fase está vazia de fato (compacta) ou só sem resultado */
-  boardByStatus: Map<string, Card[]>;
-  filtering?: boolean;
-  config: BoardConfig;
-  cardsById?: Map<string, Card>;
-  onOpen: (id: string) => void;
-  onToggleAutorun?: (statusId: string) => void;
-  onUpdatePolicy?: (statusId: string, patch: Partial<StatusDef>) => void;
-  onAdvance?: (cardId: string, toStatus: string) => void;
-  stagedCount?: number;
-  showMeta?: boolean;
-  /** ColumnDef id of the card currently being dragged (null when none) — drives `acceptsActive`. */
-  activeColumnId?: string | null;
-}) {
-  const { stage, cols } = group;
-  const total = cols.reduce((a, c) => a + (byStatus.get(c.id)?.length ?? 0), 0);
-  const boardTotal = cols.reduce((a, c) => a + (boardByStatus.get(c.id)?.length ?? 0), 0);
-  // a design decision entrega colapsada: a phase whose EVERY step is `laneStep` renders as the per-card delivery
-  // stepper lane. The No ar (terminal) phase shows the homologation signal. Every other phase is a single
-  // FLAT card list — the steps live on the cards (status line), not as stacked sub-lanes.
-  const isTerminalStage = cols.some((c) => c.def?.terminal === true);
-  const isStepperZone = cols.length > 1 && cols.every((c) => c.def?.laneStep === true);
-  // A ferramenta DECLARADA pela fase (board.yaml), quando ela resolve para uma view real. Um id
-  // desconhecido não vira porta quebrada — some (ver ColumnDef.tool).
-  const stageTool = stage.tool ? (navItemForView(stage.tool as BoardView) ?? null) : null;
-  // The phase entry step (first visible step) — the droppable target for "drop into this phase".
-  const entryId = cols[0]?.id ?? "";
-  // Suppress the "valid drop" highlight when the dragged card is already in THIS phase (same-phase drop is
-  // a no-op — don't promise a drop we won't honor). True when nothing is dragging or it's another phase.
-  const acceptsActive = !activeColumnId || activeColumnId !== stage.id;
-
-  // An EMPTY phase collapses to a compact vertical strip (title rotated) so it reclaims width — the board
-  // fits all phases on one screen. It stays a live droppable (drop into an empty phase → its entry step).
-  // Vazia DE FATO (boardTotal): a fase que só a busca esvaziou fica larga, com "nenhum card".
-  if (boardTotal === 0) {
-    return (
-      <CompactColumn
-        name={stage.name}
-        dropId={entryId}
-        acceptsActive={acceptsActive}
-        info={<PhaseInfo name={stage.name} text={stage.description} owner={stage.owner} />}
-        // Os MESMOS nós da coluna cheia — a fase vazia não é uma fase diferente, só está sem card agora.
-        automation={<ColumnAutomationMenu steps={cols} onToggleAutorun={onToggleAutorun} onUpdatePolicy={onUpdatePolicy} />}
-        // Mesma guarda da coluna cheia (>1 step visível e não é a lane do stepper), para as duas nunca divergirem
-        // — inclusive a PORTA da ferramenta, que vem antes da trilha aqui pelo mesmo motivo de lá. E ela importa
-        // MAIS com a fase vazia: sem card em Entrega, "onde está o meu código" continua sendo uma pergunta viva
-        // (pode haver trabalho no train ou parado no stage), e esta seria a única tela sem resposta à mão.
-        trail={
-          stageTool ? (
-            <PhaseToolLink tool={stageTool} boardId={config.id} />
-          ) : !isStepperZone && cols.filter((c) => c.def).length > 1 ? (
-            <StepTrail cols={cols} byStatus={byStatus} />
-          ) : null
-        }
-      />
+  // As caixinhas: a Entrega desenha as 14 primeiras, espalhadas, em 2 de altura; o No ar, a pilha; as outras, cada item
+  // no seu progresso dentro da raia (7 colunas × até 3). O que não coube vira «+N» — nunca quem tem bolinha (precisa de
+  // você, erro): a Entrega os põe primeiro nas 14, e o encaixe (p5place) os desenha antes dos quietos.
+  const { crates, extra } = useMemo(() => {
+    if (lane.role === "live") return { crates: [] as FlowCrate[], extra: 0 };
+    const mk = (c: Card, p: number) => ({ id: c.id, p, state: stateOf(c.id), card: c, step: stepOf(c) });
+    const dot = (c: Card) => (stateOf(c.id) === "attention" || stateOf(c.id) === "error" ? 0 : 1);
+    const list =
+      lane.role === "delivery"
+        ? [...cards]
+            .sort((a, b) => dot(a) - dot(b) || stepOf(b).index - stepOf(a).index || a.id.localeCompare(b.id))
+            .slice(0, DELIVERY_CRATES)
+            .map((c, k) => mk(c, 1 - k / (DELIVERY_CRATES - 1)))
+        : cards.map((c) => mk(c, crateProgress(stepOf(c), stateOf(c.id))));
+    const placed = p5place(list, 7, lane.role === "delivery" ? 2 : 3).map(
+      (p): FlowCrate => ({
+        card: p.item.card,
+        state: p.item.state,
+        step: p.item.step,
+        live: live.get(p.item.id) ?? null,
+        conducted: isConducted(p.item.card),
+        fill: crateFill(index, p.item.step, lanes),
+        dashed: crateDashed(index, p.item.state),
+        findable: lane.role !== "live" && !(lane.role === "delivery" && trainIds.has(p.item.id)),
+        auto: !!config.statuses.find((s) => s.id === p.item.card.status)?.trigger,
+        slot: p.slot,
+        lvl: p.lvl,
+      }),
     );
+    // «+N»: todo item que o poço não desenhou (além das 14 da Entrega, ou o solo que não achou coluna livre) — o fluxo
+    // nunca some com um item calado.
+    return { crates: placed, extra: Math.max(0, cards.length - placed.length) };
+  }, [lane.role, cards, stateOf, stepOf, live, index, lanes, trainIds, config]);
+
+  const liveSummary = useMemo(
+    () => (lane.role === "live" ? liveSummaryOf(cards, arrivals, now, timeZone) : undefined),
+    [lane.role, cards, arrivals, now, timeZone],
+  );
+  const caption = useMemo(() => {
+    const count = (s: FlowState) => cards.filter((c) => stateOf(c.id) === s).length;
+    return flowCaption(lane.role, {
+      count,
+      total: cards.length,
+      paused,
+      avgMinutes: avgTrain,
+      today: liveSummary?.today,
+      perDay: liveSummary?.perDay,
+      // um card por FUNCIONALIDADE: com menos cards que itens, a legenda conta os dois («11 itens · 2 funcionalidades»)
+      features: entries.length,
+    });
+  }, [lane.role, cards, stateOf, paused, avgTrain, liveSummary, entries.length]);
+
+  // Na Entrega, o que está no trem fica no trem: os cards da coluna são só o que espera FORA dele (a aprovação do
+  // dono, um erro, a publicação) — no recorte atual, como em toda coluna.
+  const lanePass = useCallback((c: Card) => (lane.role === "delivery" ? !trainIds.has(c.id) && pass(c) : pass(c)), [lane.role, trainIds, pass]);
+  const shown = useMemo(() => visibleEntries(entries, stateOf, lanePass), [entries, stateOf, lanePass]);
+  const shownIds = useMemo(() => new Set(shown.map((e) => e.item.id)), [shown]);
+  const livePass = useCallback((c: Card) => !queryText.trim() || matchesCardQuery(c, queryText, query), [queryText, query]);
+
+  const segment = (
+    <FlowSegment
+      boardId={boardId}
+      lane={lane}
+      total={cards.length}
+      crates={crates}
+      caption={caption}
+      paused={paused}
+      off={paceOff}
+      extra={extra}
+      live={liveSummary}
+      hoverId={hoverId}
+      onHover={onHover}
+      popId={crates.some((c) => c.card.id === popId) ? popId : null}
+      onPop={onPop}
+      onFind={onFind}
+      flip={index >= lanes.length - 2}
+      slots={slots}
+      now={now}
+    />
+  );
+
+  const cardsOf = (list: typeof shown) =>
+    list.map((e) => (
+      <FeatureCard
+        key={e.key}
+        config={config}
+        entry={e}
+        step={stepOf(e.item)}
+        href={featureTitleHref(boardId, e.feature, hrefOf(e.item.id))}
+        hrefOf={hrefOf}
+        now={now}
+        metrics={metrics.get(e.item.id)}
+        highlighted={hoverId === e.item.id || popId === e.item.id}
+        onHover={onHover}
+      />
+    ));
+  let body: React.ReactNode;
+  if (lane.role === "delivery") {
+    body = (
+      <>
+        <TrainColumn
+          boardId={boardId}
+          cardsById={cardsById}
+          owner={ownerMap}
+          paused={paused}
+          now={now}
+          outside={cards.filter((c) => !trainIds.has(c.id) && !shownIds.has(c.id))}
+        />
+        {cardsOf(shown)}
+      </>
+    );
+  } else if (lane.role === "live") {
+    body = <LiveColumn boardId={boardId} cards={cards} arrivals={arrivals} now={now} query={livePass} searching={searching} />;
+  } else if (shown.length === 0) {
+    // o texto do desenho para TODA coluna vazia num recorte ou numa busca (no «Tudo» sem busca a coluna vazia fica muda).
+    // No «Exceções», a coluna que TEM itens (só nenhum fora do trilho) diz quantos e leva ao «Tudo» — calada, ela
+    // parecia vazia ao lado de um cabeçalho que conta 11.
+    const words = quietLaneWords(mode === "exc" && !searching ? cards.length : 0);
+    body =
+      mode !== "all" || searching ? (
+        // em DotList: numa coluna estreita o atalho quebra para a linha de baixo sem deixar «Nada fora do trilho ·»
+        <DotList
+          className={`py-0.5 pr-0.5 text-[13px] text-fg-subtle ${QUIET_CLIP}`}
+          parts={[
+            words.text,
+            words.link && (
+              <button key="a" type="button" onClick={onShowAll} className={QUIET_LINK}>
+                {words.link}
+              </button>
+            ),
+          ]}
+        />
+      ) : null;
+  } else {
+    body = cardsOf(shown);
   }
 
-  // Non-empty phase: FLEX to share the available width (fit-to-screen), bounded so it stays readable. A
-  // bordered, filled panel for clear contrast against the canvas; the cards (border-2) pop on top.
   return (
-    <section className="group flex h-full min-w-[180px] max-w-[420px] flex-1 flex-col px-1">
-      <header className="mb-2 shrink-0 px-0.5">
-        {/* Linear, 2-line header: ROW 1 = phase name + count + the automação ⚙ + the ⓘ (description +
-            who acts). ROW 2 = the step-trail CHIPS. The verbose "agente · automação" text line is gone —
-            owner folds into the ⓘ popover, automação into the ⚙ icon. */}
-        <div className="flex items-center gap-1.5">
-          <span className="min-w-0 shrink truncate text-[13.5px] font-semibold tracking-tight text-fg">{stage.name}</span>
-          <CountChip n={total} of={filtering ? boardTotal : undefined} />
-          <span className="flex-1" />
-          <ColumnAutomationMenu steps={cols} onToggleAutorun={onToggleAutorun} onUpdatePolicy={onUpdatePolicy} />
-          <PhaseInfo name={stage.name} text={stage.description} owner={stage.owner} />
-        </div>
-        {/* ROW 2 — a FIXED-HEIGHT slot present on EVERY phase so all card lists ALIGN (mesma altura de
-            cabeçalho em toda coluna), mesmo quando a fase não tem trilha de steps. Comporta a trilha, o
-            sinal "No ar" (terminal), ou nada — mas sempre reserva o espaço. */}
-        <div className="mt-2 flex h-[26px] items-start">
-          {/* A porta para a FERRAMENTA da fase (board.yaml `columns[].tool`) — hoje só a Entrega tem
-              uma, a Esteira. Ela vem ANTES dos outros ocupantes do slot de propósito: numa fase que
-              declara ferramenta, "onde isto está de verdade" é a pergunta mais forte que o cabeçalho
-              pode responder. E cabe sem empurrar nada — a Entrega é toda `laneStep` (stepper), então
-              este slot de altura fixa estava reservado e VAZIO justamente nela. */}
-          {stageTool ? (
-            <PhaseToolLink tool={stageTool} boardId={config.id} />
-          ) : isTerminalStage ? (
-            <span
-              title="O que está na fase Entrega (aprovado/integrando, ainda não no ar) vs já em produção (No ar)."
-              className="truncate text-[11.5px] leading-snug text-fg-subtle"
-            >
-              {stagedCount && stagedCount > 0 ? (
-                <span>
-                  <span className="font-semibold text-fg-muted">{stagedCount}</span> em entrega · {total} no ar
-                </span>
-              ) : (
-                <span>tudo no ar — nada em entrega</span>
-              )}
-            </span>
-          ) : !isStepperZone && cols.filter((c) => c.def).length > 1 ? (
-            <StepTrail cols={cols} byStatus={byStatus} />
-          ) : null}
-        </div>
-      </header>
-      <div className="col-scroll flex min-h-0 flex-1 flex-col overflow-y-auto">
-        {isStepperZone ? (
-          <DeliveryStepperLane
-            cols={cols}
-            byStatus={byStatus}
-            config={config}
-            cardsById={cardsById}
-            onOpen={onOpen}
-            onAdvance={onAdvance}
-            showMeta={showMeta}
-            acceptsActive={acceptsActive}
-            filtering={filtering}
-          />
-        ) : (
-          <ColumnCardList
-            dropId={entryId}
-            cols={cols}
-            byStatus={byStatus}
-            config={config}
-            cardsById={cardsById}
-            onOpen={onOpen}
-            isTerminal={isTerminalStage}
-            stageName={stage.name}
-            showMeta={showMeta}
-            acceptsActive={acceptsActive}
-            filtering={filtering}
-          />
-        )}
-      </div>
-    </section>
-  );
-}
-
-/**
- * The flat card list of a PHASE (Triagem/Descoberta/Design/Construção/No ar): the UNION of every step's
- * cards in the column, newest on top — the steps are shown on each card (status line), not as sub-lanes.
- * One droppable whose id is the phase's ENTRY step, so a drop = "put this card in this phase" (onDragEnd
- * maps it). A terminal phase (No ar) caps to the N most-recent + a "ver todas" drawer.
- */
-function ColumnCardList({
-  dropId,
-  cols,
-  byStatus,
-  config,
-  cardsById,
-  onOpen,
-  isTerminal,
-  stageName,
-  showMeta,
-  acceptsActive,
-  filtering,
-}: {
-  dropId: string;
-  cols: { id: string; def: StatusDef | null }[];
-  byStatus: Map<string, Card[]>;
-  config: BoardConfig;
-  cardsById?: Map<string, Card>;
-  onOpen: (id: string) => void;
-  isTerminal?: boolean;
-  stageName: string;
-  showMeta?: boolean;
-  /** false when the dragged card already belongs to this phase → suppress the (no-op) drop highlight */
-  acceptsActive?: boolean;
-  filtering?: boolean;
-}) {
-  const { setNodeRef, isOver } = useDroppable({ id: dropId });
-  const [overflowOpen, setOverflowOpen] = useState(false);
-  const cards = cols.flatMap((c) => byStatus.get(c.id) ?? []).sort(byUpdatedDesc);
-  const capped = isTerminal ? cards.slice(0, TERMINAL_LANE_CAP) : cards;
-  const overflow = cards.length - capped.length;
-  return (
-    <div
-      ref={setNodeRef}
-      className={cn(
-        "flex min-h-[56px] flex-1 flex-col gap-2 rounded-lg p-1.5 transition",
-        isOver && acceptsActive !== false && "bg-accent/10 ring-1 ring-inset ring-accent/40",
-      )}
-    >
-      {cards.length === 0 ? (
-        filtering ? <NoMatch /> : <p className="px-1 py-4 text-center text-[11px] text-fg-subtle">Vazio</p>
-      ) : (
-        <>
-          <SortableContext id={dropId} items={capped.map((c) => c.id)} strategy={verticalListSortingStrategy}>
-            {capped.map((c) => (
-              <KanbanCard key={c.id} card={c} config={config} cardsById={cardsById} onOpen={onOpen} showMeta={showMeta} />
-            ))}
-          </SortableContext>
-          {overflow > 0 && (
-            <button
-              type="button"
-              onClick={() => setOverflowOpen(true)}
-              className="mt-0.5 rounded-md border border-dashed border-line px-2 py-1.5 text-[11px] font-medium text-fg-muted transition hover:bg-surface-hover hover:text-fg"
-            >
-              ver todas as {cards.length} →
-            </button>
-          )}
-          {overflowOpen && (
-            <TerminalOverflowDrawer cards={cards} title={stageName} onOpen={onOpen} onClose={() => setOverflowOpen(false)} />
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-/**
- * The folded per-phase automation menu (Notion-clean): a quiet "automação" trigger that reveals the phase's
- * automatable steps (those with a trigger/gate), each with an auto/manual toggle + the run-policy popover.
- * Replaces the per-step pill wall the stacked lanes used to show — control on demand, clean by default.
- */
-function ColumnAutomationMenu({
-  steps,
-  onToggleAutorun,
-  onUpdatePolicy,
-}: {
-  steps: { id: string; def: StatusDef | null }[];
-  onToggleAutorun?: (statusId: string) => void;
-  onUpdatePolicy?: (statusId: string, patch: Partial<StatusDef>) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const automatable = steps.map((s) => s.def).filter((d): d is StatusDef => !!d && (!!d.trigger || !!d.gate));
-  if (automatable.length === 0) return null;
-  return (
-    <div className="relative inline-flex shrink-0">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        title="Automação dos steps desta fase"
-        aria-label="Automação dos steps desta fase"
-        className="text-fg-subtle transition hover:text-fg"
-      >
-        <SlidersHorizontal className="h-3.5 w-3.5" />
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-[65]" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 top-full z-[70] mt-1 w-64 rounded-xl border border-line bg-surface p-1.5 shadow-lg">
-            {automatable.map((def) => {
-              const auto = def.autorun === true;
-              return (
-                <div key={def.id} className="flex items-center gap-2 rounded-lg px-2 py-1.5">
-                  <span className="min-w-0 flex-1 truncate text-[12px] text-fg" title={def.gate ? `Gate: ${GATE_LABEL[def.gate] ?? def.gate}` : undefined}>
-                    {def.name}
-                  </span>
-                  {def.trigger && onToggleAutorun && (
-                    <button
-                      type="button"
-                      onClick={() => onToggleAutorun(def.id)}
-                      title={auto ? `Automático (${def.trigger}) — clique para tornar manual` : `Manual (${def.trigger}) — clique para automatizar`}
-                      className={cn(
-                        "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition",
-                        auto ? "bg-fg text-surface hover:bg-fg/85" : "bg-surface-hover text-fg-muted hover:bg-line",
-                      )}
-                    >
-                      {auto ? "auto" : "manual"}
-                    </button>
-                  )}
-                  {def.trigger && onUpdatePolicy && (
-                    <ColumnPolicyPopover def={def} onChange={(patch) => onUpdatePolicy(def.id, patch)} />
-                  )}
-                  {!def.trigger && def.gate && <span className="shrink-0 text-[10px] text-fg-subtle">gate</span>}
-                </div>
-              );
-            })}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-/**
- * The collapsed DELIVERY lane: the entrega column's 5 delivery steps (revisao→merge→stage→
- * release→deploy) rendered as ONE droppable list of cards — each card carries its own stepper (the
- * evolving step text + counter + the Aprovar/Publicar buttons live on the KanbanCard). Unions the cards
- * of every step (so the operator sees one "Entrega" pile), newest on top. Drag is NOT a delivery affordance
- * here (the 2 human touches are the on-card buttons), but the lane stays a droppable so a stray card can be
- * recovered by dropping it back into the flow. Each step is also registered as a SortableContext id so
- * dnd-kit can still resolve a drop onto the lane.
- */
-function DeliveryStepperLane({
-  cols,
-  byStatus,
-  config,
-  cardsById,
-  onOpen,
-  onAdvance,
-  showMeta,
-  acceptsActive,
-  filtering,
-}: {
-  cols: { id: string; def: StatusDef | null }[];
-  byStatus: Map<string, Card[]>;
-  config: BoardConfig;
-  cardsById?: Map<string, Card>;
-  onOpen: (id: string) => void;
-  onAdvance?: (cardId: string, toStatus: string) => void;
-  showMeta?: boolean;
-  /** false when the dragged card already belongs to this phase → suppress the (no-op) drop highlight */
-  acceptsActive?: boolean;
-  filtering?: boolean;
-}) {
-  // The lane's primary droppable is the FIRST delivery step (revisao) — a drop onto the bare lane lands a
-  // card at the start of delivery (Aprovar). Cards keep their own status; the stepper drives the rest.
-  const dropId = cols[0]?.id ?? "";
-  const { setNodeRef, isOver } = useDroppable({ id: dropId });
-  const cards = cols.flatMap((c) => byStatus.get(c.id) ?? []).sort(byUpdatedDesc);
-  return (
-    <div
-      ref={setNodeRef}
-      className={cn(
-        "flex min-h-[48px] flex-1 flex-col gap-1.5 rounded-lg p-1.5 transition",
-        isOver && acceptsActive !== false ? "bg-accent/10 ring-1 ring-accent/40" : "bg-surface/40",
-      )}
-    >
-      {cards.length === 0 ? (
-        filtering ? <NoMatch /> : <p className="px-1 py-3 text-center text-[11px] text-fg-subtle">Vazio</p>
-      ) : (
-        <SortableContext id={dropId} items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
-          {cards.map((c) => (
-            <KanbanCard
-              key={c.id}
-              card={c}
-              config={config}
-              cardsById={cardsById}
-              onOpen={onOpen}
-              onAdvance={onAdvance}
-              showMeta={showMeta}
-            />
-          ))}
-        </SortableContext>
-      )}
-    </div>
-  );
-}
-
-/**
- * story-ex0160 — the "ver todas" overflow drawer for a capped terminal lane (No ar). A right-side
- * slide-over listing EVERY card of the lane (search + click-to-open), so the rest of the concluded
- * cards are reachable without polluting the column (only the 10 most-recent render inline).
- */
-function TerminalOverflowDrawer({
-  cards,
-  title,
-  onOpen,
-  onClose,
-}: {
-  cards: Card[];
-  title: string;
-  onOpen: (id: string) => void;
-  onClose: () => void;
-}) {
-  const [q, setQ] = useState("");
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  const needle = q.trim().toLowerCase();
-  const filtered = needle ? cards.filter((c) => `${c.title} ${c.id}`.toLowerCase().includes(needle)) : cards;
-  return (
-    <div className="fixed inset-0 z-[80]">
-      <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-      <div className="absolute right-0 top-0 flex h-full w-full max-w-sm flex-col border-l border-line bg-surface shadow-2xl">
-        <header className="flex items-center gap-2 border-b border-line px-4 py-3">
-          <span className="flex-1 text-sm font-semibold text-fg">{title}</span>
-          <span className="text-[11px] text-fg-subtle">{cards.length} cards</span>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded p-1 text-fg-subtle transition hover:bg-surface-hover hover:text-fg"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </header>
-        <div className="border-b border-line px-3 py-2">
-          <div className="flex items-center gap-2 rounded-md border border-line bg-inset px-2">
-            <Search className="h-3.5 w-3.5 shrink-0 text-fg-subtle" />
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Buscar…"
-              className="h-8 flex-1 bg-transparent text-sm text-fg outline-none placeholder:text-fg-subtle"
-            />
-          </div>
-        </div>
-        <div className="flex-1 overflow-y-auto p-2">
-          {filtered.length === 0 ? (
-            <p className="px-2 py-8 text-center text-[12px] text-fg-subtle">Nenhum resultado.</p>
-          ) : (
-            <ul className="flex flex-col gap-0.5">
-              {filtered.map((c) => (
-                <li key={c.id}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onClose();
-                      onOpen(c.id);
-                    }}
-                    className="flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-surface-hover"
-                  >
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[12px] text-fg">{c.title}</span>
-                      <span className="block truncate text-[10px] text-fg-subtle">{c.id}</span>
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * A PORTA de uma fase para a ferramenta que a aprofunda — declarada em `board.yaml`
- * (`columns[].tool`), nunca cravada aqui: o Kanban não sabe que existe uma "Entrega", ele sabe que
- * uma fase pode apontar para uma view.
- *
- * O rótulo, o ícone e o texto de ajuda vêm do REGISTRO de navegação (`nav-groups`) — a mesma fonte
- * que desenha o item no menu do bloco. Renomear a view num lugar renomeia a porta junto; foi
- * exatamente a divergência de nomes ("Entrega" a coluna × "Entrega" a página) que motivou tudo isto.
- * O verbo é o mesmo dos rodapés de popover ("Abrir Inbox →"), e não uma variante nova.
- */
-function PhaseToolLink({ tool, boardId }: { tool: NavItem; boardId: string }) {
-  const Icon = tool.icon;
-  return (
-    <Link
-      href={tool.href(boardId)}
-      title={tool.hint}
-      className="group/tool -ml-1 inline-flex max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-[11.5px] font-medium text-fg-muted transition hover:bg-surface-hover hover:text-accent"
-    >
-      <Icon className="h-3.5 w-3.5 shrink-0" />
-      <span className="truncate">Abrir {tool.label}</span>
-      <span aria-hidden className="shrink-0 transition-transform group-hover/tool:translate-x-0.5">
-        →
-      </span>
-    </Link>
-  );
-}
-
-/**
- * Column description with a UNIFORM footprint so every column's card list starts
- * at the same Y. Collapsed, the text occupies a fixed 3-line box (the same height
- * whether the description is one line or ten) and the "ver mais" affordance is an
- * overlay pinned to the bottom-right — it adds NO layout height, so columns stay
- * aligned regardless of which ones overflow. Clicking expands that column in place.
- */
-function ColumnDescription({ text }: { text: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const ref = useRef<HTMLParagraphElement>(null);
-  const [overflowing, setOverflowing] = useState(false);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const check = () => setOverflowing(el.scrollHeight > el.clientHeight + 1);
-    check();
-    const ro = new ResizeObserver(check);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [text, expanded]);
-
-  const canToggle = overflowing || expanded;
-
-  return (
-    <div className="relative mt-1">
-      <p
-        ref={ref}
-        onClick={() => canToggle && setExpanded((v) => !v)}
-        title={expanded ? undefined : text}
-        className={cn(
-          "text-[11px] leading-snug text-fg-muted transition-all",
-          // collapsed: a fixed 3-line box — identical height on every column
-          expanded ? "" : "line-clamp-3 h-[2.85rem]",
-          canToggle && "cursor-pointer",
-        )}
-      >
-        {text}
-      </p>
-      {canToggle &&
-        (expanded ? (
-          <button
-            type="button"
-            onClick={() => setExpanded(false)}
-            className="mt-0.5 text-[10px] font-medium text-fg-subtle transition hover:text-fg-muted"
-          >
-            ver menos
-          </button>
-        ) : (
-          // overlay: pinned bottom-right, matches the canvas bg so it reads over
-          // the clamped last line WITHOUT consuming any header height
-          <button
-            type="button"
-            onClick={() => setExpanded(true)}
-            className="absolute bottom-0 right-0 rounded bg-canvas pl-2 text-[10px] font-medium text-fg-subtle transition hover:text-fg-muted"
-          >
-            ver mais
-          </button>
-        ))}
-    </div>
+    <KanbanLane label={lane.label} segment={segment}>
+      {body}
+    </KanbanLane>
   );
 }

@@ -8,7 +8,7 @@ import type { OrchestratorPolicy, RiskClass, RiskDisposition } from "../types";
 
 /**
  * Fase 5.1/5.9 — the ENFORCEMENT capability signal that gates `mode: autonomous`. The Copiloto config tab reads
- * autonomousModeSafe() to unlock the toggle→autonomous, and setBoardOrchestratorModeAction accepts the write,
+ * autonomousModeSafe() to unlock the toggle→autonomous, and the autonomy writer (setBoardAutonomyAction) accepts the write,
  * once it is true. Single source of truth — never hard-code the booleans elsewhere.
  *
  * `mcpTokenLevelsEnforced` (6.5): the register.ts McpLevel filter — a scoped `write` token mounts no

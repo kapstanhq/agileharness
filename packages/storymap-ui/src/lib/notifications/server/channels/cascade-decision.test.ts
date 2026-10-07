@@ -336,8 +336,7 @@ describe("decideCascade — mode/kinds-aware skip (refine)", () => {
   const reopenPipeline = cfg([
     { id: "enriquecer", name: "Especificar", trigger: "harness-enrich", autorun: true, column: "discovery" },
     { id: "interview", name: "Entrevista", trigger: "harness-interview", autorun: true, column: "discovery", skipForTypes: SKIP },
-    { id: "priorizar", name: "Estimar", gate: "hasRefinement", trigger: "harness-prioritize", autorun: true, column: "discovery" },
-    { id: "pronta", name: "A fazer", autorun: true, column: "todo" }, // autorun:true so the kernel decides
+    { id: "pronta", name: "A fazer", gate: "hasRefinement", autorun: true, column: "todo" }, // autorun:true so the kernel decides
     { id: "design-ux", name: "Jornada", trigger: "harness-ux", autorun: true, column: "prepare", skipForTypes: SKIP },
     { id: "design-ui", name: "Telas", trigger: "harness-ui", autorun: true, column: "prepare", skipForTypes: SKIP },
     { id: "com-design", name: "Aprovar design", gate: "hasWireframe", autorun: false, column: "prepare", skipForTypes: SKIP },
@@ -356,10 +355,10 @@ describe("decideCascade — mode/kinds-aware skip (refine)", () => {
     });
   });
 
-  it("AC1: refine[functionality] FORWARDS past the interview at enriquecer → priorizar (when its gate passes)", () => {
-    // priorizar gates on hasRefinement (full narrative + ≥1 acceptance) — satisfy it so the forward lands.
+  it("AC1: refine[functionality] FORWARDS past the interview → pronta (when its gate passes)", () => {
+    // pronta gates on hasRefinement (full narrative + ≥1 acceptance) — satisfy it so the forward lands.
     const c = refine(["functionality"], { status: "interview", narrative: fullNarrative, acceptance: ["ac"] });
-    expect(decideCascade(c, reopenPipeline)).toEqual({ action: "forward", to: "priorizar" });
+    expect(decideCascade(c, reopenPipeline)).toEqual({ action: "forward", to: "pronta" });
   });
 
   it("AC2: refine[ui] still RUNS harness-ux at design-ux (the design block is intact)", () => {
@@ -378,7 +377,7 @@ describe("decideCascade — mode/kinds-aware skip (refine)", () => {
 
   it("a refine card sitting in `interview` FORWARDS past it (the interview is always skipped on reopen)", () => {
     const c = refine(["ui"], { status: "interview", narrative: fullNarrative, acceptance: ["ac"] });
-    expect(decideCascade(c, reopenPipeline)).toEqual({ action: "forward", to: "priorizar" });
+    expect(decideCascade(c, reopenPipeline)).toEqual({ action: "forward", to: "pronta" });
   });
 
   it("regression: a plain user BUILD story RUNS harness-interview at interview (no skip)", () => {
@@ -502,6 +501,42 @@ describe("decideCascade — card conduzido (routing.driver: conductor)", () => {
     expect(
       decideCascade(card({ status: "desenvolver", mode: "fix", reopenPending: true, routing: driven, bugReport: { brief: "x" } }), board),
     ).toEqual({ action: "stop", reason: "conductor" });
+  });
+});
+
+// O PIPELINE HÍBRIDO (types.ts `pipelineMode`/`stepAutoruns`): num board com condutor, os passos do meio marcados
+// `autorunOnlyInColumns` não rodam a skill — o card que ninguém conduz só ATRAVESSA (o gate do próximo vale). No modo por
+// colunas (`pipeline: columns`, ou sem condutor) a cascata de sempre roda a skill.
+describe("decideCascade — pipeline híbrido (autorunOnlyInColumns)", () => {
+  const statuses: StatusDef[] = [
+    { id: "enriquecer", name: "Especificar", trigger: "harness-enrich", autorun: true },
+    { id: "interview", name: "Entrevista", trigger: "harness-interview", autorun: true, autorunOnlyInColumns: true },
+    { id: "pronta", name: "A fazer", gate: "hasRefinement", autorun: false },
+    { id: "concluida", name: "No ar", terminal: true },
+  ];
+  const conductorBoard: BoardConfig = { ...cfg(statuses), conductor: { enabled: true, fromStatus: "pronta" } };
+  const refined = { status: "interview", storyType: "user", narrative: fullNarrative, acceptance: ["ac"] };
+
+  it("modo condutor: a skill do passo do meio NÃO roda — o card atravessa para «A fazer»", () => {
+    expect(decideCascade(card(refined), conductorBoard)).toEqual({ action: "forward", to: "pronta" });
+  });
+
+  it("modo condutor: atravessar respeita o gate do próximo passo (sem aceite, para)", () => {
+    expect(decideCascade(card({ status: "interview", storyType: "user" }), conductorBoard)).toMatchObject({ action: "stop" });
+  });
+
+  it("modo condutor: passo SEM a marca segue rodando a skill (Especificar)", () => {
+    expect(decideCascade(card({ status: "enriquecer", storyType: "user" }), conductorBoard)).toEqual({ action: "run", trigger: "harness-enrich" });
+  });
+
+  it("modo por colunas — declarado, ou board sem condutor — roda a skill do passo como sempre", () => {
+    expect(decideCascade(card(refined), { ...conductorBoard, pipeline: "columns" })).toEqual({ action: "run", trigger: "harness-interview" });
+    expect(decideCascade(card(refined), cfg(statuses))).toEqual({ action: "run", trigger: "harness-interview" });
+  });
+
+  it("um card CONDUZIDO no passo do meio para com o motivo do condutor (nunca atravessa sob ele)", () => {
+    const driven = { skips: [], decidedBy: "rules", decidedAt: "2026-10-07", driver: "conductor" };
+    expect(decideCascade(card({ ...refined, routing: driven }), conductorBoard)).toEqual({ action: "stop", reason: "conductor" });
   });
 });
 

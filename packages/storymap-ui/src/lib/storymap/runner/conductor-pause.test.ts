@@ -9,6 +9,9 @@ import { compareConductorQueue, admitConductorCard, memoryConductorQueueStore, t
 import {
   CHILD_WORK_WINDOW_FACTOR,
   DECLARED_PARK_LINE,
+  DEPENDENCY_PARK_LINE,
+  PARK_IGNORED_FACTOR,
+  parkIgnoredStep,
   ladderLine,
   DEFAULT_PARK_SETTINGS,
   ladderGraceMs,
@@ -222,8 +225,8 @@ describe("parkWaitingConductors — o condutor que espera o dono libera a vaga",
 
 describe("a fila do condutor — a retomada passa na frente", () => {
   const entry = (cardId: string, queuedAt: string, resume = false) => ({ entry: { board: "b", cardId, queuedAt, attempts: 0, ...(resume ? { resume: true as const } : {}) }, card: null });
-  it("retomada vem antes de qualquer prioridade; entre retomadas vale a ordem de chegada", () => {
-    const critical = { entry: { board: "b", cardId: "c-critico", queuedAt: "2026-10-01T08:00:00Z", attempts: 0 }, card: { priorityCall: { rank: 3 } } as unknown as Card };
+  it("retomada vem antes de qualquer posição; entre retomadas vale a ordem de chegada", () => {
+    const critical = { entry: { board: "b", cardId: "c-critico", queuedAt: "2026-10-01T08:00:00Z", attempts: 0 }, card: { order: -10 } as unknown as Card };
     const list = [entry("c-novo", "2026-10-01T09:00:00Z"), critical, entry("c-retomada-2", "2026-10-01T11:00:00Z", true), entry("c-retomada-1", "2026-10-01T10:00:00Z", true)];
     expect([...list].sort(compareConductorQueue).map((x) => x.entry.cardId)).toEqual(["c-retomada-1", "c-retomada-2", "c-critico", "c-novo"]);
   });
@@ -562,5 +565,145 @@ describe("parkBoardConductors — a pausa «parar agora» pede a cada condutor d
       ),
     ).toEqual([]);
     expect(w.delivered).toEqual([]);
+  });
+});
+
+// ── Fase 6 (6D): esperar outra história e o pedido de estacionar ignorado ──────────────────────────────────────────
+describe("fase 6 (6D) — esperar outra história estaciona COM o driver; o pedido ignorado é repetido e escalado", () => {
+  const facts = (over: Partial<QuietLadderFacts> = {}): QuietLadderFacts => ({ quietForMs: 30 * MIN, asking: false, transportError: null, declaredWaiting: false, ownerWait: false, slotWaiters: 0, ...over });
+
+  it("quietLadderStep: esperando outra história e quieto ⇒ estacionar por dependência (mesmo sem fila esperando vaga)", () => {
+    const now = Date.UTC(2026, 9, 7, 12);
+    expect(quietLadderStep(facts({ dependencyWait: "«Catálogo» (story-ex9621) ainda não terminou" }), undefined, DEFAULT_PARK_SETTINGS, now)).toEqual({ kind: "park", cause: "dependency" });
+    expect(quietLadderStep(facts({ quietForMs: 2 * MIN, dependencyWait: "x" }), undefined, DEFAULT_PARK_SETTINGS, now)).toEqual({ kind: "none" });
+    const line = ladderLine({ kind: "park", cause: "dependency" });
+    expect(line).toBe(DEPENDENCY_PARK_LINE);
+    expect(line).toMatch(/NÃO limpe o driver/);
+    expect(line).toMatch(/depends-on/);
+  });
+
+  it("a sessão que estacionou por dependência volta à fila NA FRENTE (a fila a segura até a dependência chegar)", async () => {
+    const w = ladderWorld({ card: cardOf("desenvolver"), quietMin: () => 30 });
+    w.deps.dependencyWait = async () => "«Catálogo» ainda não terminou";
+    expect((await parkWaitingConductors(w.deps)).asked).toMatchObject([{ cause: "dependency" }]);
+    expect(w.delivered.at(-1)).toBe(DEPENDENCY_PARK_LINE);
+    w.live.clear(); // a sessão encerrou
+    await parkWaitingConductors(w.deps);
+    expect(w.requeued).toEqual([["b", "story-x", "resume"]]);
+  });
+
+  it("parkIgnoredStep (pura): repete uma vez depois de 2× a carência, escala depois de mais 2×, e para", () => {
+    const s = DEFAULT_PARK_SETTINGS;
+    const win = PARK_IGNORED_FACTOR * s.afterMinutes * MIN;
+    const t0 = Date.UTC(2026, 9, 7, 12);
+    const memo = { board: "b", cardId: "story-x", askedAt: t0, parkCause: "quiet" as const };
+    expect(parkIgnoredStep(memo, win, false, s, t0 + win - 1)).toBe("none");
+    expect(parkIgnoredStep(memo, win, false, s, t0 + win)).toBe("reask");
+    expect(parkIgnoredStep(memo, win, true, s, t0 + win)).toBe("none"); // um prompt desenhado: não digitar
+    expect(parkIgnoredStep(memo, 1 * MIN, false, s, t0 + win)).toBe("none"); // a sessão se mexeu: não ignorou
+    const reasked = { ...memo, reaskedAt: t0 + win };
+    expect(parkIgnoredStep(reasked, win, false, s, t0 + 2 * win)).toBe("escalate");
+    expect(parkIgnoredStep({ ...reasked, escalatedAt: t0 + 2 * win }, win, false, s, t0 + 9 * win)).toBe("none");
+  });
+
+  it("parkWaitingConductors: o pedido ignorado é repetido (mesma linha), depois escalado ao operador — nunca mata a sessão", async () => {
+    let quiet = 30;
+    const w = ladderWorld({ card: cardOf("desenvolver"), quietMin: () => quiet, waiters: 2 });
+    const escalated: string[] = [];
+    w.deps.escalateIgnoredPark = async (_b, cardId, detail) => void escalated.push(`${cardId}: ${detail}`);
+    // nudge → park (quiet)
+    await parkWaitingConductors(w.deps);
+    w.tick(DEFAULT_PARK_SETTINGS.afterMinutes);
+    const asked = await parkWaitingConductors(w.deps);
+    expect(asked.asked).toMatchObject([{ cause: "quiet" }]);
+    const win = PARK_IGNORED_FACTOR * DEFAULT_PARK_SETTINGS.afterMinutes;
+    quiet = 60;
+    w.tick(win);
+    expect((await parkWaitingConductors(w.deps)).ignored).toEqual([expect.objectContaining({ step: "reask" })]);
+    expect(w.delivered.at(-1)).toBe(QUIET_PARK_LINE);
+    w.tick(win);
+    expect((await parkWaitingConductors(w.deps)).ignored).toEqual([expect.objectContaining({ step: "escalate" })]);
+    expect(escalated[0]).toMatch(/Parar condutor/);
+    expect(w.decisions.filter((d) => d.kind === "conductor-park").length).toBeGreaterThanOrEqual(3);
+    w.tick(win);
+    expect((await parkWaitingConductors(w.deps)).ignored ?? []).toEqual([]);
+  });
+});
+
+// ── fase 7: o LOTE do condutor acorda, estaciona e volta como UNIDADE ──────────────────────────────────────────────
+const ANSWER_LEAD = { board: "b", cardId: "story-ex9201", questionIds: ["q1"], by: "owner" as const };
+describe("fase 7 — lote do condutor: acordar, estacionar e voltar como unidade", () => {
+  const MARK = { id: "lote-a", lead: "story-ex9201", sessionId: "s1", at: "2026-10-01T10:00:00Z" };
+  const batchCard = (id: string, questions: unknown[] = [], status = "desenvolver"): Card => ({
+    ...coerceCard(id, { type: "story", storyType: "bug", title: `Conserto ${id.slice(-4)}`, status, routing: { driver: "conductor" }, questions }, ""),
+    batch: MARK,
+  });
+  const batchSession = (over: Partial<AgentSession> = {}) =>
+    session({ cardId: "story-ex9201", batch: { id: "lote-a", featureKey: "func-a", cardIds: ["story-ex9202", "story-ex9203"], dropped: [] }, ...over });
+
+  function batchWakeWorld(cards: Card[], sessions: AgentSession[], live: string[]) {
+    const byId = new Map(cards.map((c) => [c.id, c] as const));
+    const w = wakeWorld({ card: null, sessions, live });
+    w.deps.readCard = async (_b, id) => byId.get(id) ?? null;
+    w.deps.batchItems = async (_b, lead) => cards.filter((c) => c.id !== lead.id && c.batch?.id === lead.batch?.id);
+    return w;
+  }
+
+  it("a resposta a um ITEM chega ao terminal da sessão do lote (não fica sem dono)", async () => {
+    const w = batchWakeWorld([batchCard("story-ex9201"), batchCard("story-ex9202", [q("q1", "money", "answered")]), batchCard("story-ex9203")], [batchSession()], ["agent-conductor-story-x-ab12"]);
+    expect(await wakeConductor(w.deps, { ...ANSWER, cardId: "story-ex9202" })).toBe("delivered");
+    expect(w.delivered).toHaveLength(1);
+    expect(w.resumed).toEqual([]);
+  });
+
+  it("lote ESTACIONADO: a resposta a um item retoma o lote inteiro, o líder primeiro", async () => {
+    const w = batchWakeWorld([batchCard("story-ex9201"), batchCard("story-ex9202", [q("q1", "money", "answered")]), batchCard("story-ex9203")], [], []);
+    expect(await wakeConductor(w.deps, { ...ANSWER, cardId: "story-ex9202" })).toBe("resumed");
+    expect(w.resumed).toEqual(["b/story-ex9201", "b/story-ex9202", "b/story-ex9203"]);
+  });
+
+  it("lote estacionado com pergunta ainda aberta em OUTRO card do lote: segue esperando", async () => {
+    const w = batchWakeWorld([batchCard("story-ex9201", [q("q9", "money")]), batchCard("story-ex9202", [q("q1", "money", "answered")]), batchCard("story-ex9203")], [], []);
+    expect(await wakeConductor(w.deps, { ...ANSWER, cardId: "story-ex9202" })).toBe("still-waiting");
+    expect(w.resumed).toEqual([]);
+  });
+
+  it("um item já terminado (ou devolvido ao fluxo) não volta à fila com o lote", async () => {
+    const done = batchCard("story-ex9203", [], "concluida");
+    const w = batchWakeWorld([batchCard("story-ex9201", [q("q1", "money", "answered")]), batchCard("story-ex9202"), done], [], []);
+    expect(await wakeConductor(w.deps, ANSWER_LEAD)).toBe("resumed");
+    expect(w.resumed).toEqual(["b/story-ex9201", "b/story-ex9202"]);
+  });
+
+  it("a pergunta do dono aberta num ITEM conta como espera do dono do lote: estaciona, e a memória guarda os itens", async () => {
+    const cards = new Map([batchCard("story-ex9201"), batchCard("story-ex9202", [q("q1", "money")]), batchCard("story-ex9203")].map((c) => [c.id, c] as const));
+    const w = parkWorld({ card: cards.get("story-ex9201")!, quietMin: 10 });
+    w.deps.sessions = async () => [batchSession()];
+    w.deps.readCard = async (_b, id) => cards.get(id) ?? null;
+    const report = await parkWaitingConductors(w.deps);
+    expect(report.asked).toEqual([{ board: "b", cardId: "story-ex9201", tmuxSession: "agent-conductor-story-x-ab12", cause: "owner" }]);
+    expect(w.deps.state.get("s1")?.batchCardIds).toEqual(["story-ex9202", "story-ex9203"]);
+  });
+
+  it("o lote estacionado por quietude SAI: o líder e cada item voltam à fila juntos (o item com pergunta aberta espera a resposta)", async () => {
+    const cards = new Map([batchCard("story-ex9201"), batchCard("story-ex9202"), batchCard("story-ex9203", [q("q2", "money")])].map((c) => [c.id, c] as const));
+    const w = parkWorld({ card: cards.get("story-ex9201")!, quietMin: null });
+    const requeued: string[] = [];
+    w.deps.sessions = async () => []; // a sessão saiu (worktree_discard)
+    w.deps.readCard = async (_b, id) => cards.get(id) ?? null;
+    w.deps.requeue = async (b, c, place) => void requeued.push(`${b}/${c}:${place}`);
+    w.deps.state.set("s1", { board: "b", cardId: "story-ex9201", batchCardIds: ["story-ex9202", "story-ex9203"], askedAt: 1, parkCause: "quiet" });
+    const report = await parkWaitingConductors(w.deps);
+    expect(requeued).toEqual(["b/story-ex9201:yield", "b/story-ex9202:yield"]);
+    expect(report.requeued).toEqual([{ board: "b", cardId: "story-ex9201" }, { board: "b", cardId: "story-ex9202" }]);
+    expect(w.deps.state.size).toBe(0);
+  });
+
+  it("a pausa do board («parar agora») pede ao condutor do lote e guarda os itens para a volta", async () => {
+    const w = parkWorld({ card: batchCard("story-ex9201"), quietMin: null });
+    w.deps.sessions = async () => [batchSession()];
+    const asked = await parkBoardConductors(w.deps, "b");
+    expect(asked).toEqual([{ cardId: "story-ex9201", tmuxSession: "agent-conductor-story-x-ab12" }]);
+    expect(w.deps.state.get("s1")).toMatchObject({ parkCause: "pace", batchCardIds: ["story-ex9202", "story-ex9203"] });
   });
 });

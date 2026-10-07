@@ -27,6 +27,7 @@ import { clearPendingWake, setPendingWake } from "./orchestrator-clock";
 import { runBoardTickNow } from "./orchestrator-run";
 import { appendCopilotActivity } from "@/lib/storymap/copilot/activity";
 import { paceAllowsBackground } from "./board-pace-store";
+import { requestSentinelSweep } from "./sentinel-run";
 
 /** Defaults quando settings.orchestrator.wake está ausente (espelham DEFAULTS em config.ts). */
 export const WAKE_DEFAULTS = { enabled: true, debounceSeconds: 45, cooldownMinutes: 5 } as const;
@@ -117,6 +118,9 @@ function wakeSettings(): { enabled: boolean; debounceMs: number; cooldownMs: num
  * o wake está desligado, ou o board não é `autonomous`.
  */
 export async function scheduleBoardWake(board: string, reason: string): Promise<void> {
+  // FASE 6 — a SENTINELA acorda pelo mesmo evento, em TODO board (ela é sempre ligada; o resto desta função é o copiloto,
+  // só no autônomo). A varredura dela é $0 quando não há causa nova e é coalescida (uma rajada = uma varredura).
+  requestSentinelSweep(board, reason);
   try {
     const cfg = loadRunnerConfig().orchestrator;
     const { enabled, debounceMs, cooldownMs } = wakeSettings();
@@ -176,6 +180,8 @@ export async function scheduleBoardWake(board: string, reason: string): Promise<
 /** Acorda TODOS os boards autônomos (o `onIdle` do engine: um run acabou — pode ter travado ou gerado
  *  trabalho, e isso NÃO passa pelo watcher de arquivos). Best-effort. */
 export async function wakeAutonomousBoards(reason: string): Promise<void> {
+  // FASE 6 — um run que terminou pode ter morrido ou falhado: a Sentinela olha TODOS os boards (e o host).
+  requestSentinelSweep(undefined, reason);
   try {
     if (loadRunnerConfig().orchestrator?.enabled !== true) return;
     for (const b of await listBoards()) {

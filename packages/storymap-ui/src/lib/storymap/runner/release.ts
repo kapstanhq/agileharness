@@ -14,8 +14,11 @@
 import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { runnerStateDir } from "@/lib/storymap/paths";
-import { execErrorDetail, makeGit, quote as q } from "./git";
-import { secretScanCommand, type ExecFn } from "./worktree";
+import { execErrorDetail, makeGit, prePushGateAt, pushTarget, quote as q, setPushHold } from "./git";
+
+/** Um sha COMPLETO (40/64 hex) — o que `rev-parse HEAD` devolve num repositório de verdade. */
+const isFullSha = (s: string): boolean => /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(s);
+import { makePrePushScan, secretScanCommand, type ExecFn } from "./worktree";
 // O prefixo que É o dado de board — a ÚNICA classe que a régua de {@link classifyDeltaPath} libera. Vem
 // de config.ts (fonte única do pathspec que o engine também commita), nunca re-digitado aqui: um literal
 // duplicado é o começo de duas verdades sobre "o que é dado".
@@ -173,17 +176,28 @@ export type DeltaClass = "board-data" | "control" | "code" | "unclassified";
  *  - `.claude/hooks/` — os hooks que recusam escrita em board-data de runtime e artefato na raiz;
  *  - `justfile` — os comandos canônicos que o gate e o deploy invocam pelo nome;
  *  - `.claude/settings*.json` — o allowlist de permissão dos agentes;
+ *  - `.claude/skills/`, `.claude/agents/`, `.claude/commands/` e `.mcp.json` — as REGRAS e os poderes dos agentes (as
+ *    regras do condutor moram em `.claude/skills/harness-conductor/ref/`, lidas do worktree): um delta aqui reescreve o
+ *    que o próximo agente obedece (o train também abre a pergunta `guardrail` ao dono — decision-class.ts);
  *  - `storymap/settings.yaml` — o arquivo que DECLARA se o gate roda (`mergeGate.enabled`), o que conta
  *    como código (`staging.codePrefixes`) e a fila de publicação. É o caso extremo do defeito: um delta
  *    que desliga o gate NÃO pode ser um delta que o gate não examina. Mora fora de `storymap/boards/**`
  *    de propósito — não é board-data, é configuração do harness.
  * Prefixos casam por PASTA (com a barra), arquivos por igualdade — `justfile-notes` não é o `justfile`.
  */
-const CONTROL_PATH_PREFIXES: readonly string[] = ["scripts/git-hooks/", ".github/", ".claude/hooks/"];
+const CONTROL_PATH_PREFIXES: readonly string[] = [
+  "scripts/git-hooks/",
+  ".github/",
+  ".claude/hooks/",
+  ".claude/skills/",
+  ".claude/agents/",
+  ".claude/commands/",
+];
 const CONTROL_PATH_FILES: readonly string[] = [
   "justfile",
   ".claude/settings.json",
   ".claude/settings.local.json",
+  ".mcp.json",
   "storymap/settings.yaml",
 ];
 
@@ -711,6 +725,8 @@ export async function promoteStageToMain(opts: {
   }
   // --no-verify: the unattended release commit bypasses the non-security pre-commit hooks (mirrors
   // commitAllPending / the split commits, audit #10); the secret re-scan below is the security gate.
+  // O HEAD de ANTES do commit do release: o scan e o desfazer abaixo operam por SHA, nunca por `HEAD~1`/`HEAD^1`.
+  const preReleaseSha = (await git(`rev-parse HEAD`)).stdout.trim();
   const committed = await git(`commit --no-verify -m ${q(`release: promove código staged de ${stageBranch} para ${branch}`)}`);
   if (!committed.ok) {
     // Nothing actually committed (e.g. the delta was already present) → treat as a clean no-op.
@@ -722,8 +738,10 @@ export async function promoteStageToMain(opts: {
 
   // SM-08 fail-closed: re-scan the release commit before pushing. A hit undoes it (branch pristine).
   let blocked: string | null = null;
+  const releaseSha = (await git(`rev-parse HEAD`)).stdout.trim();
+  const pinned = isFullSha(preReleaseSha) && isFullSha(releaseSha) && preReleaseSha !== releaseSha;
   try {
-    await exec(secretScanCommand(repoRoot, { range: "HEAD~1..HEAD" }), { cwd: repoRoot, timeout: GIT_TIMEOUT_MS });
+    await exec(secretScanCommand(repoRoot, { range: pinned ? `${preReleaseSha}..${releaseSha}` : "HEAD~1..HEAD" }), { cwd: repoRoot, timeout: GIT_TIMEOUT_MS });
   } catch (e: unknown) {
     blocked = execErrorDetail(e) || "secret-scan falhou";
   }
@@ -733,7 +751,19 @@ export async function promoteStageToMain(opts: {
     // revertido junto — inclusive quando o bloqueio era um INTERNAL_ERROR do scanner num diff grande. O mesmo
     // princípio do merge train (captureTrainPreimages/restoreDataPaths): HEAD volta um commit sem tocar índice
     // nem disco, e só os arquivos do patch voltam ao estado de HEAD (um arquivo que o release CRIOU some).
-    await git(`reset --soft HEAD^1`);
+    // Por SHA e só com o HEAD ainda no commit do release: com outro commit em cima, voltar apagaria o dele.
+    const reset = !pinned
+      ? await git(`reset --soft HEAD^1`)
+      : (await git(`rev-parse HEAD`)).stdout.trim() === releaseSha
+        ? await git(`reset --soft ${q(preReleaseSha)}`)
+        : { ok: false, code: null, stdout: "", stderr: `HEAD andou depois do commit do release ${releaseSha.slice(0, 12)} — desfazer recusado` };
+    if (!reset.ok) {
+      // O commit reprovado SEGUE no HEAD: retém todo push deste checkout (o settle do engine, o train, o
+      // próximo release) até alguém tirá-lo — sem isso, o próximo `push origin HEAD` cumulativo o publicaria.
+      await setPushHold(git, pinned ? preReleaseSha : null);
+      console.error(`[release] o desfazer do release bloqueado NÃO voltou o HEAD (publicação retida): ${reset.stderr.slice(0, 300)}`);
+      return { promoted: false, outcome: "blocked", branch, pushed: false, blocked: true, reason: `secret-scan bloqueou o release e o commit NÃO foi desfeito (publicação retida): ${blocked}` };
+    }
     const undone = await git(`restore --source=HEAD --staged --worktree -- ${applyPathspec}`);
     if (!undone.ok) console.error(`[release] o desfazer do release bloqueado não restaurou os arquivos do patch: ${undone.stderr.slice(0, 300)}`);
     return { promoted: false, outcome: "blocked", branch, pushed: false, blocked: true, reason: `secret-scan bloqueou o release: ${blocked}` };
@@ -746,8 +776,20 @@ export async function promoteStageToMain(opts: {
   // ONCE, so origin stays == this checkout instead of stranding the release unpushed. Merge (not
   // rebase) preserves the release commit sha. A genuine code overlap aborts → best-effort false
   // (cumulative: a later push catches up).
-  let pushed = (await git(`push origin ${q(branch)}`)).ok;
-  if (!pushed && (await git(`fetch origin ${q(branch)}`)).ok) {
+  // O PORTÃO PRÉ-PUSH (git.ts, prePushGate) — o mesmo do train e do settle do engine: a retenção persistida
+  // (um commit que outro caminho reprovou e não desfez) e o scan por commit de TUDO o que este push cumulativo
+  // publica, não só do commit do release (varrido acima). Retido ⇒ o release fica LOCAL (pushed: false).
+  // O push leva o SHA que o portão varreu (pushTarget) — nunca o branch resolvido depois do scan.
+  const scan = makePrePushScan(exec, repoRoot, repoRoot, GIT_TIMEOUT_MS);
+  const gate = await prePushGateAt(git, branch, scan);
+  const held = gate.held;
+  if (held) console.error(`[release] push de ${branch} retido: ${held.slice(0, 300)}`);
+  const pushRef = (sha: string | null | undefined): string => {
+    const t = pushTarget(branch, sha);
+    return t === "HEAD" ? q(branch) : t;
+  };
+  let pushed = held ? false : (await git(`push origin ${pushRef(gate.sha)} --no-follow-tags`)).ok;
+  if (!held && !pushed && (await git(`fetch origin ${q(branch)}`)).ok) {
     // story-ex0014 — FRONTEIRA DE CONTRIBUIÇÃO. Este merge absorve `origin/<branch>` na árvore que o
     // self-deploy vai buildar e reiniciar como root, e é o único lugar do release por onde um commit que
     // este checkout não produziu entra sem ninguém decidir nada. O reconcile existe para o DADO de outro
@@ -765,7 +807,10 @@ export async function promoteStageToMain(opts: {
     if (verdict.detail) console.warn(`[release] origin/${branch} ${verdict.detail} (o release segue local)`);
     if (verdict.absorb) {
       if ((await git(`merge --no-edit FETCH_HEAD`)).ok) {
-        pushed = (await git(`push origin ${q(branch)}`)).ok; // retry after pulling origin's advance in
+        // o merge criou um commit (não varrido): o portão de novo, e o retry leva o sha que ELE varreu
+        const again = await prePushGateAt(git, branch, scan);
+        if (again.held) console.error(`[release] push de ${branch} retido: ${again.held.slice(0, 300)}`);
+        else pushed = (await git(`push origin ${pushRef(again.sha)} --no-follow-tags`)).ok; // retry after pulling origin's advance in
       } else {
         await git(`merge --abort`); // conflict/error → leave the released branch pristine
       }

@@ -55,10 +55,10 @@ then integrates their work, marks the tasks done, and advances the card into
   card whose `status` is `desenvolver`, board-by-board, in file order.
 
 A card should reach `desenvolver` only AFTER passing every upstream gate
-(`hasRefinement` → `hasPrioritization` → `hasWireframe` → `hasTechPlan` →
-`hasTasks`), so it must already have a non-empty `acceptance`, complete `rice`
-plus `kano`/`funnelStage`, a chosen wireframe, a tech plan, and non-empty `tasks`.
-If those are missing, stop and route back (`/harness-enrich` → `/harness-prioritize` →
+(`hasRefinement` → `hasWireframe` → `hasTechPlan` → `hasTasks`), so it must
+already have a complete narrative + non-empty `acceptance`, a chosen wireframe (when
+the story has screens), a tech plan, and non-empty `tasks`.
+If those are missing, stop and route back (`/harness-enrich` →
 `/harness-ux` → `/harness-plan` → `/harness-tasks`) — the trigger only owns the `desenvolver`
 slot and should not build an under-specified card.
 

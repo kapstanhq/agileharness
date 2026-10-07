@@ -1,14 +1,15 @@
 import { redirect } from "next/navigation";
 import { listBoards } from "@/lib/storymap/repo";
 import { AgileHarnessLogo } from "@/components/AgileHarnessLogo";
+import { boardHomeHref } from "@/components/nav/nav-groups";
 
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const boards = await listBoards();
-  // A porta de entrada é o INBOX de todos os boards: o que depende dele primeiro, de
-  // qualquer board, sem trocar de board para achar pendência. A home de cada board segue a um toque.
-  if (boards.length > 0) redirect("/inbox");
+  // A porta de entrada é o KANBAN do primeiro board (a casa do board desde que o Início saiu): o Inbox de
+  // todos os boards segue a um toque, no ícone da barra do topo.
+  if (boards.length > 0) redirect(boardHomeHref(boards[0].id));
 
   return (
     <main className="mx-auto max-w-2xl p-12">

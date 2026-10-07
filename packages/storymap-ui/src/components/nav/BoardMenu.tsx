@@ -1,6 +1,8 @@
 "use client";
 
-// O MENU DO SISTEMA — o conteúdo do ⚙ (desktop) e do sheet "Mais" (celular), escrito UMA vez.
+// O MENU DO SISTEMA — o conteúdo da engrenagem "Configurações do board" da barra do topo
+// (`shell/SettingsMenu`), em toda largura: desde a fase 1 o sheet "Mais" do celular saiu com a navegação
+// inferior, e o que só ele tinha (Inbox de todos os boards, Terminal) entrou na seção App abaixo.
 //
 // Antes eram duas listas paralelas dentro de `BoardHeader` (OverflowMenu + MoreTab) que precisavam
 // ser editadas em par para não divergir — e já divergiam: a Lixeira só existia no desktop, o modo
@@ -40,9 +42,12 @@ import {
   BellOff,
   Coins,
   Cpu,
+  Inbox as InboxIcon,
   Moon,
   RefreshCw,
   Smartphone,
+  SquareDashedMousePointer,
+  SquareTerminal,
   Sun,
   Trash2,
   Volume2,
@@ -146,6 +151,7 @@ export function BoardMenu({
   onOpenTrash,
   onRefresh,
   onNavigate,
+  onMarkAdjust,
 }: {
   boardId: string;
   notifications: BoardNotifications;
@@ -155,6 +161,8 @@ export function BoardMenu({
   onRefresh: () => void;
   /** fecha o invólucro quando o item navega para outra página. */
   onNavigate: () => void;
+  /** liga o modo «Marcar ajuste» do overlay de feedback; ausente (overlay não montado) ⇒ o item não aparece. */
+  onMarkAdjust?: () => void;
 }) {
   const { theme, toggle: toggleTheme } = useTheme();
   const isDark = theme === "dark";
@@ -188,7 +196,23 @@ export function BoardMenu({
       {/* A máquina não é deste board: os runs headless, a fila de merge e a saúde da VPS são do APP
           inteiro. Fica aqui porque a pergunta ("por que meu card não anda?") nasce olhando um board —
           e o cabeçalho avisa o alcance antes do clique. */}
-      <MenuSection label="Máquina" meta="todos os boards">
+      <MenuSection label="App" meta="todos os boards">
+        {/* A porta do feedback visual sobre a PRÓPRIA ferramenta — era a pílula flutuante no canto, em cima da 1ª raia. */}
+        {onMarkAdjust && (
+          <MenuAction
+            icon={SquareDashedMousePointer}
+            label="Marcar ajuste"
+            hint="Aponte na tela o que mudar nesta ferramenta — vira item na Triagem"
+            onClick={onMarkAdjust}
+          />
+        )}
+        <MenuLink
+          href="/inbox"
+          icon={InboxIcon}
+          label="Inbox de todos os boards"
+          hint="O que espera você em qualquer board"
+          onClick={onNavigate}
+        />
         <MenuLink
           href="/processes"
           icon={Cpu}
@@ -196,6 +220,11 @@ export function BoardMenu({
           hint="Runs ativos, falhas e saúde da VPS"
           onClick={onNavigate}
         />
+        {/* /terminal é documento estático (fora do App Router) → <a> (hard nav), não <Link>. Morava no sheet
+            «Mais» do celular, que saiu junto com a navegação inferior. */}
+        <a href="/terminal?b=shell" role="menuitem" data-menuitem onClick={onNavigate} className={ROW}>
+          <RowBody icon={SquareTerminal} label="Terminal" hint="O shell da máquina, no navegador" />
+        </a>
       </MenuSection>
 
       {/* Os três canais do MESMO aviso, na MESMA gramática (som · navegador · celular). Antes cada
@@ -238,10 +267,11 @@ export function BoardMenu({
           icon={Coins}
           tone="warn"
           label="Modo econômico"
+          // em português simples: o nome dos modelos é jargão para quem decide aqui
           hint={
             economy.enabled
-              ? "Tudo em sonnet/high · ~55% menos custo"
-              : "Modelos originais — opus onde configurado"
+              ? "Ligado: os agentes usam o modelo mais barato · ~55% menos custo"
+              : "Desligado: cada passo usa o modelo escolhido para ele"
           }
           on={economy.enabled === true}
           onToggle={economy.toggle}
@@ -273,9 +303,11 @@ export function BoardMenu({
 function MenuSection({ label, meta, children }: { label: string; meta?: string; children: React.ReactNode }) {
   return (
     <div className="mt-1.5 flex flex-col border-t border-line-muted pt-1.5 first:mt-0 first:border-t-0 first:pt-0">
-      <p className="flex items-baseline gap-1.5 px-2.5 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wide text-fg-subtle">
-        {label}
-        {meta && <span className="font-normal normal-case tracking-normal text-fg-subtle/80">· {meta}</span>}
+      {/* Texto CORRIDO (não flex): com o alcance longo («neste navegador · avisa tudo…») a 2ª linha volta à margem,
+          em vez de um bloco recuado pendurado ao lado do rótulo. */}
+      <p className="px-2.5 pb-1 pt-0.5 text-[10px] leading-[1.45] text-fg-subtle">
+        <span className="font-semibold uppercase tracking-wide">{label}</span>
+        {meta && <span className="text-fg-subtle/80"> · {meta}</span>}
       </p>
       {children}
     </div>

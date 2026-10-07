@@ -251,14 +251,14 @@ describe("governanceItemsFromDrafts — governance drafts folded into the cockpi
     const draft = makeDraft("d6", {
       changes: [
         { artifact: "desiredOutcome", field: null, before: "old", after: "new", label: "desiredOutcome" },
-        { artifact: "canvas", field: "propositionValue", before: "x", after: "y", label: "canvas.propositionValue" },
+        { artifact: "canvas", field: "valuePropositions", before: "x", after: "y", label: "canvas.valuePropositions" },
       ],
     });
     const items = governanceItemsFromDrafts([draft], new Map(), "b");
     expect(items).toHaveLength(1);
     expect(items[0].changes).toHaveLength(2);
     expect(items[0].cardTitle).toContain("desiredOutcome");
-    expect(items[0].cardTitle).toContain("canvas.propositionValue");
+    expect(items[0].cardTitle).toContain("canvas.valuePropositions");
   });
 
   it("cardId falls back to empty string when origin has no cardId (no orphan item)", () => {

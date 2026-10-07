@@ -4,11 +4,16 @@
 // tier back with copilotTier(). Chosen over a new enum value or an `autonomyProfile` field precisely to avoid a
 // SECOND source of truth for "may it deploy" that could desync from the matrix the enforcement reads.
 //
-//   Chat      = mode off                     — só conversa, sem tick. Lê, diagnostica e PROPÕE; não mexe no
-//                                              board (token MCP `ro` + Write/Edit negados — agent-session.ts).
-//   Copiloto  = mode autonomous + deploy:ask — resolves stuck steps/columns/merges/runs and answers FATOS; a
-//                                              DECISÃO de produto/UX SEMPRE pausa e pergunta; nunca faz deploy.
-//   Autônomo  = mode autonomous + deploy:auto — decide produto/UX E PUBLICA em produção sozinho, até o card no ar.
+//   Chat      = mode off                     — nada destrava o board sozinho (o conserto $0 do serviço não roda).
+//   Copiloto  = mode autonomous + deploy:ask — o conserto $0 (zelador, recuperação) roda quando a Sentinela acha uma
+//                                              causa; a matriz de risco do board segura os agentes autônomos; sem deploy.
+//   Autônomo  = mode autonomous + deploy:auto — idem, e a matriz deixa publicar pelo ritual.
+//
+// FASE 6 — o que NÃO depende mais do estado: o CHAT do board (a conversa do dono tem os poderes amplos em qualquer
+// estado — copilot/chat-powers.ts) e o tique (ele não roda mais um agente que «avança o board»: entrega o board à
+// Sentinela). As stances, a doutrina de resolução e os playbooks abaixo eram a prosa desse agente; seguem aqui só
+// porque `AUTONOMO_DOCTRINE_VERSION` (o re-arme do backoff por item) e o guarda dela em tier.test.ts ainda os leem —
+// nenhuma superfície de produção os injeta num prompt.
 //
 // Autônomo's defining bit (deploy:auto) is the operator-reviewed "§4" change. Until it is signed off, the flag
 // {@link DEPLOY_AUTONOMY_ENABLED} holds it OFF: the tier is representable in the model but the UI keeps its button
@@ -94,11 +99,6 @@ export function copilotTier(policy: OrchestratorPolicy | null | undefined): Copi
   return dispositionFor(policy, "deploy") === "auto" ? "autonomo" : "copiloto";
 }
 
-/** Is `tier` selectable right now? Autônomo is locked until the deploy-autonomy gate is signed off. PURE. */
-export function tierUnlocked(tier: CopilotTier): boolean {
-  return tier === "autonomo" ? DEPLOY_AUTONOMY_ENABLED : true;
-}
-
 /** The `mode` a tier WRITES to board.yaml. Chat → off; the two active tiers → autonomous (the tick axis). PURE. */
 export function tierMode(tier: CopilotTier): OrchestratorMode {
   return tier === "chat" ? "off" : "autonomous";
@@ -148,38 +148,13 @@ export function tierMatrix(tier: Exclude<CopilotTier, "chat">): Partial<Record<R
   return m;
 }
 
-/** UI copy for the segmented toggle (label + the honest "o que ele faz sem você" hint). The single source both the
- *  chat header and the full config page read — they must never diverge on what a state means. */
-export const TIER_META: Record<CopilotTier, { label: string; short: string; hint: string }> = {
-  chat: {
-    label: "Chat",
-    // `short` × `hint`: a MESMA verdade em duas granularidades, num lugar só. O seletor de modo é um popover e
-    // mostra a descrição junto de cada opção — com o `hint` inteiro (3-5 linhas cada) as três opções viravam
-    // uma parede de texto que ninguém lê antes de clicar. O `short` é a frase que decide; o `hint` completo
-    // continua sendo o tooltip da opção e o que alimenta a config page e o prompt do agente.
-    short: "Só responde quando você fala. Não move nada no board.",
-    // A frase ANTERIOR era a confissão de um furo: "o chat continua com poder total — o modo governa só o que
-    // ele faz SEM você". Ou seja, o estado mais conservador do toggle abria a superfície MAIS poderosa do
-    // sistema, e o único guardrail era a persona pedindo bom comportamento. Agora o Chat monta o token MCP `ro`
-    // (agent-session.ts) e nega Write/Edit: as tools de escrita do board nem existem na superfície dele. O texto
-    // diz o que o enforcement faz — e é honesto sobre o limite: o Bash nativo FICA (é o que dá poder de
-    // diagnóstico), então a garantia é sobre o BOARD, não sobre o repositório.
-    hint: "Só conversa, e só quando você fala com ele. Nenhum tick autônomo. Lê o código e o board, investiga e propõe — mas não move, não edita e não publica nada no board: as ferramentas de escrita não são montadas neste estado.",
-  },
-  copiloto: {
-    label: "Copiloto",
-    short: "Age sozinho no que é fato. Produto e deploy param em você.",
-    hint: "Age sozinho no que é FATO: destrava steps e colunas, move cards pelos gates técnicos, resolve merge preso, responde o que é apurável no código/dados. Decisão de produto/UX e deploy sempre param em você.",
-  },
-  autonomo: {
-    label: "Autônomo",
-    short: "Decide produto e publica em produção sozinho.",
-    hint: "Orquestra ponta a ponta: decide também produto/UX e PUBLICA em produção sozinho, até o card entrar no ar.",
-  },
-};
+// (TIER_META e tierUnlocked — a cópia e o cadeado do seletor Chat / Copiloto / Autônomo — saíram com o seletor na
+// fase 4: a autonomia é o controle único da barra do topo, com o perfil em autonomy-profile.ts. O tier segue como
+// PROJEÇÃO de leitura de (mode, matriz) para as stances dos prompts abaixo; o nome dele só aparece no prompt.)
+const TIER_LABEL: Record<CopilotTier, string> = { chat: "Chat", copiloto: "Copiloto", autonomo: "Autônomo" };
 
-// ── Behavioral stance per tier — the block injected into BOTH agent surfaces (the chat persona and the tick
-// wake prompt). Two axes the riskMatrix alone can't express live here: (1) whether a DECISÃO de produto/UX is
+// ── Behavioral stance per tier — the block injected into the AUTONOMOUS surface (the tick wake prompt; the chat
+// persona left it in phase 6 — the owner is present there and the confirmation rule governs). Two axes the riskMatrix alone can't express live here: (1) whether a DECISÃO de produto/UX is
 // answered or deferred, and (2) the deploy stance. Chat and Copiloto share the conservative stance; Autônomo
 // flips both — but ONLY once DEPLOY_AUTONOMY_ENABLED opens the gate (§4). Until then EVERY tier gets the
 // conservative stance, so a hand-edited `deploy: auto` matrix can't make the agent decide/publish on prompt
@@ -369,10 +344,10 @@ export function stewardPlaybooksBlock(tier: CopilotTier): string {
   return tier === "chat" ? "" : STEWARD_PLAYBOOKS;
 }
 
-/** The clause appended to the copilot CHAT persona each turn: names the operative mode + its stance + (for the
- *  active tiers) the steward playbooks, so rules 4/FACT-vs-DECISÃO in the base persona are specialized to what
- *  actually holds right now. PURE. */
+/** The mode clause: names the operative mode + its stance + (for the active tiers) the steward playbooks. Desde a
+ *  fase 6 ela NÃO é mais colada na persona do CHAT do board — ali o dono está presente e a régua é a de confirmação
+ *  (hitl/purpose-registry.ts `CHAT_COMMAND_CENTER_CLAUSE`); o modo do board é a régua dos agentes autônomos. PURE. */
 export function tierPersonaClause(tier: CopilotTier): string {
   const blocks = [resolutionDoctrineBlock(tier), stewardPlaybooksBlock(tier)].filter(Boolean);
-  return `## Modo atual: ${TIER_META[tier].label}\n${tierStance(tier)}${blocks.length ? `\n\n${blocks.join("\n\n")}` : ""}`;
+  return `## Modo atual: ${TIER_LABEL[tier]}\n${tierStance(tier)}${blocks.length ? `\n\n${blocks.join("\n\n")}` : ""}`;
 }

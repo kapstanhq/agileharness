@@ -70,23 +70,46 @@ describe("card no fim do fluxo: só a face", () => {
     acceptance: ["Dado … Quando … Então …"],
     narrative: { role: "Como sócio da oficina", want: "quero reservar", soThat: "para não disputar a bancada" },
     bugReport: { brief: "texto longo", severity: "alta", expected: "x", actual: "y", steps: ["1"], target: null } as never,
-    priorityCall: { rank: 2, rationale: "por que agora", riskiestAssumption: "a hipótese", source: "agent", assessedAt: "2026-01-01" },
     costImpact: { monthlyAmount: 1, scope: "infra", assumptions: "x" } as never,
   });
 
-  it("guarda o que a face mostra (título, tipo, porquê, severidade, bloqueio aberto) e tira critérios, tarefas, custo e raciocínio", () => {
+  it("guarda o que a face mostra (título, tipo, porquê, severidade, bloqueio aberto) e tira critérios, tarefas e custo", () => {
     const k = kanbanCard(done, true);
     expect(k.title).toBe("Reservar uma bancada");
     expect(k.narrative?.soThat).toBe("para não disputar a bancada");
     expect(k.narrative?.role).toBeNull();
     expect(k.bugReport?.severity).toBe("alta");
     expect(k.bugReport?.brief).toBe("");
-    expect(k.priorityCall?.rank).toBe(2);
-    expect(k.priorityCall?.rationale).toBe("");
     expect(k.findings.map((f) => f.id)).toEqual(["a"]);
     expect(k.acceptance).toEqual([]);
     expect(k.tasks).toEqual([]);
     expect("costImpact" in k).toBe(false);
+  });
+
+  // O quadro por funcionalidade (fase 1) lê do card no ar: o TIPO (Novidade/Correção/Manutenção — storyType e mode),
+  // a FUNCIONALIDADE (parent/serves), a chegada ao ar (a última escrita, updatedMs), o «adiado» e o condutor (routing).
+  // Enxugar a face não pode levar nenhum deles.
+  it("guarda o que o Kanban por funcionalidade lê: tipo, modo, pai/serve, a última escrita, o adiado e a rota", () => {
+    const k = kanbanCard(
+      {
+        ...done,
+        storyType: "bug",
+        mode: "fix",
+        parent: "step-ex9701",
+        serves: "story-ex9700",
+        updatedMs: 1_790_000_000_000,
+        deferred: { at: "2026-01-01", reason: "depois" },
+        routing: { driver: "conductor" },
+      } as unknown as Card,
+      true,
+    );
+    expect(k.storyType).toBe("bug");
+    expect(k.mode).toBe("fix");
+    expect(k.parent).toBe("step-ex9701");
+    expect(k.serves).toBe("story-ex9700");
+    expect(k.updatedMs).toBe(1_790_000_000_000);
+    expect(k.deferred).toBeTruthy();
+    expect(k.routing?.driver).toBe("conductor");
   });
 
   it("um card que NÃO terminou segue com critérios e tarefas (o arraste e os gates os leem)", () => {

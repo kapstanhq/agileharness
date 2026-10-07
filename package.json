@@ -8,7 +8,7 @@
     "packages/storymap-ui"
   ],
   "scripts": {
-    "typecheck": "cd packages/storymap-ui && tsc --noEmit",
+    "typecheck": "cd packages/storymap-ui && bun run typecheck",
     "test": "cd packages/storymap-ui && vitest run"
   },
   "devDependencies": {

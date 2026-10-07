@@ -5,7 +5,7 @@
 // dispatch (ENTRY_EFFECTS) executando o efeito que esta função decide.
 
 import { conductorEntryVerdict, isConducted } from "./driver";
-import type { BoardConfig, Card, EntryEffect, RiskClass } from "./types";
+import { stepAutoruns, type BoardConfig, type Card, type EntryEffect, type RiskClass } from "./types";
 
 /**
  * Qual EntryEffect uma transição de status dispara — ou null. Dispara SÓ numa MUDANÇA REAL de status
@@ -49,6 +49,8 @@ export function moveRiskClass(
   if (card && !isConducted(card) && conductorEntryVerdict({ ...card, status: toStatus }, config).dispatch) return "run";
   if (card && isConducted(card)) return "write-board";
   const status = config.statuses.find((s) => s.id === toStatus);
-  if (status?.autorun === true && status.trigger) return "run";
+  // O autorun EFETIVO neste board (types.ts `stepAutoruns`): num board com condutor, um passo `autorunOnlyInColumns`
+  // (Entrevista, Jornada, Telas) não dispara skill — entrar nele não spawna nada.
+  if (status && status.trigger && stepAutoruns(status, config)) return "run";
   return "write-board";
 }

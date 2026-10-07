@@ -32,7 +32,7 @@ import path from "node:path";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { defineResource } from "./register";
 import { GATES } from "@/lib/storymap/gates";
-import { GATE_IDS } from "@/lib/storymap/types";
+import { GATE_IDS, stepAutoruns } from "@/lib/storymap/types";
 import { findRepoRoot } from "@/lib/storymap/paths";
 import { listBoards, readBaseTemplateConfig, readBoardConfig } from "@/lib/storymap/repo";
 import { loadRunnerConfig } from "@/lib/storymap/runner/config";
@@ -79,11 +79,16 @@ export function registerResources(server: McpServer): void {
           gate: s.gate ?? null,
           skill: s.trigger ?? null,
           autorun: s.autorun === true,
+          // o pipeline híbrido: num board com condutor (o padrão) este passo não dispara a skill sozinho
+          ...(s.autorunOnlyInColumns ? { autorunSoNoModoColunas: true } : {}),
           terminal: s.terminal === true,
         })),
         linkTypes: base.linkTypes.map((l) => ({ id: l.id, nome: l.name })),
         // A lista que o portão de `set_board_autorun` pede que você confirme — ANTES de confirmar.
-        disparamQuandoArmado: base.statuses.filter((s) => s.autorun === true && s.trigger).map((s) => s.id),
+        // Um board registrado nasce no modo CONDUTOR (board-registry.ts): os passos `autorunOnlyInColumns` não disparam.
+        disparamQuandoArmado: base.statuses
+          .filter((s) => stepAutoruns(s, { pipeline: "conductor" }) && s.trigger)
+          .map((s) => s.id),
         nota:
           "um board registrado nasce DESARMADO (autorunDisabled): nenhum destes dispara até " +
           "set_board_autorun({enabled:true}). Um board declara só os DELTAS sobre este template.",

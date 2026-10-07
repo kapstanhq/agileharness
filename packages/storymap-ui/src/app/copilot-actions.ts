@@ -415,6 +415,9 @@ export interface CopilotOrchestratorOverview {
   /** Item 3 — the scoped orchestrator token (AGILEHARNESS_MCP_TOKEN_ORCH) is present on the service ⇒ the autonomous
    *  tick can actually SPAWN. FALSE ⇒ autonomous is INERT (spawnOrchestrator no-ops) — the UI says so honestly. */
   orchTokenPresent: boolean;
+  /** fase 6 — o board está pausado/desarmado pelo RITMO (board-pace-store `boardGateNow`): o motivo, ou null. O selo do
+   *  Jido não promete «agindo» com o board parado. */
+  paused: string | null;
 }
 
 /**
@@ -431,7 +434,9 @@ export async function orchestratorOverviewAction(boardId: string): Promise<Copil
   const envFlag = process.env.AGILEHARNESS_ORCH_ENABLED;
   const enabledFromEnv = envFlag === "0" || envFlag === "1";
 
-  const policy = (await readBoardConfig(boardId).catch(() => null))?.orchestrator ?? null;
+  const boardConfig = await readBoardConfig(boardId).catch(() => null);
+  const policy = boardConfig?.orchestrator ?? null;
+  const gate = await import("@/lib/storymap/runner/board-pace-store").then((m) => m.boardGateNow(boardId, boardConfig)).catch(() => null);
   const now = Date.now();
   const state = await readOrchestratorState(boardId);
 
@@ -483,6 +488,7 @@ export async function orchestratorOverviewAction(boardId: string): Promise<Copil
     },
     enforcementShipped: autonomousModeSafe(),
     orchTokenPresent: !!process.env.AGILEHARNESS_MCP_TOKEN_ORCH?.trim(),
+    paused: gate?.held ? gate.why : null,
   };
 }
 
@@ -743,6 +749,17 @@ export async function copilotItemContextAction(input: { boardId: string; ref: Es
     } else if (ref.kind === "approval") {
       const appr = await safe("approvals", async () => (await listApprovalRequests(boardId)).find((a) => a.id === ref.approvalId) ?? null);
       if (!appr) unavailable.push(`aprovação ${ref.approvalId} não encontrada`);
+    } else if (ref.kind === "sentinel") {
+      // fase 6 — a linha mais recente da causa no registro da Sentinela (o id curto é o hash da chave)
+      const row = await safe("sentinel", async () => {
+        const [{ readSentinelLog }, { sentinelCauseId }] = await Promise.all([import("@/lib/storymap/runner/sentinel-log"), import("@/lib/storymap/runner/sentinel")]);
+        const rows = (await readSentinelLog()).filter((e) => sentinelCauseId(e.causeKey) === ref.causeId);
+        return rows.length ? rows[rows.length - 1] : null;
+      });
+      if (row) {
+        pieces.sentinel = { reason: row.reason, ...(row.diagnosis ? { diagnosis: row.diagnosis } : {}), cardIds: row.cardIds, at: row.at, did: row.did };
+        if (row.cardIds[0]) extra.cardId = row.cardIds[0];
+      } else unavailable.push(`causa ${ref.causeId} não encontrada no registro da Sentinela`);
     } else if (ref.kind === "move-blocked" && pieces.card) {
       const config = await safe("board-config", () => readBoardConfig(boardId));
       if (config) {

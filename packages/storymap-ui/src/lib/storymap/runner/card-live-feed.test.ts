@@ -110,6 +110,15 @@ describe("sessionFacts — só as sessões vivas, em cards", () => {
     expect(facts[1].lastActivityAt).toBe(iso(NOW - min(9)));
     expect(facts[2].lastActivityAt).toBeUndefined();
   });
+
+  it("fase 7 — a sessão de LOTE sai uma vez por card dela (o líder primeiro), sem o item que saiu do lote", () => {
+    const batch = { id: "lote-a", featureKey: "func-a", cardIds: ["story-ex0005", "story-ex0006"], dropped: [{ cardId: "story-ex0006", reason: "falhou", at: iso(NOW) }] };
+    const facts = sessionFacts([sess({ batch })], null, NOW, new Map());
+    expect(facts.map((f) => [f.cardId, f.sessionId])).toEqual([
+      ["story-ex0004", "s1"],
+      ["story-ex0005", "s1"],
+    ]);
+  });
 });
 
 describe("sessionEvidence — a prova de trabalho de uma sessão viva", () => {

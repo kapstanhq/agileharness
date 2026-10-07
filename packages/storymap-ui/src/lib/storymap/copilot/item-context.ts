@@ -27,6 +27,8 @@ export interface ItemContextPieces {
   /** findings ALREADY filtered to the ref's relevant ones — the builder does not filter. */
   findings?: Finding[];
   preserved?: PreservedBranch | null;
+  /** fase 6 — o despertar da Sentinela que o ref aponta (a linha mais recente da causa em sentinel.jsonl). */
+  sentinel?: { reason: string; diagnosis?: string; cardIds: string[]; at: string; did: string } | null;
   /** "fonte X indisponível: <motivo>" lines — best-effort from the action. */
   unavailable?: string[];
 }
@@ -59,6 +61,8 @@ function refIdOf(ref: EscalationRef): string {
       return ref.questionId;
     case "move-blocked":
       return ref.target;
+    case "sentinel":
+      return ref.causeId;
     default:
       return ref.cardId;
   }
@@ -89,6 +93,8 @@ export function itemContextTitle(pieces: ItemContextPieces): string {
       return `Governança ${ref.draftId}`;
     case "move-blocked":
       return `Move bloqueado → ${ref.target}`;
+    case "sentinel":
+      return `Diagnóstico da Sentinela · causa ${ref.causeId}`;
     default:
       return `Card ${name}`;
   }
@@ -104,7 +110,7 @@ function truncate(s: string, cap: number, suffix: string): string {
  * (even under truncation). NO imperative verbs — only data + pointers (invariant 7 / D5).
  */
 export function buildItemContext(pieces: ItemContextPieces): string {
-  const { boardId, ref, card, mergeEntry, journal, failure, findings, preserved, unavailable } = pieces;
+  const { boardId, ref, card, mergeEntry, journal, failure, findings, preserved, sentinel, unavailable } = pieces;
   const out: string[] = [];
   out.push(`## Item escalado: ${itemContextTitle(pieces)}`);
   out.push(`(board ${boardId} · ref ${ref.kind} ${refIdOf(ref)})`);
@@ -174,6 +180,14 @@ export function buildItemContext(pieces: ItemContextPieces): string {
     );
     out.push(`motivo: ${preserved.reason}`);
     out.push(`recuperação: ${preserved.recoverHint}`);
+  }
+
+  if (sentinel) {
+    out.push("");
+    out.push("### Sentinela (sentinel.jsonl)");
+    out.push(`${sentinel.at} · ${sentinel.did}${sentinel.cardIds.length ? ` · cards ${sentinel.cardIds.join(", ")}` : ""}`);
+    out.push(`motivo: ${sentinel.reason}`);
+    if (sentinel.diagnosis) out.push(`diagnóstico: ${truncate(sentinel.diagnosis, FINDING_DETAIL_CAP, "… [truncado]")}`);
   }
 
   if (unavailable && unavailable.length) {

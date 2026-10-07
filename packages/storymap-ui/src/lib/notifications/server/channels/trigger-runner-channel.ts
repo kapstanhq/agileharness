@@ -2,7 +2,7 @@
 //
 // When a card ENTERS a status whose board.yaml entry has `autorun: true`, this
 // channel does one of two things:
-//   - the status has a `trigger` (enriquecer/priorizar/plano-tecnico/quebrar-tasks/
+//   - the status has a `trigger` (enriquecer/plano-tecnico/quebrar-tasks/
 //     desenvolver/…) → ask the runner engine to spawn Claude Code headless; or
 //   - the status has NO trigger but is autorun:true (a gated landing)
 //     → FORWARD the card to the next status (the cascade bridge). After the pipeline

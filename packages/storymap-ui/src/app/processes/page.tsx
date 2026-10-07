@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { Rocket } from "lucide-react";
 import { listRunningServices } from "@/lib/vps/processes";
 import { AppTopBar } from "@/components/nav/TopBar";
 import { ProcessesClient } from "./ProcessesClient";
@@ -44,14 +43,13 @@ export default async function ProcessesPage() {
           <p className="mt-0.5 text-sm text-fg-muted">
             O que a máquina está fazendo — runs do pipeline, fila de merge e o que travou.
           </p>
-          {/* O par desta página: aqui é o que FALHOU (e precisa de você); lá é o FLUXO (onde está cada
-              trabalho, do worktree até o ar). Um link, nunca uma segunda lista do mesmo estado. */}
+          {/* O par desta página: aqui é o que a MÁQUINA está fazendo; o que espera uma decisão sua mora no Inbox (a
+              Esteira, que era o outro par, saiu na fase 3 — o trem está no Kanban). Um link, nunca uma segunda lista. */}
           <Link
-            href="/entrega"
-            className="mt-2 inline-flex items-center gap-1.5 text-[12.5px] font-medium text-accent transition hover:underline"
+            href="/inbox"
+            className="mt-2 inline-flex items-center gap-1.5 text-[12.5px] font-medium text-accent-ink transition hover:underline"
           >
-            <Rocket className="h-3.5 w-3.5" />
-            Abrir a Esteira — do worktree até produção →
+            O que precisa de você está no Inbox →
           </Link>
         </header>
 

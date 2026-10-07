@@ -78,14 +78,6 @@ export function projectCardDoc(card: Card, deps: CardDocDeps = {}): DocModel {
       },
     });
   }
-  if (card.priorityCall?.rank != null) {
-    entries.push({
-      key: "priority",
-      label: "Prioridade",
-      icon: "signal",
-      value: { kind: "text", text: `P${card.priorityCall.rank}` },
-    });
-  }
   if (entries.length) blocks.push({ kind: "properties", id: nextId(), entries });
 
   const narrative = card.narrative;

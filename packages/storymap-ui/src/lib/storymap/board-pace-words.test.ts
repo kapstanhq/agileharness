@@ -1,32 +1,26 @@
 import { describe, expect, it } from "vitest";
 import {
-  featuresToShipWords,
   latchSealWords,
+  scopeSentenceWords,
   LATCH_SEAL_HEADLINE,
   PACE_LOADING_VALUE,
-  PACE_PANEL_LOADING,
-  PACE_PANEL_UNAVAILABLE,
   PACE_UNAVAILABLE_VALUE,
-  paceChipFace,
-  paceReadState,
+  paceRunningFace,
   quotaUsageWords,
   minutesUntilMorning,
-  paceChipValue,
-  paceHistoryLine,
   paceStatusLine,
   paceWhoWords,
   pauseMinutes,
-  SCOPE_AXIS_HELP,
-  SCOPE_BOUNDS_HELP,
   SCOPE_PRESETS,
-  SCOPE_QUOTA_HELP,
   SCOPE_TYPE_WORDS,
-  scopeChipSuffix,
-  scopeHistoryLine,
   scopeLabel,
   scopeStatusLine,
   scopeWaitingWords,
 } from "./board-pace-words";
+
+// (O chip de ritmo do cabeçalho — nav/BoardPaceChip — saiu na fase 1, e com ele as palavras que só ele mostrava: o
+// valor «Normal · só consertos», o histórico de pausas e de escopo e as ajudas do eixo do escopo. O que fica é o que a
+// pílula e o painel de ritmo do Kanban (kanban/KanbanPaceControl) dizem.)
 import type { EffectiveLatch } from "./runner/capacity-governor";
 import { FIXES_ONLY_TYPES, paceViewOf, type BoardPaceRow, type PaceScope } from "./runner/board-pace";
 
@@ -48,11 +42,6 @@ describe("as palavras do ritmo do board", () => {
   it("desarmado e registro ilegível dizem o que acontece, sem «quem»", () => {
     expect(paceStatusLine(view(null, { autorunDisabled: true }), NOW)).toMatch(/está desligado/);
     expect(paceStatusLine(view(null, {}, true), NOW)).toMatch(/^Tudo parado: /);
-  });
-
-  it("a linha do histórico: quem, há quanto e o motivo; o prazo vencido não tem autor", () => {
-    expect(paceHistoryLine({ level: "paused", by: { kind: "agent" }, at: iso(NOW - 2 * 3_600_000), reason: "cota apertada" }, NOW)).toBe("Pausado por um agente · há 2 h — cota apertada");
-    expect(paceHistoryLine({ level: "normal", by: { kind: "owner" }, at: iso(NOW - 60_000), expired: true }, NOW)).toMatch(/^Normal \(o prazo venceu\) · há /);
   });
 
   it("«até amanhã cedo» é a próxima manhã na hora local de quem pausa", () => {
@@ -84,17 +73,13 @@ describe("as palavras do escopo de tipos", () => {
     expect(SCOPE_PRESETS[0].types).toBe("all");
     expect([...(SCOPE_PRESETS[1].types as readonly string[])].sort()).toEqual(["bug", "chore", "spike", "technical"]);
     expect(SCOPE_PRESETS[1].help).toMatch(/Não começa funcionalidade nova/);
-    expect(SCOPE_AXIS_HELP).toMatch(/QUANTO.*O QUE/);
   });
 
-  it("scopeLabel / scopeChipSuffix: o preset tem nome próprio; uma combinação livre diz os tipos", () => {
+  it("scopeLabel: o preset tem nome próprio; uma combinação livre diz os tipos", () => {
     expect(scopeLabel(null)).toBe("Tudo");
     expect(scopeLabel(fixes)).toBe("Só consertos e manutenção");
     expect(scopeLabel(["bug", "chore"])).toBe("Só erro e manutenção");
     expect(scopeLabel(["user", "bug"])).toBe("Só funcionalidade nova e erro");
-    expect(scopeChipSuffix(view(null))).toBeNull();
-    expect(scopeChipSuffix(scoped({ ownerScope: layer(OWNER, fixes) }))).toBe("só consertos");
-    expect(scopeChipSuffix(scoped({ ownerScope: layer(OWNER, ["bug"]) }))).toBe("só erro");
   });
 
   it("a linha do escopo: quem, há quanto e até quando — a contagem de cards esperando NÃO está nela (C9: é dita uma vez, por scopeWaitingWords)", () => {
@@ -129,71 +114,30 @@ describe("as palavras do escopo de tipos", () => {
     expect(paceStatusLine(view(null, {}, true), NOW)).toMatch(/^Tudo parado: /);
   });
 
-  it("a linha do histórico de escopo: quem e há quanto; «Tudo» e o prazo vencido", () => {
-    expect(scopeHistoryLine({ types: fixes, by: AGENT, at: iso(NOW - 2 * 3_600_000), reason: "cota apertada" }, NOW)).toBe("Só consertos e manutenção por um agente · há 2 h — cota apertada");
-    expect(scopeHistoryLine({ types: null, by: OWNER, at: iso(NOW - 60_000), expired: true }, NOW)).toMatch(/^Tudo \(o prazo venceu\) · há /);
-    expect(scopeHistoryLine({ types: null, by: OWNER, at: iso(NOW - 3_600_000) }, NOW)).toBe("Tudo por você · há 1 h");
-  });
-
-  it("o aviso das funcionalidades prontas que vão junto na publicação (R8): no singular, no plural e calado em zero", () => {
-    expect(featuresToShipWords(0)).toBeNull();
-    expect(featuresToShipWords(1)).toBe("1 funcionalidade pronta na entrega vai junto na próxima publicação.");
-    expect(featuresToShipWords(3)).toBe("3 funcionalidades prontas na entrega vão junto na próxima publicação.");
-  });
 });
 
-// O botão e o painel do cabeçalho (components/nav/BoardPaceChip.tsx) não têm teste de renderização neste pacote: o que
+// A pílula e o painel do ritmo (components/kanban/KanbanPaceControl.tsx) não têm teste de renderização neste pacote: o que
 // eles dizem sai destas funções puras, e é aqui que se fixa.
-describe("o botão do cabeçalho e o painel do escopo", () => {
+describe("a pílula e o painel do ritmo", () => {
   const ownerFixes = (extra: Partial<PaceScope> = {}): BoardPaceRow => ({
     board: "acme",
     ownerScope: { types: [...FIXES_ONLY_TYPES], by: { kind: "owner" }, at: iso(NOW - 60_000), ...extra },
   });
 
-  it("o chip diz o ritmo e, com limite, «só consertos»: «Normal · só consertos», «Devagar · só consertos»", () => {
-    expect(paceChipValue(view(null))).toBe("Normal");
-    expect(paceChipValue(view(ownerFixes()))).toBe("Normal · só consertos");
-    const slow = view({ ...ownerFixes(), agent: { level: "slow", by: { kind: "agent" }, at: iso(NOW - 60_000) } });
-    expect(paceChipValue(slow)).toBe("Devagar · só consertos");
-    // pausado: o escopo é irrelevante para o ritmo, mas segue dito (volta com a retomada)
-    const paused = view({ ...ownerFixes(), owner: { level: "paused", by: { kind: "owner" }, at: iso(NOW - 60_000) } });
-    expect(paceChipValue(paused)).toBe("Pausado · só consertos");
-  });
-
-  it("um recorte livre aparece pelas palavras dos tipos, em minúsculas", () => {
-    const only = view({ board: "acme", ownerScope: { types: ["bug", "chore"], by: { kind: "owner" }, at: iso(NOW - 60_000) } });
-    expect(paceChipValue(only)).toBe("Normal · só erro e manutenção");
-  });
-
-  it("desarmado e ilegível não levam escopo: seguram tudo antes de olhar tipo", () => {
-    expect(paceChipValue(view(ownerFixes(), { autorunDisabled: true }))).toBe("Desligado");
-    expect(paceChipValue(view(ownerFixes(), {}, true))).toBe("Pausado");
-  });
-
-  it("o rosto do chip, estado a estado: lendo, indisponível e pronto (pausado/devagar/normal × sem e com escopo)", () => {
-    expect(paceChipFace(null, false, NOW)).toEqual({ state: "loading", value: PACE_LOADING_VALUE, title: PACE_PANEL_LOADING, ariaLabel: "Ritmo do board — lendo" });
-    expect(paceChipFace(null, true, NOW)).toEqual({ state: "unavailable", value: PACE_UNAVAILABLE_VALUE, title: PACE_PANEL_UNAVAILABLE, ariaLabel: "Ritmo do board — indisponível" });
+  it("a pílula do Kanban diz o que o board FAZ («Rodando»), e nada de nível antes de ler", () => {
     const at = iso(NOW - 60_000);
-    const casos: Array<[BoardPaceRow, string]> = [
-      [{ board: "acme" }, "Normal"],
-      [{ board: "acme", agent: { level: "slow", by: { kind: "agent" }, at } }, "Devagar"],
-      [{ board: "acme", owner: { level: "paused", by: { kind: "owner" }, at } }, "Pausado"],
-      [ownerFixes(), "Normal · só consertos"],
-      [{ ...ownerFixes(), agent: { level: "slow", by: { kind: "agent" }, at } }, "Devagar · só consertos"],
-      [{ ...ownerFixes(), owner: { level: "paused", by: { kind: "owner" }, at } }, "Pausado · só consertos"],
-    ];
-    for (const [row, rotulo] of casos) {
-      const face = paceChipFace(view(row), false, NOW);
-      expect(face, rotulo).toMatchObject({ state: "ready", value: rotulo, ariaLabel: `Ritmo do board — ${rotulo}` });
-      // uma leitura boa anterior vale mais que um erro novo
-      expect(paceChipFace(view(row), true, NOW).value, rotulo).toBe(rotulo);
-    }
-    // o valor de leitura nunca é um nível (o chip não afirma «Normal» antes de ler)
-    for (const v of [PACE_LOADING_VALUE, PACE_UNAVAILABLE_VALUE]) expect(["Normal", "Devagar", "Pausado"]).not.toContain(v);
-  });
-
-  it("escopo vencido some do chip junto com o prazo", () => {
-    expect(paceChipValue(view(ownerFixes({ until: iso(NOW - 1_000) })))).toBe("Normal");
+    expect(paceRunningFace(null, false)).toBe(PACE_LOADING_VALUE);
+    expect(paceRunningFace(null, true)).toBe(PACE_UNAVAILABLE_VALUE);
+    expect(paceRunningFace(view({ board: "acme" }), false)).toBe("Rodando");
+    expect(paceRunningFace(view({ board: "acme", agent: { level: "slow", by: { kind: "agent" }, at } }), false)).toBe("Devagar");
+    expect(paceRunningFace(view({ board: "acme", owner: { level: "paused", by: { kind: "owner" }, at } }), false)).toBe("Pausado");
+    expect(paceRunningFace(view(ownerFixes(), { autorunDisabled: true }), false)).toBe("Desligado");
+    // uma leitura boa anterior vale mais que um erro novo
+    expect(paceRunningFace(view({ board: "acme" }), true)).toBe("Rodando");
+    // o valor de leitura nunca é um nível (a pílula não afirma «Rodando» antes de ler)
+    for (const v of [PACE_LOADING_VALUE, PACE_UNAVAILABLE_VALUE]) expect(["Rodando", "Normal", "Devagar", "Pausado"]).not.toContain(v);
+    // e enquanto lê a pílula diz que LÊ, numa frase inteira — «Ritmo…» parecia o rótulo cortado no celular
+    expect(PACE_LOADING_VALUE).toBe("Lendo o ritmo…");
   });
 
   it("«N cards de funcionalidade esperando» (preset de consertos) e «N cards esperando» (recorte livre); nada quando nenhum espera", () => {
@@ -207,53 +151,11 @@ describe("o botão do cabeçalho e o painel do escopo", () => {
     expect(scopeWaitingWords({ ...view(null), scopeWaiting: 5 })).toBeNull();
   });
 
-  it("o painel explica que o escopo muda O QUÊ e o ritmo muda O QUANTO — e que o escopo sozinho não poupa cota", () => {
-    expect(SCOPE_AXIS_HELP).toMatch(/QUANTO.*O QUE/);
-    expect(SCOPE_QUOTA_HELP).toMatch(/não gasta menos/);
-    expect(SCOPE_QUOTA_HELP).toMatch(/poupar cota, use o ritmo/);
-    expect(SCOPE_BOUNDS_HELP).toMatch(/só segura a construção/i);
-    expect(SCOPE_BOUNDS_HELP).toMatch(/publicado normalmente/);
-  });
-
   it("os dois botões do painel: «Tudo» e «Só consertos e manutenção», com a ajuda em português claro", () => {
     expect(SCOPE_PRESETS.map((p) => p.label)).toEqual(["Tudo", "Só consertos e manutenção"]);
     const fixes = SCOPE_PRESETS.find((p) => p.id === "fixes")!;
     expect(fixes.help).toMatch(/erro, trabalho técnico, manutenção e investigação/);
     expect(fixes.help).toMatch(/Não começa funcionalidade nova/);
-  });
-});
-
-describe("a leitura do ritmo — o chip não diz «Normal» enquanto lê", () => {
-  const slowFixes = () => ({ ...view({ board: "acme", owner: { level: "slow", by: { kind: "owner" }, at: iso(NOW - 60_000) }, ownerScope: { types: [...FIXES_ONLY_TYPES], by: { kind: "owner" }, at: iso(NOW - 60_000) } }), scopeWaiting: 0 });
-
-  it("sem leitura e sem falha: «Ritmo…», sem texto de nível", () => {
-    const f = paceChipFace(null, false, NOW);
-    expect(f.state).toBe("loading");
-    expect(f.value).toBe(PACE_LOADING_VALUE);
-    expect(f.value).not.toMatch(/normal|devagar|pausado/i);
-    expect(f.ariaLabel).not.toMatch(/normal/i);
-  });
-
-  it("a leitura falhou e não há nenhuma: «Ritmo indisponível», nunca «Normal»", () => {
-    const f = paceChipFace(null, true, NOW);
-    expect(f.state).toBe("unavailable");
-    expect(f.value).toBe(PACE_UNAVAILABLE_VALUE);
-    expect(`${f.value} ${f.title} ${f.ariaLabel}`).not.toMatch(/normal/i);
-    expect(f.title).toBe(PACE_PANEL_UNAVAILABLE);
-  });
-
-  it("com leitura: o ritmo real (o caso do dono — «Devagar · só consertos»)", () => {
-    const f = paceChipFace(slowFixes(), false, NOW, "UTC");
-    expect(f.state).toBe("ready");
-    expect(f.value).toBe("Devagar · só consertos");
-    expect(f.ariaLabel).toBe("Ritmo do board — Devagar · só consertos");
-  });
-
-  it("uma leitura boa vale mais que um erro novo (o poll que falha não apaga o ritmo)", () => {
-    expect(paceReadState(slowFixes(), true)).toBe("ready");
-    expect(paceChipFace(slowFixes(), true, NOW).value).toBe("Devagar · só consertos");
-    expect(paceReadState(null, false)).toBe("loading");
-    expect(paceReadState(null, true)).toBe("unavailable");
   });
 });
 
@@ -318,5 +220,17 @@ describe("a tela de cota — uso da semana é uma coisa, trava engatada é outra
     expect(latchSealWords(gov(latch(), reading(95)))!.usageBelow).toBe(false);
     // sem nenhum número de uso não se afirma que baixou
     expect(latchSealWords({ latch: latch(), reading: null, caps: CAPS })!.note).toBeNull();
+  });
+});
+
+describe("a frase do escopo no painel — pausado não «começa» nada", () => {
+  it("pausado diz que nada novo começa, e que o escopo vale ao retomar", () => {
+    expect(scopeSentenceWords("fixes", true)).toBe("Nada novo começa enquanto estiver pausado; ao retomar, só começa consertos e manutenção.");
+    expect(scopeSentenceWords("all", true)).toBe("Nada novo começa enquanto estiver pausado.");
+    for (const preset of ["all", "fixes", "custom"] as const) expect(scopeSentenceWords(preset, true)).not.toMatch(/^Só começa|^Pode começar/);
+  });
+  it("rodando, a frase é o que o board pode começar", () => {
+    expect(scopeSentenceWords("fixes", false)).toBe("Só começa consertos e manutenção.");
+    expect(scopeSentenceWords("all", false)).toBe("Pode começar qualquer tipo de trabalho.");
   });
 });

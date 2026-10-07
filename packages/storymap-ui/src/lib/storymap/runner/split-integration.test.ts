@@ -10,10 +10,11 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from "vitest";
 import { describePosix } from "./test-platform";
-import { makeMergeQueue, type MergeQueueStore } from "./merge-queue";
+import { COMMIT_NOT_UNDONE, makeMergeQueue, type MergeQueueStore } from "./merge-queue";
 import { findRepoRoot } from "@/lib/storymap/paths";
 import { ensureRunnerStateDir, isolatedGitExec } from "./git-test-env";
-import type { ExecFn } from "./worktree";
+import { makePrePushScan, makeWorktreeOps, type ExecFn } from "./worktree";
+import { EMPTY_TREE, makeGit, prePushGate, prePushRange, PUSH_ACK_REF, PUSH_HOLD_REF, pushHeadToOrigin, readPushHold } from "./git";
 import type { MergeQueueEntry } from "./types";
 import type { CardStatusOnDisk, Transition } from "./transitions";
 import { withCardLock } from "@/lib/storymap/write";
@@ -52,7 +53,7 @@ describePosix("integrateSplit (real git) — Fase 4a: code→stage / data→main
     await ensureRunnerStateDir();
     mainRepo = path.join(tmpRoot, "main");
     await fsp.mkdir(path.join(mainRepo, "packages", "app"), { recursive: true });
-    await fsp.mkdir(path.join(mainRepo, "storymap", "cards"), { recursive: true });
+    await fsp.mkdir(path.join(mainRepo, "storymap", "boards", "x"), { recursive: true });
     await fsp.mkdir(path.join(mainRepo, "scripts", "git-hooks"), { recursive: true });
     // Copy the REAL secret scanner so the split's pre-push rescan runs for real (no secrets → passes).
     await fsp.copyFile(
@@ -61,7 +62,7 @@ describePosix("integrateSplit (real git) — Fase 4a: code→stage / data→main
     );
     await fsp.writeFile(path.join(mainRepo, ".gitignore"), "node_modules\n.worktrees/\n");
     await fsp.writeFile(path.join(mainRepo, "packages", "app", "x.ts"), "export const x = 1;\n");
-    await fsp.writeFile(path.join(mainRepo, "storymap", "cards", "c.md"), "# card\nstatus: a\n");
+    await fsp.writeFile(path.join(mainRepo, "storymap", "boards", "x", "c.md"), "# card\nstatus: a\n");
 
     await exec(`git init -q`, { cwd: mainRepo });
     await exec(`git config user.email t@example.test`, { cwd: mainRepo });
@@ -73,7 +74,7 @@ describePosix("integrateSplit (real git) — Fase 4a: code→stage / data→main
     // A run branch that touches BOTH code (packages/**) and board data (storymap/**).
     await exec(`git checkout -q -b run/test`, { cwd: mainRepo });
     await fsp.writeFile(path.join(mainRepo, "packages", "app", "x.ts"), "export const x = 2; // changed\n");
-    await fsp.writeFile(path.join(mainRepo, "storymap", "cards", "c.md"), "# card\nstatus: b\n");
+    await fsp.writeFile(path.join(mainRepo, "storymap", "boards", "x", "c.md"), "# card\nstatus: b\n");
     await exec(`git add -A`, { cwd: mainRepo });
     await exec(`git commit -q --no-verify -m "run work"`, { cwd: mainRepo });
     await exec(`git checkout -q ${baseBranch}`, { cwd: mainRepo });
@@ -118,7 +119,7 @@ describePosix("integrateSplit (real git) — Fase 4a: code→stage / data→main
     expect(await show(mainRepo, `${baseBranch}:packages/app/x.ts`)).not.toContain("x = 2");
 
     // DATA (the card advance) landed on main so the live board keeps moving.
-    expect(await show(mainRepo, `${baseBranch}:storymap/cards/c.md`)).toContain("status: b");
+    expect(await show(mainRepo, `${baseBranch}:storymap/boards/x/c.md`)).toContain("status: b");
 
     // The board-data commit on main carries the `board:` prefix (separable from `usm:` code commits).
     const log = (await exec(`git log --oneline -1 ${baseBranch}`, { cwd: mainRepo })).stdout;
@@ -131,7 +132,7 @@ describePosix("integrateSplit (real git) — Fase 4a: code→stage / data→main
     // board-only run lands its data on main and stages no code (empty code delta → the code-empty guard
     // marks codeStaged without touching the stage worktree).
     await exec(`git checkout -q -b run/dataonly`, { cwd: mainRepo });
-    await fsp.writeFile(path.join(mainRepo, "storymap", "cards", "c.md"), "# card\nstatus: c\n");
+    await fsp.writeFile(path.join(mainRepo, "storymap", "boards", "x", "c.md"), "# card\nstatus: c\n");
     await exec(`git add -A`, { cwd: mainRepo });
     await exec(`git commit -q --no-verify -m "data only"`, { cwd: mainRepo });
     await exec(`git checkout -q ${baseBranch}`, { cwd: mainRepo });
@@ -154,7 +155,7 @@ describePosix("integrateSplit (real git) — Fase 4a: code→stage / data→main
     // It DID enter the split (both halves marked) — but the code half was a no-op (empty code delta).
     expect(store.read()[0]?.split).toEqual({ dataLanded: true, codeStaged: true });
     // The board data still lands on main (now via the data patch, not a whole-branch merge commit).
-    expect(await show(mainRepo, `${baseBranch}:storymap/cards/c.md`)).toContain("status: c");
+    expect(await show(mainRepo, `${baseBranch}:storymap/boards/x/c.md`)).toContain("status: c");
   });
 
   it("AC1/AC4: two concurrent runs appending to board.yaml each land their entry — union preserved, zero conflict", async () => {
@@ -273,7 +274,7 @@ describePosix("integrateSplit (real git) — Fase 4a: code→stage / data→main
     // (resolveIntegrationSha) segue o rename e PINA o sha antes de qualquer op de conteúdo.
     await exec(`git checkout -q -b run/race`, { cwd: mainRepo });
     await fsp.writeFile(path.join(mainRepo, "packages", "app", "race.ts"), "export const race = 1;\n");
-    await fsp.writeFile(path.join(mainRepo, "storymap", "cards", "c.md"), "# card\nstatus: race\n");
+    await fsp.writeFile(path.join(mainRepo, "storymap", "boards", "x", "c.md"), "# card\nstatus: race\n");
     await exec(`git add -A`, { cwd: mainRepo });
     await exec(`git commit -q --no-verify -m "race work"`, { cwd: mainRepo });
     await exec(`git checkout -q ${baseBranch}`, { cwd: mainRepo });
@@ -301,7 +302,7 @@ describePosix("integrateSplit (real git) — Fase 4a: code→stage / data→main
     expect(store.read()[0]?.status).toBe("done");
     expect(store.read()[0]?.split).toEqual({ dataLanded: true, codeStaged: true });
     expect(await show(mainRepo, "stage:packages/app/race.ts")).toContain("race = 1");
-    expect(await show(mainRepo, `${baseBranch}:storymap/cards/c.md`)).toContain("status: race");
+    expect(await show(mainRepo, `${baseBranch}:storymap/boards/x/c.md`)).toContain("status: race");
     // A ref preservada foi consumida pela integração (deletada como qualquer run branch integrada).
     const preservedExists = await exec(`git rev-parse --verify failed/run/race`, { cwd: mainRepo })
       .then(() => true)
@@ -636,10 +637,10 @@ describePosix("integrateSplit (real git) — story-ex0120: a both-diverged card 
       path.join(mainRepo, "scripts", "git-hooks", "scan-secrets.mjs"),
     );
     await fsp.writeFile(path.join(mainRepo, ".gitignore"), "node_modules\n.worktrees/\n");
-    // BASE card: status priorizar, title base, empty narrative.
+    // BASE card: status interview, title base, empty narrative.
     await fsp.writeFile(
       cardAbs(),
-      ["---", "id: story-r", "type: story", "title: Título base", "status: priorizar", "---", "", "corpo base", ""].join("\n"),
+      ["---", "id: story-r", "type: story", "title: Título base", "status: interview", "---", "", "corpo base", ""].join("\n"),
     );
     await exec(`git init -q`, { cwd: mainRepo });
     await exec(`git config user.email t@example.test`, { cwd: mainRepo });
@@ -1900,11 +1901,762 @@ describePosix("integrateSplit (real git) — WP5-F1: o train só desfaz o que EL
   it("REPRO-2: o salto que LEVOU o card ao status da base no mesmo segundo do commit-base não é move de main — o avanço do run vence", async () => {
     await write(RUN_CARD, cardText("story-run", "desenvolver", ["# uiSurfaceEvidence carimbado no settle"]));
     const at = new Date((await baseInstantMs()) + 400).toISOString();
-    ledgerHops = [{ v: 1, at, board: "tb", cardId: "story-run", from: "priorizar", to: "desenvolver", actor: "cascade" }];
+    ledgerHops = [{ v: 1, at, board: "tb", cardId: "story-run", from: "interview", to: "desenvolver", actor: "cascade" }];
     const { mq, store } = makeQ();
     await mq.enqueueMerge({ runId: "r1", board: "tb", cardId: "story-run", branch: "run/r1" });
     await mq.whenIdle();
     expect(store.read()[0]?.status).toBe("done");
     expect(await show(repo, `HEAD:${RUN_CARD}`)).toContain("status: revisar-codigo");
+  });
+});
+
+// A MENSAGEM DO AUTOR. Com `codePrefixes: [packages/]` declarado, hooks, scripts e configs da raiz caem na metade
+// de DADOS (→ main) ao lado dos cards — e o commit que o train criava ali levava sempre o rótulo inventado
+// `board: sessão <id>`: código aparecia no histórico como dado de board, e a mensagem e os trailers da sessão
+// (Co-Authored-By…) sumiam. A regra: `board:` só para o commit que contém SÓ `storymap/boards/**`; o resto carrega
+// as mensagens dos commits da entrada. Fixtures inventadas (sessões sess-ex9xxx).
+describePosix("split (real git) — o commit de main carrega a mensagem do autor, `board:` só para dado de board", () => {
+  let tmpRoot: string;
+  let repo: string;
+  let baseBranch: string;
+  let real: ExecFn;
+  let scanFail: string | null = null; // o `--range` que o scanner reprova (injeção), ou null
+  let failBoardCommitOnce = false; // o commit `board:` do train falha UMA vez (injeção), depois do commit do autor
+  const injected: ExecFn = async (cmd, opts) => {
+    if (scanFail && cmd.includes("scan-secrets.mjs") && cmd.includes(`--range ${scanFail}`)) {
+      throw Object.assign(new Error("secret no commit do train"), { code: 2 });
+    }
+    if (failBoardCommitOnce && cmd.includes(`commit --no-verify -m "board:`)) {
+      failBoardCommitOnce = false;
+      throw Object.assign(new Error("commit do board falhou (injeção)"), { code: 1, stderr: "fatal: injetado" });
+    }
+    return real(cmd, opts);
+  };
+  const g = (args: string) => real(`git ${args}`, { cwd: repo, timeout: 30_000 });
+  const write = async (rel: string, text: string) => {
+    await fsp.mkdir(path.dirname(path.join(repo, rel)), { recursive: true });
+    await fsp.writeFile(path.join(repo, rel), text);
+  };
+  const commitOn = async (msg: string) => {
+    await g(`add -A`);
+    await fsp.writeFile(path.join(tmpRoot, "msg.txt"), msg);
+    await g(`commit -q --no-verify -F ${JSON.stringify(path.join(tmpRoot, "msg.txt"))}`);
+  };
+  const SESSION_MSG_1 = [
+    "fix(hooks): o guarda de intenção lê o dono do caminho",
+    "",
+    "O guarda olhava só o prefixo; agora consulta a tabela de donos.",
+    "",
+    "Co-Authored-By: Pessoa Exemplo <pessoa@example.test>",
+  ].join("\n");
+  const SESSION_MSG_2 = ["test(ops): cobre o relatório de erros", "", "Co-Authored-By: Pessoa Exemplo <pessoa@example.test>", "Refs: story-ex9301"].join("\n");
+
+  beforeEach(async () => {
+    scanFail = null;
+    failBoardCommitOnce = false;
+    tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "sm-authormsg-"));
+    real = isolatedGitExec(promisify(nodeExec) as unknown as ExecFn, tmpRoot);
+    await ensureRunnerStateDir();
+    repo = path.join(tmpRoot, "main");
+    await fsp.mkdir(path.join(repo, "scripts", "git-hooks"), { recursive: true });
+    await fsp.copyFile(
+      path.join(findRepoRoot(), "scripts", "git-hooks", "scan-secrets.mjs"),
+      path.join(repo, "scripts", "git-hooks", "scan-secrets.mjs"),
+    );
+    await write(".gitignore", "node_modules\n.worktrees/\n");
+    await write("packages/app/s.ts", "export const s = 1;\n");
+    await write("tools/hooks/guard.js", "module.exports = 1;\n");
+    await write("tools/ops/report.js", "module.exports = 'a';\n");
+    await write("storymap/boards/x/notes.md", "linha base\n");
+    await g(`init -q`);
+    await g(`config user.email t@example.test`);
+    await g(`config user.name tester`);
+    await g(`add -A`);
+    await g(`commit -q --no-verify -m base`);
+    baseBranch = (await g(`rev-parse --abbrev-ref HEAD`)).stdout.trim();
+  });
+
+  afterEach(async () => {
+    await real(`git worktree remove ${JSON.stringify(path.join(tmpRoot, "main-stage"))} --force`, { cwd: repo, timeout: 30_000 }).catch(() => {});
+    await fsp.rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  const run = async (runId: string, card?: { cardId: string; branch: string }) => {
+    const store = memStore();
+    const mq = makeMergeQueue({
+      repoRoot: repo,
+      exec: injected,
+      store,
+      now: () => 1000,
+      staging: { enabled: true, branch: "stage", codePrefixes: ["packages/"] },
+      persistDiffSnapshot: async () => {},
+      stampStaged: async () => {},
+      addSecretScanBlocker: async () => {},
+      cleanTreeRecheck: { attempts: 1, delayMs: 0 },
+      sleep: async () => {},
+    });
+    await mq.enqueueMerge(
+      card
+        ? { runId, board: "x", cardId: card.cardId, branch: card.branch, kind: "run" }
+        : { runId, board: "x", cardId: undefined, branch: `agent/${runId}`, kind: "session" },
+    );
+    await mq.whenIdle();
+    return store.read()[0];
+  };
+  const body = async (ref: string) => (await g(`log -1 --format=%B ${ref}`)).stdout.trim();
+  const trailers = async (ref: string) =>
+    (await real(`git log -1 --format=%B ${ref} | git interpret-trailers --parse`, { cwd: repo, timeout: 30_000 })).stdout.trim();
+  const filesOf = async (ref: string) =>
+    (await g(`show --name-only --format= ${ref}`)).stdout.split("\n").map((s) => s.trim()).filter(Boolean).sort();
+
+  it("(1) sessão sem card com código fora do board: o commit de main é a mensagem da sessão, com os trailers", async () => {
+    await g(`checkout -q -b agent/sess-ex9301`);
+    await write("tools/hooks/guard.js", "module.exports = 2;\n");
+    await commitOn(SESSION_MSG_1);
+    await write("tools/ops/report.js", "module.exports = 'b';\n");
+    await commitOn(SESSION_MSG_2);
+    await g(`checkout -q ${baseBranch}`);
+    const before = (await g(`rev-parse HEAD`)).stdout.trim();
+
+    expect((await run("sess-ex9301"))?.status).toBe("done");
+
+    // UM commit novo em main, com os dois arquivos — e nenhum `board:` inventado
+    expect((await g(`rev-parse HEAD~1`)).stdout.trim()).toBe(before);
+    expect(await filesOf("HEAD")).toEqual(["tools/hooks/guard.js", "tools/ops/report.js"]);
+    const msg = await body("HEAD");
+    expect(msg.split("\n")[0]).toBe("fix(hooks): o guarda de intenção lê o dono do caminho");
+    expect(msg).not.toMatch(/^board:/m);
+    expect(msg).toContain("O guarda olhava só o prefixo; agora consulta a tabela de donos.");
+    expect(msg).toContain("* test(ops): cobre o relatório de erros");
+    // os trailers são TRAILERS para o git (último parágrafo), deduplicados, mais a proveniência da entrada
+    expect((await trailers("HEAD")).split("\n")).toEqual([
+      "Co-Authored-By: Pessoa Exemplo <pessoa@example.test>",
+      "Refs: story-ex9301",
+      "Merge-Train-Entry: sessão sess-ex9301",
+    ]);
+  });
+
+  it("(2) sessão que só mexeu em dado de board: o commit segue `board: sessão <id>`", async () => {
+    await g(`checkout -q -b agent/sess-ex9302`);
+    await write("storymap/boards/x/notes.md", "linha da sessão\n");
+    await commitOn(SESSION_MSG_1);
+    await g(`checkout -q ${baseBranch}`);
+
+    expect((await run("sess-ex9302"))?.status).toBe("done");
+
+    expect(await body("HEAD")).toBe("board: sessão sess-ex9302");
+    expect(await filesOf("HEAD")).toEqual(["storymap/boards/x/notes.md"]);
+  });
+
+  it("(3) mista — código (stage) + fora do board + board: o do autor leva a mensagem, o de board segue rotulado", async () => {
+    await g(`checkout -q -b agent/sess-ex9303`);
+    await write("packages/app/s.ts", "export const s = 2;\n");
+    await write("tools/hooks/guard.js", "module.exports = 3;\n");
+    await write("storymap/boards/x/notes.md", "linha da sessão\n");
+    await commitOn(SESSION_MSG_1);
+    await g(`checkout -q ${baseBranch}`);
+    const before = (await g(`rev-parse HEAD`)).stdout.trim();
+
+    expect((await run("sess-ex9303"))?.status).toBe("done");
+
+    // main: DOIS commits — primeiro o do autor (só o caminho fora do board), depois o `board:` (só o board)
+    expect((await g(`rev-parse HEAD~2`)).stdout.trim()).toBe(before);
+    expect(await filesOf("HEAD~1")).toEqual(["tools/hooks/guard.js"]);
+    expect(await body("HEAD~1")).toBe(`${SESSION_MSG_1}\nMerge-Train-Entry: sessão sess-ex9303`);
+    expect(await filesOf("HEAD")).toEqual(["storymap/boards/x/notes.md"]);
+    expect(await body("HEAD")).toBe("board: sessão sess-ex9303");
+    // o código de packages/ fica em stage, fora de main
+    expect(await show(repo, `${baseBranch}:packages/app/s.ts`)).toContain("s = 1");
+    // stage: o assunto segue a convenção (delivery-view liga por `(sessão <id>)`), a mensagem do autor no corpo
+    const staged = await body("stage");
+    expect(staged.split("\n")[0]).toBe("usm(sessão): código staged (sessão sess-ex9303)");
+    expect(staged).toContain("fix(hooks): o guarda de intenção lê o dono do caminho");
+    expect(await trailers("stage")).toBe("Co-Authored-By: Pessoa Exemplo <pessoa@example.test>");
+    // nada ficou staged nem sujo no checkout de main
+    expect((await g(`status --porcelain -- tools storymap`)).stdout.trim()).toBe("");
+  });
+
+  it("secret nos DOIS commits da metade mista: o scan cobre os dois e o desfazer tira os dois", async () => {
+    await g(`checkout -q -b agent/sess-ex9304`);
+    await write("tools/hooks/guard.js", "module.exports = 4;\n");
+    await write("storymap/boards/x/notes.md", "linha da sessão\n");
+    await commitOn(SESSION_MSG_1);
+    await g(`checkout -q ${baseBranch}`);
+    const before = (await g(`rev-parse HEAD`)).stdout.trim();
+    scanFail = "HEAD~2..HEAD";
+
+    expect((await run("sess-ex9304"))?.status).toBe("failed");
+
+    expect((await g(`rev-parse HEAD`)).stdout.trim()).toBe(before);
+    expect(await fsp.readFile(path.join(repo, "tools/hooks/guard.js"), "utf8")).toBe("module.exports = 1;\n");
+    expect(await fsp.readFile(path.join(repo, "storymap/boards/x/notes.md"), "utf8")).toBe("linha base\n");
+    expect((await g(`status --porcelain -- tools storymap`)).stdout.trim()).toBe("");
+  });
+
+  it("secret na MENSAGEM da sessão (diff limpo): o scanner REAL lê a mensagem composta e nada chega a main", async () => {
+    // a forma de um PAT do GitHub, montada em runtime (sintética, sem marcador de fixture)
+    const token = ["gh", "p_", "Q7mZ2xK9vR4tL8nB3cW6yH1jF5dS0aGe2uPq"].join("");
+    await g(`checkout -q -b agent/sess-ex9305`);
+    await write("tools/hooks/guard.js", "module.exports = 5;\n");
+    await commitOn(`fix(hooks): ajusta o guarda\n\nDecision: autentiquei com ${token}\n\nCo-Authored-By: Pessoa Exemplo <pessoa@example.test>`);
+    await g(`checkout -q ${baseBranch}`);
+    const before = (await g(`rev-parse HEAD`)).stdout.trim();
+
+    const entry = await run("sess-ex9305");
+    expect(entry?.status).toBe("failed");
+    expect(entry?.failureReason).toMatch(/secret-scan DETECTOU secret nos commits da metade de dados/);
+    expect(entry?.failureReason).toContain("mensagem do commit");
+    expect(entry?.failureReason).not.toContain(token);
+
+    expect((await g(`rev-parse HEAD`)).stdout.trim()).toBe(before);
+    expect(await fsp.readFile(path.join(repo, "tools/hooks/guard.js"), "utf8")).toBe("module.exports = 1;\n");
+    expect((await g(`status --porcelain -- tools storymap`)).stdout.trim()).toBe("");
+  });
+
+  it("base STALE (sessão rebaseada sobre `stage` sem mover a base): o commit de outra entrada não vira o assunto", async () => {
+    // `stage` já tem o commit de OUTRA sessão (o rótulo do train, corpo e trailers dela)
+    await g(`checkout -q -b stage`);
+    await write("packages/app/s.ts", "export const s = 9;\n");
+    await commitOn(
+      "usm(sessão): código staged (sessão sess-ex9399)\n\nfeat(app): outra sessão\n\nCo-Authored-By: Outra Pessoa <outra@example.test>\nRefs: story-ex9399",
+    );
+    // a sessão foi rebaseada sobre `stage` (o refresh que conflitou + `rebase --continue`): a base dela não andou
+    await g(`checkout -q -b agent/sess-ex9306`);
+    await write("tools/hooks/guard.js", "module.exports = 6;\n");
+    await commitOn(SESSION_MSG_1);
+    await g(`checkout -q ${baseBranch}`);
+    const before = (await g(`rev-parse HEAD`)).stdout.trim();
+
+    expect((await run("sess-ex9306"))?.status).toBe("done");
+
+    expect((await g(`rev-parse HEAD~1`)).stdout.trim()).toBe(before);
+    expect(await filesOf("HEAD")).toEqual(["tools/hooks/guard.js"]);
+    expect(await body("HEAD")).toBe(`${SESSION_MSG_1}\nMerge-Train-Entry: sessão sess-ex9306`);
+  });
+
+  it("o commit `board:` falha DEPOIS do commit do autor: os dois saem, índice e disco voltam ao de antes", async () => {
+    await g(`checkout -q -b agent/sess-ex9307`);
+    await write("tools/hooks/guard.js", "module.exports = 7;\n");
+    await write("storymap/boards/x/notes.md", "linha da sessão\n");
+    await commitOn(SESSION_MSG_1);
+    await g(`checkout -q ${baseBranch}`);
+    const before = (await g(`rev-parse HEAD`)).stdout.trim();
+    failBoardCommitOnce = true;
+
+    const entry = await run("sess-ex9307");
+    // sessão: o commit que falhou devolve a entrada à sessão (parkOrReturn), sem meia-entrada em main
+    expect(entry?.status).toBe("returned-to-session");
+    expect(failBoardCommitOnce).toBe(false); // a injeção disparou — o commit do autor já tinha entrado
+
+    expect((await g(`rev-parse HEAD`)).stdout.trim()).toBe(before);
+    expect(await fsp.readFile(path.join(repo, "tools/hooks/guard.js"), "utf8")).toBe("module.exports = 1;\n");
+    expect(await fsp.readFile(path.join(repo, "storymap/boards/x/notes.md"), "utf8")).toBe("linha base\n");
+    expect((await g(`diff --cached --name-only`)).stdout.trim()).toBe("");
+    expect((await g(`status --porcelain -- tools storymap`)).stdout.trim()).toBe("");
+  });
+
+  it("entrada de CARD com arquivo fora do board: a mensagem do run (com os trailers) + a proveniência do card", async () => {
+    const runMsg = [
+      "usm(do): x/story-ex9310 [run run-ex9310]",
+      "",
+      "Decision: ajustei o guarda e marquei a tarefa",
+      "Model: modelo-exemplo · alto",
+      "Run-Id: run-ex9310",
+    ].join("\n");
+    await g(`checkout -q -b run/run-ex9310`);
+    await write("tools/hooks/guard.js", "module.exports = 10;\n");
+    await commitOn(runMsg);
+    await g(`checkout -q ${baseBranch}`);
+    const before = (await g(`rev-parse HEAD`)).stdout.trim();
+
+    expect((await run("run-ex9310", { cardId: "story-ex9310", branch: "run/run-ex9310" }))?.status).toBe("done");
+
+    expect((await g(`rev-parse HEAD~1`)).stdout.trim()).toBe(before);
+    expect(await filesOf("HEAD")).toEqual(["tools/hooks/guard.js"]);
+    const msg = await body("HEAD");
+    expect(msg.split("\n")[0]).toBe("usm(do): x/story-ex9310 [run run-ex9310]");
+    expect((await trailers("HEAD")).split("\n")).toEqual([
+      "Decision: ajustei o guarda e marquei a tarefa",
+      "Model: modelo-exemplo · alto",
+      "Run-Id: run-ex9310",
+      "Merge-Train-Entry: story-ex9310 (run run-ex9310)",
+    ]);
+  });
+
+  it("entrada de CARD sem mensagem de autor (só rótulos do sistema): o assunto de fallback do card", async () => {
+    await g(`checkout -q -b run/run-ex9311`);
+    await write("tools/hooks/guard.js", "module.exports = 11;\n");
+    await commitOn("board: estado vivo");
+    await g(`checkout -q ${baseBranch}`);
+
+    expect((await run("run-ex9311", { cardId: "story-ex9311", branch: "run/run-ex9311" }))?.status).toBe("done");
+
+    expect(await body("HEAD")).toBe(
+      "usm(story-ex9311): integra arquivos fora do board (run run-ex9311)\n\nMerge-Train-Entry: story-ex9311 (run run-ex9311)",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// O que o train PUBLICA em origin passa por um scan pré-push (fail-closed), e os desfazeres voltam por SHA.
+// Repositório real com um `origin` bare: o que importa é o que CHEGA (ou não) ao remoto.
+// ---------------------------------------------------------------------------------------------------------
+describePosix("train → origin (real git): scan pré-push, mensagens do merge integral, desfazer por sha", () => {
+  // a forma de um PAT do GitHub, montada em runtime (sintética, sem marcador de fixture)
+  const TOKEN = ["gh", "p_", "Q7mZ2xK9vR4tL8nB3cW6yH1jF5dS0aGe2uPq"].join("");
+  let tmpRoot: string;
+  let repo: string;
+  let originDir: string;
+  let baseBranch: string;
+  let real: ExecFn;
+  let resetFailures = 0; // quantos `reset --soft` do train falham (injeção)
+  // roda UMA vez, logo antes do primeiro scan por commit (o do merge commit no staging OFF): um escritor concorrente
+  let beforePerCommitScan: (() => Promise<void>) | null = null;
+  const injected: ExecFn = async (cmd, opts) => {
+    if (beforePerCommitScan && cmd.includes("scan-secrets.mjs") && cmd.includes("--per-commit")) {
+      const f = beforePerCommitScan;
+      beforePerCommitScan = null;
+      await f();
+    }
+    if (resetFailures > 0 && /^git reset --soft /.test(cmd)) {
+      resetFailures--;
+      throw Object.assign(new Error("reset falhou (injeção)"), { code: 128, stderr: "fatal: Unable to create '.git/HEAD.lock'" });
+    }
+    return real(cmd, opts);
+  };
+  const g = (args: string, cwd = repo) => real(`git ${args}`, { cwd, timeout: 30_000 });
+  const write = async (rel: string, text: string) => {
+    await fsp.mkdir(path.dirname(path.join(repo, rel)), { recursive: true });
+    await fsp.writeFile(path.join(repo, rel), text);
+  };
+  const commitOn = async (msg: string, cwd = repo) => {
+    await g(`add -A`, cwd);
+    await fsp.writeFile(path.join(tmpRoot, "msg.txt"), msg);
+    await g(`commit -q --no-verify -F ${JSON.stringify(path.join(tmpRoot, "msg.txt"))}`, cwd);
+  };
+  const remoteSha = async (branch: string) => (await g(`rev-parse ${branch}`, originDir)).stdout.trim();
+  const head = async () => (await g(`rev-parse HEAD`)).stdout.trim();
+
+  beforeEach(async () => {
+    resetFailures = 0;
+    beforePerCommitScan = null;
+    tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "sm-prepush-"));
+    real = isolatedGitExec(promisify(nodeExec) as unknown as ExecFn, tmpRoot);
+    await ensureRunnerStateDir();
+    repo = path.join(tmpRoot, "main");
+    originDir = path.join(tmpRoot, "origin.git");
+    await fsp.mkdir(path.join(repo, "scripts", "git-hooks"), { recursive: true });
+    await fsp.copyFile(
+      path.join(findRepoRoot(), "scripts", "git-hooks", "scan-secrets.mjs"),
+      path.join(repo, "scripts", "git-hooks", "scan-secrets.mjs"),
+    );
+    await write(".gitignore", "node_modules\n.worktrees/\n");
+    await write("packages/app/s.ts", "export const s = 1;\n");
+    await write("tools/hooks/guard.js", "module.exports = 1;\n");
+    await write("storymap/boards/x/notes.md", "linha base\n");
+    await g(`init -q`);
+    await g(`config user.email t@example.test`);
+    await g(`config user.name tester`);
+    await g(`add -A`);
+    await g(`commit -q --no-verify -m base`);
+    baseBranch = (await g(`rev-parse --abbrev-ref HEAD`)).stdout.trim();
+    await real(`git init -q --bare ${JSON.stringify(originDir)}`, { cwd: tmpRoot, timeout: 30_000 });
+    await g(`remote add origin ${JSON.stringify(originDir)}`);
+    await g(`push -q origin HEAD`); // cria refs/remotes/origin/<main>: o range do scan é origin/<main>..HEAD
+  });
+
+  afterEach(async () => {
+    await real(`git worktree remove ${JSON.stringify(path.join(tmpRoot, "main-stage"))} --force`, { cwd: repo, timeout: 30_000 }).catch(() => {});
+    await fsp.rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  const makeQueue = (store = memStore(), staging = true) =>
+    makeMergeQueue({
+      repoRoot: repo,
+      exec: injected,
+      store,
+      now: () => 1000,
+      ...(staging ? { staging: { enabled: true, branch: "stage", codePrefixes: ["packages/"] } } : {}),
+      persistDiffSnapshot: async () => {},
+      stampStaged: async () => {},
+      addSecretScanBlocker: async () => {},
+      cleanTreeRecheck: { attempts: 1, delayMs: 0 },
+      sleep: async () => {},
+    });
+  /** Uma sessão cortada de `start` que só CRIA um arquivo em `tools/` (a metade de dados → main), com mensagem limpa. */
+  const cleanSession = async (id: string, value: number, start: string) => {
+    await g(`checkout -q -b agent/${id} ${start}`);
+    await write(`tools/hooks/guard-${value}.js`, `module.exports = ${value};\n`);
+    await commitOn(`fix(hooks): ajuste ${value}\n\nCo-Authored-By: Pessoa Exemplo <pessoa@example.test>`);
+    await g(`checkout -q ${baseBranch}`);
+    return { runId: id, board: "x", cardId: undefined, branch: `agent/${id}`, kind: "session" as const };
+  };
+
+  it("staging OFF: o merge integral varre as MENSAGENS dos commits que traz — token só na mensagem não chega a main nem a origin", async () => {
+    await g(`checkout -q -b run/run-ex9320`);
+    await write("tools/hooks/guard.js", "module.exports = 20;\n");
+    await commitOn(`usm(do): x/story-ex9320 [run run-ex9320]\n\nDecision: autentiquei com ${TOKEN}\nRun-Id: run-ex9320`);
+    await g(`checkout -q ${baseBranch}`);
+    const before = await head();
+
+    const store = memStore();
+    const mq = makeQueue(store, false);
+    await mq.enqueueMerge({ runId: "run-ex9320", board: "x", cardId: "story-ex9320", branch: "run/run-ex9320", kind: "run" });
+    await mq.whenIdle();
+
+    const entry = store.read()[0];
+    expect(entry?.status).toBe("failed");
+    expect(entry?.failureReason).toMatch(/secret-scan DETECTOU secret no merge commit/);
+    expect(entry?.failureReason).toContain("mensagem do commit");
+    expect(entry?.failureReason).not.toContain(TOKEN);
+    expect(await head()).toBe(before);
+    expect(await remoteSha(baseBranch)).toBe(before);
+  });
+
+  it("commit local NÃO varrido em main (o crash entre o commit e o scan): o push é retido, o train pausa e solta quando o commit sai", async () => {
+    const pushed = await head();
+    // a tentativa anterior commitou e morreu antes do scan: um commit local, não publicado, com o token na mensagem
+    await write("storymap/boards/x/notes.md", "linha da tentativa que morreu\n");
+    await commitOn(`board: sessão sess-ex9321\n\nDecision: ${TOKEN}`);
+    const poisoned = await head();
+
+    const store = memStore();
+    const mq = makeQueue(store);
+    await mq.enqueueMerge(await cleanSession("sess-ex9322", 22, pushed));
+    await mq.whenIdle();
+
+    // a entrada integrou LOCALMENTE (o commit DELA foi varrido e está limpo), mas nada saiu para origin
+    const first = store.read().find((e) => e.runId === "sess-ex9322");
+    expect(first?.status).toBe("done");
+    expect(first?.pushError).toMatch(/secret-scan pré-push DETECTOU secret em commit local não publicado/);
+    expect(first?.pushError).not.toContain(TOKEN);
+    expect(await remoteSha(baseBranch)).toBe(pushed);
+    expect(mq.getSnapshot().pushHold).toMatch(/pré-push/);
+
+    // PAUSADO: a próxima entrada espera — não se empilha commit sobre o envenenado
+    await mq.enqueueMerge(await cleanSession("sess-ex9323", 23, pushed));
+    await mq.whenIdle();
+    expect(store.read().find((e) => e.runId === "sess-ex9323")?.status).toBe("waiting");
+    expect(await remoteSha(baseBranch)).toBe(pushed);
+
+    // o operador tira o commit envenenado (mantendo o que veio depois) ⇒ a retenção solta sozinha e o train segue
+    await g(`rebase -q --onto ${poisoned}~1 ${poisoned}`);
+    await mq.enqueueMerge(await cleanSession("sess-ex9324", 24, pushed));
+    await mq.whenIdle();
+    expect(store.read().find((e) => e.runId === "sess-ex9323")?.status).toBe("done");
+    expect(mq.getSnapshot().pushHold).toBeUndefined();
+    expect(await remoteSha(baseBranch)).toBe(await head());
+    expect((await g(`log --format=%B ${baseBranch}`, originDir)).stdout).not.toContain(TOKEN);
+  });
+
+  it("commit local NÃO varrido em `stage`: o push de stage é retido — origin/stage não recebe o commit", async () => {
+    // `stage` publicado em origin, e um commit local nele que nunca foi varrido (a tentativa que morreu)
+    await g(`branch stage`);
+    await g(`push -q origin stage`);
+    const stagePushed = (await g(`rev-parse stage`)).stdout.trim();
+    await g(`checkout -q stage`);
+    await write("packages/app/outro.ts", "export const outro = 1;\n");
+    await commitOn(`usm(sessão): código staged (sessão sess-ex9330)\n\nDecision: ${TOKEN}`);
+    await g(`checkout -q ${baseBranch}`);
+
+    await g(`checkout -q -b agent/sess-ex9331`);
+    await write("packages/app/s.ts", "export const s = 31;\n");
+    await commitOn("feat(app): s vira 31");
+    await g(`checkout -q ${baseBranch}`);
+
+    const store = memStore();
+    const mq = makeQueue(store);
+    await mq.enqueueMerge({ runId: "sess-ex9331", board: "x", cardId: undefined, branch: "agent/sess-ex9331", kind: "session" });
+    await mq.whenIdle();
+
+    const entry = store.read()[0];
+    expect(entry?.split?.codeStaged).toBe(true); // o código DESTA entrada foi varrido e aterrissou em stage local
+    expect(entry?.pushError).toMatch(/pré-push DETECTOU secret.*em stage/);
+    expect(await remoteSha("stage")).toBe(stagePushed);
+    expect(mq.getSnapshot().pushHold).toMatch(/stage/);
+  });
+
+  it("desfazer por SHA: o `reset` que falha UMA vez é retentado e confere o HEAD — main volta ao de antes", async () => {
+    await g(`checkout -q -b agent/sess-ex9340`);
+    await write("tools/hooks/guard.js", "module.exports = 40;\n");
+    await commitOn(`fix(hooks): ajusta o guarda\n\nDecision: autentiquei com ${TOKEN}`);
+    await g(`checkout -q ${baseBranch}`);
+    const before = await head();
+    resetFailures = 1;
+
+    const store = memStore();
+    const mq = makeQueue(store);
+    await mq.enqueueMerge({ runId: "sess-ex9340", board: "x", cardId: undefined, branch: "agent/sess-ex9340", kind: "session" });
+    await mq.whenIdle();
+
+    expect(resetFailures).toBe(0); // a injeção disparou
+    const entry = store.read()[0];
+    expect(entry?.status).toBe("failed");
+    expect(entry?.failureReason).toMatch(/secret-scan DETECTOU secret nos commits da metade de dados/);
+    expect(entry?.failureReason).not.toContain(COMMIT_NOT_UNDONE);
+    expect(await head()).toBe(before);
+    expect(await fsp.readFile(path.join(repo, "tools/hooks/guard.js"), "utf8")).toBe("module.exports = 1;\n");
+    expect(mq.getSnapshot().pushHold).toBeUndefined();
+  });
+
+  it("desfazer que NÃO volta o HEAD: «commit local NÃO desfeito», push retido e train pausado — nada chega a origin", async () => {
+    await g(`checkout -q -b agent/sess-ex9341`);
+    await write("tools/hooks/guard.js", "module.exports = 41;\n");
+    await commitOn(`fix(hooks): ajusta o guarda\n\nDecision: autentiquei com ${TOKEN}`);
+    await g(`checkout -q ${baseBranch}`);
+    const before = await head();
+    resetFailures = 2; // a tentativa e a retentativa
+
+    const store = memStore();
+    const mq = makeQueue(store);
+    await mq.enqueueMerge({ runId: "sess-ex9341", board: "x", cardId: undefined, branch: "agent/sess-ex9341", kind: "session" });
+    await mq.whenIdle();
+
+    const entry = store.read()[0];
+    expect(entry?.status).toBe("failed");
+    expect(entry?.failureReason).toContain(COMMIT_NOT_UNDONE);
+    expect(entry?.failureReason).toContain(`git reset --soft ${before}`);
+    expect(entry?.failureReason).not.toContain(TOKEN);
+    expect(await head()).not.toBe(before); // o commit seguiu LOCAL — e é exatamente por isso que nada publica
+    expect(mq.getSnapshot().pushHold).toContain(COMMIT_NOT_UNDONE);
+
+    // a próxima entrada NÃO integra nem publica enquanto o commit envenenado estiver no HEAD
+    await mq.enqueueMerge(await cleanSession("sess-ex9342", 42, before));
+    await mq.whenIdle();
+    expect(store.read().find((e) => e.runId === "sess-ex9342")?.status).toBe("waiting");
+    expect(await remoteSha(baseBranch)).toBe(before);
+
+    // o operador faz o que a mensagem pede ⇒ a retenção solta e a fila anda
+    await g(`reset -q --hard ${before}`);
+    await mq.enqueueMerge(await cleanSession("sess-ex9343", 43, before));
+    await mq.whenIdle();
+    expect(store.read().find((e) => e.runId === "sess-ex9342")?.status).toBe("done");
+    expect(mq.getSnapshot().pushHold).toBeUndefined();
+    expect((await g(`log --format=%B ${baseBranch}`, originDir)).stdout).not.toContain(TOKEN);
+  });
+
+  /** Um commit local NÃO varrido em main com o token num ARQUIVO (a tentativa que morreu antes do scan). */
+  const poisonMainWithFile = async () => {
+    await write("tools/hooks/chave.js", `module.exports = "${TOKEN}";\n`);
+    await commitOn("board: sessão sess-ex9350");
+    return head();
+  };
+  const originLog = async (branch: string) => (await g(`log -p --format=%B ${branch}`, originDir)).stdout;
+
+  it("consertar PARA A FRENTE não solta a retenção: um commit que apaga o segredo não publica a história que o carrega", async () => {
+    const pushed = await head();
+    await poisonMainWithFile();
+    const store = memStore();
+    const mq = makeQueue(store);
+    await mq.enqueueMerge(await cleanSession("sess-ex9351", 51, pushed));
+    await mq.whenIdle();
+    expect(store.read()[0]?.pushError).toMatch(/pré-push DETECTOU/);
+
+    // o operador «conserta» com um commit novo: o diff LÍQUIDO fica limpo, a história não
+    await write("tools/hooks/chave.js", `module.exports = "redigido";\n`);
+    await commitOn("fix: tira a chave");
+    await mq.enqueueMerge(await cleanSession("sess-ex9352", 52, pushed));
+    await mq.whenIdle();
+    expect(store.read().find((e) => e.runId === "sess-ex9352")?.status).toBe("waiting"); // segue pausado
+    expect(mq.getSnapshot().pushHold).toBeDefined();
+    expect(await remoteSha(baseBranch)).toBe(pushed);
+    expect(await originLog(baseBranch)).not.toContain(TOKEN);
+  });
+
+  it("a retenção é PERSISTIDA: o settle de board-data do engine não publica, e um train NOVO (restart) também não", async () => {
+    const pushed = await head();
+    await poisonMainWithFile();
+    const mq = makeQueue();
+    await mq.enqueueMerge(await cleanSession("sess-ex9353", 53, pushed));
+    await mq.whenIdle();
+    expect(await readPushHold(makeGit(real, { cwd: repo, timeoutMs: 30_000 }))).not.toBeNull();
+
+    // o `board: estado vivo` do engine (commitBoardStateAndPush → pushHeadToOrigin) esbarra no mesmo portão
+    await write("storymap/boards/x/notes.md", "estado vivo do board\n");
+    const settle = await makeWorktreeOps(real).commitBoardStateAndPush(repo, "board: estado vivo");
+    expect(settle.committed).toBe(true);
+    expect(settle.pushed).toBe(false);
+    expect(settle.pushError).toMatch(/RETIDO/);
+    expect(await remoteSha(baseBranch)).toBe(pushed);
+
+    // «restart»: um train novo, sem nada em memória — o ref por worktree segue retendo
+    const store2 = memStore();
+    const mq2 = makeQueue(store2);
+    await mq2.enqueueMerge(await cleanSession("sess-ex9354", 54, pushed));
+    await mq2.whenIdle();
+    expect(store2.read()[0]?.pushError).toMatch(/RETIDO/);
+    expect(mq2.getSnapshot().pushHold).toBeDefined();
+    expect(await remoteSha(baseBranch)).toBe(pushed);
+    expect(await originLog(baseBranch)).not.toContain(TOKEN);
+  });
+
+  it("primeiro push de `stage` (origin ainda sem stage): o range é o merge-base com origin/main, não `HEAD~1` — o commit herdado de main não sai", async () => {
+    await poisonMainWithFile();
+    await g(`branch stage`); // cortado do main LOCAL, que carrega o commit não varrido; origin não tem stage
+    await g(`checkout -q -b agent/sess-ex9355`);
+    await write("packages/app/s.ts", "export const s = 55;\n");
+    await commitOn("feat(app): s vira 55");
+    await g(`checkout -q ${baseBranch}`);
+
+    const store = memStore();
+    const mq = makeQueue(store);
+    await mq.enqueueMerge({ runId: "sess-ex9355", board: "x", cardId: undefined, branch: "agent/sess-ex9355", kind: "session" });
+    await mq.whenIdle();
+
+    expect(store.read()[0]?.split?.codeStaged).toBe(true);
+    expect((await g(`for-each-ref refs/heads/stage`, originDir)).stdout.trim()).toBe(""); // stage NÃO chegou a origin
+    expect(mq.getSnapshot().pushHold).toMatch(/stage/);
+  });
+
+  it("falso-positivo: o ACEITE do operador solta a retenção, o pump retoma a fila sem enfileirar nada, e um segredo NOVO depois do aceite ainda retém", async () => {
+    const pushed = await head();
+    await poisonMainWithFile();
+    const store = memStore();
+    const mq = makeQueue(store);
+    await mq.enqueueMerge(await cleanSession("sess-ex9360", 60, pushed));
+    await mq.whenIdle();
+    expect(store.read()[0]?.pushError).toMatch(/pré-push DETECTOU/);
+    expect(mq.getSnapshot().pushHold).toContain(PUSH_ACK_REF); // o que fazer está no snapshot (ops / runner_status)
+    await mq.enqueueMerge(await cleanSession("sess-ex9361", 61, pushed));
+    await mq.whenIdle();
+    expect(store.read().find((e) => e.runId === "sess-ex9361")?.status).toBe("waiting");
+
+    // sem aceite, o pump NÃO solta (a condição ainda vale) — e apagar a retenção à mão não adiantaria: o mesmo range
+    expect((await mq.pump()).pumped).toBe(false);
+    const hold = await readPushHold(makeGit(real, { cwd: repo, timeoutMs: 30_000 }));
+    expect(hold).not.toBeNull();
+    await g(`update-ref ${PUSH_ACK_REF} ${hold!.poisoned}`); // o comando que a mensagem dá
+
+    // a varredura periódica (pump) solta a retenção e drena a fila — nenhum enqueue novo
+    await mq.pump();
+    await mq.whenIdle();
+    expect(store.read().find((e) => e.runId === "sess-ex9361")?.status).toBe("done");
+    expect(mq.getSnapshot().pushHold).toBeUndefined();
+    expect(await remoteSha(baseBranch)).toBe(await head());
+
+    // o aceite cobre SÓ até o commit aceito: um segredo novo depois dele ainda é achado e retém
+    const published = await head();
+    await write("tools/hooks/outra-chave.js", `module.exports = "${TOKEN}";\n`);
+    await commitOn("board: sessão sess-ex9362");
+    await mq.enqueueMerge(await cleanSession("sess-ex9363", 63, published));
+    await mq.whenIdle();
+    expect(store.read().find((e) => e.runId === "sess-ex9363")?.pushError).toMatch(/pré-push DETECTOU/);
+    expect(await remoteSha(baseBranch)).toBe(published);
+  });
+
+  it("a retenção gravada pelo settle do ENGINE aparece no snapshot do train na varredura periódica (pump), sem push do train", async () => {
+    const pushed = await head();
+    await poisonMainWithFile();
+    await write("storymap/boards/x/notes.md", "estado vivo do board\n");
+    const settle = await makeWorktreeOps(real).commitBoardStateAndPush(repo, "board: estado vivo");
+    expect(settle.pushed).toBe(false);
+    expect(await remoteSha(baseBranch)).toBe(pushed);
+
+    const mq = makeQueue();
+    expect(mq.getSnapshot().pushHold).toBeUndefined();
+    await mq.pump();
+    expect(mq.getSnapshot().pushHold).toMatch(/RETIDO/);
+    expect(mq.getSnapshot().pushHold).toContain(`git -C "${repo}"`); // o checkout certo: os refs são por worktree
+    expect(mq.getSnapshot().pushHold).not.toContain(TOKEN);
+  });
+
+  it("staging OFF: um commit do engine que cai entre o merge e o scan NÃO é varrido no lugar do merge nem apagado pelo desfazer", async () => {
+    await g(`checkout -q -b run/run-ex9364`);
+    await write("tools/hooks/guard.js", "module.exports = 64;\n");
+    await commitOn(`usm(do): x/story-ex9364 [run run-ex9364]\n\nDecision: autentiquei com ${TOKEN}\nRun-Id: run-ex9364`);
+    await g(`checkout -q ${baseBranch}`);
+    const before = await head();
+    beforePerCommitScan = async () => {
+      await write("storymap/boards/x/notes.md", "o engine escreveu no meio\n");
+      await commitOn("board: estado vivo (concorrente)");
+    };
+
+    const store = memStore();
+    const mq = makeQueue(store, false);
+    await mq.enqueueMerge({ runId: "run-ex9364", board: "x", cardId: "story-ex9364", branch: "run/run-ex9364", kind: "run" });
+    await mq.whenIdle();
+
+    const entry = store.read()[0];
+    expect(entry?.status).toBe("failed");
+    expect(entry?.failureReason).toMatch(/secret-scan DETECTOU secret no merge commit/); // o MERGE foi varrido, não o do engine
+    expect((await g(`log --format=%s -3`)).stdout).toContain("board: estado vivo (concorrente)"); // o desfazer não o apagou
+    expect(mq.getSnapshot().pushHold).toContain(COMMIT_NOT_UNDONE);
+    expect(await remoteSha(baseBranch)).toBe(before);
+  });
+});
+
+// O push leva o SHA que o portão varreu: um commit que cai entre o scan e o push não sai sem ter sido varrido.
+describePosix("pushHeadToOrigin (real git): publica o sha varrido, não o HEAD de depois", () => {
+  let tmpRoot = "";
+  afterEach(async () => {
+    if (tmpRoot) await fsp.rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("um commit criado DURANTE o scan fica local; origin recebe exatamente a ponta varrida", async () => {
+    tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "sm-prepush-sha-"));
+    const real = isolatedGitExec(promisify(nodeExec) as unknown as ExecFn, tmpRoot);
+    const repo = path.join(tmpRoot, "r");
+    const origin = path.join(tmpRoot, "o.git");
+    await fsp.mkdir(path.join(repo, "scripts", "git-hooks"), { recursive: true });
+    await fsp.copyFile(path.join(findRepoRoot(), "scripts", "git-hooks", "scan-secrets.mjs"), path.join(repo, "scripts", "git-hooks", "scan-secrets.mjs"));
+    const git = makeGit(real, { cwd: repo, timeoutMs: 30_000 });
+    await git(`init -q`);
+    await git(`config user.email t@example.test`);
+    await git(`config user.name tester`);
+    await git(`add -A`);
+    await git(`commit -q --no-verify -m base`);
+    await real(`git init -q --bare ${JSON.stringify(origin)}`, { cwd: tmpRoot, timeout: 30_000 });
+    await git(`remote add origin ${JSON.stringify(origin)}`);
+    await git(`push -q origin HEAD`);
+    const branch = (await git(`rev-parse --abbrev-ref HEAD`)).stdout.trim();
+    await fsp.writeFile(path.join(repo, "a.txt"), "a\n");
+    await git(`add -A`);
+    await git(`commit -q --no-verify -m a`);
+    const scanned = (await git(`rev-parse HEAD`)).stdout.trim();
+
+    const inner = makePrePushScan(real, repo, repo, 30_000);
+    const res = await pushHeadToOrigin(git, async (range) => {
+      const verdict = await inner(range);
+      await fsp.writeFile(path.join(repo, "b.txt"), "b\n"); // o escritor concorrente
+      await git(`add -A`);
+      await git(`commit -q --no-verify -m b`);
+      return verdict;
+    });
+    expect(res.pushed).toBe(true);
+    expect((await real(`git rev-parse ${branch}`, { cwd: origin, timeout: 30_000 })).stdout.trim()).toBe(scanned);
+    expect((await git(`rev-parse HEAD`)).stdout.trim()).not.toBe(scanned); // o commit de depois segue local
+  });
+});
+
+// O range pré-push sem NENHUM tracking ref (remoto configurado, nada publicado) e com HEAD num commit RAIZ: a
+// árvore vazia como base — nunca `HEAD~1`, que nem resolve aqui e virava erro interno permanente.
+describePosix("prePushRange/prePushGate (real git): commit raiz sem tracking ref", () => {
+  const TOKEN = ["gh", "p_", "Q7mZ2xK9vR4tL8nB3cW6yH1jF5dS0aGe2uPq"].join("");
+  let tmpRoot = "";
+  afterEach(async () => {
+    if (tmpRoot) await fsp.rm(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("a base é a árvore vazia; o scan varre o commit raiz e retém (ref gravado)", async () => {
+    tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "sm-prepush-root-"));
+    const real = isolatedGitExec(promisify(nodeExec) as unknown as ExecFn, tmpRoot);
+    const repo = path.join(tmpRoot, "r");
+    await fsp.mkdir(path.join(repo, "scripts", "git-hooks"), { recursive: true });
+    await fsp.copyFile(path.join(findRepoRoot(), "scripts", "git-hooks", "scan-secrets.mjs"), path.join(repo, "scripts", "git-hooks", "scan-secrets.mjs"));
+    const git = makeGit(real, { cwd: repo, timeoutMs: 30_000 });
+    await git(`init -q`);
+    await git(`config user.email t@example.test`);
+    await git(`config user.name tester`);
+    await git(`remote add origin ${JSON.stringify(path.join(tmpRoot, "nao-existe.git"))}`);
+    await fsp.writeFile(path.join(repo, "cfg.js"), `module.exports = "${TOKEN}";\n`);
+    await git(`add -A`);
+    await git(`commit -q --no-verify -m raiz`);
+    const branch = (await git(`rev-parse --abbrev-ref HEAD`)).stdout.trim();
+
+    expect(await prePushRange(git, branch)).toBe(`${EMPTY_TREE}..HEAD`);
+    const reason = await prePushGate(git, branch, makePrePushScan(real, repo, repo, 30_000));
+    expect(reason).toMatch(/pré-push DETECTOU/);
+    expect(reason).not.toContain(TOKEN);
+    expect((await git(`rev-parse --verify --quiet ${PUSH_HOLD_REF}`)).stdout.trim()).toBe((await git(`rev-parse HEAD`)).stdout.trim());
   });
 });

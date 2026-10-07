@@ -21,7 +21,8 @@
 //
 // EXAUSTIVO: `DECIDE` é um Record por kind — um kind novo não compila até alguém escrever a decisão dele.
 
-import type { BoardConfig, Card, EntryEffect, RiskClass, StatusDef } from "../types";
+import { stepAutoruns, type BoardConfig, type Card, type EntryEffect, type RiskClass, type StatusDef } from "../types";
+import { moveRiskClass } from "../entry-effect";
 import {
   deliveryInFlight,
   isCopilotActionable,
@@ -39,6 +40,7 @@ import { moveTargets } from "../move-targets";
 import { evaluateGate } from "../gates";
 import { acceptRoute, triagePlacementGap } from "../triage/parse";
 import { isConducted } from "../driver";
+import { agentMayTakeQuestion } from "../autonomy";
 import { GOVERNANCE_DRAFT_TTL_DAYS } from "../governance";
 import { unresolvedChanges } from "../design-canvas";
 import { isRemovalScope, REMOVAL_SCOPE_BY_ID } from "../frameworks";
@@ -47,12 +49,18 @@ import { acceptTriageRefusal, dataDeletionRefusal, designApproveRefusal, moveRef
 import type { DeployCause, DeployFailurePhase } from "../types";
 import { actionHappened, cardsOfCause, changesOutcome, deployCauseOfItem, hasOutcomeAction, isDiscard, isOwnerAdvisory, type InboxFacts } from "./contract";
 import { findingFixRefusal, severityWords } from "../finding-fix";
-import { ASK_MAX, clampAsk, clip, dayToken, plural, quoted, timeToken } from "./copy";
+import { ASK_FORMAT, ASK_MAX, clampAsk, clip, dayToken, plural, quoted, timeToken } from "./copy";
 import { callerWords } from "@/lib/storymap/mcp/caller";
 import { approvalRequesterText } from "@/lib/storymap/approval-requester";
 import { dependentsSample, discardGroupRefusal, discardPlan } from "@/lib/storymap/card-dependents";
+import type { ProposedItem } from "../smart-capture/types";
 
 // ── Os tipos ─────────────────────────────────────────────────────────────────────────────────────────
+
+/** O teto do rótulo de um botão (uma alternativa do agente vira botão: o texto inteiro fica na consequência). */
+export const OPTION_LABEL_MAX = ASK_FORMAT.optionLabelMax;
+/** O teto do «o que aconteceu» que vem do agente (o contexto da pergunta): o inteiro vai para Detalhes. */
+export const HAPPENED_MAX = 280;
 
 /** As seções do Inbox. `resolvido` não nasce de um item vivo — vem dos recibos e do registro (receipts.ts). */
 export type InboxBucket = "decidir" | "acompanhar";
@@ -65,18 +73,22 @@ export type InboxBucket = "decidir" | "acompanhar";
  */
 export type OptionInvoke =
   | QuickActionInvoke
-  | { kind: "answer-question"; boardId: string; cardId: string; questionId: string }
+  // `answer`/`selectedOptionIds` no próprio invoke = a resposta de UM clique (a alternativa do agente, a sugestão dele); o
+  // que a pessoa escreve ou marca no corpo do item vem no payload e vence.
+  | { kind: "answer-question"; boardId: string; cardId: string; questionId: string; answer?: string; selectedOptionIds?: string[] }
   | { kind: "approve-governance"; boardId: string; draftId: string }
   | { kind: "reject-governance"; boardId: string; draftId: string }
   | { kind: "grant-request"; boardId: string; approvalId: string }
   | { kind: "deny-request"; boardId: string; approvalId: string }
   | { kind: "resolve-proxy-audit"; boardId: string; cardId: string; questionId: string; outcome: "confirmed" | "reopened" }
-  | { kind: "resolve-delivery-audit"; boardId: string; cardId: string; outcome: "confirmed" | "reopened" }
-  | { kind: "accept-proposal"; boardId: string; containerId: string }
-  | { kind: "refine-proposal"; boardId: string; containerId: string }
+  | { kind: "resolve-delivery-audit"; boardId: string; cardId: string; outcome: "confirmed" | "reopened"; note?: string }
+  // `items` = os itens propostos, todos: o clique cria tudo; a seleção que a pessoa desmarcou no corpo vem no payload e vence
+  | { kind: "accept-proposal"; boardId: string; containerId: string; items?: ProposedItem[] }
+  // `note` = o pedido de ajuste PADRÃO (um clique, sem formulário antes); o motivo da pessoa vem depois, pelo `addNote`
+  | { kind: "refine-proposal"; boardId: string; containerId: string; note?: string }
   | { kind: "request-redesign"; boardId: string; cardId: string }
   | { kind: "renew-meter" }
-  | { kind: "undo-system-decision"; boardId: string; decisionId: string }
+  | { kind: "undo-system-decision"; boardId: string; decisionId: string; note?: string }
   | { kind: "show-publish-status"; boardId: string; cardId: string }
   // O sim do dono para uma mudança de código guardado (dinheiro) que o plano de publicação segura — por CAUSA, não por card.
   | { kind: "authorize-publish"; boardId: string; causeKey: string }
@@ -85,10 +97,27 @@ export type OptionInvoke =
   // Execução aprovada (runner/locked-exec*): as decisões do dono sobre um comando travado. `hash` = o pedido exato que ele
   // viu — o servidor recusa se ele mudou.
   | { kind: "approve-locked-exec"; boardId: string; id: string; hash: string }
-  | { kind: "reject-locked-exec"; boardId: string; id: string }
+  | { kind: "reject-locked-exec"; boardId: string; id: string; note?: string }
+  // «Adicionar um motivo» depois do «Não rodar»: o texto da pessoa (payload `note`) explica a recusa ao agente
+  | { kind: "explain-locked-exec"; boardId: string; id: string }
   | { kind: "undo-locked-exec"; boardId: string; id: string }
   | { kind: "keep-locked-exec"; boardId: string; id: string }
   | { kind: "ack-locked-exec"; boardId: string; id: string }
+  // Fase 3 — as alavancas que moravam na Esteira (app/delivery-actions.ts): pedir a publicação do que está pronto
+  // (`override` = por cima da guarda de trabalho concorrente), cancelar um pedido que espera, refazer na hora os pedidos
+  // de autorização que envelheceram.
+  | { kind: "publish-staged"; boardId: string; override?: boolean }
+  | { kind: "cancel-publish"; boardId: string; requestId: string }
+  | { kind: "rerequest-publish"; boardId: string }
+  // a trava da cota: só o operador solta (clearCapacityLatchAction)
+  | { kind: "clear-latch" }
+  // ligar o aviso no celular — o pedido de permissão e a inscrição são do NAVEGADOR: gesto de tela, como o `link`
+  | { kind: "enable-push" }
+  | { kind: "dismiss-push-offer" }
+  // o card conduzido que ninguém assumiu: parar o condutor (encerra a sessão dele e guarda o card) ou devolver o card
+  // ao fluxo das colunas — operador só (app/actions.ts stopConductorAction / returnCardToFlowAction)
+  | { kind: "stop-conductor"; boardId: string; cardId: string }
+  | { kind: "return-to-flow"; boardId: string; cardId: string }
   | { kind: "howto"; title: string; steps: string[] };
 
 export type OptionInvokeKind = OptionInvoke["kind"];
@@ -103,7 +132,13 @@ export type ReceiptUndo =
   | { kind: "reopen-finding"; boardId: string; cardId: string; findingId: string }
   | { kind: "revive-card"; boardId: string; cardId: string };
 
-/** Uma opção do item — a parte 3 da anatomia. */
+/**
+ * Uma opção do item — a parte 3 da anatomia. UM CLIQUE (fase 3, pedido do dono): nenhuma opção tem diálogo de
+ * confirmação nem formulário antes do botão. A que muda produção ou não tem volta diz isso no RÓTULO («Apagar os dados —
+ * não tem volta») e na consequência; a reversível traz o `undo` do recibo; a que pedia um texto roda com o texto padrão
+ * e o recibo oferece `addNote`. As únicas que leem o corpo do item são a resposta livre (`requires: "answer"`) e a
+ * escolha múltipla (`requires: "selection"`) — e nelas o botão É o envio do que foi escrito/marcado.
+ */
 export interface DecisionOption {
   /** estável dentro do item (chave de pendência/telemetria). */
   id: string;
@@ -115,10 +150,13 @@ export interface DecisionOption {
   /** recusada AGORA pela mesma régua do servidor: o porquê e, quando há, o que a libera. */
   disabled?: { reason: string; unblock?: { label: string; href: string } };
   invoke: OptionInvoke;
-  /** confirmação antes do clique (as destrutivas e as de produção). */
-  confirm?: { title: string; body: string };
-  /** a opção precisa de algo que o dono escreve/escolhe no corpo do item antes de valer. */
-  requires?: "answer" | "selection" | "note";
+  /** a opção envia o que a pessoa escreve (uma linha) ou marca no corpo do item — o botão é o envio. */
+  requires?: "answer" | "selection";
+  /**
+   * «Adicionar um motivo» no recibo, DEPOIS do clique (a opção já rodou com o texto padrão): a tela abre uma linha e
+   * manda o que a pessoa escreveu como `note` deste invoke. Opcional — nada espera por ele.
+   */
+  addNote?: { label: string; invoke: OptionInvoke };
   /** trilha de auditoria do clique humano (quick-actions SENSITIVE_AUDIT_CLASSES). */
   auditCls: RiskClass;
   /** o recibo do clique bem-sucedido, quando o servidor não devolve um desfecho próprio. */
@@ -315,11 +353,8 @@ function forwardOf(card: Card, config: BoardConfig, boardId: string, title: stri
           ? "Leva o código aprovado para o ramo principal; a publicação vem depois."
           : approvesToAir
             ? "O card segue sozinho até o ar: integra, homologa e publica, com prova a cada passo."
-            : `O card vai para «${rec.name}»${rec.autorun ? " e a automação do passo começa" : ""}.`,
+            : `O card vai para «${rec.name}»${rec.trigger && stepAutoruns(rec, config) ? " e a automação do passo começa" : ""}.`,
       tone: externalEffect ? "danger" : "primary",
-      ...(externalEffect || effect || approvesToAir
-        ? { confirm: { title: ask, body: externalEffect ? `${title} vai para «${rec.name}» e a publicação em produção dispara.` : approvesToAir ? `${title} vai para «${rec.name}» e segue sozinho até o ar.` : `${title} vai para «${rec.name}».` } }
-        : {}),
       auditCls: externalEffect ? "deploy" : effect ? "merge-resolve" : "write-board",
       invoke: { kind: "move-card", boardId, cardId: card.id, status: rec.id },
       done: externalEffect
@@ -480,7 +515,7 @@ function systemFollowUp(item: CockpitItem, c: KindCtx): { next: NextActor; ifIgn
 /**
  * «Tentar de novo» NO LUGAR — refaz a ação automática do passo onde o card está (republishCardAction), sem movê-lo. UMA
  * opção para os dois itens que a oferecem (o efeito que não rodou e o card parado sem ninguém cuidando): a recusa do
- * servidor dita antes do clique (republishRefusal) e, quando o passo publica, a confirmação. `advice` fecha a
+ * servidor dita antes do clique (republishRefusal); quando o passo publica, o rótulo diz «em produção». `advice` fecha a
  * consequência — o que o dono deve saber antes de apertar.
  */
 function retryEffectOption(item: Pick<CockpitItem, "boardId" | "cardId">, c: KindCtx, effect: EntryEffect, stepName: string, advice: string): DecisionOption {
@@ -492,10 +527,9 @@ function retryEffectOption(item: Pick<CockpitItem, "boardId" | "cardId">, c: Kin
     consequence: deploys
       ? `Roda a publicação de novo a partir de «${stepName}», sem mover o card. ${advice}`
       : `Roda de novo a promoção do código a partir de «${stepName}». ${advice}`,
-    // «Publicar de novo» não é vermelho: repete o que já foi aprovado (a confirmação diz que é produção). O vermelho
+    // «Publicar de novo» não é vermelho: repete o que já foi aprovado (o rótulo diz que é produção). O vermelho
     // fica para o que descarta ou não tem volta — dois botões vermelhos para coisas opostas confundiam o dono.
     tone: "primary",
-    ...(deploys ? { confirm: { title: "Publicar de novo?", body: `A publicação de ${c.title} em produção dispara de novo, a partir de «${stepName}».` } } : {}),
     ...(refusal ? { disabled: { reason: refusal } } : {}),
     auditCls: deploys ? "deploy" : "merge-resolve",
     invoke: { kind: "republish", boardId: item.boardId, cardId: item.cardId },
@@ -503,46 +537,107 @@ function retryEffectOption(item: Pick<CockpitItem, "boardId" | "cardId">, c: Kin
   };
 }
 
+/**
+ * O rótulo do «aceitar» de uma proposta — conta o que o clique MANDA. O modelo o escreve com todos os itens; o Inbox o
+ * reescreve com os que a pessoa deixou marcados (o payload vence o invoke), senão o botão dizia «Criar os 5 cards» e
+ * criava 3. Nada marcado = «Nada marcado». PURA.
+ */
+export function proposalAcceptLabel(items: ReadonlyArray<{ targetCardId?: string | null }>): string {
+  const n = items.length;
+  if (n === 0) return "Nada marcado";
+  const creates = items.filter((i) => !i.targetCardId).length;
+  return creates === n ? (n === 1 ? "Criar o card" : `Criar os ${n} cards`) : n === 1 ? "Aplicar o item" : `Aplicar os ${n} itens`;
+}
+
+/**
+ * Quem cuida de uma amostra de auditoria: um revisor independente (IA), pela decisão do dono de 06/10 — que ainda não
+ * roda. Dito como é: ninguém está revisando (contract.ts `isInboxItem`). Quando o revisor existir, isto passa a nomeá-lo.
+ */
+const AUDIT_UNREVIEWED: ItemDecision["next"] = { who: "ninguem", label: "Ninguém está revisando: o revisor independente ainda não roda", stalled: true };
+
 // ── As decisões, por kind ────────────────────────────────────────────────────────────────────────────
 
 type DecideMap = { [K in CockpitItemKind]: (item: Extract<CockpitItem, { kind: K }>, c: KindCtx) => KindDraft };
 
 const DECIDE: DecideMap = {
   question: (item, c) => {
-    const answer: DecisionOption = {
+    const ref: EscalationRef = { templateId: "question-pending", kind: "question", boardId: item.boardId, cardId: item.cardId, questionId: item.questionId };
+    const byOwner = item.ownerOnly || c.verdict.ownerClass;
+    const base = { boardId: item.boardId, cardId: item.cardId, questionId: item.questionId };
+    const done = "Respondido. O agente segue com a sua resposta.";
+    const ahead = item.awaitingProxy ? " Vale no lugar da resposta do procurador." : "";
+    // UM CLIQUE (fase 3): cada alternativa do agente é um botão que responde com ela; a recomendada é a principal. A
+    // pergunta aberta tem a linha de resposta (o botão É o envio) e, quando o agente sugeriu, «Usar a sugestão».
+    // A escolha múltipla marca as alternativas no corpo e envia. A resposta livre fica sempre à mão.
+    const free: DecisionOption = {
       id: "answer",
       label: item.awaitingProxy ? "Responder antes do procurador" : "Responder",
-      consequence: item.awaitingProxy
-        ? "Sua resposta vale no lugar da do procurador; o card segue com ela."
-        : "Sua resposta vai para o agente, e o card volta a andar com ela.",
+      consequence: `A sua resposta vai para o agente, e o card volta a andar com ela.${ahead}`,
       tone: "primary",
       requires: "answer",
       auditCls: "write-board",
-      invoke: { kind: "answer-question", boardId: item.boardId, cardId: item.cardId, questionId: item.questionId },
-      done: "Respondido. O agente segue com a sua resposta.",
+      invoke: { kind: "answer-question", ...base },
+      done,
     };
-    const ref: EscalationRef = { templateId: "question-pending", kind: "question", boardId: item.boardId, cardId: item.cardId, questionId: item.questionId };
-    const byOwner = item.ownerOnly || c.verdict.ownerClass;
+    const options: DecisionOption[] = [];
+    if (item.options.length && item.mode === "multi") {
+      options.push({ ...free, id: "answer:selection", label: "Responder com as marcadas", consequence: `Manda as alternativas que você marcou; o card volta a andar com elas.${ahead}`, requires: "selection" });
+      options.push({ ...free, tone: "neutral", label: "Responder com as suas palavras" });
+    } else if (item.options.length) {
+      const lead = item.options.find((o) => o.recommended) ?? null;
+      for (const o of item.options) {
+        options.push({
+          id: `answer:${o.id}`,
+          label: clip(o.label, OPTION_LABEL_MAX),
+          consequence: [o.recommended ? "É o que o agente recomenda." : "", o.pros?.length ? `A favor: ${o.pros.join("; ")}.` : "", o.cons?.length ? `Contra: ${o.cons.join("; ")}.` : ""]
+            .filter(Boolean)
+            .join(" ") || `O agente segue com esta resposta.${ahead}`,
+          tone: o === lead ? "primary" : "neutral",
+          auditCls: "write-board",
+          invoke: { kind: "answer-question", ...base, selectedOptionIds: [o.id] },
+          done: `Respondido: «${clip(o.label, 60)}». O agente segue com isso.`,
+        });
+      }
+      options.push({ ...free, tone: "neutral", label: "Responder com as suas palavras" });
+    } else if (item.recommendation?.trim()) {
+      options.push({
+        id: "answer:suggestion",
+        // a sugestão inteira cabe no botão, ou o botão diz só «Usar a sugestão» e ela vai inteira na consequência —
+        // nunca cortada no meio (a recomendação aceita até 240 caracteres, o botão 60)
+        label: `Usar a sugestão: ${item.recommendation.trim()}`.length <= OPTION_LABEL_MAX ? `Usar a sugestão: ${item.recommendation.trim()}` : "Usar a sugestão",
+        consequence: `Responde com o que o agente sugeriu: ${item.recommendation.trim()}${ahead}`,
+        tone: "primary",
+        auditCls: "write-board",
+        invoke: { kind: "answer-question", ...base, answer: item.recommendation.trim() },
+        done: "Respondido com a sugestão do agente. Ele segue com isso.",
+      });
+      options.push({ ...free, tone: "neutral" });
+    } else {
+      options.push(free);
+    }
     return {
       askVerb: "Responder",
-      // a pergunta inteira do agente mora no corpo do item (o formulário) e em Detalhes; a linha é curta
+      // a pergunta do agente É o que ele precisa da pessoa; a inteira mora em Detalhes quando passa de uma linha
       ask: clip(item.prompt, ASK_MAX) || `Responder a pergunta sobre ${c.title}`,
+      // o CONTEXTO do agente é o «o que aconteceu» (ask_question exige o formato); sem ele, quem perguntou e onde
       happened: [
-        `Um agente perguntou enquanto trabalhava em ${c.title}.`,
+        item.context?.trim() ? clip(item.context.trim(), HAPPENED_MAX) : `Um agente perguntou enquanto trabalhava em ${c.title}.`,
         byOwner
           ? c.verdict.ownerClass
             ? `Só você decide: toca em «${ownerClassLabel(c.verdict.ownerClass, c.config)}».`
-            : "Só você decide: é decisão de negócio (dinheiro, marca, PRD ou dados de pessoas); nunca vai ao procurador."
+            : "Só você decide: é decisão de negócio (dinheiro, marca, PRD ou dados de pessoas)."
           : "",
       ]
         .filter(Boolean)
         .join(" "),
-      options: [answer],
+      options,
       ifIgnored: "O card fica parado nesta pergunta; o resto do board segue.",
       more: cardMore(item, ref),
       details: [
-        { label: "Pergunta", value: item.questionId },
+        { label: "Id da pergunta", value: item.questionId },
         ...(item.prompt.length > ASK_MAX ? [{ label: "Pergunta inteira", value: item.prompt }] : []),
+        ...(item.context && item.context.length > HAPPENED_MAX ? [{ label: "Contexto inteiro", value: item.context }] : []),
+        ...(item.recommendation ? [{ label: "Sugestão do agente", value: item.recommendation }] : []),
         ...(item.askedBy ? [{ label: "Perguntado por", value: item.askedBy }] : []),
         ...(item.category ? [{ label: "Categoria", value: item.category }] : []),
       ],
@@ -563,8 +658,9 @@ const DECIDE: DecideMap = {
     const stepName = c.step(item.status);
     const ref: EscalationRef = { templateId: blockerTemplateId(item.findingId, item.lens, c.card?.status), kind: "finding", boardId: item.boardId, cardId: item.cardId, findingId: item.findingId };
     return {
-      askVerb: "Liberar",
-      ask: `Liberar ${c.title} sem consertar o problema da revisão?`,
+      // a pergunta NEUTRA, com o caminho seguro primeiro: «Liberar … sem consertar?» enquadrava o risco como a pergunta
+      askVerb: "Consertar",
+      ask: `Consertar o problema que a revisão achou em ${c.title}, ou liberar sem o conserto?`,
       happened: `A revisão encontrou um problema que impede ${c.title} de sair de «${stepName}».`,
       options: [
         {
@@ -577,7 +673,6 @@ const DECIDE: DecideMap = {
           label: "Liberar sem consertar",
           consequence: "O card segue sem o conserto; o problema fica registrado como «não corrigir».",
           tone: "neutral",
-          confirm: { title: "Liberar sem consertar?", body: `${c.title} segue sem o conserto. O problema fica registrado no card.` },
           auditCls: "write-board",
           invoke: { kind: "update-finding", boardId: item.boardId, cardId: item.cardId, findingId: item.findingId, status: "wontfix" },
           done: "Liberado sem o conserto — o problema ficou registrado.",
@@ -640,9 +735,8 @@ const DECIDE: DecideMap = {
             done: "Card de conserto criado — o sistema cuida dele.",
           },
           {
-            ...mk("acknowledged", "Aceitar o risco", "Nada é corrigido: o aviso fica registrado no card como risco aceito por você.", "Registrado como risco aceito."),
+            ...mk("acknowledged", "Aceitar o risco, sem consertar", `O problema que a revisão achou em ${c.title} fica sem conserto, registrado no card como risco aceito por você.`, "Registrado como risco aceito."),
             tone: "neutral",
-            confirm: { title: "Aceitar o risco?", body: `O problema que a revisão achou em ${c.title} fica sem conserto, registrado no card como risco aceito por você.` },
           },
         ],
         ifIgnored: "Nada trava: o problema fica sem conserto e o aviso segue aberto no card.",
@@ -779,36 +873,22 @@ const DECIDE: DecideMap = {
       // refazê-lo daqui exigiria rodar o deploy sem a garantia de que nada publica (o board que publica não declara a
       // medição que só lê). Sem botão de autorizar — autorizaria o que mudou —, a saída é a Esteira.
       if (cause && !approvals.length && c.facts?.deployStale.has(cause.causeKey)) {
-        const esteira = c.config.id || item.boardId;
+        // a alavanca que morava na Esteira (fase 3: a Esteira saiu) — refazer o pedido NA HORA, daqui
         return {
-          bucket: "acompanhar",
-          askVerb: null,
-          ask: `O pedido de publicação envelheceu — refaça pela Esteira${affects}`,
-          happened: "O código guardado mudou na main desde o pedido de autorização, então ele já não vale. O sistema não refaz este pedido sozinho porque o board não declara uma medição que só lê, e o deploy poderia publicar. Nada foi publicado.",
-          options: [],
+          askVerb: "Refazer",
+          ask: `Refazer o pedido de publicação com o código de agora?${affects}`,
+          happened: "O código guardado mudou desde o pedido de autorização, então ele já não vale. O sistema não refaz este pedido sozinho neste board, porque ele não tem uma medição que só lê: refazer roda a publicação do board. Nada foi publicado.",
+          options: [rerequestOption(c.config.id || item.boardId, Boolean(c.config.deploy?.planCommand?.trim()))],
           ifIgnored: `A publicação segue parada${affects}; nada vai ao ar.`,
-          next: { who: "voce", label: "Refazer pela Esteira" },
-          more: [
-            {
-              id: "more:open-esteira",
-              label: "Abrir a Esteira",
-              consequence: "Abre a Esteira do board, onde «Refazer os pedidos de publicação» pede a autorização com a mudança de agora. Não decide nada.",
-              tone: "neutral",
-              auditCls: "read",
-              invoke: { kind: "link", href: `/board/${encodeURIComponent(esteira)}/entrega` },
-              done: "Aberto.",
-            },
-            status,
-          ],
+          more: [status],
           details,
-          dot: "grey",
+          dot: "amber",
         };
       }
       if (cause && approvals.length) {
         const classText = cause.ownerClass ? `«${ownerClassLabel(cause.ownerClass, c.config)}»` : "negócio";
         const files = [...new Set(approvals.flatMap((a) => a.subject.files))];
         const units = [...new Set(approvals.flatMap((a) => a.units))];
-        const where = units.length ? ` em ${units.join(", ")}` : "";
         const of = anchor ? ` de ${quoted(anchor.title)}` : "";
         const shown = files.slice(0, 8);
         // Visto de OUTRO card que a mesma causa segura (o selo «Precisa de você» do Kanban mostra este texto em cada card
@@ -819,17 +899,13 @@ const DECIDE: DecideMap = {
           ask: fromOther
             ? `Autorizar a publicação do código de ${classText} que segura este card? (o código vem de ${quoted(anchor.title)})${affects}`
             : `Autorizar a publicação do código de ${classText}${of}?${affects}`,
-          happened: `A publicação parou porque a mudança mexe em código de ${classText}, e só você libera isso: ${plural(files.length, "arquivo", "arquivos")}${where}. Nada foi publicado.`,
+          happened: `A publicação parou porque a mudança mexe em código de ${classText}, e só você libera isso: ${plural(files.length, "arquivo", "arquivos")}. Nada foi publicado.`,
           options: [
             {
               id: "authorize-publish",
               label: "Autorizar publicar",
               consequence: "Grava a sua autorização para ESTA mudança e dispara a publicação de novo. Se esse código mudar depois, a autorização deixa de valer e o Inbox pede de novo.",
               tone: "primary",
-              confirm: {
-                title: "Autorizar a publicação?",
-                body: `Você autoriza publicar ${plural(files.length, "arquivo", "arquivos")} de código de ${classText}${of}${where}. A autorização vale só para esta mudança.`,
-              },
               auditCls: "deploy",
               // a linha da causa mora no livro DESTE Inbox (o board que publica o pacote) — o card pode ser de outro board
               invoke: { kind: "authorize-publish", boardId: c.config.id || item.boardId, causeKey: cause.causeKey },
@@ -840,8 +916,9 @@ const DECIDE: DecideMap = {
           more: [...(anchor ? [openCard(boardOfCard(anchor.id), anchor.id)] : cardMore(item, ref)), status],
           details: [
             ...details,
-            { label: "O que você autoriza", value: `${plural(files.length, "arquivo", "arquivos")}${where}` },
+            { label: "O que você autoriza", value: plural(files.length, "arquivo", "arquivos") },
             { label: "Arquivos", value: `${shown.join(", ")}${files.length > shown.length ? ` … e mais ${files.length - shown.length}` : ""}` },
+            ...publishUnitsDetail(units),
           ],
           dot: "red",
         };
@@ -910,7 +987,6 @@ const DECIDE: DecideMap = {
             label: "Publicar de novo em produção",
             consequence: `Move o card para «${step.name}» e dispara a publicação em produção outra vez${scheduled ? ", sem esperar a nova tentativa do sistema" : ""}.`,
             tone: scheduled ? "neutral" : "primary",
-            confirm: { title: "Publicar de novo em produção?", body: `${c.title} vai para «${step.name}» e a publicação em produção dispara de novo.` },
             ...(inFlight
               ? { disabled: { reason: "Uma publicação deste card já está em andamento; espere a confirmação dela." } }
               : refusal
@@ -1038,10 +1114,6 @@ const DECIDE: DecideMap = {
           label: "Deixar fazer",
           consequence: "Autoriza esta ação uma vez, exatamente como foi pedida.",
           tone: "primary",
-          confirm: {
-            title: `Deixar ${who} ${action}?`,
-            body: item.args ? "A autorização vale uma vez, para exatamente o que foi pedido (veja em Detalhes)." : "Os detalhes do pedido não estão disponíveis — abra o board e recarregue antes de autorizar.",
-          },
           ...(item.args ? {} : { disabled: { reason: "Os detalhes do pedido não chegaram; sem eles não dá para autorizar às cegas." } }),
           auditCls: item.riskClass ?? "write-board",
           invoke: { kind: "grant-request", boardId: item.boardId, approvalId },
@@ -1077,12 +1149,15 @@ const DECIDE: DecideMap = {
     const gateVerdict = card && target ? evaluateGate(card, target.id, c.config) : null;
     const placement = refusal && card && refusal === triagePlacementGap(card, c.config);
     const ref: EscalationRef = { templateId: "review-triage", kind: "card", boardId: item.boardId, cardId: item.cardId };
+    // O agente do passo só começa onde o passo RODA neste board (types.ts `stepAutoruns`: num board com condutor,
+    // Entrevista/Jornada/Telas não disparam skill) — ou onde a entrada é a do condutor.
+    const targetRuns = !!target && !!card && (moveRiskClass(c.config, target.id, card.status, card) === "run");
     const options: DecisionOption[] = [];
     if (card && target && staging) {
       options.push({
         id: "accept",
         label: `Aceitar e mandar para «${target.name}»`,
-        consequence: `O card entra no fluxo em «${target.name}»${target.autorun ? ", e o agente do passo começa" : ""}.`,
+        consequence: `O card entra no fluxo em «${target.name}»${targetRuns ? ", e o agente do passo começa" : ""}.`,
         tone: "primary",
         ...(refusal
           ? {
@@ -1094,7 +1169,7 @@ const DECIDE: DecideMap = {
           : {}),
         auditCls: "write-board",
         invoke: { kind: "accept-triage", boardId: item.boardId, cardId: item.cardId },
-        done: `${c.title} foi para «${target.name}»${target.autorun ? "; o agente começou" : ""}.`,
+        done: `${c.title} foi para «${target.name}»${targetRuns ? "; o agente começou" : ""}.`,
         ...(card.status ? { undo: { kind: "move-back" as const, boardId: item.boardId, cardId: item.cardId, from: target.id, to: card.status, toStaging: true } } : {}),
       });
       // O que DEPENDE deste card vai junto (card-dependents.ts) — antes o clique voltava com «reancore-os primeiro»,
@@ -1107,7 +1182,7 @@ const DECIDE: DecideMap = {
       const many = along.length === 1 ? "o card que depende dele" : `os ${along.length} cards que dependem dele`;
       options.push({
         id: "discard",
-        label: along.length && !groupRefusal ? `Descartar com ${many}` : "Descartar",
+        label: along.length && !groupRefusal ? `Descartar com ${many}` : "Descartar (vai para a lixeira)",
         consequence: along.length
           ? `Vai para a lixeira do board junto com ${many} (${dependentsSample(along, 3)}); dá para restaurar todos por 7 dias.`
           : "O card vai para a lixeira do board; dá para restaurar por 7 dias.",
@@ -1115,9 +1190,6 @@ const DECIDE: DecideMap = {
         ...(groupRefusal
           ? { disabled: { reason: groupRefusal, ...(blocker ? { unblock: { label: "Abrir o card que segura", href: cardHref(item.boardId, blocker.id) } } : {}) } }
           : {}),
-        confirm: along.length
-          ? { title: `Descartar este item e ${many}?`, body: `${c.title} vai para a lixeira do board junto com ${dependentsSample(along, 5)} — dá para restaurar todos por 7 dias.` }
-          : { title: "Descartar este item?", body: `${c.title} vai para a lixeira do board — dá para restaurar por 7 dias.` },
         auditCls: "destructive",
         invoke: { kind: "delete-card", boardId: item.boardId, cardId: item.cardId, ...(along.length ? { withDependents: true } : {}) },
         done: along.length
@@ -1216,10 +1288,9 @@ const DECIDE: DecideMap = {
       ? [
           {
             id: "discard-work",
-            label: "Descartar este trabalho",
-            consequence: "O que não entrou é perdido de vez; a fila de integração do board destrava.",
+            label: "Descartar este trabalho — não tem volta",
+            consequence: `O trabalho de ${c.title} que não entrou no código principal é perdido de vez; a fila de integração do board destrava.`,
             tone: "danger",
-            confirm: { title: "Descartar este trabalho?", body: `O trabalho de ${c.title} que não entrou no código principal é perdido.` },
             auditCls: "merge-resolve",
             invoke: gateFailed ? { kind: "resolve-gate", runId: item.runId, action: "abort" } : { kind: "resolve-merge", runId: item.runId, action: "aborted" },
             done: "Trabalho descartado — a fila de integração segue sem ele.",
@@ -1306,10 +1377,9 @@ const DECIDE: DecideMap = {
           ? [
               {
                 id: "discard-work",
-                label: "Descartar este trabalho",
-                consequence: "Apaga de vez o que não entrou no código principal.",
+                label: "Descartar este trabalho — não tem volta",
+                consequence: `Apaga de vez o trabalho de ${c.title} que não entrou no código principal.`,
                 tone: "danger" as const,
-                confirm: { title: "Descartar este trabalho?", body: `O trabalho de ${c.title} que não entrou é apagado de vez.` },
                 auditCls: "destructive" as const,
                 invoke: { kind: "discard-branch" as const, branch: item.branch },
                 done: "Trabalho descartado.",
@@ -1332,10 +1402,9 @@ const DECIDE: DecideMap = {
     const ref: EscalationRef = { templateId: "proposal-capture", kind: "card", boardId: item.boardId, cardId: item.cardId };
     const remove: DecisionOption = {
       id: "delete-proposal",
-      label: "Excluir a proposta",
+      label: "Excluir a proposta (vai para a lixeira)",
       consequence: "A proposta sai; nenhum card é criado. Dá para restaurar da lixeira por 7 dias.",
       tone: "danger",
-      confirm: { title: "Excluir esta proposta?", body: "Nenhum card é criado. A proposta vai para a lixeira do board." },
       auditCls: "destructive",
       invoke: { kind: "delete-card", boardId: item.boardId, cardId: item.cardId },
       done: "Proposta excluída (dá para restaurar da lixeira por 7 dias).",
@@ -1364,23 +1433,23 @@ const DECIDE: DecideMap = {
       options: [
         {
           id: "accept-proposal",
-          label: creates === n ? "Criar os cards marcados" : "Aplicar os itens marcados",
-          consequence: "Os itens marcados entram no board; esta proposta sai do Inbox.",
+          // um clique cria TODOS; quem desmarcar itens no corpo manda só os marcados (o payload vence o invoke)
+          label: proposalAcceptLabel(item.items),
+          consequence: "Os itens propostos entram no board (os que você desmarcar ficam de fora); esta proposta sai do Inbox.",
           tone: "primary",
-          requires: "selection",
           auditCls: "write-board",
-          invoke: { kind: "accept-proposal", boardId: item.boardId, containerId: item.cardId },
-          done: "Os itens marcados entraram no board.",
+          invoke: { kind: "accept-proposal", boardId: item.boardId, containerId: item.cardId, items: item.items },
+          done: "Os itens entraram no board.",
         },
         {
           id: "refine-proposal",
           label: "Pedir ajustes",
-          consequence: "O agente refaz a proposta com o seu comentário; nenhum card é criado ainda.",
+          consequence: "O agente refaz a proposta mais simples e mais clara; nenhum card é criado ainda. Depois você pode dizer o que mudar.",
           tone: "neutral",
-          requires: "note",
           auditCls: "write-board",
-          invoke: { kind: "refine-proposal", boardId: item.boardId, containerId: item.cardId },
-          done: "O agente está refazendo a proposta com o seu comentário.",
+          invoke: { kind: "refine-proposal", boardId: item.boardId, containerId: item.cardId, note: REFINE_DEFAULT_NOTE },
+          done: "O agente está refazendo a proposta.",
+          addNote: { label: "Adicionar um motivo", invoke: { kind: "refine-proposal", boardId: item.boardId, containerId: item.cardId } },
         },
         remove,
       ],
@@ -1501,7 +1570,6 @@ const DECIDE: DecideMap = {
       consequence: `Roda a publicação de novo a partir de «${stepName}», sem mover o card; a prova de que está no ar é medida outra vez.`,
       // repetir o que já foi aprovado não é vermelho (o vermelho é do que descarta ou não tem volta)
       tone: "primary",
-      confirm: { title: "Publicar de novo?", body: `A publicação de ${c.title} em produção dispara de novo, a partir de «${stepName}».` },
       ...(refusal ? { disabled: { reason: refusal } } : {}),
       auditCls: "deploy",
       invoke: { kind: "republish", boardId: item.boardId, cardId: item.cardId },
@@ -1570,7 +1638,6 @@ const DECIDE: DecideMap = {
               label: "Publicar em produção",
               consequence: `Move o card para «${step.name}» e coloca o código aprovado no ar.`,
               tone: "danger",
-              confirm: { title: "Publicar em produção?", body: `${c.title} vai para «${step.name}» e a publicação em produção dispara.` },
               ...(inFlight
                 ? { disabled: { reason: "Uma publicação deste card já está em andamento; espere a confirmação dela." } }
                 : refusal
@@ -1592,7 +1659,7 @@ const DECIDE: DecideMap = {
   "proxy-audit": (item, c) => ({
     bucket: "acompanhar",
     askVerb: null,
-    ask: `O procurador respondeu por você em ${c.title} — revisar quando puder`,
+    ask: `O procurador respondeu por você em ${c.title}; a resposta foi sorteada para revisão`,
     happened: `Pergunta: ${clip(item.prompt, 140)} Resposta: ${clip(item.answer || "—", 140)}`,
     options: [
       {
@@ -1615,7 +1682,7 @@ const DECIDE: DecideMap = {
       },
     ],
     ifIgnored: "A resposta fica valendo.",
-    next: { who: "ninguem", label: "Nada espera por isto" },
+    next: AUDIT_UNREVIEWED,
     more: cardMore(item, null),
     details: [
       { label: "Premissas do procurador", value: item.assumptions },
@@ -1627,7 +1694,7 @@ const DECIDE: DecideMap = {
   "delivery-audit": (item, c) => ({
     bucket: "acompanhar",
     askVerb: null,
-    ask: `${c.title} foi ao ar sem você aprovar antes — revisar quando puder`,
+    ask: `${c.title} foi ao ar sem aprovação antes; a entrega foi sorteada para revisão`,
     happened: item.before || item.after ? `Antes: ${clip(item.before ?? "—", 120)} Agora: ${clip(item.after ?? "—", 120)}` : "Mudou o que o usuário vê. A entrega não trouxe o antes e o depois; veja no ar ou abra o card.",
     options: [
       {
@@ -1641,17 +1708,16 @@ const DECIDE: DecideMap = {
       },
       {
         id: "reopen-delivery",
-        label: "Reabrir com um motivo",
+        label: "Reabrir para ajuste",
         consequence: "O card volta para ajuste com o seu motivo; o que está no ar fica até o ajuste sair.",
         tone: "neutral",
-        requires: "note",
         auditCls: "write-board",
-        invoke: { kind: "resolve-delivery-audit", boardId: item.boardId, cardId: item.cardId, outcome: "reopened" },
-        done: "Reaberto — o card voltou para ajuste com o seu motivo.",
+        invoke: { kind: "resolve-delivery-audit", boardId: item.boardId, cardId: item.cardId, outcome: "reopened", note: "O dono pediu para reabrir a entrega." },
+        done: "Reaberto — o card voltou para ajuste.",
       },
     ],
     ifIgnored: "A entrega fica valendo.",
-    next: { who: "ninguem", label: "Nada espera por isto" },
+    next: AUDIT_UNREVIEWED,
     more: [
       ...(item.link
         ? [{ id: "more:live", label: "Ver no ar", consequence: "Abre o produto no ar.", tone: "neutral" as const, auditCls: "read" as const, invoke: { kind: "link" as const, href: item.link }, done: "Aberto." }]
@@ -1668,20 +1734,12 @@ const DECIDE: DecideMap = {
     const classText = item.ownerClass ? `«${ownerClassLabel(item.ownerClass, c.config)}»` : "negócio";
     const files = [...new Set(item.approvals.flatMap((a) => a.files))];
     const units = [...new Set(item.approvals.flatMap((a) => a.units))];
-    const where = units.length ? ` em ${units.join(", ")}` : "";
     const shown = files.slice(0, 8);
-    const esteira: DecisionOption = {
-      id: "more:open-esteira",
-      label: "Abrir a Esteira",
-      consequence: "Abre a Esteira do board, onde «Refazer os pedidos de publicação» pede a autorização com a mudança de agora. Não decide nada.",
-      tone: "neutral",
-      auditCls: "read",
-      invoke: { kind: "link", href: `/board/${encodeURIComponent(item.boardId)}/entrega` },
-      done: "Aberto.",
-    };
+    // o nome técnico do pacote e das partes publicadas («face:<app>») só nos detalhes, com rótulo em palavras
     const details = [
-      { label: "Pacote", value: item.pkg },
+      { label: "Parte do produto", value: item.pkg },
       ...(files.length ? [{ label: "Arquivos", value: `${shown.join(", ")}${files.length > shown.length ? ` … e mais ${files.length - shown.length}` : ""}` }] : []),
+      ...publishUnitsDetail(units),
     ];
     if (item.rerequesting) {
       return {
@@ -1699,40 +1757,34 @@ const DECIDE: DecideMap = {
     }
     if (!item.approvals.length) {
       return {
-        bucket: "acompanhar",
-        askVerb: null,
-        ask: "O pedido de publicação envelheceu — refaça pela Esteira",
-        happened: "O código guardado mudou na main desde o pedido de autorização, então ele já não vale. Nada foi publicado.",
-        options: [],
+        askVerb: "Refazer",
+        ask: "Refazer o pedido de publicação com o código de agora?",
+        happened: "O código guardado mudou desde o pedido de autorização, então ele já não vale. Nada foi publicado.",
+        options: [rerequestOption(item.boardId, Boolean(c.config.deploy?.planCommand?.trim()))],
         ifIgnored: "A publicação segue parada; nada vai ao ar.",
-        next: { who: "voce", label: "Refazer pela Esteira" },
-        more: [esteira],
+        more: [],
         details,
-        dot: "grey",
+        dot: "amber",
       };
     }
     return {
       askVerb: "Autorizar",
-      ask: `Autorizar a publicação do código de ${classText}${where}?`,
-      happened: `O plano de publicação do board pede o seu sim para ${plural(files.length, "arquivo", "arquivos")} de código de ${classText}${where}. Nenhuma tentativa de publicar o registrou num card (o board pode estar pausado). Nada foi publicado.`,
+      ask: `Autorizar a publicação do código de ${classText}?`,
+      happened: `O plano de publicação do board pede o seu sim para ${plural(files.length, "arquivo", "arquivos")} de código de ${classText}. Nenhuma tentativa de publicar o registrou num card (o board pode estar pausado). Nada foi publicado.`,
       options: [
         {
           id: "authorize-publish",
           label: "Autorizar publicar",
           consequence: "Grava a sua autorização para ESTA mudança. Se esse código mudar depois, a autorização deixa de valer e o Inbox pede de novo. Publicar continua sendo do board, no ritmo dele.",
           tone: "primary",
-          confirm: {
-            title: "Autorizar a publicação?",
-            body: `Você autoriza publicar ${plural(files.length, "arquivo", "arquivos")} de código de ${classText}${where}. A autorização vale só para esta mudança.`,
-          },
           auditCls: "deploy",
           invoke: { kind: "authorize-publish", boardId: item.boardId, causeKey: item.causeKey },
           done: "Autorização gravada. A próxima publicação do board já a encontra.",
         },
       ],
       ifIgnored: "A publicação segue parada; nada vai ao ar.",
-      more: [esteira],
-      details: [...details, { label: "O que você autoriza", value: `${plural(files.length, "arquivo", "arquivos")}${where}` }],
+      more: [],
+      details: [...details, { label: "O que você autoriza", value: plural(files.length, "arquivo", "arquivos") }],
       dot: "red",
     };
   },
@@ -1771,13 +1823,9 @@ const DECIDE: DecideMap = {
       options: [
         {
           id: "approve-deletion",
-          label: "Apagar os dados (não tem volta)",
-          consequence: "O agente de descontinuação apaga os dados; depois disso eles não voltam.",
+          label: "Apagar os dados — não tem volta",
+          consequence: `Apaga os dados de ${c.title}${item.target ? ` (${item.target})` : ""}${surfaces.length ? `, em: ${surfaces.join(", ")}` : ""}. Depois disso eles não voltam.`,
           tone: "danger",
-          confirm: {
-            title: "Apagar os dados de produção? Não tem volta.",
-            body: `Apaga os dados de ${c.title}${item.target ? ` (${item.target})` : ""}${surfaces.length ? `, em: ${surfaces.join(", ")}` : ""}. Motivo: ${clip(item.brief, 140)}. Depois disso os dados não voltam.`,
-          },
           ...(refusal ? { disabled: { reason: refusal } } : {}),
           auditCls: "destructive",
           invoke: { kind: "approve-data-deletion", boardId: item.boardId, cardId: item.cardId },
@@ -1818,6 +1866,44 @@ const DECIDE: DecideMap = {
   stalled: (item, c) => {
     // O modelo de conversa neutro do card: o que houve está no próprio card (o achado do vigia) — nenhum modelo novo.
     const ref: EscalationRef = { templateId: "hitl-card-instructions", kind: "card", boardId: item.boardId, cardId: item.cardId };
+    const details = [
+      ...(item.findingDetail ? [{ label: "Detalhe", value: item.findingDetail }] : []),
+      ...(item.suggestion ? [{ label: "O que resolve", value: item.suggestion }] : []),
+    ];
+    // Fase 3 (decisão do dono): o card CONDUZIDO que ninguém assumiu ganha as duas saídas do operador — devolver o card às
+    // colunas, ou parar o condutor e guardar o card. Nenhum ator do sistema reabre em laço quem morreu, então é Decidir.
+    if (item.conducted || isConducted(c.card)) {
+      return {
+        bucket: "decidir",
+        askVerb: "Devolver",
+        ask: `Devolver ${c.title} ao fluxo das colunas, ou parar o condutor?`,
+        happened: `${item.findingTitle}. O trabalho que já foi feito continua guardado.`,
+        options: [
+          {
+            id: "return-to-flow",
+            label: "Devolver ao fluxo",
+            consequence: `O card sai do condutor e volta às colunas em «${item.stepName}»: o agente do passo (ou um condutor novo, se o passo for de condutor) pega daqui.`,
+            tone: "primary",
+            auditCls: "write-board",
+            invoke: { kind: "return-to-flow", boardId: item.boardId, cardId: item.cardId },
+            done: `${c.title} voltou ao fluxo das colunas.`,
+          },
+          {
+            id: "stop-conductor",
+            label: "Parar condutor",
+            consequence: "Encerra a sessão do condutor, se ainda houver uma, e guarda o card como adiado: nada roda nele até você retomar.",
+            tone: "neutral",
+            auditCls: "write-board",
+            invoke: { kind: "stop-conductor", boardId: item.boardId, cardId: item.cardId },
+            done: `O condutor parou; ${c.title} ficou guardado como adiado.`,
+          },
+        ],
+        ifIgnored: `O card fica em «${item.stepName}» sem ninguém cuidando.`,
+        more: cardMore(item, ref),
+        details,
+        dot: "red",
+      };
+    }
     return {
       // SEMPRE Acompanhar, em todo modo: quem resolve é o card de conserto que o vigia abriu (trabalho do sistema), e
       // é em Acompanhar que a contagem «sem ninguém cuidando» lê `next.stalled`. As opções ficam à mão para quem
@@ -1831,14 +1917,11 @@ const DECIDE: DecideMap = {
         ...(item.retryable && item.effect ? [retryEffectOption(item, c, item.effect, item.stepName, "O que o sistema já tentou está em Detalhes.")] : []),
         { ...askJido(ref, "Pedir ao Jido para olhar", "O Jido olha o que aconteceu e propõe o próximo passo."), id: "jido-look" },
       ],
-      // nem todo card parado ganha conserto (o de condutor só é avisado): a frase não promete um.
+      // nem todo card parado ganha conserto: a frase não promete um.
       ifIgnored: `Nada mais move este card sozinho: ele fica em «${item.stepName}» até alguém agir. Se o sistema abriu um card de conserto, ele segue na fila.`,
       next: { who: "ninguem", label: "Ninguém está cuidando", stalled: true },
       more: cardMore(item, null),
-      details: [
-        ...(item.findingDetail ? [{ label: "Detalhe", value: item.findingDetail }] : []),
-        ...(item.suggestion ? [{ label: "O que resolve", value: item.suggestion }] : []),
-      ],
+      details,
       dot: "red",
     };
   },
@@ -1849,17 +1932,6 @@ const DECIDE: DecideMap = {
     const whoMid = who.charAt(0).toLowerCase() + who.slice(1);
     // O BLOCO ESTRUTURADO vem antes das palavras do agente: o que roda (programa real + comando exato), como desfazer,
     // e cada conferência com o critério. O texto do agente entra por último, rotulado — ele não forja a tela.
-    const checkLine = (v: (typeof item.verify)[number]) => `• ${v.label}: ${v.command} — ${v.criterion}`;
-    const structured = [
-      `Programa: ${item.program}`,
-      `Comando: ${item.command}`,
-      item.undoCommand ? `Para desfazer: ${item.undoCommand} (programa: ${item.undoProgram ?? "?"})` : `SEM DESFAZER — plano B: ${item.noUndoPlan ?? "—"}`,
-      ...(item.preflight.length ? ["Antes de rodar, confere:", ...item.preflight.map(checkLine)] : []),
-      "Depois de rodar, confere:",
-      ...item.verify.map(checkLine),
-      "Conferências: só comandos que o servidor liberou para conferir.",
-    ].join("\n");
-    const agentText = `Explicação do agente: ${item.summary}${item.why ? `\nPor que agora (agente): ${item.why}` : ""}`;
     const details = [
       { label: "Programa", value: item.program },
       { label: "Comando", value: item.command },
@@ -1897,15 +1969,11 @@ const DECIDE: DecideMap = {
           options: [
             {
               id: "approve",
-              label: item.undoCommand ? "Aprovar e rodar" : "Aprovar e rodar (sem desfazer)",
+              label: item.undoCommand ? "Aprovar e rodar" : "Aprovar e rodar — sem desfazer",
               consequence: item.undoCommand
-                ? "O servidor roda este comando uma vez, nos próximos 15 minutos, confere e desfaz sozinho se a conferência falhar."
-                : "O servidor roda este comando uma vez, nos próximos 15 minutos, e confere. Não há como desfazer: se der errado, vale o plano B.",
+                ? "O servidor roda este comando uma vez, nos próximos 15 minutos, confere e desfaz sozinho se a conferência falhar. O que roda exatamente está acima."
+                : "O servidor roda este comando uma vez, nos próximos 15 minutos, e confere. Não há como desfazer: se der errado, vale o plano B. O que roda exatamente está acima.",
               tone: item.undoCommand ? "primary" : "danger",
-              confirm: {
-                title: item.undoCommand ? "Rodar este comando no servidor?" : "Rodar este comando no servidor? Não tem desfazer.",
-                body: `${structured}\n\n${agentText}`,
-              },
               auditCls: "destructive",
               invoke: { kind: "approve-locked-exec", boardId: item.boardId, id: item.lockedExecId, hash: item.hash },
               done: "Aprovado — o servidor está rodando o comando; o resultado aparece aqui.",
@@ -1916,8 +1984,9 @@ const DECIDE: DecideMap = {
               consequence: "Nada roda. O agente fica sabendo que você não aprovou.",
               tone: "neutral",
               auditCls: "write-board",
-              invoke: { kind: "reject-locked-exec", boardId: item.boardId, id: item.lockedExecId },
+              invoke: { kind: "reject-locked-exec", boardId: item.boardId, id: item.lockedExecId, note: "O dono não aprovou pelo Inbox." },
               done: "Recusado — nada rodou.",
+              addNote: { label: "Adicionar um motivo", invoke: { kind: "explain-locked-exec", boardId: item.boardId, id: item.lockedExecId } },
             },
           ],
           ifIgnored: "Nada roda. O pedido espera aqui; o agente segue no que não depende dele.",
@@ -1961,10 +2030,9 @@ const DECIDE: DecideMap = {
               ? [
                   {
                     id: "undo",
-                    label: "Desfazer",
-                    consequence: "O servidor roda o comando de desfazer uma vez.",
+                    label: "Desfazer o comando",
+                    consequence: `O servidor roda o comando de desfazer uma vez: ${item.undoCommand}`,
                     tone: "danger" as const,
-                    confirm: { title: "Desfazer o comando?", body: `O servidor roda:\nPrograma: ${item.undoProgram ?? "?"}\nComando: ${item.undoCommand}` },
                     auditCls: "destructive" as const,
                     invoke: { kind: "undo-locked-exec" as const, boardId: item.boardId, id: item.lockedExecId },
                     done: "Desfazendo — o resultado aparece aqui.",
@@ -2008,12 +2076,272 @@ const DECIDE: DecideMap = {
       }
     }
   },
+
+  // ── Fase 3: as alavancas que moravam na Esteira e os avisos do host ──────────────────────────────────────────
+
+  "publish-held": (item) => {
+    const publishAnyway: DecisionOption = {
+      id: "publish-anyway",
+      label: "Publicar mesmo assim",
+      consequence: "Publica agora o que está pronto, por cima da outra sessão. O trabalho dela não vai junto, mas também não se perde: entra na próxima publicação.",
+      tone: "primary",
+      auditCls: "deploy",
+      invoke: { kind: "publish-staged", boardId: item.boardId, override: true },
+      done: "Pedido liberado: a publicação sai na próxima janela livre. Se algo ainda segurar, o Inbox diz o quê.",
+    };
+    const cancel: DecisionOption = {
+      id: "cancel-publish",
+      label: "Cancelar o pedido",
+      consequence: "Nada é publicado agora; o que está pronto continua esperando, e dá para pedir de novo quando quiser.",
+      tone: "neutral",
+      auditCls: "deploy",
+      invoke: { kind: "cancel-publish", boardId: item.boardId, requestId: item.requestId },
+      done: "Pedido cancelado. O que está pronto continua esperando.",
+    };
+    const tries = item.heldCount > 0 ? ` O sistema já tentou ${plural(item.heldCount, "vez", "vezes")}.` : "";
+    const retry = item.nextAttemptAt ? ` Ele tenta de novo ${timeToken(item.nextAttemptAt)}.` : "";
+    const details = [
+      ...(item.reason ? [{ label: "Motivo", value: item.reason }] : []),
+      { label: "Pedido", value: item.requestId },
+      { label: "Tentativas", value: String(item.heldCount) },
+    ];
+    const happened = `A publicação do board está segurada${item.since ? ` desde ${timeToken(item.since)}` : ""}: outra sessão está mexendo nos mesmos arquivos.${tries}`;
+    if (!item.blocked) {
+      return {
+        bucket: "acompanhar",
+        askVerb: null,
+        ask: "A publicação do board espera outra sessão terminar",
+        happened: `${happened}${retry}`,
+        options: [publishAnyway, cancel],
+        ifIgnored: "O sistema publica sozinho quando a outra sessão terminar.",
+        next: { who: "sistema", label: "O sistema tenta de novo" },
+        more: [],
+        details,
+        dot: "amber",
+      };
+    }
+    return {
+      askVerb: "Publicar",
+      ask: "Publicar por cima da outra sessão, ou cancelar o pedido?",
+      happened: `${happened} A espera passou do normal: a outra sessão não terminou.`,
+      options: [publishAnyway, cancel],
+      ifIgnored: `Nada vai ao ar enquanto a outra sessão não terminar.${retry}`,
+      more: [],
+      details,
+      dot: "red",
+    };
+  },
+
+  "stage-idle": (item) => ({
+    askVerb: "Publicar",
+    ask: `Publicar ${item.pending === 1 ? "a entrega que espera" : `as ${item.pending} entregas que esperam`} há ${plural(item.hours, "hora", "horas")}?`,
+    happened: `${item.pending === 1 ? "Uma entrega está pronta" : `${item.pending} entregas estão prontas`} e ${item.pending === 1 ? "espera" : "esperam"} há ${plural(item.hours, "hora", "horas")}. Este board só publica quando alguém pede.`,
+    options: [
+      {
+        id: "publish-staged",
+        label: item.pending === 1 ? "Publicar a entrega" : `Publicar as ${item.pending} entregas`,
+        consequence: "Pede a publicação de tudo o que está pronto neste board, de uma vez; ela sai na próxima janela livre.",
+        tone: "primary",
+        ...(item.canPublish ? {} : { disabled: { reason: "A publicação está desligada nesta instalação; ninguém publica daqui." } }),
+        auditCls: "deploy",
+        invoke: { kind: "publish-staged", boardId: item.boardId },
+        done: "Publicação pedida: sai na próxima janela livre. Se algo segurar, o Inbox diz o quê.",
+      },
+    ],
+    ifIgnored: "As entregas continuam prontas e fora do ar.",
+    more: [],
+    details: [{ label: "Entregas", value: String(item.pending) }],
+    dot: "amber",
+  }),
+
+  "capacity-latch": (item) => ({
+    bucket: "acompanhar",
+    banner: true,
+    askVerb: null,
+    ask:
+      item.trippedBy === "operator"
+        ? "Automação parada: alguém puxou o freio"
+        : `Automação parada: a cota da conta chegou no limite${item.level === "hard" ? ", e o que rodava parou" : ""}`,
+    happened: "Com a trava engatada, nenhum agente começa trabalho novo.",
+    options: [
+      {
+        id: "clear-latch",
+        label: "Soltar a trava",
+        consequence: "Os agentes voltam a trabalhar. Se a cota ainda estiver no limite, a trava engata de novo sozinha.",
+        tone: "primary",
+        ...(item.halt ? { disabled: { reason: "Esta trava vem de um arquivo no servidor; só apagando o arquivo lá ela sai." } } : {}),
+        auditCls: "write-board",
+        invoke: { kind: "clear-latch" },
+        done: "Trava solta: os agentes voltaram a trabalhar.",
+      },
+    ],
+    ifIgnored: "Nenhum agente começa trabalho novo até a trava sair.",
+    next: { who: "voce", label: "Só você solta a trava" },
+    more: [],
+    details: [
+      { label: "Motivo", value: item.reason },
+      { label: "Engatada por", value: item.trippedBy },
+    ],
+    dot: "red",
+  }),
+
+  "host-health": (item) => {
+    // A faixa diz só o que de fato aconteceu (quick-fix health-red): «o conserto virou um card» SÓ quando o tick
+    // registrou o card; quando ele pulou, diz que nenhum card foi aberto e por quê; sem registro, que ainda não abriu.
+    const cards = [...new Set(item.signals.flatMap((s) => (s.card ? [s.card] : [])))];
+    const skipped = [...new Set(item.signals.flatMap((s) => (!s.card && s.noCard != null ? [s.noCard || "sem motivo registrado"] : [])))];
+    const happened = [
+      "A última conferência de saúde ficou vermelha.",
+      cards.length ? `O conserto está ${cards.length === 1 ? "no card" : "nos cards"} ${cards.join(", ")} do board da ferramenta.` : null,
+      skipped.length ? `Nenhum card de conserto foi aberto${cards.length ? " para os outros sinais" : ""}: ${skipped.join("; ")}.` : null,
+      !cards.length && !skipped.length ? "Ainda não foi aberto card de conserto: ele só abre quando o sinal fica vermelho em leituras seguidas." : null,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return {
+      bucket: "acompanhar",
+      banner: true,
+      askVerb: null,
+      ask: clampAsk(`A ferramenta não está bem: ${item.signals.map((s) => s.label).join(", ")}`),
+      happened: clip(happened, HAPPENED_MAX),
+      options: [
+        {
+          id: "more:health",
+          label: "Ver a saúde da ferramenta",
+          consequence: "Abre a página com cada sinal e o que ele diz. Só leitura.",
+          tone: "neutral",
+          auditCls: "read",
+          invoke: { kind: "link", href: "/processes" },
+          done: "Aberto.",
+        },
+      ],
+      ifIgnored: cards.length ? "O sistema segue medindo; o card de conserto anda pela fila." : "O sistema segue medindo; a faixa some quando o sinal sair do vermelho.",
+      next: { who: "sistema", label: cards.length ? "O sistema cuida" : "O sistema segue medindo" },
+      more: [],
+      details: item.signals.map((s) => ({ label: s.label, value: s.detail || s.id })),
+      dot: "red",
+    };
+  },
+
+  // fase 6 — a Sentinela não resolveu uma causa (Mínima: ela só lê; Máxima: o conserto não pegou). O diagnóstico vai
+  // inteiro nos detalhes; «Resolver no chat» abre o chat do board com a causa carregada — quem tem os poderes é o chat.
+  sentinel: (item) => {
+    const ref: EscalationRef = { templateId: "sentinel-cause", kind: "sentinel", boardId: item.boardId, causeId: item.causeId };
+    return {
+      bucket: "acompanhar",
+      // uma faixa no topo, como a saúde do host: o diagnóstico espera VOCÊ (Mínima não mexe), e recolhido em «os agentes
+      // estão cuidando» ele diria o contrário
+      banner: true,
+      askVerb: null,
+      ask: clampAsk(`A Sentinela não resolveu: ${sentinelPlainDiagnosis(item.causeKey) ?? item.diagnosis}`),
+      happened: item.tried
+        ? "Ela tentou consertar e o problema continuou. O que ela viu está nos detalhes."
+        : "Ela só olhou (neste modo ela não mexe em nada). O que ela viu e o conserto que recomenda estão nos detalhes.",
+      options: [
+        {
+          id: "sentinel:resolve-in-chat",
+          label: "Resolver no chat",
+          consequence: "Abre o chat do board com este diagnóstico carregado. O chat confere a causa e pede a sua confirmação antes de mexer.",
+          tone: "primary",
+          auditCls: "read",
+          invoke: { kind: "escalate", ref },
+          done: "O chat abriu com este diagnóstico.",
+        },
+      ],
+      ifIgnored: "O problema continua; a Sentinela não acorda de novo pela mesma causa por um dia.",
+      next: { who: "voce", label: "Esperando você" },
+      more: item.cardId ? [openCard(item.boardId, item.cardId)] : [],
+      details: [
+        { label: "Diagnóstico", value: item.diagnosis },
+        ...(item.cardIds.length > 1 ? [{ label: "Cards com a mesma causa", value: item.cardIds.join(", ") }] : []),
+      ],
+      dot: "red",
+    };
+  },
+
+  "push-off": () => ({
+    bucket: "acompanhar",
+    banner: true,
+    askVerb: null,
+    ask: "Ative o aviso no celular para saber do que é urgente",
+    happened: "O aviso no celular está desligado. Ele só toca para o que não pode esperar.",
+    options: [
+      {
+        id: "enable-push",
+        label: "Ativar o aviso no celular",
+        consequence: "O navegador pede a sua permissão; depois, só o que é urgente chega no celular.",
+        tone: "primary",
+        auditCls: "write-board",
+        invoke: { kind: "enable-push" },
+        done: "Aviso ativado neste aparelho.",
+      },
+      {
+        id: "dismiss-push-offer",
+        label: "Agora não",
+        consequence: "O Inbox para de lembrar. Para ativar depois, use a engrenagem da barra, em Avisos.",
+        tone: "neutral",
+        auditCls: "write-board",
+        invoke: { kind: "dismiss-push-offer" },
+        done: "Certo, o Inbox não lembra mais. Para ativar depois, use a engrenagem da barra, em Avisos.",
+      },
+    ],
+    ifIgnored: "Nada muda: o Inbox continua mostrando tudo aqui.",
+    next: { who: "voce", label: "Quando quiser" },
+    more: [],
+    details: [],
+    dot: "green",
+  }),
 };
 
 // ── Ajudantes de texto por kind ──────────────────────────────────────────────────────────────────────
 
 /** Por quanto tempo uma publicação sem confirmação fica em Acompanhar antes de subir para quem decide. */
 export const DEPLOY_WATCH_MINUTES = 60;
+
+/** O pedido de ajuste PADRÃO do «Pedir ajustes» de uma proposta — o clique roda já; o motivo da pessoa vem depois. */
+export const REFINE_DEFAULT_NOTE = "Refaça a proposta mais simples e mais clara: menos cards, cada um com um objetivo só.";
+
+/**
+ * «Refazer o pedido agora» — a alavanca que morava na Esteira: roda NA HORA a medição da publicação do pacote no board
+ * que o publica e refaz os pedidos de autorização com o código de agora (app/delivery-actions.ts, operador só).
+ */
+/** Os nomes técnicos das partes publicadas («face:<app>»): só em Detalhes, com rótulo em palavras. PURA. */
+function publishUnitsDetail(units: readonly string[]): Array<{ label: string; value: string }> {
+  return units.length ? [{ label: "Onde publica (nome técnico)", value: units.join(", ") }] : [];
+}
+
+/**
+ * O diagnóstico de uma causa de CONFIGURAÇÃO da Sentinela (runner/sentinel.ts `SENTINEL_CONFIG_CAUSES`) em palavras do
+ * dono, pela chave da causa (`<tipo>:…`). O texto técnico gravado no registro fica em Detalhes; a faixa diz isto — e,
+ * como é lido na hora, vale também para o diagnóstico antigo já gravado. Outras causas: null (o texto é o da sessão).
+ */
+const SENTINEL_PLAIN: Readonly<Record<string, string>> = {
+  "stale-conductor-skill": "as instruções do condutor estão numa versão antiga, e cada condutor começa mais lento e gastando mais",
+  "guard-missing": "falta no servidor a proteção contra comandos perigosos, então o chat do board fica só lendo",
+};
+export function sentinelPlainDiagnosis(causeKey: string): string | null {
+  return SENTINEL_PLAIN[causeKey.split(":")[0] ?? ""] ?? null;
+}
+
+/**
+ * «Refazer o pedido agora». A consequência é a VERDADE do board (owner-approval.ts `rerequestPublishRequests`): com a
+ * medição que só lê declarada (`deploy.planCommand`) ela roda e nada publica; sem ela, roda a PUBLICAÇÃO do board — que,
+ * com a autorização do dono pendente, para antes de publicar e só refaz o pedido (a saída 3). Prometer «sem publicar
+ * nada» no board sem medição contradizia o próprio «O que aconteceu» do item.
+ */
+function rerequestOption(boardId: string, hasPlan: boolean): DecisionOption {
+  return {
+    id: "rerequest-publish",
+    label: "Refazer o pedido agora",
+    consequence: hasPlan
+      ? "Mede de novo o que a publicação leva (só a medição, sem publicar) e pede a sua autorização com o código de agora."
+      : "Este board não tem uma medição que só lê, então roda a publicação dele: com a sua autorização pendente, ela para antes de publicar e só refaz o pedido com o código de agora.",
+    tone: "primary",
+    auditCls: "deploy",
+    invoke: { kind: "rerequest-publish", boardId },
+    done: "Refazendo o pedido: o pedido novo aparece aqui quando a medição terminar.",
+  };
+}
 
 const capitalize = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
@@ -2112,6 +2440,8 @@ function governanceExpiry(since: string | null | undefined): string | null {
 /** Um kind técnico que o Jido pega NESTE tier de um board humano (a demoção do ux-report §4.1). */
 function jidoPicksUp(item: CockpitItem, c: KindCtx): boolean {
   if (c.businessOnly || c.tier === "chat" || item.copilotBackoff) return false;
+  // a pergunta que o perfil de autonomia deixa com o dono (ou a `guardrail`): o Jido é recusado nela — ela fica em Decidir
+  if (item.kind === "question" && !agentMayTakeQuestion(item.category, c.card, c.config)) return false;
   return isCopilotActionable(item, c.tier);
 }
 
@@ -2206,13 +2536,28 @@ export function promote(decision: ItemDecision, now: number): ItemDecision {
  * Nunca a conversa com o Jido, um link ou o status (o primário de Decidir era «Pedir ao Jido» em vários itens), e
  * nunca um DESCARTE por sobra — no conflito de integração a única que muda o desfecho é «Descartar este trabalho», e
  * ela não pode ser o botão cheio. Item sem nada que mude o desfecho (Acompanhar): a declarada principal, se houver.
- * PURA.
+ * A sobra neutra também nunca é ESCOLHA do dono em nome dele (`neverBySurplus`): uma alternativa do agente que ele
+ * não recomendou, nem o desfecho de um problema da revisão (liberar sem consertar, aceitar o risco, «já foi
+ * consertado»). Sem nada seguro, não há principal — nenhum botão cheio, e o card fechado não ganha botão. PURA.
  */
 export function primaryOption(decision: Pick<ItemDecision, "options">): DecisionOption | null {
   const enabled = decision.options.filter((o) => !o.disabled && o.invoke.kind !== "howto");
   const outcome = enabled.filter(changesOutcome);
   if (outcome.length === 0) return enabled.find((o) => o.tone === "primary") ?? null;
-  return outcome.find((o) => o.tone === "primary") ?? outcome.find((o) => o.tone === "danger" && !isDiscard(o.invoke)) ?? outcome.find((o) => o.tone !== "danger") ?? null;
+  return (
+    outcome.find((o) => o.tone === "primary") ??
+    outcome.find((o) => o.tone === "danger" && !isDiscard(o.invoke) && !neverBySurplus(o.invoke)) ??
+    outcome.find((o) => o.tone !== "danger" && !neverBySurplus(o.invoke)) ??
+    null
+  );
+}
+
+/**
+ * O que só vira principal DECLARADO (tom primary), nunca por sobra: responder com uma alternativa (só a recomendada
+ * pelo agente é declarada principal) e mudar o desfecho de um problema da revisão. PURA.
+ */
+function neverBySurplus(invoke: DecisionOption["invoke"]): boolean {
+  return (invoke.kind === "answer-question" && Boolean(invoke.selectedOptionIds?.length)) || invoke.kind === "update-finding";
 }
 
 /** Re-exportado para quem monta o tipo de uma opção de um item publicado (deploy-unsettled). */

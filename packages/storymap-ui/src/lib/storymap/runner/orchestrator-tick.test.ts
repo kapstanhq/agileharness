@@ -233,3 +233,18 @@ describe("runOrchestratorTick — governador de capacidade", () => {
     expect(spawn).toHaveBeenCalled();
   });
 });
+
+// FASE 6 — a Sentinela é SEMPRE ligada: a varredura dela roda no começo do tique, mesmo com o copiloto desligado, e uma
+// falha dela nunca troca o resultado do tique.
+describe("runOrchestratorTick — a Sentinela", () => {
+  it("varre mesmo com o copiloto desligado (enabled=false)", async () => {
+    const sentinel = vi.fn(async () => {});
+    expect(await runOrchestratorTick(baseDeps({ enabled: false, sentinel }))).toEqual([]);
+    expect(sentinel).toHaveBeenCalledTimes(1);
+  });
+
+  it("uma falha da varredura não derruba o tique", async () => {
+    const r = await runOrchestratorTick(baseDeps({ sentinel: async () => Promise.reject(new Error("x")) }));
+    expect(r).toEqual(["ran"]);
+  });
+});

@@ -1,50 +1,28 @@
-// O lado IMPURO da página de Entrega: git, config e os coletores que já existem.
+// O lado IMPURO da fronteira de publicação: git e config. Quem consome é o Inbox (`cockpit-collect`: «Publicar as N
+// entregas») e o boot (`instrumentation`). A Esteira, que nasceu com este módulo, saiu na fase 3.
 //
-// Espelha a divisão de `fleet-view` / `fleet-deps`: a projeção e as réguas ficam em `delivery-view`
-// (puras, testáveis sem subir nada) e aqui mora só a leitura do mundo. Toda consulta é BEST-EFFORT —
-// uma página de diagnóstico que falha inteira porque um `git rev-parse` não respondeu é pior que uma
-// página com um campo vazio.
+// Espelha a divisão de `fleet-view` / `fleet-deps`: as réguas ficam em `delivery-view` (puras, testáveis sem subir
+// nada) e aqui mora só a leitura do mundo. Toda consulta é BEST-EFFORT — um campo vazio vence um item que explode
+// porque um `git rev-parse` não respondeu.
 
-import { collectFleet } from "./fleet-view";
-import { defaultFleetDeps } from "./fleet-deps";
-import { listPublishRequests } from "./publish-queue";
 import { releaseCodePrefixes } from "./release-scope";
 import { stageContentAhead } from "./stage-content";
 import { declaredCodePrefixes } from "./staging";
-import {
-  activityIsFresh,
-  belongsToBoard,
-  parseStagedLog,
-  projectWork,
-  stagedTotalOf,
-  STAGED_LOG_FORMAT,
-  type BoardFrontier,
-  type DeliveryOverview,
-} from "./delivery-view";
-import { parsePorcelainZPaths } from "./session-activity";
+import { parseStagedLog, stagedTotalOf, STAGED_LOG_FORMAT, type BoardFrontier } from "./delivery-view";
 import { loadRunnerConfig } from "./config";
 import { isOrganizeOnly } from "@/lib/storymap/organize-only-core";
-import { defaultExec, type ExecFn } from "./worktree";
+import type { ExecFn } from "./worktree";
 import { findRepoRoot } from "@/lib/storymap/paths";
-import { listBoards, readBoardConfig } from "@/lib/storymap/repo";
+import { readBoardConfig } from "@/lib/storymap/repo";
 import { mayRequestPublish, releaseModeOf } from "@/lib/storymap/release-policy";
 
 /** Teto de commits listados por board — a raia mostra entregas, não o histórico do repositório. */
 const MAX_STAGED = 30;
 /** Acima disto a lista de entregas usa o escopo do board como pathspec (a linha de comando tem limite). */
 const MAX_PENDING_PATHSPEC = 400;
-/** Teto de pedidos no histórico da fila — o suficiente para a raia "No ar" e a trilha recente. */
-const MAX_PUBLISH_ROWS = 12;
 const GIT_TIMEOUT_MS = 20_000;
 
 const q = (s: string): string => JSON.stringify(s);
-
-/** Os ids dos boards, best-effort — falha de leitura vira lista vazia, nunca uma página que explode. */
-async function listBoardIds(): Promise<string[]> {
-  return listBoards()
-    .then((bs) => bs.map((b) => b.id))
-    .catch(() => []);
-}
 
 /** `git` no repo raiz, devolvendo stdout limpo — ou `null` quando o comando falha (nunca lança). */
 async function git(exec: ExecFn, cmd: string): Promise<string | null> {
@@ -62,11 +40,10 @@ async function git(exec: ExecFn, cmd: string): Promise<string | null> {
  * que o `release-scope` acabou de eliminar; aqui ela é relida do mesmo jeito, com a mesma condição.
  *
  * O escopo por caminho importa: sem ele a contagem incluiria o que OUTRO board deixou no stage
- * compartilhado, e a página prometeria publicar algo que a promoção deste board não leva.
+ * compartilhado, e o Inbox prometeria publicar algo que a promoção deste board não leva.
  *
- * Exportada para o teste: é o número que decide publicar, e a régua dele são os ARGUMENTOS do git
- * (base, pathspec, exclusão do que já está no ar). Testar isso por `collectDelivery` mediria a
- * orquestração e deixaria a régua sem cobertura.
+ * É o número que decide publicar («Publicar as N entregas»), e a régua dele são os ARGUMENTOS do git (base,
+ * pathspec, exclusão do que já está no ar) — o teste os cobra direto.
  */
 export async function frontierOf(board: string, exec: ExecFn): Promise<BoardFrontier> {
   const cfg = loadRunnerConfig().autorun;
@@ -150,84 +127,5 @@ export async function frontierOf(board: string, exec: ExecFn): Promise<BoardFron
     // conteúdo pendente sem commit que o carregue fora do ar (o commit já é ancestral do que está no ar): ainda é 1 entrega
     stagedTotal: Math.max(1, stagedTotalOf(count, staged.length)),
     pendingFiles: pending.length,
-  };
-}
-
-
-/**
- * A árvore desta sessão tem trabalho NÃO-COMMITADO? `null` quando não deu para saber.
- *
- * Um `git status --porcelain` por sessão AMBÍGUA (só as caladas há mais de 10min — quem acabou de dar
- * sinal está obviamente trabalhando e não custa nada). É o mesmo comando que a varredura de worktrees
- * já roda, e reusa o parser puro dela; o que muda é a PERGUNTA: lá é "foi tocada dentro da janela?"
- * (para não apagar trabalho), aqui é "sobrou alguma coisa fora do git?" (para não chamar de "em curso"
- * uma sessão que já entregou e só esqueceu a árvore aberta).
- */
-async function worktreePending(path: string, exec: ExecFn): Promise<boolean | null> {
-  try {
-    const { stdout } = await exec(`git status --porcelain -z -uall`, { cwd: path, timeout: 10_000 });
-    return parsePorcelainZPaths(String(stdout)).length > 0;
-  } catch {
-    return null; // não deu para provar que acabou ⇒ o modelo puro trata como "trabalhando"
-  }
-}
-
-/** Os pedidos de publicação do board que esperam alguém (livro de bloqueios de deploy), e se estão sendo refeitos. */
-async function publishRequestsOf(board: string, now: number): Promise<DeliveryOverview["publishRequests"]> {
-  const [{ readDeployBlocks }, { publishRequestsSummary }] = await Promise.all([import("./deploy-blocks"), import("./owner-approval")]);
-  return { board, ...publishRequestsSummary(await readDeployBlocks(), board, now) };
-}
-
-/**
- * O panorama, ESCOPADO ao board pedido.
- *
- * O escopo é o conserto de uma mistura que só não aparece com um board só: "Em curso" filtrava por board
- * enquanto train, stage e fronteiras vinham do sistema inteiro — números que não fecham entre si e que o
- * operador não tem como atribuir. Agora todas as raias respondem sobre o MESMO recorte, e o que não tem
- * board (trabalho de sessão sem card, `board: ""`) aparece em todas por desenho (`belongsToBoard`):
- * escondê-lo seria refazer por filtro o buraco que a raia única acabou de fechar.
- *
- * Sem `boardId` (o atalho legado `/entrega`) mostra TODOS os boards. Antes mostrava só os que estavam
- * na lista `publishQueue.boards` — o que, agora que todo board é liberável, esconderia exatamente os
- * que acumulam sem publicar sozinhos. `publishTotals` é sempre contado ANTES do truncamento.
- */
-export async function collectDelivery(exec: ExecFn = defaultExec, boardId?: string): Promise<DeliveryOverview> {
-  // Com board pedido, medimos a fronteira DELE — inclusive quando ele não publica sozinho, para a
-  // página poder oferecer o botão em vez de aparecer vazia (`BoardFrontier.releaseMode`).
-  const boards = boardId ? [boardId] : await listBoardIds();
-  const [fleetAll, publishAll] = await Promise.all([
-    collectFleet(defaultFleetDeps()).catch(() => []),
-    listPublishRequests().catch(() => []),
-  ]);
-  const fleet = boardId ? fleetAll.filter((r) => belongsToBoard(r.board, boardId)) : fleetAll;
-  const publishScoped = boardId ? publishAll.filter((r) => r.board === boardId) : publishAll;
-  const frontiers = await Promise.all(boards.map((b) => frontierOf(b, exec).catch(() => null)));
-
-  // Sonda SÓ as sessões ambíguas: com árvore e sem atividade provada na janela de `workState` (a MESMA régua,
-  // `activityIsFresh`). As demais respondem sozinhas, e assim o custo não cresce com o tamanho da frota ATIVA. Era o
-  // batimento — que o tick renova para todo tmux vivo, então um condutor parado nunca era sondado.
-  const now = Date.now();
-  const ambiguous = fleet.filter((r) => r.worktreePath && !activityIsFresh(r.lastActivityAt, now));
-  const pending = new Map<string, boolean>();
-  await Promise.all(
-    ambiguous.map(async (r) => {
-      const v = await worktreePending(r.worktreePath!, exec);
-      if (v !== null) pending.set(r.sessionId, v);
-    }),
-  );
-
-  const publishRequests = boardId ? await publishRequestsOf(boardId, now).catch(() => undefined) : undefined;
-
-  return {
-    frontiers: frontiers.filter((f): f is BoardFrontier => !!f),
-    work: projectWork(fleet, pending),
-    ...(publishRequests ? { publishRequests } : {}),
-    publish: publishScoped.slice(0, MAX_PUBLISH_ROWS),
-    // Contados sobre a fila INTEIRA (do recorte), nunca sobre a janela acima — ver `publishTotals`.
-    publishTotals: {
-      published: publishScoped.filter((r) => r.status === "published").length,
-      open: publishScoped.filter((r) => r.status === "waiting" || r.status === "publishing").length,
-    },
-    generatedAt: new Date().toISOString(),
   };
 }

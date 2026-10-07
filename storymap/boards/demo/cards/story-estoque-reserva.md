@@ -24,22 +24,6 @@ tasks: []
 order: 30
 created: '2026-08-01'
 updated: '2026-08-01'
-priorityCall:
-  rank: 1
-  rationale: Estimado contra as âncoras já pontuadas do board.
-  source: reasoning
-  assessedAt: '2026-08-01'
-  wsjf:
-    value: 3
-    urgency: 8
-    unlock: 1
-    size: 5
-    basis:
-    - soThat
-    - aceite
-    - personas
-    cohortSize: 66
-    cohortAt: '2026-08-01T12:00:00.000Z'
 ---
 
 História de usuário do board de demonstração. Dado sintético: serve para exercitar o pipeline, não descreve um produto real.

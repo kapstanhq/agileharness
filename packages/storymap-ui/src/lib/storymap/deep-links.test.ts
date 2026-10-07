@@ -3,18 +3,14 @@ import {
   cardHref,
   decodeInboxItemId,
   decodeRouteParam,
-  demandHref,
   findInboxItem,
   inboxHref,
   inboxItemHref,
   inboxListItemHref,
-  newCardHref,
   processesMergeHref,
   processesServiceHref,
   runServiceId,
-  vocabEntityHref,
 } from "./deep-links";
-import type { DemandType } from "./demands";
 
 // Auditoria do Inbox — `?focus=<cardId>` acendia o PRIMEIRO item do card: dois itens do mesmo card
 // levavam ao mesmo lugar, e um item de board (governança, pedido de agente, aviso do host) virava `?focus=` vazio.
@@ -86,7 +82,8 @@ describe("decodeInboxItemId", () => {
 // `vocabulario/[kind]/[id]` comparavam params sem decodificar e só estavam corretas porque os ids em
 // disco são slug — uma propriedade dos DADOS de hoje, não do código. O par encode↔decode abaixo é o
 // que transforma isso numa propriedade do código.
-describe("cardHref / vocabEntityHref — simetria com decodeRouteParam", () => {
+// (A página de UMA persona/sistema — `vocabEntityHref` — saiu com Personas & Sistemas na fase 2.)
+describe("cardHref — simetria com decodeRouteParam", () => {
   const seg = (href: string) => href.split("/").pop()!;
 
   it("cardHref round-trips um id comum", () => {
@@ -97,17 +94,6 @@ describe("cardHref / vocabEntityHref — simetria com decodeRouteParam", () => {
   it("cardHref round-trips um id hostil", () => {
     const id = "story a/b:c";
     expect(decodeRouteParam(seg(cardHref("acme", id)))).toBe(id);
-  });
-
-  it("vocabEntityHref round-trips um id com acento e espaço (o write path aceita isso hoje)", () => {
-    const id = "Mãe Solo";
-    const href = vocabEntityHref("acme", "persona", id);
-    expect(href).toBe(`/board/acme/vocabulario/persona/${encodeURIComponent(id)}`);
-    expect(decodeRouteParam(seg(href))).toBe(id);
-  });
-
-  it("vocabEntityHref mantém o kind como segmento literal (a página casa contra os literais)", () => {
-    expect(vocabEntityHref("acme", "sistema", "api")).toBe("/board/acme/vocabulario/sistema/api");
   });
 
   // Eram a MESMA função até o link do Inbox chegar re-codificado (abaixo). Divergem só aí: num segmento de UMA
@@ -184,31 +170,6 @@ describe("decodeRouteParam fica em UMA passada", () => {
   });
 });
 
-describe("demandHref — a linha de uma demanda leva ao ITEM dela (B11)", () => {
-  // Exhaustive over EVERY DemandType — o Record obriga a listar um tipo novo aqui.
-  const EVERY: Record<DemandType, true> = {
-    question: true,
-    "deploy-failed": true,
-    blocker: true,
-    review: true,
-    gate: true,
-    "merge-conflict": true,
-    "merge-gate-failed": true,
-    "release-aging": true,
-    "deploy-unsettled": true,
-    "effect-failed": true,
-    stalled: true,
-  };
-  const ALL_TYPES = Object.keys(EVERY) as DemandType[];
-
-  it.each(ALL_TYPES)("%s com itemId ⇒ a página do item; sem ⇒ a lista (nunca o Kanban, nunca ?focus)", (type) => {
-    expect(demandHref({ type, boardId: "acme", cardId: "c1", itemId: `c1:${type}` })).toBe(`/board/acme/inbox/${encodeURIComponent(`c1:${type}`)}`);
-    const bare = demandHref({ type, boardId: "acme", cardId: "c1" });
-    expect(bare).toBe("/board/acme/inbox");
-    expect(bare).not.toContain("focus=");
-  });
-});
-
 describe("processesMergeHref / processesServiceHref / runServiceId", () => {
   it("builds ?run= encoded", () => {
     const runId = "run/abc-123";
@@ -230,7 +191,7 @@ describe("processesMergeHref / processesServiceHref / runServiceId", () => {
   });
 });
 
-describe("cardHref(view) / newCardHref — a página do card é a ÚNICA superfície de detalhe", () => {
+describe("cardHref(view) — a página do card é a ÚNICA superfície de detalhe", () => {
   it("sem view, é a rota nua (o caso de todo clique em card)", () => {
     expect(cardHref("storymap", "story-x")).toBe("/board/storymap/card/story-x");
   });
@@ -245,32 +206,5 @@ describe("cardHref(view) / newCardHref — a página do card é a ÚNICA superf�
     expect(cardHref("acme", "story:a b", { view: "markdown" })).toBe(
       `/board/acme/card/${encodeURIComponent("story:a b")}?view=markdown`,
     );
-  });
-
-  it("newCardHref leva só o contexto PRESENTE (um pai vazio não vira `pai=`)", () => {
-    expect(newCardHref("storymap", { type: "story" })).toBe("/board/storymap/card/novo?tipo=story");
-    expect(newCardHref("storymap", { type: "story", parent: null, release: null, status: null })).toBe(
-      "/board/storymap/card/novo?tipo=story",
-    );
-  });
-
-  it("newCardHref carrega pai/release/status — o '+ story' de uma célula nasce no lugar", () => {
-    const href = newCardHref("storymap", {
-      type: "story",
-      parent: "step-a",
-      release: "r1",
-      status: "triagem",
-    });
-    const q = new URLSearchParams(href.split("?")[1]);
-    expect(q.get("tipo")).toBe("story");
-    expect(q.get("pai")).toBe("step-a");
-    expect(q.get("release")).toBe("r1");
-    expect(q.get("status")).toBe("triagem");
-  });
-
-  it("valores hostis viajam encodados na query (URLSearchParams faz o escape)", () => {
-    const href = newCardHref("storymap", { type: "step", parent: "a&b=c" });
-    expect(href).toContain("pai=a%26b%3Dc");
-    expect(new URLSearchParams(href.split("?")[1]).get("pai")).toBe("a&b=c");
   });
 });

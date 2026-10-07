@@ -14,7 +14,8 @@
 
 import { revalidatePath } from "next/cache";
 import { requireSession } from "@/lib/auth/action-guard";
-import { docSchema } from "@/lib/storymap/doc/doc-registry";
+import { docSchema, docWriteRefusal } from "@/lib/storymap/doc/doc-registry";
+import { currentMcpActor, isScopedActor } from "@/lib/storymap/mcp/actor";
 import {
   parseSchemaBody,
   replaceSectionBlocks,
@@ -105,6 +106,15 @@ export async function writeDocSectionAction(input: {
   mode?: "append" | "replace";
 }): Promise<Result<{ section: string; count: number }>> {
   await requireSession("writeDocSectionAction");
+  // A regra de dono (doc-registry `docWriteRefusal`): o BMC e as personas só o dono muda — agente propõe; o resto
+  // do PRD só a conversa da página dele. ANTES de ler: a recusa não depende do conteúdo.
+  const refusal = docWriteRefusal({
+    boardId: input.boardId,
+    docType: input.docType,
+    section: input.section,
+    writer: { scoped: isScopedActor(), caller: currentMcpActor()?.caller },
+  });
+  if (refusal) return { ok: false, error: refusal };
   const loaded = await loadDoc(input.boardId, input.docType);
   if (!loaded) return { ok: false, error: `Documento desconhecido: "${input.docType}".` };
   const { schema, doc } = loaded;

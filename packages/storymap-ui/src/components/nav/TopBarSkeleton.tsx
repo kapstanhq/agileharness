@@ -1,156 +1,105 @@
-// O ESQUELETO da barra de topo — a barra enquanto o servidor ainda não respondeu.
+// O ESQUELETO da barra do topo — a barra enquanto o servidor ainda não respondeu.
 //
-// A decisão que define este arquivo: **o que é IDENTIDADE aparece de verdade; só o que é DADO vira
-// bloco cinza.** O wordmark e o rosto do Jido não dependem de IO nenhum — pintá-los como retângulos
-// faria a marca e o mascote PISCAREM a cada navegação, que é precisamente o defeito que o desenho da
-// barra já tinha resolvido ("com um rosto só, em um lugar só, não há mudança, não há buraco"). O que
-// espera o servidor é o nome do board, os medidores e os blocos; é isso, e só isso, que ondula.
+// A decisão que define este arquivo: **o que é IDENTIDADE aparece de verdade; só o que é DADO vira bloco
+// cinza.** A marca não depende de IO nenhum — pintá-la como retângulo faria o logo PISCAR a cada navegação.
+// O que espera o servidor é o nome do projeto, o grupo e os três sinais da direita; é isso, e só isso, que ondula.
 //
-// A casca (`topBarShell` + os três slots) vem de `lib/ui`, a MESMA que o TopBar usa — é o que garante
-// que a barra falsa e a verdadeira tenham a mesma altura e a troca não empurre a página. A altura,
-// aliás, quem manda nela é o Jido (`CopilotFace size="xs"` — 40px, ver `SIZE_PX` em mascot.ts, onde o
-// tamanho é múltiplo da grade de propósito), não os chips de 32px: por isso o
-// centro reserva o rosto inteiro mesmo no celular, onde os blocos ao redor somem.
+// A casca (`appBarShell` e os dois lados) vem de `shell/app-bar-shell`, a MESMA que o `AppBar` usa — é o que
+// garante que a barra falsa e a verdadeira tenham os mesmos 52px e a troca não empurre a página.
 //
-// Sem `"use client"`: um esqueleto que custasse hidratação para aparecer chegaria junto com o
-// conteúdo que ele deveria anteceder. (O `CopilotFace` é client, mas é puro desenho — sem estado,
-// sem fetch, sem efeito.)
+// Sem `"use client"`: um esqueleto que custasse hidratação para aparecer chegaria junto com o conteúdo que ele
+// deveria anteceder.
 
 import { AgileHarnessLogo } from "@/components/AgileHarnessLogo";
-import { CopilotFace } from "@/components/copilot/CopilotFace";
 import { Skeleton, SkeletonScreen } from "@/components/Skeleton";
+import { BrandMark } from "@/components/shell/BrandMark";
+import { appBarLeft, appBarRight, appBarSep, appBarShell } from "@/components/shell/app-bar-shell";
 import { cn } from "@/lib/cn";
-import { topBarShell, topBarSlotCenter, topBarSlotLeft, topBarSlotRight } from "@/lib/ui";
 
-/** Um medidor da direita (inbox · terminal · runs · cota) — o `h-8` do `CHIP_BASE` do NavShell. */
-function ChipGhost({ value = "w-4" }: { value?: string }) {
+/** A marca de verdade — o lockup no desktop, o ícone compacto no celular (como o `AppBarBrand`). */
+function BrandGhost() {
   return (
-    <div className="inline-flex h-8 shrink-0 items-center gap-1.5 px-2">
+    <span className="inline-flex h-10 shrink-0 items-center text-fg md:h-8">
+      <span className="hidden md:inline-flex">
+        <AgileHarnessLogo size={13} />
+      </span>
+      <BrandMark className="md:hidden" />
+    </span>
+  );
+}
+
+function Sep() {
+  return (
+    <span aria-hidden className={appBarSep}>
+      /
+    </span>
+  );
+}
+
+/** Um sinal da direita (anel · Inbox · engrenagem) — o alvo de 40px no celular, 32px no desktop. */
+function SignalGhost({ wide }: { wide?: boolean }) {
+  return (
+    <div className="inline-flex h-10 min-w-10 shrink-0 items-center justify-center gap-1.5 px-1.5 md:h-8 md:min-w-8">
       <Skeleton className="h-4 w-4 rounded" />
-      <Skeleton className={`h-3 rounded ${value}`} />
+      {wide && <Skeleton className="hidden h-3 w-5 rounded md:block" />}
     </div>
   );
 }
 
-/** Um BLOCO do centro (Negócio · Produto · Design · Software) — `h-8`, quadradinho de 11px + rótulo. */
-function BlockGhost({ label = "w-12" }: { label?: string }) {
-  return (
-    <div className="inline-flex h-8 shrink-0 items-center gap-2 px-2.5">
-      <Skeleton className="h-[11px] w-[11px] rounded-[3px]" />
-      <Skeleton className={`h-3 rounded ${label}`} />
-    </div>
-  );
-}
-
-/**
- * A barra de um board (o `BoardHeader`) em carregamento.
- *
- * O wordmark repete a grade de duas células do `WordmarkHome` (logo + "Ir para o início" empilhados)
- * porque é ela que decide a largura do lockup — sem a segunda célula o crumb ao lado nasceria alguns
- * pixels à esquerda e escorregaria quando a barra real chegasse.
- */
+/** A barra de um board (o `BoardHeader`) em carregamento: marca / projeto ▾ / grupo ▾ · anel · Inbox · engrenagem. */
 export function BoardTopBarSkeleton() {
   return (
-    <header aria-hidden className={topBarShell}>
-      <div className={topBarSlotLeft}>
-        <span className="mr-3 hidden items-center text-fg lg:inline-grid">
-          <span className="col-start-1 row-start-1 whitespace-nowrap">
-            <AgileHarnessLogo size={13} />
-          </span>
-          <span className="col-start-1 row-start-1 whitespace-nowrap text-[15px] font-semibold tracking-tight opacity-0">
-            Ir para o início
-          </span>
-        </span>
-        {/* O board (crumb): rótulo + chevron, na altura de 32px do NavCrumb. */}
-        <div className="inline-flex h-8 items-center gap-1.5 px-2">
+    <header aria-hidden className={appBarShell}>
+      <div className={appBarLeft}>
+        <BrandGhost />
+        <Sep />
+        <div className="inline-flex h-7 items-center gap-1 px-1.5">
+          <Skeleton className="h-3.5 w-16 rounded" />
+        </div>
+        <Sep />
+        <div className="inline-flex h-7 items-center gap-1 px-1.5">
           <Skeleton className="h-3.5 w-14 rounded" />
-          <Skeleton className="h-3.5 w-3.5 rounded" />
-        </div>
-        {/* O ⋯ de gestão do board — desktop-only, como o original. */}
-        <div className="hidden h-8 w-8 items-center justify-center md:flex">
-          <Skeleton className="h-3.5 w-3.5 rounded" />
         </div>
       </div>
-
-      <div className={topBarSlotCenter}>
-        <div className="flex items-center gap-1">
-          <div className="hidden items-center gap-0.5 md:flex">
-            <BlockGhost label="w-14" />
-            <BlockGhost label="w-12" />
-          </div>
-          {/* O Jido de verdade, em repouso — quem dá a altura da barra. */}
-          <div className="flex min-w-[2.25rem] items-center justify-center">
-            <CopilotFace mood="feliz" size="xs" className="shrink-0 text-fg-muted" title="" />
-          </div>
-          <div className="hidden items-center gap-0.5 md:flex">
-            <BlockGhost label="w-12" />
-            <BlockGhost label="w-16" />
-          </div>
-        </div>
-      </div>
-
-      <div className={topBarSlotRight}>
-        {/* Os quatro medidores somem no celular, exatamente como no BoardHeader.
-            As larguras são o TAMANHO DO VALOR de cada um: contadores (inbox · terminal) cabem em
-            2 dígitos; os dois últimos carregam PERCENTUAL (Processos = RAM · cota do Claude), que
-            é largo — reservar menos faria a barra encolher na hidratação. */}
-        <div className="hidden items-center gap-1 md:flex">
-          <ChipGhost />
-          <ChipGhost value="w-3" />
-          <ChipGhost value="w-7" />
-          <ChipGhost value="w-7" />
-        </div>
-        {/* "Criar tarefa" — a ação primária (`h-8 rounded-lg px-3`). */}
-        <span className="hidden md:ml-1.5 md:inline-flex">
-          <Skeleton className="h-8 w-[124px] rounded-lg" />
-        </span>
+      <div className={appBarRight}>
+        <SignalGhost wide />
+        <SignalGhost wide />
+        <SignalGhost />
       </div>
     </header>
   );
 }
 
 /**
- * A barra das páginas APP-LEVEL (Processos, Perguntas…) — o `AppTopBar`.
- *
- * Mais baixa que a do board por construção: aqui não há Jido, então quem dita a altura são os 32px
- * do voltar/HealthPill. O título é dado (o esqueleto não o adivinha); o voltar e o logo são fixos.
+ * A barra das páginas APP-LEVEL (Processos, Inbox, Semana…) — o `AppTopBar`. O título é dado (o esqueleto não
+ * o adivinha); o voltar e a marca são fixos.
  */
 export function AppTopBarSkeleton({ title }: { title?: string }) {
   return (
-    <header aria-hidden className={topBarShell}>
-      <div className={topBarSlotLeft}>
-        <div className="mr-0.5 flex h-8 w-8 shrink-0 items-center justify-center">
+    <header aria-hidden className={appBarShell}>
+      <div className={appBarLeft}>
+        <div className="-ml-1.5 inline-flex h-10 w-10 shrink-0 items-center justify-center md:h-8 md:w-8">
           <Skeleton className="h-4 w-4 rounded" />
         </div>
-        <span className="hidden text-fg lg:inline-flex">
-          <AgileHarnessLogo size={13} />
-        </span>
-        <span className="mx-1 inline-flex">
-          <Skeleton className="h-3.5 w-3.5 rounded" />
-        </span>
-        {/* Quando a rota conhece o próprio nome, ele aparece JÁ — um título que se sabe não tem por
-            que ondular (e é o que diz ao operador que ele chegou onde clicou). */}
-        {title ? (
-          <span className="truncate text-[13px] font-medium text-fg">{title}</span>
-        ) : (
-          <Skeleton className="h-3.5 w-24 rounded" />
-        )}
+        <BrandGhost />
+        <Sep />
+        {/* Quando a rota conhece o próprio nome, ele aparece JÁ — um título que se sabe não tem por que ondular. */}
+        {title ? <span className="truncate text-[13px] font-semibold text-fg">{title}</span> : <Skeleton className="h-3.5 w-24 rounded" />}
       </div>
-      <div className={topBarSlotCenter} />
-      <div className={topBarSlotRight}>
-        <ChipGhost value="w-7" />
+      <div className={appBarRight}>
+        <SignalGhost wide />
+        <SignalGhost wide />
       </div>
     </header>
   );
 }
 
 /**
- * A tela inteira de uma página APP-LEVEL em carregamento (Processos, Perguntas) — as duas usam a
- * mesma casca (`max-w-3xl p-6 sm:p-10` + cabeçalho), então ela mora aqui uma vez só.
+ * A tela inteira de uma página APP-LEVEL em carregamento (Processos, Perguntas) — as duas usam a mesma casca
+ * (`max-w-3xl p-6 sm:p-10` + cabeçalho), então ela mora aqui uma vez só.
  *
- * O TÍTULO e a linha de apoio são escritos de VERDADE: a rota já os conhece (são constantes do
- * arquivo, não vêm do servidor), e uma página que se anuncia no primeiro quadro é o que diz ao
- * operador que ele chegou onde clicou. Fantasma é só o que ainda está sendo lido do disco.
+ * O TÍTULO e a linha de apoio são escritos de VERDADE: a rota já os conhece (são constantes do arquivo, não vêm
+ * do servidor). Fantasma é só o que ainda está sendo lido do disco.
  */
 export function AppPageSkeleton({
   title,

@@ -2,7 +2,7 @@
 //
 // Two orthogonal concerns the RunnerEngine consults before admitting a queued run:
 //   1. LANE classification — a run is LIGHT (low-context skills that only edit .md:
-//      harness-enrich/prioritize/tasks/plan/ux) or HEAVY (high-context skills that write
+//      harness-enrich/tasks/plan/ux) or HEAVY (high-context skills that write
 //      code + run tools: harness-do/review/qa/refine/fix/retire/sync-card). The two lanes
 //      have independent concurrency caps so a backlog of heavy runs never starves the
 //      cheap light ones (and vice-versa).

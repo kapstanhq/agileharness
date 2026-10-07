@@ -50,10 +50,17 @@ export const BANNED_TERMS: readonly BannedTerm[] = [
   // o glossário único (WP3): o dono lê «passo», nunca «etapa». («condutor» → «agente» vale para o texto do item —
   // INBOX_ITEM_TERMS —, mas não aqui: a linha de presença do card ainda distingue o condutor do agente sem cabeça.)
   { id: "etapa", re: /\betapas?\b/i, use: "passo" },
+  // o nome técnico de uma parte publicada («face:loja», «functions:loja») chegou à frase do dono em 07/10
+  { id: "unit-id", re: /\b[a-z][a-z0-9-]*:[a-z][\w-]*/, use: "a parte do produto, em palavras (o nome técnico em Detalhes)" },
+  { id: "fail-closed", re: /\bfail-(closed|open)\b/i, use: "na dúvida, segura (em palavras)" },
 ];
 
-/** Termos que só o TEXTO DE UM ITEM do Inbox não usa (as partes 1–4), além do glossário comum. */
-export const INBOX_ITEM_TERMS: readonly BannedTerm[] = [{ id: "condutor", re: /\bcondutor(es)?\b/i, use: "agente" }];
+/**
+ * Termos que só o TEXTO DE UM ITEM do Inbox não usa (as partes 1–4), além do glossário comum. Vazio desde a fase 3: o
+ * dono nomeou o condutor no próprio Inbox («o condutor encerrou e ninguém assumiu» → «Parar condutor», decisão de
+ * 06/10) — a palavra deixou de ser jargão para ele. A lista fica para o próximo termo só do item.
+ */
+export const INBOX_ITEM_TERMS: readonly BannedTerm[] = [];
 
 /** Os termos que o texto de um ITEM contém — o glossário comum mais o do item (vazio = limpo). PURA. */
 export function itemTermsIn(text: string): BannedTerm[] {
@@ -107,6 +114,12 @@ export const INBOX_KIND_NOUN: Readonly<Record<CockpitItemKind, string>> = {
   stalled: "Card parado",
   "locked-exec": "Comando para aprovar",
   "publish-approval": "Autorizar publicação",
+  "publish-held": "Publicação segurada",
+  "stage-idle": "Entregas esperando",
+  "capacity-latch": "Cota no limite",
+  "host-health": "Saúde da ferramenta",
+  sentinel: "Diagnóstico da Sentinela",
+  "push-off": "Aviso no celular",
 };
 
 /** Os termos do glossário que `text` contém (vazio = limpo). PURA. */
@@ -207,12 +220,18 @@ export function relativeWithClock(iso: string | null | undefined, now: number, t
   const ms = iso ? Date.parse(iso) : NaN;
   if (!Number.isFinite(ms)) return null;
   const age = now - ms;
+  // uma DATA pura (YYYY-MM-DD — a proposta de PRD nasce assim) é um dia do calendário, não um instante: convertê-la
+  // para o fuso do dono a jogaria para a véspera (meia-noite UTC é 21h do dia anterior em São Paulo), e contar horas
+  // desde a meia-noite dizia «há 8 h» de uma proposta de minutos atrás. A idade dela é em DIAS do calendário do dono.
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso ?? "");
+  if (dateOnly) {
+    const today = new Date(now).toLocaleDateString("en-CA", { timeZone }); // YYYY-MM-DD no fuso de quem lê
+    const days = Math.round((Date.parse(`${today}T00:00:00Z`) - ms) / 86_400_000);
+    const rel = days <= 0 ? "hoje" : days === 1 ? "ontem" : `há ${plural(days, "dia", "dias")}`;
+    return `${rel} · ${dateOnly[3]}/${dateOnly[2]}`;
+  }
   const words = ageWords(age);
   const rel = words === "agora" ? "agora" : `há ${words}`;
-  // uma DATA pura (YYYY-MM-DD — a proposta de PRD nasce assim) é um dia do calendário, não um instante: convertê-la
-  // para o fuso do dono a jogaria para a véspera (meia-noite UTC é 21h do dia anterior em São Paulo)
-  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso ?? "");
-  if (dateOnly) return `${rel} · ${dateOnly[3]}/${dateOnly[2]}`;
   const clock =
     age < 86_400_000
       ? new Date(ms).toLocaleTimeString("pt-BR", { timeZone, hour: "2-digit", minute: "2-digit" })
@@ -236,4 +255,63 @@ export function staleDays(since: string | null | undefined, now: number, limit =
 /** «parado há N dias». PURA. */
 export function staleLabel(days: number): string {
   return `parado há ${plural(days, "dia", "dias")}`;
+}
+
+/** O motivo PADRÃO de reabrir uma entrega pelo «Desfazer» — o clique roda já (um clique em todo lugar); quem quiser outro motivo o escreve no card. */
+export const REOPEN_DEFAULT_NOTE = "O dono reabriu esta entrega pelo Inbox.";
+
+// ── O formato de uma pergunta de agente (ask_question) ───────────────────────────────────────────────────
+
+/**
+ * Os tetos de uma pergunta que um agente faz ao dono (fase 3: mensagens dos agentes em linguagem simples). O Inbox mostra
+ * `context` como «O que aconteceu», `text` como «O que eu preciso de você» e cada opção como um botão de um clique — então
+ * cada parte tem de caber no papel dela. Generosos de propósito: o teto pega o parágrafo colado, não a frase longa.
+ */
+export const ASK_FORMAT = {
+  textMax: 240,
+  contextMax: 400,
+  optionsMin: 2,
+  optionsMax: 4,
+  // = o botão do Inbox (decision.ts `OPTION_LABEL_MAX`): um rótulo aceito aqui nunca chega cortado no botão
+  optionLabelMax: 60,
+  recommendationMax: 240,
+  freeTextMax: 300,
+} as const;
+
+/** Uma pergunta como o agente a manda (o recorte de `ask_question` que o formato julga). */
+export interface AskShape {
+  text: string;
+  context?: string;
+  options?: ReadonlyArray<{ label: string }>;
+  recommendation?: string;
+}
+
+/**
+ * O que está FORA do formato numa chamada de `ask_question` — vazio = aceita. Cada linha diz o que corrigir, em
+ * português, para o agente refazer a chamada. PURA.
+ */
+export function askFormatProblems(input: { texts?: readonly string[]; questions?: readonly AskShape[] }): string[] {
+  const out: string[] = [];
+  const F = ASK_FORMAT;
+  if (!input.texts?.length && !input.questions?.length) out.push("mande ao menos uma pergunta (`texts` ou `questions`).");
+  (input.texts ?? []).forEach((t, i) => {
+    if (!t.trim()) out.push(`texts[${i}] está vazio: escreva a pergunta.`);
+    else if (t.trim().length > F.freeTextMax) out.push(`texts[${i}] tem ${t.trim().length} caracteres (máximo ${F.freeTextMax}): uma pergunta, não um relatório.`);
+  });
+  (input.questions ?? []).forEach((q, i) => {
+    const at = `questions[${i}]`;
+    const text = q.text?.trim() ?? "";
+    if (!text) out.push(`${at}.text está vazio: escreva o que você precisa da pessoa, numa pergunta.`);
+    else if (text.length > F.textMax) out.push(`${at}.text tem ${text.length} caracteres (máximo ${F.textMax}): uma pergunta só; o porquê vai em context.`);
+    if (q.context && q.context.trim().length > F.contextMax) out.push(`${at}.context tem ${q.context.trim().length} caracteres (máximo ${F.contextMax}): o que aconteceu, em 1–2 frases.`);
+    const opts = q.options ?? [];
+    if (opts.length && (opts.length < F.optionsMin || opts.length > F.optionsMax)) out.push(`${at}.options tem ${opts.length} (use de ${F.optionsMin} a ${F.optionsMax}, cada uma uma ação curta).`);
+    opts.forEach((o, j) => {
+      const label = o.label?.trim() ?? "";
+      if (!label) out.push(`${at}.options[${j}].label está vazio.`);
+      else if (label.length > F.optionLabelMax) out.push(`${at}.options[${j}].label tem ${label.length} caracteres (máximo ${F.optionLabelMax}): vira um botão — uma ação curta; o detalhe vai em pros/cons.`);
+    });
+    if (q.recommendation && q.recommendation.trim().length > F.recommendationMax) out.push(`${at}.recommendation tem ${q.recommendation.trim().length} caracteres (máximo ${F.recommendationMax}).`);
+  });
+  return out;
 }

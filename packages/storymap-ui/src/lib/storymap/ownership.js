@@ -5,9 +5,11 @@
  * via ownership.d.ts) AND the pre-write/pre-edit guard hook require()s it directly.
  *
  * Three ownership classes:
- *   human      — o PRD (o documento mais alto do board), a escada estratégica legada
- *                (Posicionamento/Métrica/Resultado-alvo), Canvas, personas, releases; only a human
- *                may change these canonically; a run that tries is BLOCKED.
+ *   human      — o PRD (docs/prd.md — inclui as personas), o Business Model Canvas
+ *                (docs/business-model-canvas.md), a escada estratégica legada
+ *                (Posicionamento/Métrica/Resultado-alvo), o Canvas antigo, personas, releases; only a
+ *                human may change these canonically; a run that tries is BLOCKED. O contexto dos
+ *                agentes (docs/contexto.md) NÃO é: os agentes o mantêm.
  *   proposable — future artefacts (ideias) that an agent may PROPOSE by writing
  *                to the proposals/ zone (a path-based flag); a human promotes to
  *                canonical. Writes to proposals/ are always allowed.
@@ -47,7 +49,7 @@ function isBoardYamlPath(filePath) {
  * Is this the PRD of a board? `storymap/boards/<board>/docs/prd.md`.
  *
  * Ele é owner:human pelo mesmo motivo que a escada estratégica que ele absorveu — só que a aposta é
- * MAIOR: o PRD é o documento mais alto do board, e todo card, toda priorização e todo run herdam o
+ * MAIOR: o PRD é o documento mais alto do board, e todo card, toda decisão e todo run herdam o
  * texto dele como contexto. Um run que o reescreve muda o norte de tudo que vier depois, e muda
  * calado.
  *
@@ -61,6 +63,33 @@ function isPrdDocPath(filePath) {
   if (typeof filePath !== 'string') return false;
   const norm = filePath.split('\\').join('/');
   return /storymap\/boards\/[^/]+\/docs\/prd\.md$/i.test(norm);
+}
+
+/**
+ * Is this the Business Model Canvas of a board? `storymap/boards/<board>/docs/business-model-canvas.md`.
+ *
+ * O documento do grupo Negócio — owner:human pela mesma razão do PRD (decisão do dono, 06/10): é a
+ * aposta de negócio, e um run que a reescreve muda o porquê de tudo, calado. O agente PROPÕE
+ * (`propose_change artifact:"canvas"`); a conversa da tela escreve com o humano olhando.
+ */
+function isBmcDocPath(filePath) {
+  if (typeof filePath !== 'string') return false;
+  const norm = filePath.split('\\').join('/');
+  return /storymap\/boards\/[^/]+\/docs\/business-model-canvas\.md$/i.test(norm);
+}
+
+/**
+ * Is this the style guide of a board? `storymap/boards/<board>/design/style-guide.md`.
+ *
+ * O TOM (voice) dele é da marca, logo do dono (decisão de 06/10), e o arquivo inteiro tem UM escritor: o
+ * servidor (`write_styleguide` / a página de Design → `promoteStyleGuideDoc`, que recusa o tom e as cores que
+ * reprovam AA). Um run que o editasse por Write/Edit passaria por cima das duas recusas, então o caminho é
+ * bloqueado inteiro: cores, tipografia, estética e componentes o agente mantém pela tool.
+ */
+function isStyleGuideDocPath(filePath) {
+  if (typeof filePath !== 'string') return false;
+  const norm = filePath.split('\\').join('/');
+  return /storymap\/boards\/[^/]+\/design\/style-guide\.md$/i.test(norm);
 }
 
 /**
@@ -100,8 +129,30 @@ function evaluateOwnerGuard({ filePath, board, beforeYaml, afterYaml, runId }) {
     return {
       owner: OWNER.HUMAN,
       fields: ['prd'],
-      message: `run ${runLabel} tentou reescrever o PRD (${filePath}). O PRD é o documento mais alto do board — todo card, toda priorização e todo run herdam o texto dele como contexto, e mudá-lo por um run muda o norte de tudo que vier depois, calado.`,
-      fix: `Proponha a mudança com a tool MCP \`propose_change\` (artifact: "prd", field: <chave da seção>) — ela vira um rascunho que o humano aprova no Inbox. Para escrever DIRETO, use a conversa da tela do PRD (/board/<board>/prd), onde o humano está olhando.`,
+      message: `run ${runLabel} tentou reescrever o PRD (${filePath}). O PRD é o documento mais alto do board — todo card, toda decisão e todo run herdam o texto dele como contexto, e mudá-lo por um run muda o norte de tudo que vier depois, calado.`,
+      fix: `Proponha a mudança com a tool MCP \`propose_change\` (artifact: "prd", field: <chave da seção>) — ela vira um rascunho que o humano aprova no Inbox. Para escrever DIRETO, use a conversa da tela do PRD (/board/<board>/produto), onde o humano está olhando. Contexto técnico (decisões, requisitos, riscos) vai em docs/contexto.md, que é seu: \`write_doc\` docType "contexto".`,
+    };
+  }
+
+  // O Business Model Canvas → owner:human, pelo mesmo caminho do PRD.
+  if (isBmcDocPath(filePath)) {
+    const runLabel = runId ?? '(unknown run)';
+    return {
+      owner: OWNER.HUMAN,
+      fields: ['canvas'],
+      message: `run ${runLabel} tentou reescrever o Business Model Canvas (${filePath}). Ele é a aposta de negócio do board — só o dono a muda.`,
+      fix: `Proponha a mudança com a tool MCP \`propose_change\` (artifact: "canvas", field: <chave do bloco>) — ela vira um rascunho que o humano aprova no Inbox. Só o dono escreve direto, na tela de Negócio (/board/<board>/negocio).`,
+    };
+  }
+
+  // O guia de estilo → um escritor só (o servidor). O tom é do dono; o resto o agente mantém pela tool.
+  if (isStyleGuideDocPath(filePath)) {
+    const runLabel = runId ?? '(unknown run)';
+    return {
+      owner: OWNER.HUMAN,
+      fields: ['styleguide'],
+      message: `run ${runLabel} tentou reescrever o guia de estilo (${filePath}) direto no arquivo. O arquivo tem um escritor só — o servidor, que recusa mudança no tom (do dono) e cor que reprove o contraste AA.`,
+      fix: `Use a tool MCP \`write_styleguide\` (uma seção por vez: cores, tipografia, estética, componentes, anti-padrões, dívidas). O tom de voz é do dono: proponha o texto exato na conversa ou no card — ele aplica na página de Design (/board/<board>/design).`,
     };
   }
 
@@ -133,4 +184,4 @@ function evaluateOwnerGuard({ filePath, board, beforeYaml, afterYaml, runId }) {
   };
 }
 
-module.exports = { OWNER, HUMAN_BOARD_FIELDS, isProposalPath, isBoardYamlPath, isPrdDocPath, isCardPath, evaluateOwnerGuard };
+module.exports = { OWNER, HUMAN_BOARD_FIELDS, isProposalPath, isBoardYamlPath, isPrdDocPath, isBmcDocPath, isStyleGuideDocPath, isCardPath, evaluateOwnerGuard };

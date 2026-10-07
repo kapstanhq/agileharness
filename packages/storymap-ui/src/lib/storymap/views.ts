@@ -1,12 +1,8 @@
-// Pure view-filtering logic for the prioritization page (no React), so it can be
-// unit-tested in isolation. The component (PrioritizationView.tsx) owns the React
-// state (useViewFilter); this module owns the math.
+// Pure board-view logic (no React), so it can be unit-tested in isolation: the entry lane, the
+// terminal/staging sets and the Kanban placement.
 
 import type { BoardConfig, Card, StatusDef } from "./types";
 import { isContainerCard } from "./unplaced";
-
-/** A ranked story row: the card plus its derived RICE score (null = not scored). */
-export type Row = { card: Card; score: number | null };
 
 /**
  * The status a BRAND-NEW card enters: the STAGING intake lane (e.g. `triage`) when the
@@ -29,18 +25,6 @@ export function entryStatus(config: BoardConfig): StatusDef | null {
 export function entryStatusId(config: BoardConfig): string | null {
   return entryStatus(config)?.id ?? null;
 }
-
-/** Status scope of a view: "open" (in-flight), "all", or a specific status id. */
-export type StatusScope = "open" | "all" | string;
-
-export interface ViewFilter {
-  scope: StatusScope;
-  /** null = show all; otherwise keep the N highest-ranked SCORED rows */
-  topN: number | null;
-}
-
-export const DEFAULT_VIEW_FILTER: ViewFilter = { scope: "open", topN: null };
-export const TOP_N_OPTIONS = [5, 10, 20];
 
 /**
  * Terminal ("done") statuses — the END of the pipeline (e.g. `concluida`).
@@ -68,23 +52,6 @@ export function terminalStatusIds(config: BoardConfig): Set<string> {
  */
 export function stagingStatusIds(config: BoardConfig): Set<string> {
   return new Set(config.statuses.filter((s) => s.staging).map((s) => s.id));
-}
-
-/**
- * Apply a view's status scope + top-N to the globally-ranked rows (order preserved).
- * Top-N counts only SCORED rows, so an unscored (no-RICE) tail never masquerades as
- * "top" priority when fewer than N cards are scored.
- */
-export function applyViewFilter(rows: Row[], filter: ViewFilter, config: BoardConfig): Row[] {
-  let out = rows;
-  if (filter.scope === "open") {
-    const done = terminalStatusIds(config);
-    out = out.filter((r) => !r.card.status || !done.has(r.card.status));
-  } else if (filter.scope !== "all") {
-    out = out.filter((r) => r.card.status === filter.scope);
-  }
-  if (filter.topN != null) out = out.filter((r) => r.score != null).slice(0, filter.topN);
-  return out;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

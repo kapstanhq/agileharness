@@ -1347,6 +1347,10 @@ describePosix("promoteStageToMain — fronteira de contribuição (story-ex0014)
     expect(classifyDeltaPath("src/bicicleta/quadro.ts", undefined)).toBe("code");
     expect(classifyDeltaPath("storymap/boards/oficina/cards/story-ex9962.md", undefined)).toBe("board-data");
     expect(classifyDeltaPath("justfile", undefined)).toBe("control");
+    // as regras e os poderes dos agentes também são controle (suíte completa, nunca absorvidos por reconcile)
+    for (const p of [".claude/skills/harness-conductor/ref/verificar.md", ".claude/agents/revisor.md", ".claude/commands/x.md", ".mcp.json"]) {
+      expect(classifyDeltaPath(p, undefined), p).toBe("control");
+    }
     // declarado: o de sempre (fora do prefixo = unclassified); [] declarado = nada é código
     expect(classifyDeltaPath("src/bicicleta/quadro.ts", ["packages/"])).toBe("unclassified");
     expect(classifyDeltaPath("src/bicicleta/quadro.ts", [])).toBe("unclassified");

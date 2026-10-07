@@ -20,27 +20,24 @@ export const cardSurfaceHover =
 export const cardSurfaceSm =
   "rounded-lg border border-line bg-surface shadow-[0_1px_1px_rgba(15,15,15,0.035)] transition";
 
-// ── A casca da barra de topo ────────────────────────────────────────────────────────────
-// Mora AQUI, e não no `nav/TopBar.tsx`, por um motivo mecânico: o TopBar é `"use client"`
-// (publica a própria altura por ResizeObserver) e quem mais precisa destas medidas é o
-// ESQUELETO da barra — que é server-side justamente para não custar JS. Importar a string do
-// módulo client arrastaria o grafo dele (HealthPill e seu poll) para dentro da tela de
-// carregamento; copiá-la à mão deixaria o esqueleto sair do lugar no dia em que a barra mudar.
-// Um módulo neutro resolve os dois: UMA definição, nenhum cliente a reboque.
+// (A casca da barra de topo antiga — `topBarShell` e os três slots — saiu na fase 1: a barra de 52px mora em
+// shell/AppBar, e as medidas que o esqueleto de carregamento divide com ela, em shell/app-bar-shell.ts.)
 
-/** O `<header>`: mesma altura, borda, superfície e grade em TODA página. */
-export const topBarShell =
-  "flex items-center gap-2 border-b border-line bg-surface px-4 py-2.5 md:grid md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]";
+// ── O rodapé: o compositor do Jido ──────────────────────────────────────────────────────
+// Desde a fase 1 o rodapé de toda tela de board é o compositor do Jido (chat/JidoComposer): FIXO, em toda largura,
+// e ele publica a própria altura em `--jido-composer-h` no <html>. Quem rola embaixo dele reserva essa altura; quem
+// gruda no fundo (barra de salvar, barra de decisão, barra de lote) gruda logo ACIMA dele. Sem compositor montado
+// (tela com o chat ancorado, ou fora de um board) a variável não existe e vale 0 — a folga comum. Era a nav inferior
+// do celular (`pb-24` / `bottom-14`), que saiu.
 
-/** Slot da ESQUERDA — a árvore de contexto (app › board › view). */
-export const topBarSlotLeft =
-  "flex min-w-0 flex-1 items-center gap-1 md:flex-none md:justify-self-start";
+/** A folga do FIM de uma tela de board: o último item nunca fica atrás do compositor. */
+export const composerGutter = "pb-[calc(var(--jido-composer-h,0px)_+_2rem)]";
 
-/** Slot do CENTRO — os blocos com o Jido no meio. */
-export const topBarSlotCenter = "flex shrink-0 items-center md:justify-self-center";
+/** O `bottom` de quem gruda no fundo da tela (sticky/fixed): logo acima do compositor. */
+export const aboveComposer = "bottom-[var(--jido-composer-h,0px)]";
 
-/** Slot da DIREITA — os medidores + a ação primária. */
-export const topBarSlotRight = "flex items-center gap-1 md:justify-self-end";
+/** O `bottom` de um botão flutuante no canto: acima do compositor, com o respiro de antes. */
+export const floatAboveComposer = "bottom-[calc(var(--jido-composer-h,0px)_+_1.5rem)]";
 
 // ── Card typographic primitives (exact design spec) ─────────────────────────────────────
 // One place for the recurring card micro-styles so a card can't drift from the spec.

@@ -537,9 +537,9 @@ describe("a pergunta por card — gateAdmitsCard (R2 e R3)", () => {
     for (const type of ["idea", "activity", "step"] as const) expect(gateAdmitsCard(gateFixes, card({ type, storyType: null })).admit, type).toBe(true);
   });
 
-  it("SÓ A CONSTRUÇÃO é barrada: captura, triagem, dúvidas, especificação, entrevista, estimativa, a fazer, design e entrega seguem", () => {
+  it("SÓ A CONSTRUÇÃO é barrada: captura, triagem, dúvidas, especificação, entrevista, a fazer, design e entrega seguem", () => {
     for (const status of SCOPE_BUILD_STATUSES) expect(gateAdmitsCard(gateFixes, card({ status }), "column").admit, status).toBe(false);
-    for (const status of ["capturando", "triage", "grill", "enriquecer", "interview", "priorizar", "pronta", "design-ux", "design-ui", "com-design", "ready", "refinar", "corrigir", "descontinuar", "revisar-codigo", "qa-automatizado", "revisao", "merge", "stage", "release", "deploy", "concluida", null]) {
+    for (const status of ["capturando", "triage", "grill", "enriquecer", "interview", "pronta", "design-ux", "design-ui", "com-design", "ready", "refinar", "corrigir", "descontinuar", "revisar-codigo", "qa-automatizado", "revisao", "merge", "stage", "release", "deploy", "concluida", null]) {
       expect(gateAdmitsCard(gateFixes, card({ status }), "column").admit, String(status)).toBe(true);
     }
   });
@@ -613,7 +613,7 @@ describe("a fronteira da construção é declarativa — conferida contra o boar
   });
 
   it("nada do que anda para o tipo ser decidido, nem da entrega, está na fronteira — e todo id existe no board", () => {
-    const stays = ["capturando", "triage", "grill", "enriquecer", "interview", "priorizar", "pronta", "design-ux", "design-ui", "com-design", "ready", "refinar", "corrigir", "descontinuar", "revisar-codigo", "qa-automatizado", "revisao", "merge", "stage", "release", "deploy"];
+    const stays = ["capturando", "triage", "grill", "enriquecer", "interview", "pronta", "design-ux", "design-ui", "com-design", "ready", "refinar", "corrigir", "descontinuar", "revisar-codigo", "qa-automatizado", "revisao", "merge", "stage", "release", "deploy"];
     for (const id of stays) {
       expect(ids, id).toContain(id);
       expect(scopeGatesStatus(id), id).toBe(false);
@@ -1110,7 +1110,7 @@ describe("a troca de tipo sob escopo — storyTypeChangeRefusal (R6)", () => {
   });
 
   it("um agente NÃO tira de `user` um card já classificado (passou da especificação); a frase diz o que fazer", () => {
-    for (const status of ["pronta", "interview", "priorizar", "design-ux", "plano-tecnico", "desenvolver", "revisao", "release"]) {
+    for (const status of ["pronta", "interview", "design-ux", "plano-tecnico", "desenvolver", "revisao", "release"]) {
       expect(storyTypeChangeRefusal(scope, { ...classified, status }, "chore", AGENT), status).toMatch(/só o dono troca o tipo dele/);
     }
     expect(storyTypeChangeRefusal(scope, classified, "bug", AGENT)).toContain("Funcionalidade nova");

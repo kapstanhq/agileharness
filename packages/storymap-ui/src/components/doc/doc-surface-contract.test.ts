@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -12,14 +12,19 @@ import { describe, expect, it } from "vitest";
 
 const read = (p: string) => readFileSync(fileURLToPath(new URL(p, import.meta.url)), "utf8");
 const shell = read("./DocShell.tsx");
-const table = read("./views/TableView.tsx");
 const board = read("./views/BoardView.tsx");
 
-describe("DocShell — folga do rodapé no celular", () => {
-  // MEDIDO: a nav inferior é `fixed` e `md:hidden` (BoardHeader), 57px de altura num viewport de 844.
-  // O `py-8` original reservava 32px — o fim do documento passava POR BAIXO dela e ficava inalcançável.
-  it("reserva pb-24 no celular e volta a pb-8 a partir de md (o degrau das telas irmãs)", () => {
-    expect(shell).toContain('const BOTTOM_GUTTER = "pb-24 md:pb-8"');
+describe("DocShell — folga do rodapé", () => {
+  // MEDIDO (antes da fase 1): a nav inferior era `fixed` e `md:hidden`, 57px num viewport de 844, e o `py-8` original
+  // reservava 32px — o fim do documento passava POR BAIXO dela e ficava inalcançável. Desde a fase 1 o rodapé é o
+  // compositor do Jido, fixo em TODA largura, que publica a própria altura: a folga é essa altura + o respiro.
+  it("reserva a altura do compositor do Jido (+ respiro), a mesma folga das telas irmãs", () => {
+    expect(shell).toContain("const BOTTOM_GUTTER = composerGutter;");
+    const ui = read("../../lib/ui.ts");
+    expect(ui).toContain('export const composerGutter = "pb-[calc(var(--jido-composer-h,0px)_+_2rem)]";');
+    // a barra de salvar gruda ACIMA do compositor, não atrás dele
+    expect(shell).toMatch(/className=\{cn\("sticky z-20 [^"]*", aboveComposer\)\}/);
+    expect(ui).toContain('export const aboveComposer = "bottom-[var(--jido-composer-h,0px)]";');
   });
 
   it("as DUAS colunas de leitura (com e sem sumário) usam a mesma folga", () => {
@@ -65,19 +70,11 @@ describe("DocShell — o alternador de views cabe numa linha no celular", () => 
   });
 });
 
-describe("TableView — coluna sem dado não se desenha", () => {
-  it("grupo e etiqueta são condicionais ao conteúdo real das linhas", () => {
-    expect(table).toContain("const hasGroups = rows.some((r) => !!r.group)");
-    expect(table).toContain("const hasTags = rows.some((r) => r.tags.length > 0)");
-    // cabeçalho E célula — esconder só um dos dois desalinha a grade inteira.
-    expect(table).toContain("{hasGroups && <Th>Grupo</Th>}");
-    expect(table).toContain("{hasTags && <Th>Etiqueta</Th>}");
-    expect((table.match(/\{hasGroups && \(/g) ?? []).length).toBe(1);
-    expect((table.match(/\{hasTags && \(/g) ?? []).length).toBe(1);
-  });
-
-  it("a grade rola dentro do próprio contêiner — a página nunca rola de lado", () => {
-    expect(table).toContain('cn("overflow-x-auto"');
+// A TableView saiu na fase 2 (cada documento tem a sua vista FIXA — quadro ou documento — e nenhum é tabela): a
+// garantia dela («coluna sem dado não se desenha») saiu junto, porque a peça não existe mais.
+describe("as vistas de documento — sem tabela", () => {
+  it("a TableView não existe mais (nenhum documento se lê como tabela)", () => {
+    expect(existsSync(fileURLToPath(new URL("./views/TableView.tsx", import.meta.url)))).toBe(false);
   });
 });
 
@@ -131,9 +128,11 @@ describe("Tokens — a rampa de tinta passa o piso AA", () => {
     }
   });
 
-  it("o host reserva o rodapé para o overlay flutuante não pousar sobre a nav", () => {
+  it("o host reserva o rodapé para o overlay flutuante não pousar sobre o compositor do Jido", () => {
     expect(css).toContain("--ah-bottom-reserve");
-    expect(css).toMatch(/@media \(max-width: 767px\)[\s\S]{0,120}--ah-bottom-reserve:\s*56px/);
+    // o rodapé é o compositor (fixo em toda largura, publica a altura); sem ele, 0. A nav inferior de 56px saiu.
+    expect(css).toMatch(/--ah-bottom-reserve:\s*var\(--jido-composer-h, 0px\);/);
+    expect(css).not.toMatch(/--ah-bottom-reserve:\s*56px/);
     const overlay = readFileSync(fileURLToPath(new URL("../../../public/ah-overlay.js", import.meta.url)), "utf8");
     expect(overlay).toContain("var(--ah-bottom-reserve, 0px)");
     // O default 0px é o que mantém o overlay servível em app que não declara nada.
@@ -144,9 +143,12 @@ describe("Tokens — a rampa de tinta passa o piso AA", () => {
     // Estava invertido: passo vazio = `bg-fg` (~12:1, o aglomerado mais escuro da tela) e passo com
     // trabalho = âmbar a 2.19:1. Numa captura com 4 colunas zeradas, 13 pontos pretos gritavam
     // "nada aqui". Ocupado agora é MASSA DE TINTA; vazio é anel.
-    const kanban = readFileSync(fileURLToPath(new URL("../KanbanBoard.tsx", import.meta.url)), "utf8");
-    expect(kanban).toContain('has ? "bg-fg" : "border border-line-emphasis bg-transparent"');
-    expect(kanban).not.toContain('has ? "bg-accent" : "bg-fg"');
+    // Fase 1: a trilha saiu da coluna e virou a BARRA DE PASSOS do card que roda (kanban/FeatureCard) — a mesma
+    // garantia, no componente novo: o passo FEITO leva a cor do estado (verde de rodando), o passo por fazer a
+    // linha mais apagada; nunca o inverso, nunca a tinta do texto no vazio.
+    const card = readFileSync(fileURLToPath(new URL("../kanban/FeatureCard.tsx", import.meta.url)), "utf8");
+    expect(card).toContain('i < step.index ? "bg-st-run" : "bg-line-muted"');
+    expect(card).not.toMatch(/i < step\.index \? "bg-(line|fg)[^"]*" : "bg-(fg|st-run)/);
   });
 
   it("nenhuma cor CRUA de nível 600 sobrou como texto (3.19:1 e 3.77:1 sobre papel)", () => {

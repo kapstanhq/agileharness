@@ -9,6 +9,8 @@ import {
   parseSseBuffer,
   imagePromptTail,
   composeCopilotPrompt,
+  mcpUnavailableText,
+  BOARD_UNCONFIGURED_CLAUSE,
   terminalChipFor,
   RESUME_SESSION_MISSING_RE,
   type CopilotSseEvent,
@@ -47,11 +49,30 @@ describe("buildCopilotTurnArgs", () => {
     expect(args).not.toContain("--session-id");
   });
 
-  it("degrades WITHOUT mcp config (no token) — only native tools, no --mcp-config", () => {
+  // quick-fix chat-mcp: sem token o Jido roda ISOLADO — `--strict-mcp-config` sem `--mcp-config` = ZERO MCP.
+  // Antes a ausência do config tirava também o strict, e "sem MCP" virava "com todos os MCP do operador"
+  // (conectores da conta, `.mcp.json` do alvo) auto-aprovados pelo skip-permissions.
+  it("WITHOUT mcp config (no token) it stays ISOLATED — strict on, zero mounts", () => {
     const args = buildCopilotTurnArgs({ ...base });
+    expect(args).toContain("--strict-mcp-config");
     expect(args).not.toContain("--mcp-config");
-    expect(args).not.toContain("--strict-mcp-config");
     expect(args).not.toContain("--append-system-prompt-file");
+  });
+
+  it("WITH mcp config it is strict AND mounts exactly that config", () => {
+    const args = buildCopilotTurnArgs({ ...base, mcpConfigPath: "/tmp/mcp.json" });
+    expect(args).toContain("--strict-mcp-config");
+    expect(args.filter((a) => a === "--mcp-config")).toHaveLength(1);
+    expect(args[args.indexOf("--mcp-config") + 1]).toBe("/tmp/mcp.json");
+  });
+
+  it("no-token wording says the board connection is not configured — never 'authorize the connector'", () => {
+    expect(mcpUnavailableText("ro")).toContain("AGILEHARNESS_MCP_TOKEN_RO");
+    expect(mcpUnavailableText("full")).toContain("AGILEHARNESS_MCP_TOKEN ");
+    for (const t of [mcpUnavailableText("ro"), mcpUnavailableText("full"), BOARD_UNCONFIGURED_CLAUSE]) {
+      expect(t).toMatch(/conexão com o board não (está )?configurada/i);
+    }
+    expect(BOARD_UNCONFIGURED_CLAUSE).toMatch(/Nunca peça para autorizar um conector/);
   });
 
   // Estado CHAT do Jido: a metade NATIVA da contenção read-only (a outra metade é o token MCP `ro`, escolhido

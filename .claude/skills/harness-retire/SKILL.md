@@ -125,8 +125,8 @@ guarantees this — postergado/abandoned cards with no level skip straight to
 5. **Archive.** Once nothing is pending (level ≤ `remover-codigo`, or `excluir-tudo` with the
    data cut done), set `status: arquivados` (terminal) in the card `.md`, KEEPING
    `mode: retire` + the `retirement` block as the tombstone. Update `## Descontinuação`
-   with what was actually removed + the commit sha(s). Do NOT clear the prioritization or
-   narrative — the card is a historical record of something that existed.
+   with what was actually removed + the commit sha(s). Do NOT clear the narrative or
+   acceptance — the card is a historical record of something that existed.
 
 6. **Report.** State: the diagnosis (what the feature owned + inbound refs), the level
    executed, exactly what was removed (files/routes/flags/functions/data + counts), the

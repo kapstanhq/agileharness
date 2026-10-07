@@ -1,5 +1,5 @@
-// Classes de decisão: o AH para para o dono SÓ em decisão de negócio — dinheiro, falar em
-// nome da marca, PRD e metas, dados de pessoas. Estes testes fixam a régua única (`whoDecides`) em cada ponto onde
+// Classes de decisão: o dono só é chamado quando o ponto pertence a uma das classes dele (gasto e preço, a voz
+// pública da marca, o PRD com as metas, informação sobre pessoas). Estes testes fixam a régua única (`whoDecides`) em cada ponto onde
 // o AH pode parar, os dois modos, e o lugar onde as quatro classes são declaradas (`_base`, sobrescrevível).
 
 import { describe, expect, it } from "vitest";
@@ -170,9 +170,10 @@ describe("whoDecides — só-negócio (ultra): o dono só nas quatro classes", (
     expect(whoDecides({ kind: "recovery" }, card(), ultra).decider).toBe("system");
   });
 
-  it("a captura (o texto do dono) e as amostras de auditoria seguem com ele", () => {
+  // decisão do dono (06/10): as amostras de auditoria são revisadas por revisores independentes (IA), não por ele
+  it("a captura (o texto do dono) segue com ele; as amostras de auditoria saem para o revisor independente", () => {
     expect(whoDecides({ kind: "capture-proposal" }, card(), ultra).decider).toBe("owner");
-    expect(whoDecides({ kind: "audit" }, card(), ultra).decider).toBe("owner");
+    expect(whoDecides({ kind: "audit" }, card(), ultra).decider).toBe("system");
   });
 
   it("todo veredito traz o porquê em português", () => {
@@ -401,8 +402,9 @@ const MATRIX: Record<CockpitItemKind, Row> = {
   "deploy-unsettled": { item: mk("deploy-unsettled"), ultra: { decider: "system" } },
   "release-aging": { item: mk("release-aging"), ultra: { decider: "system" } },
   "merge-failed": { item: mk("merge-failed"), ultra: { decider: "system" } },
-  "proxy-audit": { item: mk("proxy-audit"), ultra: { decider: "owner", ownerClass: null }, structural: "a amostra do que o sistema decidiu em nome do dono" },
-  "delivery-audit": { item: mk("delivery-audit"), ultra: { decider: "owner", ownerClass: null }, structural: "a amostra do que o sistema decidiu em nome do dono" },
+  // decisão do dono (06/10): as amostras são revisadas por revisores independentes (IA), não pelo dono
+  "proxy-audit": { item: mk("proxy-audit"), ultra: { decider: "system" } },
+  "delivery-audit": { item: mk("delivery-audit"), ultra: { decider: "system" } },
   "meter-stalled": { item: mk("meter-stalled"), ultra: { decider: "system" } },
   "publish-approval": {
     item: mk("publish-approval", { causeKey: "loja:owner:?", pkg: "loja", ownerClass: null, approvals: [{ hash: "h", files: ["a.ts"], units: ["site"], rules: ["regra-x"] }], rerequesting: false, stale: false }),
@@ -413,6 +415,14 @@ const MATRIX: Record<CockpitItemKind, Row> = {
   "effect-failed": { item: mk("effect-failed"), ultra: { decider: "system" } },
   stalled: { item: mk("stalled"), ultra: { decider: "system" } },
   "locked-exec": { item: mk("locked-exec"), ultra: { decider: "owner", ownerClass: null }, structural: "um comando que a trava proíbe a agentes só roda com o clique do dono" },
+  // fase 3 — as alavancas do operador (as actions recusam qualquer outro chamador) e a saúde, que vira card de conserto
+  "publish-held": { item: mk("publish-held"), ultra: { decider: "owner", ownerClass: null }, structural: "publicar por cima da guarda, ou cancelar, é alavanca do operador" },
+  "stage-idle": { item: mk("stage-idle"), ultra: { decider: "owner", ownerClass: null }, structural: "um board manual só publica quando alguém pede" },
+  "capacity-latch": { item: mk("capacity-latch"), ultra: { decider: "owner", ownerClass: null }, structural: "só o operador solta a trava da cota" },
+  "host-health": { item: mk("host-health"), ultra: { decider: "system" } },
+  // fase 6 — o que a Sentinela não resolveu é trabalho da máquina (recuperação), nunca uma classe do dono
+  sentinel: { item: mk("sentinel"), ultra: { decider: "system" } },
+  "push-off": { item: mk("push-off"), ultra: { decider: "owner", ownerClass: null }, structural: "só a pessoa liga o aviso no celular dela" },
 };
 
 describe("a matriz kind × modo (exaustiva) e o invariante do só-negócio", () => {

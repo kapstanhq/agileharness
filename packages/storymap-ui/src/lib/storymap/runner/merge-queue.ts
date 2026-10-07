@@ -31,7 +31,21 @@ import { promises as fsp, existsSync, mkdirSync, mkdtempSync, rmSync } from "nod
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
-import { execErrorDetail, makeGit, quote, type GitResult, type GitRunner } from "./git";
+import {
+  clearPushHold,
+  execErrorDetail,
+  makeGit,
+  prePushGateAt,
+  pushHoldActive,
+  pushHoldReason,
+  quote,
+  pushTarget,
+  readPushHold,
+  setPushHold,
+  type GitResult,
+  type GitRunner,
+  type PrePushGateResult,
+} from "./git";
 import {
   withCodeNotLandedFinding,
   withConflictedBranchFinding,
@@ -52,7 +66,8 @@ import { describeFrontmatterError, frontmatterLimits, parseFrontmatter } from "@
 import { coerceCard, readBoardConfig, readCards } from "@/lib/storymap/repo";
 import { terminalStatusIds } from "@/lib/storymap/views";
 import { mergeCardThreeWay } from "@/lib/storymap/card-merge";
-import { BOARD_YAML_RE, restoreGovernanceKeys } from "./governance-keys";
+import { codeChangePoint, parseNameStatus, withCodeChangeMarks, type DiffFile } from "@/lib/storymap/decision-class";
+import { BOARD_YAML_RE, cardGovernanceOf, restoreCardGovernance, restoreGovernanceKeys, type CardGovernance } from "./governance-keys";
 import { updateCardOnDisk, withCardLock, writeCardToPath } from "@/lib/storymap/write";
 import {
   commitBoardDataScoped,
@@ -61,7 +76,10 @@ import {
   deprovisionNodeModules,
   provisionNodeModules,
   resolveWorkspaceGlobs,
+  makePrePushScan,
+  prePushScanNotes,
   secretScanCommand,
+  withPrivateMessageFile,
   type ExecFn,
   type WorktreeFs,
 } from "./worktree";
@@ -69,7 +87,8 @@ import { layoutOf } from "@/lib/storymap/target-profile";
 import { serialCommit, type CommitSerializer } from "./commit-serializer";
 import { neutralizeCloudCredentials, type DiretoriosSemCredencial } from "./spawn-env";
 import { patchCreatedPaths, sweepPatchCreations } from "./patch-creations";
-import { declaredCodePrefixes, isCodePath, partitionPaths, pathsTouchCode, promoteImportedDataPaths, stagingBranchOf } from "./staging";
+import { BOARD_DATA_PREFIX, declaredCodePrefixes, isCodePath, partitionPaths, pathsTouchCode, promoteImportedDataPaths, stagingBranchOf } from "./staging";
+import { authoredMessages, COMMIT_LOG_FORMAT, composeIntegrationMessage, parseCommitLog } from "./integration-commit-message";
 // story-ex0014 / story-ex0097 — a fronteira de contribuição é UMA régua para os TRÊS lugares que fazem
 // `fetch`+`merge FETCH_HEAD` na árvore que o deploy publica (o `stage` e o `main` do train, o `main` do
 // release), e `classifyDeltaPath` é a UMA definição de "o que não pode passar" que ela e o gate deste
@@ -117,6 +136,12 @@ import { resolvedClaudeBin } from "./claude-bin";
 // The merge runs on the MAIN tree (a few refs + a working-tree merge), never minutes — but a
 // hung git would otherwise freeze the whole train, so cap each invocation generously.
 const MERGE_TIMEOUT_MS = 60_000;
+// O aviso quando o desfazer de um commit do train NÃO voltou o HEAD: o commit segue LOCAL e a publicação fica retida.
+export const COMMIT_NOT_UNDONE = "commit local NÃO desfeito — não publicar";
+/** Um sha que `git rev-parse` devolveu (não vazio, sem espaço nem metacaractere de shell). */
+const isRev = (s: string): boolean => /^[0-9A-Za-z]{4,64}$/.test(s);
+/** Um sha COMPLETO (40/64 hex) — o que `rev-parse HEAD` devolve num repositório de verdade. */
+const isFullSha = (s: string): boolean => /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(s);
 // Retain a bounded history of terminal entries (done/failed) for the ops panel; non-terminal
 // entries (waiting/merging/conflict) are NEVER dropped (they're live work).
 const MAX_TERMINAL_RETAINED = 100;
@@ -762,6 +787,14 @@ export interface MergeQueueConfig {
    */
   stampStaged?: (board: string, cardId: string) => Promise<void>;
   /**
+   * Fase 4 — a MUDANÇA DE CÓDIGO que o dono reservou para si (decision-class.ts `codeChangePoint`): o código do card
+   * toca cobrança/pagamento (o card passa a tocar a classe «dinheiro» — a publicação espera o dono) ou altera um teste
+   * que já existia (abre a pergunta `guardrail` — do dono até existir o revisor de diff). Chamado depois das DUAS
+   * metades, como `stampStaged` (a metade de dados apagaria uma marca anterior). Default: uma composição de
+   * `updateCardOnDisk`; os testes injetam um coletor. Não-fatal no ponto de chamada.
+   */
+  markCodeChange?: (board: string, cardId: string, runId: string, files: readonly DiffFile[]) => Promise<void>;
+  /**
    * WS-1.2: stamps a `general:blocker` finding on the card when the CODE half of the
    * split FAILED to land the run's code on `stage` (so the DATA half never ran and the card did NOT advance).
    * The blocker holds the card out of `qa-automatizado` (gate `hasNoBlockers`) so the telemetry-`ok` stops
@@ -884,6 +917,12 @@ async function defaultAddSecretScanBlocker(board: string, cardId: string, runId:
     ...card,
     findings: withSecretScanBlockerFinding(card.findings ?? [], runId, detail),
   }));
+}
+
+/** Default {@link MergeQueueConfig.markCodeChange}: grava no card, sob a trava dele, as marcas do diff
+ * (decision-class.ts withCodeChangeMarks). Idempotente por run; um card ausente é no-op. */
+async function defaultMarkCodeChange(board: string, cardId: string, runId: string, files: readonly DiffFile[]): Promise<void> {
+  await updateCardOnDisk(board, cardId, (card) => withCodeChangeMarks(card, files, runId, new Date().toISOString()));
 }
 
 /** Default {@link MergeQueueConfig.clearRunBlockers}: flips this run's own gate/secret-scan blockers
@@ -2470,6 +2509,7 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
   const persistConflictedBranchFinding =
     cfg.persistConflictedBranchFinding ?? defaultPersistConflictedBranchFinding;
   const stampStaged = cfg.stampStaged ?? defaultStampStaged;
+  const markCodeChange = cfg.markCodeChange ?? defaultMarkCodeChange;
   const addCodeNotLandedBlocker = cfg.addCodeNotLandedBlocker ?? defaultAddCodeNotLandedBlocker;
   const addDataNotLandedBlocker = cfg.addDataNotLandedBlocker ?? defaultAddDataNotLandedBlocker;
   const reconcileLedger = cfg.reconcileLedger ?? reconcileLedgerWithCards;
@@ -2524,7 +2564,73 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
   // The current processing loop (if any), exposed via whenIdle() so tests can await settle.
   let current: Promise<void> = Promise.resolve();
 
-  const snapshot = (): MergeQueueSnapshot => ({ entries: entries.map((e) => ({ ...e })), processing });
+  /**
+   * PUBLICAÇÃO RETIDA — o checkout (main ou o worktree de `stage`) tem commit local que NÃO pode ir a origin:
+   * o scan pré-push achou segredo (ou não conseguiu varrer), ou um desfazer de commit do train não voltou o
+   * HEAD. Enquanto houver retenção, NENHUM push do train sai daquele checkout e o loop NÃO integra a próxima
+   * entrada (empilhar commits em cima de um commit envenenado só torna a limpeza do operador mais difícil).
+   * A retenção se SOLTA sozinha quando a condição dela deixa de valer (`stillHeld`: o commit envenenado não é
+   * mais ancestral do HEAD / o scan de um erro interno volta limpo) — conferida no topo do loop, a cada
+   * `process()`. Este mapa é só o sinal de PAUSA do loop: a retenção de verdade é PERSISTIDA no ref por
+   * worktree (git.ts, PUSH_HOLD_REF), que todo pusher respeita e que sobrevive a restart — na primeira volta do
+   * loop depois de um restart, `adoptPersistedHold` traz a de main de volta para cá.
+   */
+  type PushHold = { cwd: string; reason: string; stillHeld: () => Promise<boolean> };
+  const pushHolds = new Map<string, PushHold>();
+  const holdPushes = (hold: PushHold): void => {
+    pushHolds.set(hold.cwd, hold);
+    console.error(`[harness-merge-queue] publicação RETIDA (${hold.cwd}): ${hold.reason}`);
+  };
+  /** Confere cada retenção; solta as que não valem mais. `true` ⇒ ainda há retenção (o loop pausa). */
+  const pushesStillHeld = async (): Promise<boolean> => {
+    for (const [cwd, hold] of [...pushHolds]) {
+      let held = true;
+      try {
+        held = await hold.stillHeld();
+      } catch {
+        held = true; // incerteza RETÉM (fail-closed)
+      }
+      if (!held) {
+        pushHolds.delete(cwd);
+        console.warn(`[harness-merge-queue] retenção de publicação solta (${cwd}): a condição não vale mais`);
+      }
+    }
+    return pushHolds.size > 0;
+  };
+  /** Uma retenção PERSISTIDA em main — gravada antes de um restart, ou pelo settle de board-data do ENGINE (que
+   *  não passa pelo train) — vira a pausa do loop e aparece no snapshot. Chamada no topo de cada volta do loop e a
+   *  cada `pump()` (a varredura periódica): sem isso a retenção do engine só era vista no próximo push do train. */
+  let persistedHoldAdoption: Promise<void> | null = null;
+  const adoptPersistedHold = (): Promise<void> =>
+    (persistedHoldAdoption ??= adoptPersistedHoldOnce().finally(() => {
+      persistedHoldAdoption = null;
+    }));
+  const adoptPersistedHoldOnce = async (): Promise<void> => {
+    const persisted = await readPushHold(git, cfg.repoRoot);
+    if (!persisted || pushHolds.has(cfg.repoRoot)) return;
+    if (!(await pushHoldActive(git, persisted, cfg.repoRoot))) return; // já solta (aceite / reset): o portão a limpa
+    const branch = (await git(`rev-parse --abbrev-ref HEAD`)).stdout.trim() || "main";
+    holdPushes({
+      cwd: cfg.repoRoot,
+      reason: pushHoldReason(branch, persisted, cfg.repoRoot),
+      stillHeld: async () => {
+        if (await pushHoldActive(git, persisted, cfg.repoRoot)) return true;
+        await clearPushHold(git, cfg.repoRoot);
+        return false;
+      },
+    });
+  };
+
+  const snapshot = (): MergeQueueSnapshot => {
+    const held = [...pushHolds.values()].map((h) => h.reason);
+    const notes = prePushScanNotes();
+    return {
+      entries: entries.map((e) => ({ ...e })),
+      processing,
+      ...(held.length > 0 ? { pushHold: held.join(" · ") } : {}),
+      ...(notes.length > 0 ? { pushScanNote: notes.join(" · ") } : {}),
+    };
+  };
 
   // audit #12: carry the just-finished `trigger` so the cascade re-eval can suppress re-firing the
   // SAME column's skill (the loop guard). A non-advancing board-data run that merges back minutes
@@ -2774,6 +2880,83 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
     return false;
   };
 
+  /**
+   * O portão de todo push do train — o MESMO {@link prePushGate} (git.ts) que o settle de board-data do engine
+   * e a promoção do release atravessam: a retenção PERSISTIDA (ref por worktree, sobrevive a restart) e o scan
+   * por commit do que o push publica (`<merge-base>..HEAD`, diff e mensagens). Devolve o MOTIVO (e o push não
+   * sai) ou null. Retido ⇒ registra a retenção em memória também, e o loop pausa até ela soltar.
+   *
+   * O QUE ISTO FECHA: cada commit que o train cria é varrido logo depois de criado — mas o push é CUMULATIVO, e
+   * há caminhos em que um commit local chega ao push sem ter passado por aquele scan: o processo que morre entre
+   * o commit e o scan (a retomada vê o patch como «already» e não commita nem varre de novo), e o desfazer que
+   * não desfez. Uma régua só, no último ponto antes de origin, cobre todos eles.
+   */
+  const trainPushGate = async (cwd: string, branch: string): Promise<PrePushGateResult> => {
+    const scan = makePrePushScan(cfg.exec, cwd, cwd, MERGE_TIMEOUT_MS);
+    const gate = await prePushGateAt(git, branch, scan, cwd);
+    if (!gate.held) {
+      pushHolds.delete(cwd);
+      return { held: null, sha: gate.sha ?? null };
+    }
+    const reason = gate.held;
+    holdPushes({
+      cwd,
+      reason,
+      stillHeld: async () => {
+        const persisted = await readPushHold(git, cwd);
+        if (persisted) {
+          if (await pushHoldActive(git, persisted, cwd)) return true;
+          await clearPushHold(git, cwd);
+          return false;
+        }
+        // não persistida (erro interno do scanner, transitório por natureza): o portão inteiro de novo
+        return (await prePushGateAt(git, branch, scan, cwd)).held !== null;
+      },
+    });
+    return { held: reason };
+  };
+
+  /**
+   * Volta o HEAD de `cwd` a `sha` (o HEAD de ANTES do primeiro commit da tentativa) — por SHA, nunca por
+   * `HEAD~<n>`/`HEAD^1` (contagem relativa que assume que HEAD ainda é o nosso commit), CONFERINDO que o HEAD
+   * de fato voltou, com UMA retentativa (a falha típica é transitória: o lock de HEAD/ref). `false` ⇒ o
+   * commit local NÃO saiu — o chamador retém a publicação ({@link holdPoisoned}). Só quando o sha de antes
+   * não pôde ser lido (HEAD ilegível antes do commit) cai na contagem relativa — ainda conferindo o `ok`.
+   */
+  const resetToSha = async (cwd: string, mode: "--soft" | "--hard", sha: string, commits: number): Promise<boolean> => {
+    const bySha = isRev(sha);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const r = await gitAt(cwd, `reset ${mode} ${bySha ? quote(sha) : `HEAD~${commits}`}`);
+      if (!r.ok) continue;
+      if (!bySha || (await gitAt(cwd, `rev-parse HEAD`)).stdout.trim() === sha) return true;
+    }
+    return false;
+  };
+
+  /** Retém a publicação de `cwd` enquanto o commit que ficou no HEAD (o que não foi desfeito) for ancestral
+   *  dele — solta sozinha quando o operador o tirar (ou o HEAD voltar a `preSha`). PERSISTIDA no ref por
+   *  worktree (git.ts, setPushHold): o settle do engine e o release também a respeitam, e ela sobrevive a restart. */
+  const holdPoisoned = async (cwd: string, preSha: string, reason: string): Promise<void> => {
+    const poisoned = (await gitAt(cwd, `rev-parse HEAD`)).stdout.trim();
+    const base = isRev(preSha) ? preSha : null;
+    if (isRev(poisoned) && poisoned !== preSha) await setPushHold(git, base, cwd);
+    holdPushes({
+      cwd,
+      reason,
+      stillHeld: async () => {
+        const head = (await gitAt(cwd, `rev-parse HEAD`)).stdout.trim();
+        if (base && head === base) {
+          await clearPushHold(git, cwd);
+          return false;
+        }
+        if (!isRev(poisoned) || poisoned === preSha) return true; // não sei qual é ⇒ retém
+        if (await pushHoldActive(git, { poisoned, base }, cwd)) return true;
+        await clearPushHold(git, cwd);
+        return false;
+      },
+    });
+  };
+
   /** Push HEAD to origin after a merge-back (story-ex0082). Non-fatal: a failure logs + records on
    * the entry but does NOT block the queue or change the `done` status — `git push` is cumulative,
    * so the next successful push recovers all accumulated commits. #37 auto-push: on a non-fast-forward
@@ -2789,13 +2972,26 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
    * retry, `merge --abort` em conflito — passando por {@link reconcileWithOrigin}, que aplica a fronteira.
    * Sob o default (`owner`) o comportamento é byte-idêntico ao de antes. */
   const pushToOrigin = async (entry: MergeQueueEntry): Promise<void> => {
-    let pushed = await git(`push origin HEAD`);
-    if (!pushed.ok) {
-      const branch = (await git(`rev-parse --abbrev-ref HEAD`)).stdout.trim() || "main";
-      if (await reconcileWithOrigin(cfg.repoRoot, branch)) pushed = await git(`push origin HEAD`);
+    const branch = (await git(`rev-parse --abbrev-ref HEAD`)).stdout.trim() || "main";
+    // o push leva o SHA que o portão varreu (pushTarget) — nunca um `HEAD` resolvido depois do scan
+    const gate = await trainPushGate(cfg.repoRoot, branch);
+    if (gate.held) {
+      entry.pushError = gate.held.slice(0, 300);
+      return;
+    }
+    let pushed = await git(`push origin ${pushTarget(branch, gate.sha)} --no-follow-tags`);
+    if (!pushed.ok && (await reconcileWithOrigin(cfg.repoRoot, branch))) {
+      // o reconcile criou um merge commit (não varrido): o portão de novo antes do retry
+      const again = await trainPushGate(cfg.repoRoot, branch);
+      if (again.held) {
+        entry.pushError = again.held.slice(0, 300);
+        return;
+      }
+      pushed = await git(`push origin ${pushTarget(branch, again.sha)} --no-follow-tags`);
     }
     if (pushed.ok) {
-      entry.pushError = undefined; // clear any prior recorded failure on this later success
+      // clear any prior recorded failure on this later success — salvo uma retenção viva (a do `stage`, p.ex.)
+      if (pushHolds.size === 0) entry.pushError = undefined;
       return;
     }
     const detail = (pushed.stderr || `exit ${pushed.code}`).slice(0, 200);
@@ -2990,7 +3186,9 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
   const cardAtRef = (ref: string, relPath: string): Promise<Card | null> =>
     readCardAtRef(cfg.exec, cfg.repoRoot, ref, relPath);
 
-  /** SM-08 fail-closed: scan the LAST commit (`HEAD~1..HEAD`) in `cwd` for secrets. Returns a discriminated
+  /** SM-08 fail-closed: scan the LAST commit(s) (`HEAD~<n>..HEAD`) in `cwd` for secrets — the diff AND the
+   * commit MESSAGES (`--messages`): the split composes its main/stage commits from the entry's own messages
+   * (free text, incl. an agent's `Decision:` trailer), which the diff never shows. Returns a discriminated
    * failure (`internalError` distinguishes a scanner exit-1/invocation failure from an exit-2 secret) or null
    * when clean. BOTH are fail-closed — the flag only tailors the operator-facing message, MIRRORING the
    * whole-branch merge path (~L1968-1972). We deliberately do NOT fail-OPEN on a scanner error (the sealed
@@ -2998,9 +3196,14 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
    * merge path's pre-push rescan so the split's main + stage commits get the SAME gate. */
   const scanLastCommitForSecrets = async (
     cwd: string,
+    // A metade de dados pode criar DOIS commits (código fora do board + board); o scan cobre todos os que criou.
+    commits = 1,
   ): Promise<{ internalError: boolean; detail: string } | null> => {
     try {
-      await cfg.exec(secretScanCommand(cwd, { range: "HEAD~1..HEAD" }), { cwd, timeout: MERGE_TIMEOUT_MS });
+      await cfg.exec(secretScanCommand(cwd, { range: `HEAD~${commits}..HEAD`, messages: true, perCommit: true }), {
+        cwd,
+        timeout: MERGE_TIMEOUT_MS,
+      });
       return null;
     } catch (err) {
       const e = err as { code?: unknown };
@@ -3008,6 +3211,45 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
       // exit 2 = secret found; anything else (1 = scanner internal error, or an invocation failure) is ALSO
       // fail-closed — we only distinguish for the message/finding, never to let the commit through.
       return { internalError: code !== 2, detail: execErrorDetail(err) || `exit ${e?.code}` };
+    }
+  };
+
+  /**
+   * As mensagens dos commits da ENTRADA (`rev`, sem o que `base`, main e `stage` já têm; mais antiga primeiro) —
+   * o que o autor escreveu, com os trailers. O `--not stage HEAD` não é enfeite: a base pode estar STALE (um
+   * `worktree_refresh` que conflitou não move o `baseCommit`; a sessão termina o rebase e submete), e então
+   * `base..rev` traria os commits de OUTRAS entradas que o rebase puxou de `stage` — o assunto e os trailers
+   * delas iriam parar no commit desta em main. Idem para uma sessão que fez merge de main no branch dela.
+   * Leitura que falha ⇒ `[]` (o chamador cai no rótulo de fallback; nunca bloqueia a integração).
+   */
+  const entryCommitMessages = async (base: string, rev: string): Promise<string[]> => {
+    if (!base) return [];
+    const exclude = [base, "HEAD"];
+    const stageBranch = cfg.staging?.enabled ? cfg.staging.branch : null;
+    // só exclui o branch de staging se ele EXISTE (um ref desconhecido derruba o `log` inteiro)
+    if (stageBranch && (await git(`rev-parse --verify --quiet ${quote(`refs/heads/${stageBranch}`)}`)).ok) {
+      exclude.push(stageBranch);
+    }
+    const log = await git(
+      `log --reverse --format=${COMMIT_LOG_FORMAT} ${quote(rev)} --not ${exclude.map((r) => quote(r)).join(" ")}`,
+    );
+    return log.ok ? parseCommitLog(log.stdout) : [];
+  };
+
+  /**
+   * `git commit --no-verify -F <arquivo>` — a mensagem do AUTOR é texto livre e NUNCA passa pela linha de shell
+   * (a lição do story-ex0156 em worktree.ts: aspas duplas não neutralizam `` ` ``/`$(…)`). Com `onlyPaths`, é o
+   * `git commit --only -- <caminhos>`: só esses caminhos entram (com o conteúdo do disco, que é o do índice —
+   * o patch acabou de aplicar com `--index`), e o RESTO do índice segue staged para o commit seguinte.
+   * Nunca lança: a escrita do arquivo que falha volta como `ok:false`. O arquivo é PRIVADO (diretório 0700,
+   * arquivo 0600, apagado no fim — ver {@link withPrivateMessageFile}): a mensagem ainda não foi varrida.
+   */
+  const commitWithMessage = async (cwd: string, message: string, onlyPaths?: readonly string[]): Promise<GitResult> => {
+    const only = onlyPaths && onlyPaths.length > 0 ? ` -- ${onlyPaths.map((p) => quote(p)).join(" ")}` : "";
+    try {
+      return await withPrivateMessageFile(message, (file) => gitAt(cwd, `commit --no-verify -F ${quote(file)}${only}`));
+    } catch (err) {
+      return { ok: false, code: null, stdout: "", stderr: `mensagem de commit não gravou: ${String(err instanceof Error ? err.message : err)}` };
     }
   };
 
@@ -3886,16 +4128,24 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
         // --no-verify: the unattended stage commit bypasses the non-security hooks (mirrors
         // commitAllPending); the secret scan below is the security gate. audit #10: a NON-ok commit
         // (delta applied but not committed) now PAUSES instead of silently marking codeStaged:true.
-        const committed = await gitAt(
-          stagePath,
-          // WS-1.3: card-less session work has no card to name in the subject — say what it IS
-          // (`usm(undefined)` in the stage history would be a lie a future archaeologist has to decode).
-          `commit --no-verify -m ${quote(
-            entry.cardId
-              ? `usm(${entry.cardId}): código staged (run ${entry.runId})`
-              : `usm(sessão): código staged (sessão ${entry.runId})`,
-          )}`,
-        );
+        // WS-1.3: card-less session work has no card to name in the subject — say what it IS
+        // (`usm(undefined)` in the stage history would be a lie a future archaeologist has to decode).
+        // O ASSUNTO segue a convenção (delivery-view liga o commit à sessão por `(sessão <id>)`; diff.ts acha o
+        // código de um card por `usm(<card>): código staged`). Mas a SESSÃO tem autor: as mensagens dela (e os
+        // trailers — Co-Authored-By…) vão no CORPO, em vez de sumirem no rótulo do train.
+        const stageSubject = entry.cardId
+          ? `usm(${entry.cardId}): código staged (run ${entry.runId})`
+          : `usm(sessão): código staged (sessão ${entry.runId})`;
+        const sessionMessages = entry.cardId ? [] : authoredMessages(await entryCommitMessages(base, branch));
+        // o desfazer do secret volta a ESTE sha (nunca `HEAD^1`, que assume que HEAD ainda é o nosso commit)
+        const stagePre = (await gitAt(stagePath, `rev-parse HEAD`)).stdout.trim();
+        const committed =
+          sessionMessages.length > 0
+            ? await commitWithMessage(
+                stagePath,
+                `${stageSubject}\n\n${composeIntegrationMessage(sessionMessages, { fallbackSubject: stageSubject })}`,
+              )
+            : await gitAt(stagePath, `commit --no-verify -m ${quote(stageSubject)}`);
         if (!committed.ok) {
           await gitAt(stagePath, `reset --hard HEAD`); // discard the applied-but-uncommitted delta; stage clean
           const outcome = await parkOrReturn(
@@ -3908,10 +4158,14 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
         if (blocked) {
           // ISOLATED stage worktree (gitAt, not the live `git(...)` runner) → a hard undo of the just-applied
           // staged commit is safe here; there is no uncommitted live-checkout code to clobber.
-          await gitAt(stagePath, `reset --hard HEAD^1`); // undo the staged commit; stage pristine
-          const reason = blocked.internalError
-            ? `split: secret-scan FALHOU (erro interno do scanner) sobre o código staged — fail-closed: ${blocked.detail}`
-            : `split: secret-scan DETECTOU secret no código staged: ${blocked.detail}`;
+          // undo the staged commit; stage pristine — por SHA, conferido, com uma retentativa
+          const undone = await resetToSha(stagePath, "--hard", stagePre, 1);
+          const reason =
+            (blocked.internalError
+              ? `split: secret-scan FALHOU (erro interno do scanner) sobre o código staged — fail-closed: ${blocked.detail}`
+              : `split: secret-scan DETECTOU secret no código staged: ${blocked.detail}`) +
+            (undone ? "" : ` — ${COMMIT_NOT_UNDONE} (HEAD de ${staging.branch} não voltou a ${stagePre.slice(0, 12) || "?"})`);
+          if (!undone) await holdPoisoned(stagePath, stagePre, reason);
           finalize(entry, "failed", { failureReason: reason });
           try {
             // card-less (session): no card to blocker — the `failed` entry + its failureReason is the record.
@@ -3925,9 +4179,24 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
         }
         // #37 auto-push: push the staged code; on a non-ff rejection (origin/stage advanced from
         // another checkout) reconcile and retry once, so origin/stage stays == this checkout.
-        const stagePushed = await gitAt(stagePath, `push origin ${quote(staging.branch)}`); // best-effort (gitAt never throws)
-        if (!stagePushed.ok && (await reconcileWithOrigin(stagePath, staging.branch))) {
-          await gitAt(stagePath, `push origin ${quote(staging.branch)}`);
+        // O scan PRÉ-PUSH vem antes (fail-closed): o push é cumulativo e pode levar um commit de `stage` que
+        // uma tentativa anterior criou e morreu antes de varrer. Retido ⇒ não publica; a entrada termina a
+        // integração LOCAL (o commit DELA foi varrido acima) e o loop pausa até a retenção soltar.
+        const stageGate = await trainPushGate(stagePath, staging.branch);
+        if (stageGate.held) {
+          entry.pushError = stageGate.held.slice(0, 300);
+        } else {
+          // o SHA varrido, nunca o branch resolvido depois do scan (pushTarget); sem sha, o nome do branch como antes
+          const stageRef = (sha: string | null | undefined): string => {
+            const t = pushTarget(staging.branch, sha);
+            return t === "HEAD" ? quote(staging.branch) : t;
+          };
+          const stagePushed = await gitAt(stagePath, `push origin ${stageRef(stageGate.sha)} --no-follow-tags`); // best-effort (gitAt never throws)
+          if (!stagePushed.ok && (await reconcileWithOrigin(stagePath, staging.branch))) {
+            const again = await trainPushGate(stagePath, staging.branch);
+            if (again.held) entry.pushError = again.held.slice(0, 300);
+            else await gitAt(stagePath, `push origin ${stageRef(again.sha)} --no-follow-tags`);
+          }
         }
       }
       // #38 verify-integration: before TRUSTING `codeStaged`, CONFIRM the run's code actually landed on
@@ -4022,7 +4291,9 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
           | { kind: "landed"; cards: CardStatusOnDisk[] }
           | { kind: "apply-failed"; detail: string }
           | { kind: "commit-failed"; detail: string }
-          | { kind: "secret"; reason: string; internalError: boolean };
+          | { kind: "secret"; reason: string; internalError: boolean }
+          // o desfazer dos commits desta tentativa NÃO voltou o HEAD: o commit segue local ⇒ retém a publicação
+          | { kind: "undo-failed"; detail: string; secret: boolean; preSha: string };
 
         const dataHalf = async (): Promise<DataHalfOutcome> => {
           // WP5-F1 — O TRAIN SÓ DESFAZ O QUE ELE ESCREVEU. Antes de escrever qualquer coisa, a metade de dados
@@ -4105,6 +4376,14 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
           for (const f of lineData.filter((p) => BOARD_YAML_RE.test(p))) {
             govLive.set(f, await fsp.readFile(path.join(cfg.repoRoot, f), "utf8").catch(() => null));
           }
+          // …e a exceção de autonomia POR CARD (governance-keys.ts restoreCardGovernance): a de main de cada card que o run
+          // traz, lida ANTES do patch (null = o card é novo em main). Vale para o patch por linha E para o 3-way.
+          const cardGovLive = new Map<string, CardGovernance | null>();
+          let cardGovFixed = false;
+          for (const f of data.filter((p) => CARD_MD_RE.test(p))) {
+            const text = await fsp.readFile(path.join(cfg.repoRoot, f), "utf8").catch(() => null);
+            cardGovLive.set(f, cardGovernanceOf(text === null ? null : parseCardText(text, `vivo:${f}`, f)));
+          }
 
           // 1) Line-apply everything that is NOT a carved card. On conflict the markers stay on disk only until
           //    `undo` puts back the bytes this attempt wrote (and NOTHING else) before we park.
@@ -4136,7 +4415,7 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
               if (fixed === null) continue;
               await fsp.writeFile(file, fixed);
               await git(`add -- ${quote(f)}`);
-              console.warn(`[harness-merge-queue] split: ${f} — a chave de governança «organizeOnly» do run ${entry.runId} não foi aceita (só o operador a muda); o valor de main foi mantido`);
+              console.warn(`[harness-merge-queue] split: ${f} — uma chave de governança (organizeOnly ou a autonomia) do run ${entry.runId} não foi aceita (só o operador a muda); o valor de main foi mantido`);
             }
           }
 
@@ -4195,6 +4474,26 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
             if (failed) return failed;
           }
 
+          // 2.1) A EXCEÇÃO DE AUTONOMIA do card não vem de um worktree: um `autonomyMode: ultra` escrito no card do run
+          //    liberaria «Aprovar entrega» só para ele. Volta à de main (a nova: sem exceção), sob a trava do card.
+          for (const [f, live] of cardGovLive) {
+            const id = CARD_MD_CAPTURE_RE.exec(f);
+            const fixOne = async (): Promise<void> => {
+              const text = await fsp.readFile(path.join(cfg.repoRoot, f), "utf8").catch(() => null);
+              const landed = text === null ? null : parseCardText(text, `aterrissado:${f}`, f);
+              const fixed = landed ? restoreCardGovernance(landed, live) : null;
+              if (!fixed) return;
+              cardGovFixed = true;
+              written.add(f);
+              await writeCardToPath(path.join(cfg.repoRoot, f), fixed);
+              await noteWrote([f]);
+              await git(`add -- ${quote(f)}`);
+              console.warn(`[harness-merge-queue] split: ${f} — a exceção de autonomia do card que o run ${entry.runId} trouxe não foi aceita (só o operador a muda); o valor de main foi mantido`);
+            };
+            if (id) await withCardLock(id[1], id[2], fixOne);
+            else await fixOne();
+          }
+
           // 2.5) REGENERATE the artifacts derived from the data that just landed, so main is internally
           //    consistent at the instant it commits. Regenerating (never patching) is what makes this
           //    correct under concurrency: the artifact is recomputed from main's POST-merge data, so it is
@@ -4225,39 +4524,91 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
           //    (ok:false ⇒ index ≠ HEAD) is the ground truth: it also skips the empty commit on a
           //    crash-resume whose idempotent re-merge produced no new diff.
           let hasStaged = lineApplied;
-          if (carved.length > 0 || dataDerived.length > 0) hasStaged = !(await git(`diff --cached --quiet`)).ok;
+          // (uma exceção de card devolvida à de main pode zerar a única mudança daquele card: pergunta ao índice)
+          if (carved.length > 0 || dataDerived.length > 0 || cardGovFixed) hasStaged = !(await git(`diff --cached --quiet`)).ok;
           if (hasStaged) {
-            // --no-verify: an unattended commit must bypass the NON-security pre-commit hooks (test-evidence
-            // is non-deterministic); the secret scan below is the security gate. audit #10: a NON-ok commit
-            // PAUSES with main left pristine (never a silent staged-but-uncommitted board-state loss).
-            const committed = await git(
-              // WS-1.3: a card-less session CAN carry board data (it moved a card on some board while doing
-              // self-dev) — it takes the normal data→main split; only the subject has no card to name.
-              `commit --no-verify -m ${quote(
-                entry.cardId ? `board: ${entry.cardId} (run ${entry.runId})` : `board: sessão ${entry.runId}`,
-              )}`,
-            );
-            if (!committed.ok) {
-              // WP5-F1 — devolve só os caminhos que esta tentativa escreveu, ao estado anterior a ela.
+            // O QUE vai em cada commit. A metade de dados é «tudo fora de `codePrefixes`» — com `packages/` declarado,
+            // hooks, scripts e configs da raiz caem AQUI, ao lado dos cards. O rótulo `board:` é do train e só diz
+            // a verdade sobre dado de board (`storymap/boards/**` e os artefatos derivados dele, regenerados acima);
+            // o resto é trabalho do AUTOR e carrega as mensagens dos commits da entrada (com os trailers). Uma
+            // entrada mista vira DOIS commits: primeiro o do autor (`commit --only` só com os caminhos fora do
+            // board), depois o `board:` com o que ficou staged. Diff ilegível ⇒ classifica pela lista do patch.
+            const derivedArtifacts = new Set(derivedHere.map((d) => d.artifact));
+            const stagedNow = await git(`diff --cached --name-only --no-renames`);
+            const stagedPaths = stagedNow.ok
+              ? stagedNow.stdout.split("\n").map((s) => s.trim()).filter(Boolean)
+              : [...trainPaths];
+            const outsideBoard = stagedPaths.filter((p) => !p.startsWith(BOARD_DATA_PREFIX) && !derivedArtifacts.has(p));
+            const boardLeft = stagedPaths.length === 0 || outsideBoard.length < stagedPaths.length;
+            let made = 0;
+            // O HEAD de ANTES do primeiro commit desta tentativa: todo desfazer volta a ESTE sha (nunca a
+            // `HEAD~<made>`, contagem relativa) e CONFERE que voltou — ver resetToSha.
+            const preSha = (await git(`rev-parse HEAD`)).stdout.trim();
+            /** Desfaz os commits desta tentativa. Não voltou ⇒ o desfecho que RETÉM a publicação (e NÃO roda o
+             *  `undo` dos caminhos: com o commit ainda no HEAD, devolver os bytes de antes por baixo dele deixaria
+             *  o índice/disco revertendo o commit — o próximo `board:` de outro escritor levaria essa reversão). */
+            const undoCommits = async (why: string, secret: boolean): Promise<DataHalfOutcome | null> => {
+              if (made === 0 || (await resetToSha(cfg.repoRoot, "--soft", preSha, made))) return null;
+              const head = (await git(`rev-parse HEAD`)).stdout.trim();
               return {
-                kind: "commit-failed",
-                detail: `split: board commit falhou (run ${entry.runId}): ${(committed.stderr || `exit ${committed.code}`).slice(0, 160)}${await undo()}`,
+                kind: "undo-failed",
+                secret,
+                preSha,
+                detail:
+                  `${why} — ${COMMIT_NOT_UNDONE}: ${made} commit(s) do train seguem em main local (HEAD ${head.slice(0, 12) || "?"}, ` +
+                  `antes ${preSha.slice(0, 12) || "?"}); o push está retido até o operador fazer \`git reset --soft ${preSha || "<sha de antes>"}\``,
               };
+            };
+            const commitFailed = async (r: GitResult, what: string): Promise<DataHalfOutcome> => {
+              const why = `split: ${what} falhou (run ${entry.runId}): ${(r.stderr || `exit ${r.code}`).slice(0, 160)}`;
+              // um commit anterior desta tentativa (o do autor) sai antes do desfazer — o índice volta a ter tudo
+              const stuck = await undoCommits(why, false);
+              if (stuck) return stuck;
+              // WP5-F1 — devolve só os caminhos que esta tentativa escreveu, ao estado anterior a ela.
+              return { kind: "commit-failed", detail: `${why}${await undo()}` };
+            };
+            if (outsideBoard.length > 0) {
+              const provenance = entry.cardId
+                ? `Merge-Train-Entry: ${entry.cardId} (run ${entry.runId})`
+                : `Merge-Train-Entry: sessão ${entry.runId}`;
+              const fallbackSubject = entry.cardId
+                ? `usm(${entry.cardId}): integra arquivos fora do board (run ${entry.runId})`
+                : `chore(sessão): integra a sessão ${entry.runId}`;
+              const message = composeIntegrationMessage(await entryCommitMessages(base, branch), { fallbackSubject, provenance });
+              const authored = await commitWithMessage(cfg.repoRoot, message, boardLeft ? outsideBoard : undefined);
+              if (!authored.ok) return commitFailed(authored, "commit do código fora do board");
+              made++;
             }
-          // SM-08 fail-closed: a secret (OR a scanner internal error) in the board commit undoes it and
-          // pauses the train. HARDENING 1.2 — the undo is NON-destructive: `reset --soft HEAD^1` drops the
-          // board commit (which carries ONLY what this attempt wrote — the index was isolated above), then
-          // `undo` puts exactly those paths back to what they were BEFORE the train (WP5-F1), leaving every
-          // other file of the live runtime checkout — committed or not — UNTOUCHED. The secret content
-          // survives on the run branch for diagnosis.
-            const blocked = await scanLastCommitForSecrets(cfg.repoRoot);
+            if (boardLeft) {
+              // --no-verify: an unattended commit must bypass the NON-security pre-commit hooks (test-evidence
+              // is non-deterministic); the secret scan below is the security gate. audit #10: a NON-ok commit
+              // PAUSES with main left pristine (never a silent staged-but-uncommitted board-state loss).
+              const committed = await git(
+                // WS-1.3: a card-less session CAN carry board data (it moved a card on some board while doing
+                // self-dev) — it takes the normal data→main split; only the subject has no card to name.
+                `commit --no-verify -m ${quote(
+                  entry.cardId ? `board: ${entry.cardId} (run ${entry.runId})` : `board: sessão ${entry.runId}`,
+                )}`,
+              );
+              if (!committed.ok) return commitFailed(committed, "board commit");
+              made++;
+            }
+          // SM-08 fail-closed: a secret (OR a scanner internal error) in the commit(s) of this data half — the
+          // author's commit (code outside the board) and/or the `board:` one, diff AND message — undoes them and
+          // pauses the train. HARDENING 1.2 — the undo is NON-destructive: `reset --soft HEAD~<n>` drops the
+          // commit(s) this attempt made (which carry ONLY what this attempt wrote — the index was isolated
+          // above), then `undo` puts exactly those paths back to what they were BEFORE the train (WP5-F1),
+          // leaving every other file of the live runtime checkout — committed or not — UNTOUCHED. The secret
+          // content survives on the run branch for diagnosis.
+            const blocked = await scanLastCommitForSecrets(cfg.repoRoot, made);
             if (blocked) {
-              await git(`reset --soft HEAD^1`);
+              const why = blocked.internalError
+                ? `split: secret-scan FALHOU (erro interno do scanner) sobre os commits da metade de dados em main (código fora do board e/ou board, diff e mensagem) — fail-closed: ${blocked.detail}`
+                : `split: secret-scan DETECTOU secret nos commits da metade de dados em main (código fora do board e/ou board, diff e mensagem): ${blocked.detail}`;
+              const stuck = await undoCommits(why, true);
+              if (stuck) return stuck;
               const suffix = await undo();
-              const reason = blocked.internalError
-                ? `split: secret-scan FALHOU (erro interno do scanner) sobre o board data — fail-closed: ${blocked.detail}${suffix}`
-                : `split: secret-scan DETECTOU secret no board data: ${blocked.detail}${suffix}`;
-              return { kind: "secret", reason, internalError: blocked.internalError };
+              return { kind: "secret", reason: `${why}${suffix}`, internalError: blocked.internalError };
             }
           }
           // O status de cada card do run ANTES (o lado vivo de main) e DEPOIS da aterrissagem — o merge-back muda
@@ -4334,6 +4685,22 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
           const half = await parkOrReturn(entry, outcome.detail);
           return half === "returned" ? "done" : "paused";
         }
+        if (outcome.kind === "undo-failed") {
+          // O commit do train segue em main LOCAL: retém todo push daquele checkout (o scan pré-push é a rede
+          // de baixo, mas um commit de board limpo e meio-aterrissado também não pode sair) e pausa o train.
+          await holdPoisoned(cfg.repoRoot, outcome.preSha, outcome.detail);
+          finalize(entry, "failed", { failureReason: outcome.detail });
+          if (outcome.secret) {
+            try {
+              if (entry.cardId) await addSecretScanBlocker(entry.board, entry.cardId, entry.runId, outcome.detail);
+            } catch (err) {
+              entry.secretScanBlockerError = String(err instanceof Error ? err.message : err).slice(0, 200);
+            }
+          }
+          await persist();
+          notify();
+          return "paused";
+        }
         if (outcome.kind === "secret") {
           finalize(entry, "failed", { failureReason: outcome.reason });
           try {
@@ -4381,6 +4748,17 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
         await stampStaged(entry.board, entry.cardId);
       } catch (err) {
         console.error("[harness-merge-queue] stampStaged falhou (não-fatal):", err instanceof Error ? err.message : err);
+      }
+      // O código de cobrança e a mudança em teste existente são do DONO (decision-class.ts codeChangePoint): o diff do
+      // código que acabou de aterrissar em `stage` marca o card — a publicação dele espera o dono (owner-waiting.ts).
+      try {
+        const ns = await git(`diff --name-status --no-renames ${quote(base)}..${quote(branch)}`);
+        const codeSet = new Set(code);
+        const files = ns.ok ? parseNameStatus(ns.stdout).filter((f) => codeSet.has(f.path)) : [];
+        const point = codeChangePoint(files);
+        if (point.billing || point.existingTests || point.agentConfig) await markCodeChange(entry.board, entry.cardId, entry.runId, files);
+      } catch (err) {
+        console.error("[harness-merge-queue] markCodeChange falhou (não-fatal):", err instanceof Error ? err.message : err);
       }
     }
 
@@ -4627,7 +5005,17 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
     // this loop awaits each integration before selecting the next and (b) the defensive guard below
     // pauses if one is somehow mid-flight (re-entrancy / recovery race); the in-flight one's completion
     // re-pumps process(). (Supersedes the old conflict-pause AC3 — the design's deliberate change.)
+    // Uma retenção PERSISTIDA antes de um restart volta a pausar o loop (uma vez por processo). SEM `await`: a
+    // primeira escolha de entrada segue síncrona como sempre (o supersede de runs do mesmo card depende disso);
+    // a retenção é registrada seguindo em paralelo, e o push dessa primeira entrada esbarra no ref de qualquer jeito
+    // (prePushGate) — o pior caso é UMA entrada integrada localmente sobre o commit retido, nunca publicada.
+    void adoptPersistedHold();
     for (;;) {
+      // PUBLICAÇÃO RETIDA (scan pré-push reprovou / desfazer não voltou o HEAD): não integra a próxima entrada —
+      // empilhar commits sobre um commit local envenenado só piora a limpeza. Solta sozinha (ver pushHolds).
+      // ANTES do guarda serial: entre o guarda e a escolha da entrada não pode haver `await` (um process()
+      // reentrante escolheria a mesma entrada).
+      if (pushHolds.size > 0 && (await pushesStillHeld())) break;
       if (entries.some((e) => e.status === "merging" || e.status === "gate-running")) break; // serial: one integration at a time
       const entry = entries.find((e) => e.status === "waiting");
       if (!entry) break; // nothing left to integrate (queue empty, or only parked/terminal entries remain)
@@ -4975,11 +5363,19 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
       // a concurrent board-data commit slipping between the failed merge and the abort could otherwise
       // commit the CONFLICTED index — so merge+abort must be ONE atomic unit. (The snap paths already abort
       // internally; a redundant `merge --abort` there is a harmless captured no-op — git() never throws.)
+      // O sha de ANTES e o do merge commit, lidos DENTRO da seção crítica: o scan e o desfazer do segredo abaixo
+      // operam sobre ESTES shas, nunca sobre `HEAD~1`/`HEAD^1` (um commit de board do engine que caísse entre o
+      // merge e o scan seria varrido no lugar do merge, e o desfazer o jogaria fora).
+      let preMergeSha = "";
+      let mergeSha = "";
       const mergeRes = await commitSerializer(cfg.repoRoot, async () => {
+        preMergeSha = (await git(`rev-parse HEAD`)).stdout.trim();
         const res = await mergeWithSnapResolution(integrationRev(entry), snapFiles); // G5: the pinned sha the gate validated
         if (res.outcome === "conflict") await git(`merge --abort`); // restore main BEFORE releasing the lock
+        else mergeSha = (await git(`rev-parse HEAD`)).stdout.trim();
         return res;
       });
+      const mergePinned = isFullSha(preMergeSha) && isFullSha(mergeSha) && preMergeSha !== mergeSha;
       if (mergeRes.outcome === "regen-failed") {
         // The snap-conflict regen's `vitest -u` threw → mergeWithSnapResolution already aborted the merge
         // (main pristine). Re-drive or park, mirroring the content-conflict tail below. LOW #3: surface the
@@ -5031,7 +5427,13 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
         // PAUSE the train. main returns pristine; the secret never reaches origin.
         let scanBlock: { internalError: boolean; detail: string } | null = null;
         try {
-          await cfg.exec(secretScanCommand(cfg.repoRoot, { range: "HEAD~1..HEAD" }), {
+          // `messages: true`: para um merge commit, `HEAD~1..HEAD` lista TODO commit que o merge trouxe — as
+          // mensagens CRUAS do run/sessão (o trailer `Decision:` com o texto livre do agente) chegam a main e a
+          // origin por aqui sem passar por nenhum outro scan de mensagem (o do run é `--staged`: só o diff).
+          // `perCommit: true`: e cada um desses commits pelo SEU diff — um segredo que um commit do run adiciona e
+          // outro remove some do diff líquido do merge, mas o merge publica os dois.
+          const mergeRange = mergePinned ? `${preMergeSha}..${mergeSha}` : "HEAD~1..HEAD";
+          await cfg.exec(secretScanCommand(cfg.repoRoot, { range: mergeRange, messages: true, perCommit: true }), {
             cwd: cfg.repoRoot,
             timeout: MERGE_TIMEOUT_MS,
           });
@@ -5050,14 +5452,27 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
           // data-loss class as the split path). On abort the merge commit stays LOCAL + UNPUSHED and the
           // train PAUSES here (the `break` below skips the push), so the poison never reaches origin — the
           // operator undoes it by hand after clearing the dirty tree.
-          const undo = await git(`reset --keep HEAD^1`);
+          // Por SHA, e só se o HEAD ainda é o merge: com outro commit em cima (o engine), voltar apagaria o dele —
+          // aí o desfazer NÃO roda e a retenção (abaixo) segura a publicação até o operador decidir.
+          const undo: GitResult = !mergePinned
+            ? await git(`reset --keep HEAD^1`)
+            : await commitSerializer(cfg.repoRoot, async () =>
+                (await git(`rev-parse HEAD`)).stdout.trim() === mergeSha
+                  ? git(`reset --keep ${quote(preMergeSha)}`)
+                  : { ok: false, code: null, stdout: "", stderr: `HEAD andou depois do merge ${mergeSha.slice(0, 12)} — desfazer recusado` },
+              );
           const undoSuffix = undo.ok
             ? ""
-            : ` [ATENÇÃO: undo do merge abortou (mudanças locais sobrepõem os arquivos merged) — o merge commit está LOCAL e NÃO-pushado; desfaça à mão após limpar a árvore]`;
+            : ` [ATENÇÃO: undo do merge abortou (${(undo.stderr || "mudanças locais sobrepõem os arquivos merged").slice(0, 120)}) — o merge commit está LOCAL e NÃO-pushado; a publicação fica retida até ele sair do HEAD]`;
           const reason =
             (scanBlock.internalError
               ? `secret-scan FALHOU (erro interno do scanner) sobre o merge commit — fail-closed, push bloqueado: ${scanBlock.detail}`
               : `secret-scan DETECTOU secret no merge commit — push bloqueado: ${scanBlock.detail}`) + undoSuffix;
+          // o merge commit envenenado ficou LOCAL ⇒ retém todo push de main até o operador tirá-lo
+          if (!undo.ok) {
+            const pre = mergePinned ? preMergeSha : (await git(`rev-parse HEAD^1`)).stdout.trim();
+            await holdPoisoned(cfg.repoRoot, pre, `${COMMIT_NOT_UNDONE}: ${reason}`);
+          }
           finalize(entry, "failed", { failureReason: reason });
           // AC2: stamp a security:blocker finding so the card surfaces as blocked. Best-effort: a write
           // error logs + records on the entry but NEVER un-blocks the push (mirrors addGateBlocker).
@@ -5636,7 +6051,16 @@ export function makeMergeQueue(cfg: MergeQueueConfig): MergeQueuePort {
 
     async pump() {
       await ensureLoaded();
+      // PUBLICAÇÃO RETIDA: traz a retenção persistida por outro escritor (o settle do engine) para o snapshot, e
+      // confere se as vivas ainda valem. O laço que PAROU numa retenção não tem evento de retomada — é aqui, na
+      // varredura periódica, que ele volta a andar quando o operador a solta (reset ou aceite).
+      const holdKeys = (): string => [...pushHolds.keys()].join("\n");
+      const heldBefore = holdKeys();
+      await adoptPersistedHold().catch(() => {});
+      const stillHeld = pushHolds.size > 0 && (await pushesStillHeld());
+      if (holdKeys() !== heldBefore) notify();
       const waiting = entries.filter((e) => e.status === "waiting").length;
+      if (stillHeld) return { waiting, pumped: false };
       // Nada esperando ⇒ nada a fazer. Algo EM VOO ⇒ o laço está vivo e vai seguir sozinho quando aquela
       // integração terminar (ela re-bombeia no `finally`): cutucar agora seria no-op, e chamar de "pumped"
       // um no-op faria o log mentir sobre ter destravado alguma coisa.

@@ -4,7 +4,7 @@
 //     card que o sistema republicava;
 //   • o card, a linha de estado e o nav não pintam com matiz cru do Tailwind nem animam com `animate-*` cru: a cor sai
 //     dos tokens de estado (presence-tone.ts) e o pulso de `.state-pulse` (com prefers-reduced-motion);
-//   • nenhuma linha de card é região viva (`role=status`): o pulso do board é o único anúncio;
+//   • nenhuma linha de card é região viva (`role=status`) — nem o card, nem a caixinha do fluxo;
 //   • o chip do Inbox não mostra «0» antes da primeira resposta.
 
 import { readFileSync } from "node:fs";
@@ -18,15 +18,28 @@ const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[
 const RAW_HUE = /\b(?:bg|text|border|ring|from|to|via|fill|stroke|outline|decoration|divide|shadow)-(?:red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|slate|gray|zinc|neutral|stone)-\d{2,3}\b/;
 
 describe("o Decidir é a única fonte de «precisa de você» no Kanban", () => {
-  it.each(["../lib/storymap/lanes.ts", "./KanbanBoard.tsx", "./RunnerStatusProvider.tsx", "./KanbanCard.tsx"])("%s não usa cardDemands/dominantDemand", (f) => {
+  it.each([
+    "../lib/storymap/lanes.ts",
+    "../lib/storymap/kanban-features.ts",
+    "./KanbanBoard.tsx",
+    "./RunnerStatusProvider.tsx",
+    "./kanban/FeatureCard.tsx",
+    "./kanban/CratePopover.tsx",
+    "./kanban/TrainColumn.tsx",
+  ])("%s não usa cardDemands/dominantDemand", (f) => {
     expect(code(read(f))).not.toMatch(/\b(cardDemands|dominantDemand)\b/);
   });
 
-  it("o botão de resolver do rodapé lê o Decidir do board, e só existe para o card que está nele", () => {
-    const src = code(read("./RunnerStatusProvider.tsx"));
-    const slot = src.slice(src.indexOf("export function KanbanCardNextAction("), src.indexOf("export function MoveToPopover("));
-    expect(slot).toMatch(/useOwnerDecisionFor\(cardId\)/);
-    expect(slot).toMatch(/if \(!decision\?\.primary\) return null;/);
+  // O rodapé do card antigo (KanbanCardNextAction) virou o BLOCO DE AÇÃO do card por funcionalidade: o «precisa de
+  // você» é o estado que o Decidir dá ao card, e o primário roda a ação do Inbox só quando a decisão a tem.
+  it("o «precisa de você» e o botão primário do card leem o Decidir do board — nunca o status", () => {
+    const board = code(read("./KanbanBoard.tsx"));
+    expect(board).toMatch(/owner: ownerMap\.has\(c\.id\)/);
+    expect(board).toMatch(/<OwnerDecisionsProvider value=\{ownerMap\}>/);
+    const cardSrc = code(read("./kanban/FeatureCard.tsx"));
+    expect(cardSrc).toMatch(/const decision = useOwnerDecisionFor\(card\.id\)/);
+    expect(cardSrc).toMatch(/state === "attention" && decision\?\.primary \? \(/);
+    expect(cardSrc).toMatch(/<QuickActionButton boardId=\{config\.id\} cardId=\{card\.id\} action=\{decision\.primary\}/);
   });
 
   it("a página do Kanban entrega o Decidir do coletor junto com o board", () => {
@@ -37,7 +50,19 @@ describe("o Decidir é a única fonte de «precisa de você» no Kanban", () => 
 });
 
 describe("cor e movimento só pelos tokens de estado", () => {
-  it.each(["./KanbanCard.tsx", "./CardLiveStatus.tsx", "./nav/NavShell.tsx", "./KanbanPulse.tsx", "./nav/NavAgentsChip.tsx"])(
+  it.each([
+    "./KanbanBoard.tsx",
+    "./kanban/FeatureCard.tsx",
+    "./kanban/FlowBand.tsx",
+    "./kanban/CratePopover.tsx",
+    "./kanban/TrainColumn.tsx",
+    "./kanban/LiveColumn.tsx",
+    "./kanban/KanbanLane.tsx",
+    "./kanban/kanban-tokens.ts",
+    "./CardLiveStatus.tsx",
+    "./nav/NavShell.tsx",
+    "./nav/NavAgentsChip.tsx",
+  ])(
     "%s sem matiz cru do Tailwind nem animate-* cru",
     (f) => {
       const src = code(read(f));
@@ -46,9 +71,21 @@ describe("cor e movimento só pelos tokens de estado", () => {
     },
   );
 
-  it("nenhuma linha de card é região viva; o pulso do board é a única", () => {
-    for (const f of ["./KanbanCard.tsx", "./CardLiveStatus.tsx"]) expect(code(read(f)), f).not.toMatch(/role=["{]?["']?status/);
-    expect(code(read("./KanbanPulse.tsx")).match(/role="status"/g)).toHaveLength(1);
+  // Com 60 cards na tela, 60 regiões vivas faziam o leitor de tela anunciar o board inteiro a cada quadro do SSE. O
+  // pulso do board (KanbanPulse) saiu do Kanban na fase 1 — o fluxo no cabeçalho diz o mesmo à vista —, então a
+  // garantia que sobra é a de sempre: nenhuma peça do quadro (card, caixinha, trem, No ar) é região viva.
+  it("nenhuma linha de card nem caixinha do fluxo é região viva", () => {
+    for (const f of [
+      "./KanbanBoard.tsx",
+      "./kanban/FeatureCard.tsx",
+      "./kanban/FlowBand.tsx",
+      "./kanban/CratePopover.tsx",
+      "./kanban/TrainColumn.tsx",
+      "./kanban/LiveColumn.tsx",
+      "./CardLiveStatus.tsx",
+    ])
+      expect(code(read(f)), f).not.toMatch(/role=["{]?["']?status/);
+    expect(code(read("./KanbanBoard.tsx"))).not.toMatch(/<KanbanPulse\b/);
   });
 });
 
@@ -57,26 +94,35 @@ describe("o nav", () => {
     const store = code(read("./useInboxSummary.ts"));
     expect(store).toMatch(/let current: InboxSummary \| null = null;/);
     expect(store).toMatch(/useSyncExternalStore\(subscribe, \(\) => current, \(\) => null\)/);
-    const header = code(read("./BoardHeader.tsx"));
-    expect(header).toMatch(/value=\{total == null \? "" : total\}/);
+    // o ícone do Inbox da barra do topo (shell/InboxIconLink) — era o chip do BoardHeader
+    expect(code(read("./shell/InboxIconLink.tsx"))).toMatch(/\{total == null \? "" : total\}/);
   });
 
   // O nav contava agentes e o pulso contava cards pintados de «Agindo» — «Agentes 1» com «0 agindo».
   it("o «Agentes N» do nav, o do «Mais» do celular e o «n agentes agindo» do pulso saem da MESMA presença e da MESMA conta", () => {
-    for (const f of ["./nav/NavAgentsChip.tsx", "./BoardHeader.tsx", "./KanbanPulse.tsx"]) {
+    // O BoardHeader saiu da lista na fase 1: a barra do topo não conta mais agentes (o «Agentes N» e o «Mais» do
+    // celular saíram dela; quem conta condutores é a 2ª barra do Kanban). Prova-se abaixo que ele não refaz a conta.
+    expect(code(read("./BoardHeader.tsx"))).not.toMatch(/agentPulse\(|reduceAgentPresence\(|workingAgents\(/);
+    // O pulso do Kanban saiu na fase 1; quem conta agentes no Kanban agora é o «u/s condutores» da 2ª barra, e o
+    // número vem do KanbanBoard — pela MESMA presença e pela MESMA conta (agentPulse, recortada aos condutores).
+    for (const f of ["./nav/NavAgentsChip.tsx", "./KanbanBoard.tsx"]) {
       const src = code(read(f));
       expect(src, f).toMatch(/useAgentPresence\(\)/);
       expect(src, f).toMatch(/agentPulse\(/);
       expect(src, f).not.toMatch(/reduceAgentPresence\(|workingAgents\(/); // nenhuma tela refaz a conta com o relógio dela
     }
-    expect(code(read("./KanbanPulse.tsx"))).not.toMatch(/\.working\b[^\n]*agindo|kind === "queued"/); // o pulso não conta cards
+    // o número de condutores do Kanban conta AGENTES (agentPulse), nunca cards pintados de «rodando»
+    expect(code(read("./KanbanBoard.tsx"))).toMatch(/const agentsUsed = agentPulse\(/);
   });
 
-  it("«Agentes N» toma o lugar dos chips Terminal e Processos; a RAM só aparece quando freia", () => {
+  it("a barra do topo não tem chips de máquina; a RAM só aparece quando freia (na engrenagem)", () => {
     const header = code(read("./BoardHeader.tsx"));
-    expect(header).toMatch(/<NavAgentsChip \/>/);
-    expect(header).not.toMatch(/<TerminalChip \/>|<ProcessesChip \/>/);
-    expect(header).toMatch(/if \(pct == null \|\| pct < RAM_ALERT_PCT\) return null;/);
+    // fase 1: a barra é marca / projeto / grupo · cota · Inbox · engrenagem — nenhum medidor de máquina nela
+    expect(header).not.toMatch(/<NavAgentsChip \/>|<TerminalChip \/>|<ProcessesChip \/>|<RamAlertChip \/>/);
+    // a RAM virou a linha de alerta da engrenagem, com a MESMA régua (só a partir do limite)
+    const gear = code(read("./shell/SettingsMenu.tsx"));
+    expect(gear).toMatch(/if \(pct == null \|\| pct < RAM_ALERT_PCT\) return null;/);
+    expect(header).toMatch(/<SettingsMenu /);
   });
 });
 

@@ -16,8 +16,10 @@ export const AGENT_ACTIONS_VERSION = 1;
 
 /** What the guard did with a scoped agent's tool call. */
 /** `throttled` (B4): o limite de ações por hora do board FREOU uma ação `auto` — nada rodou, nada foi pedido ao
- *  humano; o agente recebeu a hora de tentar de novo. */
-export type AgentActionOutcome = "executed" | "grant-consumed" | "pending" | "refused" | "throttled";
+ *  humano; o agente recebeu a hora de tentar de novo. `requested` (fase 6): a chamada nativa do chat foi PEDIDA — a
+ *  linha nasce no instante do pedido (um turno cancelado ou morto pelo relógio não apaga o que ele mandou rodar); o
+ *  desfecho vem numa segunda linha com o mesmo `toolUseId`. */
+export type AgentActionOutcome = "executed" | "grant-consumed" | "pending" | "refused" | "throttled" | "requested";
 
 export interface AgentAction {
   v: number;
@@ -28,6 +30,10 @@ export interface AgentAction {
   /** QUEM chamou, quando o agente se nomeou (mcp/caller.ts): `copilot:<board>`, `conductor:<cardId>`,
    *  `session:<nome>`, `external:<nome>`. Ausente nas linhas antigas e no agente que não se nomeia. */
   caller?: string;
+  /** Fase 6 — o PAPEL de quem agiu (mcp/actor.ts `actorRole`): `conductor:<card>`, `sentinel`, `chat`, `proxy`, `critic`,
+   *  `external:<nome>`, `session:<nome>`. É a chave do limite por hora por papel e o que a trilha agrupa. Ausente nas
+   *  linhas antigas. */
+  role?: string;
   board?: string;
   /** WS-12 (D16) — the CARD the call targets, from the canonical `cardId` arg the guard already reads. This is
    *  what makes the per-item anti-noop streak attributable to a real ATTEMPT (noop-attribution.ts) instead of to
@@ -44,6 +50,16 @@ export interface AgentAction {
   /** ISO de quando o limite reabre, num `throttled` — a linha de estado do card diz «volta às HH:MM» com ele. */
   retryAfter?: string;
   note?: string;
+  /**
+   * Fase 6 — O QUE foi executado, para a trilha reconstruir um incidente (o chat do dono: copilot/chat-audit.ts): os
+   * argumentos da chamada (o comando do shell, o texto digitado num terminal, o prompt de uma tarefa). Longo ⇒ o COMEÇO e
+   * o FIM (um enchimento na frente ou atrás não esconde o efeito) e o hash do inteiro em {@link argsSha256}.
+   */
+  args?: string;
+  argsSha256?: string;
+  /** o id da chamada no stream do CLI (liga a linha `requested` à do desfecho) e o do subagente que a fez, quando há. */
+  toolUseId?: string;
+  parentToolUseId?: string;
 }
 
 export type AppendAgentActionInput = Omit<AgentAction, "v" | "at">;

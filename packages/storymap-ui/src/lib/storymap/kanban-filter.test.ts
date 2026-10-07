@@ -8,11 +8,8 @@ import {
   cardTypeKeys,
   cardTypeLabel,
   EMPTY_KANBAN_FILTER,
-  filterCardGroups,
   isKanbanFilterActive,
-  kanbanTypeFacets,
   matchesCardQuery,
-  matchesKanbanFilter,
   readKanbanFilter,
   writeKanbanFilter,
 } from "./kanban-filter";
@@ -119,75 +116,10 @@ describe("cardTypeKeys / cardTypeLabel — o tipo que o card mostra", () => {
   });
 });
 
-describe("matchesKanbanFilter — texto E tipos", () => {
-  it("filtro vazio casa tudo e não conta como ativo", () => {
+describe("isKanbanFilterActive", () => {
+  it("filtro vazio (ou só espaços) não conta como ativo", () => {
     expect(isKanbanFilterActive(EMPTY_KANBAN_FILTER)).toBe(false);
     expect(isKanbanFilterActive({ q: "  ", types: [] })).toBe(false);
-    expect(matchesKanbanFilter(s3, EMPTY_KANBAN_FILTER)).toBe(true);
-  });
-
-  it("um chip de tipo sozinho recorta pelo tipo", () => {
-    const f = { q: "", types: ["bug" as const] };
-    expect(isKanbanFilterActive(f)).toBe(true);
-    expect(matchesKanbanFilter(s2, f)).toBe(true);
-    expect(matchesKanbanFilter(s4, f)).toBe(true); // modo fix
-    expect(matchesKanbanFilter(s3, f)).toBe(false);
-  });
-
-  it("vários chips = OU entre eles; texto + chips = E", () => {
-    const f = { q: "", types: ["bug" as const, "chore" as const] };
-    expect(matchesKanbanFilter(s2, f)).toBe(true);
-    expect(matchesKanbanFilter(s3, f)).toBe(true);
-    expect(matchesKanbanFilter(s1, f)).toBe(false);
-    expect(matchesKanbanFilter(s2, { q: "pedidos", types: ["bug"] })).toBe(true);
-    expect(matchesKanbanFilter(s2, { q: "safari", types: ["bug"] })).toBe(false);
-  });
-});
-
-describe("kanbanTypeFacets — os chips da barra", () => {
-  const stories = [s1, s2, s3, s4];
-
-  it("só os tipos presentes no board, na ordem canônica, com o rótulo em português", () => {
-    const facets = kanbanTypeFacets(stories, "");
-    expect(facets.map((f) => f.type)).toEqual(["user", "bug", "chore"]);
-    expect(facets.map((f) => f.label)).toEqual(["User Story", "Bug", "Chore"]);
-    expect(facets.map((f) => f.count)).toEqual([2, 2, 1]);
-  });
-
-  it("um tipo ligado fica na fileira mesmo sem card no board (dá para desligar)", () => {
-    const facets = kanbanTypeFacets(stories, "", undefined, ["spike"]);
-    expect(facets.map((f) => [f.type, f.count])).toEqual([
-      ["user", 2],
-      ["spike", 0],
-      ["bug", 2],
-      ["chore", 1],
-    ]);
-  });
-
-  it("a contagem respeita o texto, mas o chip não some quando zera", () => {
-    const facets = kanbanTypeFacets(stories, "pedidos", { cardsById });
-    expect(facets.map((f) => [f.type, f.count])).toEqual([
-      ["user", 0],
-      ["bug", 1],
-      ["chore", 0],
-    ]);
-  });
-});
-
-describe("filterCardGroups — a contagem por coluna/raia", () => {
-  it("mantém toda chave (a coluna não some) e só os cards que passam", () => {
-    const groups = new Map<string, Card[]>([
-      ["triage", [s1, s2]],
-      ["pronta", [s3]],
-      ["vazia", []],
-    ]);
-    const shown = filterCardGroups(groups, (c) => matchesKanbanFilter(c, { q: "", types: ["bug"] }));
-    expect([...shown.keys()]).toEqual(["triage", "pronta", "vazia"]);
-    expect(shown.get("triage")!.map((c) => c.id)).toEqual(["story-despacho"]);
-    expect(shown.get("pronta")).toEqual([]);
-    expect(shown.get("vazia")).toEqual([]);
-    // o original fica intacto (o arrasto calcula a ordem sobre a coluna inteira)
-    expect(groups.get("triage")).toHaveLength(2);
   });
 });
 

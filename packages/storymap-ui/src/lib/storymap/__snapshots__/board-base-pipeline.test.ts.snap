@@ -32,15 +32,14 @@ exports[`board resolved config — golden snapshot (byte-identical across the _b
   "columns": [
     {
       "color": "#a78bfa",
-      "description": "Entrada crua. Steps: Capturando (lane OCULTA da captura inteligente — você descreve a dor/objetivo e o preview propõe os cards para você aceitar ali mesmo) e Triagem (inbox de report_issue/captura: classifica, deduplica e roteia). Nada vira trabalho até passar para a Descoberta. O que ainda não está decidido não entra aqui: vira Ideia (a porta acima), e volta como tarefa quando a exploração terminar.",
+      "description": "Entrada crua. Steps: Capturando (lane OCULTA da captura inteligente — você descreve a dor/objetivo e o preview propõe os cards para você aceitar ali mesmo) e Triagem (inbox de report_issue/captura: classifica, deduplica e roteia). Nada vira trabalho até passar para a Descoberta.",
       "id": "backlog",
       "name": "Triagem",
       "owner": "agent",
-      "tool": "ideias",
     },
     {
       "color": "#3b82f6",
-      "description": "Entender a story (sessão contínua — um agente, vários chapéus). Steps: Dúvidas (perguntas ao humano por contexto), Especificar (narrativa + aceite como hipótese), Entrevista (3 usuários sintéticos + 1 lente crítica validam/ajustam o aceite), Estimar (RICE/KANO/funil conforme a natureza da story) e A fazer (go/no-go: aprovar a story para construir).",
+      "description": "Entender a story (sessão contínua — um agente, vários chapéus). Steps: Dúvidas (perguntas ao humano por contexto), Especificar (narrativa + aceite como hipótese), Entrevista (3 usuários sintéticos + 1 lente crítica validam/ajustam o aceite) e A fazer (a fila do trabalho, na ordem da coluna).",
       "id": "discovery",
       "name": "Descoberta",
       "owner": "agent",
@@ -67,7 +66,6 @@ exports[`board resolved config — golden snapshot (byte-identical across the _b
       "id": "entrega",
       "name": "Entrega",
       "owner": "human",
-      "tool": "entrega",
     },
     {
       "color": "#16a34a",
@@ -176,7 +174,7 @@ exports[`board resolved config — golden snapshot (byte-identical across the _b
   },
   "routeProfiles": {
     "express": {
-      "description": "ajuste simples / technical trivial; o enrich grava priorityCall mínimo ao pular priorizar",
+      "description": "ajuste simples / technical trivial",
       "effortCap": "medium",
       "modelCap": "sonnet",
       "skips": [
@@ -185,7 +183,6 @@ exports[`board resolved config — golden snapshot (byte-identical across the _b
         "design-ui",
         "com-design",
         "ready",
-        "priorizar",
       ],
     },
     "full": {
@@ -243,6 +240,7 @@ exports[`board resolved config — golden snapshot (byte-identical across the _b
     },
     {
       "autorun": false,
+      "autorunOnlyInColumns": true,
       "color": "#60a5fa",
       "column": "discovery",
       "costGuard": true,
@@ -271,10 +269,11 @@ exports[`board resolved config — golden snapshot (byte-identical across the _b
     },
     {
       "autorun": true,
+      "autorunOnlyInColumns": true,
       "color": "#818cf8",
       "column": "discovery",
       "costGuard": true,
-      "description": "🤖 Automação: o harness-interview simula 3 entrevistas com as personas do board (1 com lente crítica/cética) CONTRA a narrativa + aceite já especificados, valida/ajusta os critérios onde a conversa contradiz a hipótese, sintetiza dores/desejos/must-haves/riscos e avança para Estimar. Só stories user — technical/chore/spike/bug pulam direto para Estimar (skipForTypes).",
+      "description": "🤖 Automação: o harness-interview simula 3 entrevistas com as personas do board (1 com lente crítica/cética) CONTRA a narrativa + aceite já especificados, valida/ajusta os critérios onde a conversa contradiz a hipótese, sintetiza dores/desejos/must-haves/riscos e avança para A fazer. Só stories user — technical/chore/spike/bug pulam direto para A fazer (skipForTypes).",
       "dispensable": true,
       "effort": "high",
       "id": "interview",
@@ -291,33 +290,18 @@ exports[`board resolved config — golden snapshot (byte-identical across the _b
       "trigger": "harness-interview",
     },
     {
-      "autorun": true,
-      "color": "#ec4899",
-      "column": "discovery",
-      "costGuard": true,
-      "description": "🤖 Automação: o harness-prioritize pontua a story pela régua WSJF — valor, urgência e destravamento (cada um na escala 1·2·3·5·8·13) divididos pelo tamanho — estimando contra as ÂNCORAS já pontuadas do board e contra o que o produto já entregou, e a move para A fazer. A ordem do backlog cai dessa conta, então pontuar um card novo não mexe no score de nenhum outro. Só entra aqui com a narrativa completa (role + quero/precisamos + para/de modo que) e ≥1 critério de aceite (gate hasRefinement).",
-      "dispensable": true,
-      "effort": "medium",
-      "gate": "hasRefinement",
-      "id": "priorizar",
-      "maxTurns": 15,
-      "model": "sonnet",
-      "name": "Estimar",
-      "short": "EST",
-      "trigger": "harness-prioritize",
-    },
-    {
       "autorun": false,
       "color": "#f59e0b",
       "column": "discovery",
-      "description": "Priorizada — PARADA go/no-go (saída da Descoberta): só humano mexe e arrasta para fora o que deve ser construído. Só entra aqui com a prioridade avaliada (gate hasPrioritization: uma nota WSJF, ou o tier argumentado; a priorização numérica antiga — RICE/KANO/funil — ainda satisfaz o gate, mas é legado).",
-      "gate": "hasPrioritization",
+      "description": "A fila do trabalho (saída da Descoberta), na ORDEM DA COLUNA: o que está no topo vai primeiro — «Fazer antes» leva um card ao topo, «Pode esperar» ao fim; não há nota de prioridade. Num board com condutor, o condutor pega o card daqui quando houver vaga, nessa ordem, para moldar a story; o «vai» para construir é do crítico do plano (ou do dono, com a caixa «spec» desligada), não desta coluna. No modo por colunas é a parada go/no-go: você arrasta para fora o que deve ser construído. Só entra aqui com a narrativa completa (role + quero/precisamos + para/de modo que) e ≥1 critério de aceite (gate hasRefinement).",
+      "gate": "hasRefinement",
       "id": "pronta",
       "name": "A fazer",
       "short": "TODO",
     },
     {
       "autorun": true,
+      "autorunOnlyInColumns": true,
       "color": "#d946ef",
       "column": "prepare",
       "costGuard": true,
@@ -342,6 +326,7 @@ exports[`board resolved config — golden snapshot (byte-identical across the _b
     },
     {
       "autorun": true,
+      "autorunOnlyInColumns": true,
       "color": "#c084fc",
       "column": "prepare",
       "costGuard": true,
@@ -383,6 +368,7 @@ exports[`board resolved config — golden snapshot (byte-identical across the _b
     },
     {
       "autorun": false,
+      "autorunOnlyInColumns": true,
       "color": "#22d3ee",
       "column": "construcao",
       "description": "Aprovado e pronto para desenvolver — buffer humano (green-light) até um run pegar o card. Stories técnicas pulam o Design e este buffer (o A fazer, na Descoberta, já é o go/no-go delas).",
@@ -448,6 +434,7 @@ exports[`board resolved config — golden snapshot (byte-identical across the _b
     },
     {
       "autorun": true,
+      "autorunOnlyInColumns": true,
       "color": "#0d9488",
       "column": "construcao",
       "costGuard": true,
@@ -701,6 +688,69 @@ exports[`board resolved config — golden snapshot (byte-identical across the _b
       "mcp": "storymap/graphify/{board}.json",
     },
   },
+  "view": {
+    "lanes": [
+      {
+        "id": "triagem",
+        "label": "Triagem",
+        "statuses": [
+          "capturando",
+          "triage",
+          "pronta",
+        ],
+      },
+      {
+        "id": "moldando",
+        "label": "Moldando",
+        "statuses": [
+          "grill",
+          "enriquecer",
+          "interview",
+          "design-ux",
+          "design-ui",
+          "com-design",
+          "refinar",
+          "corrigir",
+          "descontinuar",
+        ],
+      },
+      {
+        "id": "construindo",
+        "label": "Construindo",
+        "statuses": [
+          "ready",
+          "plano-tecnico",
+          "desenvolver",
+        ],
+      },
+      {
+        "id": "verificando",
+        "label": "Verificando",
+        "statuses": [
+          "revisar-codigo",
+          "qa-automatizado",
+        ],
+      },
+      {
+        "id": "entrega",
+        "label": "Entrega",
+        "statuses": [
+          "revisao",
+          "merge",
+          "stage",
+          "release",
+          "deploy",
+        ],
+      },
+      {
+        "id": "noar",
+        "label": "No ar",
+        "statuses": [
+          "concluida",
+        ],
+      },
+    ],
+  },
 }
 `;
 
@@ -844,28 +894,17 @@ exports[`board resolved config — golden snapshot (byte-identical across the _b
       "autorun": true,
       "color": "#3b82f6",
       "costGuard": true,
-      "description": "🤖 Escreve a narrativa e os critérios de aceite, e move para Priorizar.",
+      "description": "🤖 Escreve a narrativa e os critérios de aceite, e move para Pronta p/ build.",
       "id": "enriquecer",
       "maxTurns": 20,
       "name": "Enriquecer",
       "trigger": "harness-enrich",
     },
     {
-      "autorun": true,
-      "color": "#ec4899",
-      "costGuard": true,
-      "description": "🤖 Pontua pela régua WSJF contra as âncoras do board e move para Pronta p/ build.",
-      "gate": "hasRefinement",
-      "id": "priorizar",
-      "maxTurns": 15,
-      "name": "Priorizar",
-      "trigger": "harness-prioritize",
-    },
-    {
       "autorun": false,
       "color": "#f59e0b",
-      "description": "Priorizada — parada go/no-go. Avance manualmente para Design UI/UX ao aprovar.",
-      "gate": "hasPrioritization",
+      "description": "Parada go/no-go, na ordem da coluna (o topo vai primeiro). Avance manualmente para Design UI/UX ao aprovar.",
+      "gate": "hasRefinement",
       "id": "pronta",
       "name": "Pronta p/ build",
     },

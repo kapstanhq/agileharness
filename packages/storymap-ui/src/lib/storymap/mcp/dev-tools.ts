@@ -109,6 +109,7 @@ import {
 import { collectWorkCandidates, excludedReason, rankWorkCandidates } from "@/lib/storymap/runner/suggest-work";
 import { getCardClaims, isClaimLive } from "@/lib/storymap/runner/claims";
 import { listBoards, readBoardConfig, readCard, readCards } from "@/lib/storymap/repo";
+import { CONDUCTOR_DEFAULT_MODEL, conductorModelCapFor, conductorModelFor, isHandOpenedConductor, resolveConductorPolicy } from "@/lib/storymap/driver";
 // Deploy of a product app: the SINGLE source lives in the runner (also used by the onEnter deploy-board
 // effect). The MCP `deploy`/`deploy_status` tools reuse the SAME registry — no parallel implementation.
 import {
@@ -123,6 +124,7 @@ import {
 import { checkDeployFreshness, legacyTargetFreshnessInputs } from "@/lib/storymap/runner/deploy-freshness";
 import { releaseCodePrefixes } from "@/lib/storymap/runner/release-scope";
 import { resolvedClaudeBin } from "../runner/claude-bin";
+import { evaluateShellGuard } from "../runner/claude-settings";
 
 const pexec = promisify(execFile);
 
@@ -143,6 +145,19 @@ export { sessionSpawnDeps };
 const text = (s: string): CallToolResult => ({ content: [{ type: "text", text: s || "(vazio)" }] });
 const json = (d: unknown): CallToolResult => ({ content: [{ type: "text", text: JSON.stringify(d, null, 2) }] });
 const fail = (s: string): CallToolResult => ({ content: [{ type: "text", text: s }], isError: true });
+
+/**
+ * A TRAVA DURA do host para um comando que o SERVIÇO vai rodar ou digitar a pedido de um chamador MCP — abrir um
+ * terminal (`term_new`), digitar num shell (`claude_send`/`session_ask` num pane que não é um agente). Esses caminhos
+ * nunca passam pela tool `Bash` do CLI, então o hook do host nunca os veria: o serviço o consulta aqui
+ * (runner/claude-settings.ts `evaluateShellGuard`). Vale para TODO chamador — o operador inclusive: a trava recusa só o
+ * catastrófico, e o override dela é do humano no ambiente da sessão dele, nunca de uma chamada MCP. Sem hook no host,
+ * nada a perguntar (null). Devolve o motivo da recusa, ou null.
+ */
+async function hardDenyRefusal(command: string, cwd: string = findRepoRoot()): Promise<string | null> {
+  const verdict = await evaluateShellGuard(command, { cwd });
+  return verdict.blocked ? verdict.reason : null;
+}
 
 // --- process exec (no shell — array args, never interpolated) -------------
 async function run(
@@ -166,6 +181,60 @@ async function run(
       stderr: String(err.stderr ?? err.message ?? ""),
     };
   }
+}
+
+// --- ops report (query_errors / ops_health) — pure, exported for tests ------
+type RunOutput = { code: number; stdout: string; stderr: string };
+
+/** Tira os códigos de cor ANSI (CSI/OSC) de um texto de terminal. PURA. */
+export function stripAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "");
+}
+
+function parseJson(raw: string): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: JSON.parse(raw) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/**
+ * O resultado de `query_errors`: a lista (`ok: true, errors`) quando a consulta rodou; `{ok: false, error}` com isError
+ * quando o script disse que ela falhou (ele sai 2 com esse formato) — nunca uma lista vazia no lugar de uma falha. Sem
+ * JSON, o texto (sem ANSI) volta, e uma saída não-zero é falha. PURA.
+ */
+export function queryErrorsResult(r: RunOutput): CallToolResult {
+  const parsed = parseJson(r.stdout.trim());
+  if (parsed.ok && Array.isArray(parsed.value)) {
+    const out = json({ exitCode: r.code, ok: r.code === 0, errors: parsed.value });
+    return r.code === 0 ? out : { ...out, isError: true };
+  }
+  if (parsed.ok && parsed.value && typeof parsed.value === "object" && (parsed.value as { ok?: unknown }).ok === false) {
+    const error = (parsed.value as { error?: unknown }).error;
+    return { ...json({ exitCode: r.code, ok: false, error: typeof error === "string" ? error : "a consulta falhou" }), isError: true };
+  }
+  // formato inesperado: o texto cru (sem cor) segue; só uma saída não-zero é falha
+  const out = json({ exitCode: r.code, output: stripAnsi(r.stdout || r.stderr).slice(0, 12_000) });
+  return r.code === 0 ? out : { ...out, isError: true };
+}
+
+/**
+ * O resultado de `ops_health` (script chamado com `--health --json`): `{exitCode, health}` estruturado — `ok`,
+ * `queryFailed`, `capped`, `unmapped` chegam ao agente como dado. Saída não-zero ou `health.ok === false` ⇒ isError.
+ * Sem JSON, o texto volta sem os códigos de cor, e não-zero continua falha. PURA.
+ */
+export function opsHealthResult(r: RunOutput): CallToolResult {
+  const parsed = parseJson(r.stdout.trim());
+  if (parsed.ok && parsed.value && typeof parsed.value === "object" && !Array.isArray(parsed.value)) {
+    const health = parsed.value as { ok?: unknown };
+    const out = json({ exitCode: r.code, health });
+    return r.code !== 0 || health.ok === false ? { ...out, isError: true } : out;
+  }
+  const raw = stripAnsi(r.stdout || r.stderr).slice(0, 12_000);
+  if (r.code !== 0) return fail(`ops_health falhou (exit ${r.code}):\n${raw || "(sem saída)"}`);
+  return text(raw);
 }
 
 // --- git reconcile (shared by sync_repo + git_commit_push) ----------------
@@ -991,6 +1060,13 @@ export function registerDevTools(server: McpServer): void {
       },
     },
     async ({ sessionId, message }) => {
+      // fase 7 — o LOTE: o código de um item que SAIU do lote (batch_drop) não vai ao train com os outros
+      const own = (await allSessions().catch(() => [])).find((s) => s.sessionId === sessionId);
+      if (own?.batch?.dropped.length) {
+        const { droppedItemsSubmitRefusal } = await import("@/lib/storymap/runner/conductor-batch-deps");
+        const refusal = await droppedItemsSubmitRefusal(own).catch((err) => `os commits do lote não foram lidos (${err instanceof Error ? err.message : String(err)}) — sem a conferência, nada é submetido`);
+        if (refusal) return fail(refusal);
+      }
       const res = await submitSessionWork(sessionDeps(), { sessionId, message });
       if (!res.ok) return fail(res.reason);
       return json({
@@ -1257,11 +1333,19 @@ export function registerDevTools(server: McpServer): void {
       description:
         "Encerra a sessão: remove a PASTA do worktree e dispõe o branch com o teardown FAIL-CLOSED — um branch com " +
         "commits não integrados é PRESERVADO como `failed/agent/<id>` (recuperável por cherry-pick), só um " +
-        "provadamente vazio é deletado. Devolve o veredito. Chame ao terminar para liberar uma vaga do cap.",
-      inputSchema: { sessionId: z.string() },
+        "provadamente vazio é deletado. Devolve o veredito. Chame ao terminar para liberar uma vaga do cap. " +
+        "`handoff: true` = você SUBMETEU (worktree_submit aceito) e encerra sem esperar o veredito: o serviço reabre um " +
+        "condutor para o card quando o train decidir (só o condutor no PUBLICAR usa; estacionar NÃO é passagem).",
+      inputSchema: {
+        sessionId: z.string(),
+        handoff: z
+          .boolean()
+          .optional()
+          .describe("true = passagem ao merge train: a submissão desta sessão fica com o train e o serviço retoma o card no veredito"),
+      },
     },
-    async ({ sessionId }) => {
-      const res = await discardSessionWorktree(sessionDeps(), { sessionId });
+    async ({ sessionId, handoff }) => {
+      const res = await discardSessionWorktree(sessionDeps(), { sessionId, handoff: handoff === true });
       if (!res.ok) return fail(res.reason);
       return json({ branchPreserved: res.branchPreserved, detail: res.detail });
     },
@@ -1366,7 +1450,26 @@ export function registerDevTools(server: McpServer): void {
       },
     },
     async ({ board, cardId, sessionId }) => {
-      const res = await claimCardForSession(sessionClaimDeps(), { sessionId, board, cardId });
+      // fase 7 (decisão 9) — uma sessão de implementação não pega card de uma funcionalidade que outro condutor ocupa.
+      // A conferência e o claim rodam juntos sob a trava do despacho: o pump (e outra abertura à mão) não passa no meio.
+      const caller = (await allSessions().catch(() => [])).find((s) => s.sessionId === sessionId);
+      const target = caller?.role === "implement" ? await readCard(board, cardId).catch(() => null) : null;
+      const claimNow = async () => ({ res: await claimCardForSession(sessionClaimDeps(), { sessionId, board, cardId }) });
+      let out: { busy: string } | Awaited<ReturnType<typeof claimNow>>;
+      if (target) {
+        const [{ featureBusyRefusal }, { withConductorDispatchLock }] = await Promise.all([
+          import("@/lib/storymap/runner/conductor-batch-deps"),
+          import("@/lib/storymap/runner/conductor"),
+        ]);
+        out = await withConductorDispatchLock(async () => {
+          const busy = await featureBusyRefusal(board, target, sessionId).catch(() => null);
+          return busy ? { busy } : claimNow();
+        });
+      } else {
+        out = await claimNow();
+      }
+      if ("busy" in out) return json({ ok: false, motivo: out.busy });
+      const res = out.res;
       if (!res.ok) {
         return json({
           ok: false,
@@ -1412,6 +1515,69 @@ export function registerDevTools(server: McpServer): void {
     },
   );
 
+  // fase 7 — o LOTE do condutor (runner/conductor-batch-ops.ts): as duas rodam sob withConductorDispatchLock, para a
+  // gravação da fila no fim de uma passada do pump nunca apagar o que elas mudaram.
+  defineTool(server,
+    "claim_batch",
+    {
+      title: "Pegar um lote de itens da mesma funcionalidade",
+      description:
+        "Condutor de uma correção/manutenção: pega, para a SUA sessão, outros itens (correção/manutenção) da MESMA " +
+        "funcionalidade que estão na fila do condutor — todos ou nenhum. Recusa história, outra funcionalidade, item " +
+        "solo, item com dono, lote acima do teto (US$ 10 por item, no máximo US$ 30) ou lote com o plano já submetido.",
+      inputSchema: {
+        sessionId: z.string().describe("o SEU sessionId — a sessão que já segura o card líder"),
+        board: z.string(),
+        cardIds: z.array(z.string()).min(1).describe("os itens a juntar ao lote (sem o líder)"),
+      },
+    },
+    async ({ sessionId, board, cardIds }) => {
+      const { claimBatchNow } = await import("@/lib/storymap/runner/conductor-batch-deps");
+      const res = await claimBatchNow({ sessionId, board, cardIds });
+      if (!res.ok) {
+        return json({ ok: false, motivo: res.reason, ...(res.refusals ? { recusas: res.refusals.map((r) => ({ cardId: r.cardId, motivo: r.reason, detalhe: r.detail })) } : {}) });
+      }
+      return json({
+        ok: true,
+        lote: res.batchId,
+        lider: res.lead,
+        cards: res.cardIds,
+        tetoUSD: res.capUSD,
+        ...(res.warnings.length ? { avisos: res.warnings } : {}),
+        proximo:
+          "um commit por item com o trailer «Card: <id>»; o plano do lote mora no líder (uma seção «## Item <id>» por item) " +
+          "e fecha o lote quando for submetido; item que falhar ⇒ batch_drop({sessionId, cardId, reason}).",
+      });
+    },
+  );
+
+  defineTool(server,
+    "batch_drop",
+    {
+      title: "Tirar um item do lote",
+      description:
+        "Tira do lote da SUA sessão um item que falhou: solta o claim, registra o motivo no card e devolve o item à " +
+        "fila para rodar sozinho. O líder não sai por aqui — sem ele, solte os itens e encerre.",
+      inputSchema: {
+        sessionId: z.string().describe("o SEU sessionId"),
+        cardId: z.string().describe("o item que sai do lote"),
+        reason: z.string().min(1).describe("por que o item saiu (vai para o card e para a fila)"),
+      },
+    },
+    async ({ sessionId, cardId, reason }) => {
+      const { dropBatchItemNow } = await import("@/lib/storymap/runner/conductor-batch-deps");
+      const res = await dropBatchItemNow({ sessionId, cardId, reason });
+      if (!res.ok) return json({ ok: false, motivo: res.reason });
+      return json({
+        ok: true,
+        detalhe: res.detail,
+        proximo:
+          "desfaça os commits «Card: " + cardId + "» (git revert com «Card-Revert: <sha>», ou refaça o branch só com os itens que ficaram) " +
+          "e diga ao card o que mudou (report_progress) — os outros itens seguem e publicam.",
+      });
+    },
+  );
+
   defineTool(server,
     "suggest_work",
     {
@@ -1419,7 +1585,8 @@ export function registerDevTools(server: McpServer): void {
       description:
         "Lista os cards ACIONÁVEIS de um board que NINGUÉM está trabalhando (sem claim vivo), ordenados por: " +
         "coluna mais à direita primeiro (WIP antes de trabalho novo — um card em QA está a um passo de " +
-        "shipar; um em Spec está a um pipeline inteiro), depois prioridade (3 Crítica → 0 Baixa). É CÓDIGO, " +
+        "shipar; um em Spec está a um pipeline inteiro), depois a POSIÇÃO do card na coluna (mais acima primeiro — a " +
+        "ordem que o dono arruma com «Fazer antes»/«Pode esperar»; não há nota de prioridade). É CÓDIGO, " +
         "não LLM: duas chamadas simultâneas recebem o MESMO ranking. NÃO reserva nada — a exclusão acontece " +
         "quando você ADQUIRE o claim (o 1º ganha; o 2º pega o próximo da lista). Chame ao terminar um card. " +
         "Exclui: coluna terminal, coluna sem automação (trabalho de humano), card com blocker aberto.",
@@ -1640,7 +1807,9 @@ export function registerDevTools(server: McpServer): void {
       description:
         "Consulta os erros de produção pelo script de relatório que ESTA instalação declarou. Filtre por " +
         "SERVIÇO e por janela. " +
-        "Os serviços válidos são os deste deployment. Requer ADC auth ativa no servidor.",
+        "Os serviços válidos são os deste deployment. Requer ADC auth ativa no servidor. " +
+        "Devolve `{exitCode, ok: true, errors: [...]}` (lista, possivelmente vazia) quando a consulta rodou, ou " +
+        "`{exitCode, ok: false, error}` (com isError) quando ela FALHOU — uma consulta que falhou nunca é «zero erros».",
       inputSchema: {
         service: z.string().regex(/^[a-z0-9_-]+$/i).optional().describe("nome do serviço"),
         lastHours: z.number().int().positive().max(168).optional().describe("janela em horas, padrão 1"),
@@ -1650,13 +1819,7 @@ export function registerDevTools(server: McpServer): void {
       const args = [opsReport.script, "--json"];
       if (service) args.push("--service", service);
       args.push("--last", `${lastHours ?? 1}h`);
-      const r = await run(process.execPath, args, { timeoutMs: 60_000, maxBuffer: 8_000_000 });
-      const raw = r.stdout || r.stderr;
-      try {
-        return json({ exitCode: r.code, errors: JSON.parse(raw) });
-      } catch {
-        return json({ exitCode: r.code, output: raw.slice(0, 12_000) });
-      }
+      return queryErrorsResult(await run(process.execPath, args, { timeoutMs: 60_000, maxBuffer: 8_000_000 }));
     },
   );
 
@@ -1666,12 +1829,13 @@ export function registerDevTools(server: McpServer): void {
       title: "Saúde de produção",
       description:
         "Health check de ops (autenticação do provedor + contagem de erros por serviço) via o script de " +
-        "relatório declarado por esta instalação, com --health.",
+        "relatório declarado por esta instalação, com --health --json. Devolve `{exitCode, health}` — `health` traz " +
+        "`ok`, e por serviço `recentErrors` (null quando a consulta falhou), `queryFailed`, `capped` e o balde " +
+        "`unmapped`. Saída não-zero (ou `health.ok: false`) volta como falha (isError), nunca como verde.",
       inputSchema: {},
     },
     async () => {
-      const r = await run(process.execPath, [opsReport.script, "--health"], { timeoutMs: 60_000, maxBuffer: 8_000_000 });
-      return text((r.stdout || r.stderr).slice(0, 12_000));
+      return opsHealthResult(await run(process.execPath, [opsReport.script, "--health", "--json"], { timeoutMs: 60_000, maxBuffer: 8_000_000 }));
     },
   );
 
@@ -2500,7 +2664,7 @@ export function registerDevTools(server: McpServer): void {
       const found = await resolveTranscriptFor(session);
       const antes = found ? ((await readTranscriptTurns(found.path, { maxTurns: 1 }))?.cursor ?? 0) : 0;
 
-      const entrega = await deliverToSession(session, msg, { submit: true, multiline, confirmMaster });
+      const entrega = await deliverToSession(session, msg, { submit: true, multiline, confirmMaster, screenShell: (t) => hardDenyRefusal(t) });
       if (!entrega.ok) return fail(entrega.error);
 
       const espera = await waitForIdleCore(
@@ -2566,7 +2730,8 @@ export function registerDevTools(server: McpServer): void {
       },
     },
     async ({ session, text: msg, submit, multiline, confirmMaster }) => {
-      const res = await deliverToSession(session, msg, { submit, multiline, confirmMaster });
+      // num SHELL o texto é digitado e cada linha roda: a trava dura do host é consultada antes (hardDenyRefusal)
+      const res = await deliverToSession(session, msg, { submit, multiline, confirmMaster, screenShell: (t) => hardDenyRefusal(t) });
       if (!res.ok) return fail(res.error);
       return json({
         ok: true,
@@ -2684,18 +2849,49 @@ export function registerDevTools(server: McpServer): void {
         });
       }
       const who = currentMcpActor();
-      const res = await spawnWorkSession(sessionSpawnDeps(), {
-        role,
-        task,
-        board,
-        cardId,
-        model,
-        name,
-        actor: who ? `mcp:${who.level}${who.tokenEnv ? `(${who.tokenEnv})` : ""}` : undefined,
-        // A scoped token IS the copiloto acting; the operator's `full` token is a human at a keyboard. Only the
-        // copiloto's own sessions are the steward's to reap (WS-6.1), so the distinction has to be recorded.
-        spawnedBy: who && who.level !== "full" ? "copilot" : "human",
-      });
+      // Um CONDUTOR aberto à mão ganha o mesmo recorte do despachado (driver.ts isHandOpenedConductor): o driver da sessão
+      // (tools nativas, papel MCP, pacote de contexto) e — sem `model` forçado — o modelo do condutor do board com o teto
+      // pelo tipo do card (Sonnet para bug/manutenção), não o modelo da coluna.
+      const cardNow = board && cardId ? await readCard(board, cardId).catch(() => null) : null;
+      const conducted = !!cardNow && isHandOpenedConductor(task, cardNow);
+      const conductorModel =
+        conducted && !model
+          ? conductorModelFor(
+              resolveConductorPolicy(await readBoardConfig(board!).catch(() => null))?.model ?? CONDUCTOR_DEFAULT_MODEL,
+              conductorModelCapFor(cardNow!),
+            )
+          : undefined;
+      const spawnNow = () =>
+        spawnWorkSession(sessionSpawnDeps(), {
+          role,
+          task,
+          board,
+          cardId,
+          model: model ?? conductorModel,
+          ...(conducted ? { driver: "conductor" as const } : {}),
+          name,
+          actor: who ? `mcp:${who.level}${who.tokenEnv ? `(${who.tokenEnv})` : ""}` : undefined,
+          // A scoped token IS the copiloto acting; the operator's `full` token is a human at a keyboard. Only the
+          // copiloto's own sessions are the steward's to reap (WS-6.1), so the distinction has to be recorded.
+          spawnedBy: who && who.level !== "full" ? "copilot" : "human",
+        });
+      // fase 7 (decisão 9) — nunca dois condutores na mesma funcionalidade: a abertura à mão também pergunta, e a
+      // conferência e a abertura rodam juntas sob a trava do despacho (o pump abre condutores sob a mesma trava).
+      let opened: { busy: string } | { res: Awaited<ReturnType<typeof spawnNow>> };
+      if (role === "implement" && board && cardNow) {
+        const [{ featureBusyRefusal }, { withConductorDispatchLock }] = await Promise.all([
+          import("@/lib/storymap/runner/conductor-batch-deps"),
+          import("@/lib/storymap/runner/conductor"),
+        ]);
+        opened = await withConductorDispatchLock(async () => {
+          const busy = await featureBusyRefusal(board, cardNow).catch(() => null);
+          return busy ? { busy } : { res: await spawnNow() };
+        });
+      } else {
+        opened = { res: await spawnNow() };
+      }
+      if ("busy" in opened) return json({ ok: false, error: "feature_busy", motivo: opened.busy });
+      const res = opened.res;
       if (!res.ok) {
         // A refusal is a RESULT the caller acts on, not an error to retry blindly: it carries the queue (wait
         // or re-prioritise?) or the holder (take another card). `isError` would hide the structure from it.
@@ -2806,6 +3002,9 @@ export function registerDevTools(server: McpServer): void {
         relDir = rel;
       }
       const cmd = (command && command.trim()) || "bash";
+      // o comando do terminal roda num shell cru, fora da tool Bash do CLI: a trava dura do host é consultada aqui
+      const refused = await hardDenyRefusal(cmd, absCwd);
+      if (refused) return fail(`recusado pela trava dura do host: ${refused}`);
       const r = await ensureDetachedSession(session, cmd, absCwd);
       if (!r.ok) return fail(r.error || "falha ao criar o terminal (tmux disponível?).");
       // Carimba createdAt no registry (cwd/idade) — feeds /processes e a passada `cop-*` ociosas do reaper.

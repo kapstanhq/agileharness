@@ -2,7 +2,8 @@
 // whether it may run, must escalate to a human approval, or is refused outright — by the board's riskMatrix.
 // defineTool (register.ts) wraps EVERY tool handler with this; it runs at CALL time (the handler is cached
 // forever, so the policy MUST be re-read per call, never closed over). A `full` operator token or an internal
-// (no-actor) call short-circuits to allow BEFORE any IO — so the human/paired chat is never gated, and the
+// (no-actor) call short-circuits to allow BEFORE any policy IO — so the human/paired chat is never gated (the chat's
+// calls are only RECORDED, fire-and-forget: copilot/chat-audit.ts), and the
 // only surface this touches is a scoped token that, today, is only ever used by the (still-gated) tick.
 //
 // Contract: returns null ⇒ ALLOW (the real handler runs). Returns a CallToolResult ⇒ the guard's own reply:
@@ -12,18 +13,20 @@
 
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { RiskClass, RiskDisposition } from "@/lib/storymap/types";
-import { currentMcpActor, mcpActorAttribution, type McpActor } from "./actor";
+import { actorRole, currentMcpActor, mcpActorAttribution, noteResolvedRole, roleKindOf, type ActorRole, type McpActor } from "./actor";
 import { callerWords, isCopilotCaller, toWhomWords } from "./caller";
 import { resolveToolScope } from "./scope";
 import { loadRunnerConfig } from "@/lib/storymap/runner/config";
 import { readBoardConfig } from "@/lib/storymap/repo";
 import { defaultDisposition, dispositionFor } from "@/lib/storymap/runner/orchestrator-policy";
+import { clampByProfile } from "@/lib/storymap/autonomy-profile";
 import { createApprovalRequest, consumeGrant, findMatchingGrant } from "@/lib/storymap/approvals";
 import { appendAgentAction } from "@/lib/storymap/runner/agent-actions";
 import { appendCopilotActivity } from "@/lib/storymap/copilot/activity";
+import { recordChatMcpCall } from "@/lib/storymap/copilot/chat-audit";
 import {
-  applyAction,
-  rateWithinLimit,
+  applyActionForRole,
+  rateWithinLimitForRole,
   readOrchestratorState,
   writeOrchestratorState,
 } from "@/lib/storymap/runner/orchestrator-state";
@@ -59,7 +62,7 @@ function pending(approvalId: string, tool: string, cls: RiskClass): CallToolResu
  * rebaixava `auto` para `ask` e abria um pedido de aprovação por ação — o dono via «Jido pede: move_card» em série e
  * decidia à mão o que a matriz dele já autorizava.
  */
-function throttled(tool: string, cls: RiskClass, retryAfter: string, maxPerHour: number): CallToolResult {
+function throttled(tool: string, cls: RiskClass, retryAfter: string, maxPerHour: number, roleKind?: string): CallToolResult {
   return {
     content: [
       {
@@ -70,7 +73,8 @@ function throttled(tool: string, cls: RiskClass, retryAfter: string, maxPerHour:
           tool,
           riskClass: cls,
           retryAfter,
-          hint: `limite de ${maxPerHour} ações automáticas por hora neste board atingido — nada rodou e nada foi pedido ao humano. Tente de novo a partir de ${retryAfter} (com os MESMOS args, se ainda fizer sentido).`,
+          ...(roleKind ? { role: roleKind } : {}),
+          hint: `limite de ${maxPerHour} ações automáticas por hora ${roleKind ? `do papel «${roleKind}» ` : ""}neste board atingido — nada rodou e nada foi pedido ao humano. Tente de novo a partir de ${retryAfter} (com os MESMOS args, se ainda fizer sentido).`,
         }),
       },
     ],
@@ -135,9 +139,9 @@ async function guardRepoScoped(
  * resolvida no registro: condutor de qual card); `copilot` = é o copiloto falando (primeira pessoa no diário);
  * `words` = como dizer quem foi. Sem rótulo declarado, é «um agente» — nunca o copiloto por omissão. Nunca lança.
  */
-async function callerOf(actor: McpActor): Promise<{ attribution: string | null; copilot: boolean; words: string }> {
+async function callerOf(actor: McpActor): Promise<{ attribution: string | null; copilot: boolean; words: string; role: ActorRole }> {
   const caller = actor.caller;
-  if (!caller) return { attribution: null, copilot: false, words: "Um agente" };
+  if (!caller) return { attribution: null, copilot: false, words: "Um agente", role: actorRole(actor, null) };
   let session: { driver?: string | null; cardId?: string | null; name?: string | null } | null = null;
   if (caller.kind === "session") {
     try {
@@ -149,7 +153,7 @@ async function callerOf(actor: McpActor): Promise<{ attribution: string | null; 
     }
   }
   const attribution = mcpActorAttribution(actor, session);
-  return { attribution, copilot: isCopilotCaller(caller), words: callerWords(attribution) ?? "Um agente" };
+  return { attribution, copilot: isCopilotCaller(caller), words: callerWords(attribution) ?? "Um agente", role: actorRole(actor, session) };
 }
 
 /** As tools que só FREIAM um board (pausar, desacelerar): o guard as audita e nunca as retém. */
@@ -170,7 +174,13 @@ export function stricterDisposition(a: RiskDisposition, b: RiskDisposition): Ris
 
 export async function guardToolCall(name: string, cls: RiskClass, args: unknown): Promise<CallToolResult | null> {
   const actor = currentMcpActor();
-  if (!actor || actor.level === "full") return null; // operator token / internal call → never gated
+  if (!actor) return null; // internal call → never gated
+  if (actor.level === "full") {
+    // operator token → never gated. Mas a CONVERSA do Jido (fase 6: a central de comando do dono, com este token) deixa
+    // registro de toda ação — antes ela saía daqui sem uma linha na trilha (copilot/chat-audit.ts).
+    recordChatMcpCall(actor, name, cls, args);
+    return null;
+  }
   if (cls === "read") return null; // reads are always safe
 
   // scope.ts: `board` is the SCOPE, not merely an argument — derivado da sessão/run/lote quando a
@@ -186,7 +196,11 @@ export async function guardToolCall(name: string, cls: RiskClass, args: unknown)
   // QUEM chamou (mcp/caller.ts): a atribuição entra em toda linha da trilha, e decide a VOZ do diário — só o copiloto
   // fala em primeira pessoa; a ação de outro agente é dita como dele (antes o diário dizia «Executei…» por todo mundo).
   const who = await callerOf(actor);
-  const auditBase = { actor: actor.tokenEnv, ...(who.attribution ? { caller: who.attribution } : {}), board, cardId: cardIdOf(args), tool: name, cls } as const;
+  // Fase 6 — o PAPEL (mcp/actor.ts): fica no ator, para as escritas SÍNCRONAS desta requisição (o salto de status do
+  // move_card grava `conductor:<card>`, não `run:orch`), entra em toda linha da trilha e escolhe o balde do limite.
+  noteResolvedRole(actor, who.role);
+  const roleKind = roleKindOf(who.role);
+  const auditBase = { actor: actor.tokenEnv, ...(who.attribution ? { caller: who.attribution } : {}), role: who.role, board, cardId: cardIdOf(args), tool: name, cls } as const;
 
   // 0) O FREIO nunca é freado. Pausar ou desacelerar um board (runner/board-pace.ts) é o sentido seguro, e a hora em que
   //    o limite de ações do board estourou — ou em que a matriz dele pede aprovação para escrever — é exatamente a hora
@@ -206,14 +220,18 @@ export async function guardToolCall(name: string, cls: RiskClass, args: unknown)
   }
 
   // 2) Resolve the disposition from the board's riskMatrix (re-read per call — never cached).
-  const policy = board ? (await readBoardConfig(board).catch(() => null))?.orchestrator ?? null : null;
-  let disp = board ? dispositionFor(policy, cls) : defaultDisposition(cls);
+  const boardCfg = board ? await readBoardConfig(board).catch(() => null) : null;
+  const policy = boardCfg?.orchestrator ?? null;
+  // O PERFIL de autonomia (autonomy-profile.ts) só APERTA a matriz: com a caixa de deploy desligada no bloco explícito,
+  // `deploy` nunca resolve `auto`, mesmo com a matriz editada à mão depois do painel.
+  let disp = board ? clampByProfile(boardCfg, cls, dispositionFor(policy, cls)) : defaultDisposition(cls);
   // Uma ação que CRUZA boards (mudar um card de board) responde à matriz MAIS ESTRITA dos dois: a do board de destino
   // também governa o que entra nele. Destino ilegível ⇒ a disposição padrão da classe (conservadora).
   const toBoard = CROSS_BOARD_TOOLS.has(name) ? (args as Record<string, unknown> | null | undefined)?.toBoard : undefined;
   if (board && typeof toBoard === "string" && toBoard.trim() && toBoard !== board) {
-    const toPolicy = (await readBoardConfig(toBoard.trim()).catch(() => null))?.orchestrator ?? null;
-    disp = stricterDisposition(disp, toPolicy ? dispositionFor(toPolicy, cls) : defaultDisposition(cls));
+    const toCfg = await readBoardConfig(toBoard.trim()).catch(() => null);
+    const toPolicy = toCfg?.orchestrator ?? null;
+    disp = stricterDisposition(disp, toPolicy ? clampByProfile(toCfg, cls, dispositionFor(toPolicy, cls)) : defaultDisposition(cls));
   }
 
   // O ledger (agent-actions) é a trilha de AUDITORIA; o diário (activity) é o que o operador LÊ no chat. As
@@ -223,22 +241,23 @@ export async function guardToolCall(name: string, cls: RiskClass, args: unknown)
   const where = board ? `${board}${card ? `/${card}` : ""}` : undefined;
 
   // 3) auto → rate-limit check (anti-runaway). B4: over the hourly cap ⇒ THROTTLE (retry-after to the agent), never
-  //    an approval request — um freio de ritmo não é uma decisão do dono.
+  //    an approval request — um freio de ritmo não é uma decisão do dono. Fase 6: o balde é do PAPEL — condutores,
+  //    Sentinela, procurador, crítico e agentes de fora não dividem mais um limite só (o teto é o do board, por papel).
   if (disp === "auto" && board) {
     const now = Date.now();
     const st = await readOrchestratorState(board);
     const max = policy?.maxActionsPerHour;
-    if (!rateWithinLimit(st, max, now)) {
+    if (!rateWithinLimitForRole(st, roleKind, max, now)) {
       const retryAfter = nextHourStart(now);
-      void appendAgentAction({ ...auditBase, disposition: "auto", outcome: "throttled", retryAfter, note: `limite de ${max} ações/hora; tentar de novo a partir de ${retryAfter}` });
+      void appendAgentAction({ ...auditBase, disposition: "auto", outcome: "throttled", retryAfter, note: `limite de ${max} ações/hora do papel ${roleKind}; tentar de novo a partir de ${retryAfter}` });
       void appendCopilotActivity(board, {
         kind: "refused",
-        text: `${who.copilot ? "Adiei" : `${who.words} pediu`} \`${name}\` (${cls})${who.copilot ? "" : " e eu adiei"}: o board atingiu o limite de ${max} ações automáticas por hora. Nada foi pedido a você; dá para tentar de novo a partir de ${retryAfter}.`,
+        text: `${who.copilot ? "Adiei" : `${who.words} pediu`} \`${name}\` (${cls})${who.copilot ? "" : " e eu adiei"}: o limite de ${max} ações automáticas por hora deste papel foi atingido. Nada foi pedido a você; dá para tentar de novo a partir de ${retryAfter}.`,
         detail: where,
       });
-      return throttled(name, cls, retryAfter, max ?? 0);
+      return throttled(name, cls, retryAfter, max ?? 0, roleKind);
     }
-    await writeOrchestratorState(board, applyAction(st, now)).catch(() => {});
+    await writeOrchestratorState(board, applyActionForRole(st, roleKind, now)).catch(() => {});
   }
 
   if (disp === "auto") {

@@ -3,7 +3,7 @@ id: story-bug-resenha-html
 type: story
 title: Resenha aceita HTML no corpo
 storyType: bug
-status: priorizar
+status: pronta
 parent: null
 serves: story-resenha-escrever
 release: r1

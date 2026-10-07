@@ -107,6 +107,7 @@ describe("deriveMood — a prioridade é a regra de produto do rosto", () => {
     expect(deriveMood({ level: "off" })).toBe("dormindo");
     expect(deriveMood({ level: "auto-disarmed" })).toBe("dormindo");
     expect(deriveMood({ level: "auto-inert" })).toBe("dormindo");
+    expect(deriveMood({ level: "auto-paused" })).toBe("dormindo"); // fase 6: board pausado não acorda o Jido
   });
 
   it("NÃO dorme durante uma conversa, mesmo com o board desligado (o chat funciona sempre)", () => {

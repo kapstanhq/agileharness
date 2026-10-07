@@ -38,7 +38,12 @@ export function isOwnerAdvisory(item: { findingSeverity: string }, verdict: Pick
 /**
  * O item mora no Inbox? Tudo mora, menos o aviso que não trava nada fora do caso do dono: ele não tem dono nem ação
  * que mude desfecho — é DÍVIDA, visível no card (a lista de avisos dele). Num caso real, vários avisos ocupavam Acompanhar, nenhum
- * triado, sem prazo. Segue no cockpit (o agente autônomo ainda os trata); só o Inbox do dono não os lista. PURA.
+ * triado, sem prazo. Segue no cockpit (o agente autônomo ainda os trata); só o Inbox do dono não os lista.
+ *
+ * As AMOSTRAS de auditoria (a resposta do procurador, a entrega autônoma) MORAM — em «Os agentes estão cuidando», nunca
+ * em Decidir. Decisão do dono de 06/10: quem as revisa são revisores independentes (IA), nunca ele. Mas esse revisor
+ * ainda não roda; escondê-las deixava as amostras sem ninguém (e a de entrega pendente segura o próximo sorteio do
+ * card). Até ele existir, elas ficam à vista, marcadas «ninguém está revisando» (decision.ts). PURA.
  */
 export function isInboxItem(item: CockpitItem, verdict: Pick<DecisionVerdict, "decider" | "ownerClass">): boolean {
   return item.kind !== "finding" || isOwnerAdvisory(item, verdict);
@@ -372,6 +377,15 @@ export const KIND_CONTRACT: { [K in CockpitItemKind]: KindContract<K> } = {
   // o pedido que o plano listou sem card é a CAUSA do livro (a mesma chave da publicação parada que o card teria): o
   // coletor só o emite enquanto a linha existe
   "publish-approval": { causeKey: (item) => `deploy:${item.causeKey}`, alive: always },
+  // fase 3 — as alavancas da Esteira: a publicação do BOARD é uma causa só (o pedido segurado e as entregas paradas
+  // falam da mesma fila); os avisos do host são um só em todo board (uma faixa)
+  "publish-held": { causeKey: (item) => `publish:${item.boardId}`, alive: always },
+  "stage-idle": { causeKey: (item) => `publish:${item.boardId}`, alive: always },
+  "capacity-latch": { causeKey: () => "host:latch", alive: always },
+  "host-health": { causeKey: () => "host:health", alive: always },
+  "push-off": { causeKey: () => "host:push-off", alive: always },
+  // fase 6 — a causa da Sentinela é a própria causa (dois cards com o mesmo motivo já chegam como UM item)
+  sentinel: { causeKey: (item) => `sentinel:${item.causeKey}`, alive: always },
 };
 
 /** A chave da causa de um item (o contrato do kind dele). PURA. */

@@ -26,7 +26,7 @@ import { maskSecret, secretWeakness, weaknessAdvice } from "@/lib/storymap/mcp/a
 // A REGRA de normalização do segredo MCP mora em token-bootstrap (uma só, para o tier primário e os
 // escopados) — ver `normalizeScopedMcpTokenEnv` logo abaixo de `mcpSecretWarned`.
 import { MCP_TOKEN_ENV, normalizeMcpTokenEnv } from "@/lib/storymap/mcp/token-bootstrap";
-import { patchYamlScalars } from "./settings-yaml";
+import { patchYamlScalars, patchYamlScalarsChecked, type YamlScalarPatch } from "./settings-yaml";
 import { coerceNotificationSettings } from "@/lib/notifications/push-policy";
 import { DEFAULT_GOVERNOR_SETTINGS, coerceGovernorSettings, governorEnvSwitch } from "./capacity-governor";
 import { budgetFlags, columnFlags } from "./flags";
@@ -1372,6 +1372,39 @@ export async function writeOrchestratorSettings(patch: OrchestratorSettingsPatch
   cache = null; // force reload on next read
 }
 
+/**
+ * Um TOGGLE do settings.yaml (uma ou poucas chaves escalares, ex.: `economyMode`) gravado NO LUGAR — o arquivo
+ * (188 comentários de documentação operacional) não é re-serializado. A edição é provada por leitura de volta
+ * (`patchYamlScalarsChecked`); se o formato do arquivo fugir do que a edição textual cobre, cai no caminho antigo a
+ * partir do que está NO ARQUIVO (`readFileSettings`, nunca `loadRunnerConfig`: este já traz os overrides de ENV, e
+ * gravá-lo vazaria um `AGILEHARNESS_AUTORUN_*` para o arquivo). Quick-fix yaml-comments; o gravador que preserva
+ * comentários no arquivo inteiro é da fase 6.
+ */
+export async function patchRunnerSettingsScalars(patches: readonly YamlScalarPatch[]): Promise<void> {
+  if (!patches.length) return;
+  const path = settingsPath();
+  let text = "";
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    /* arquivo ainda não existe — o patch cria um settings mínimo e válido */
+  }
+  const out = patchYamlScalarsChecked(text, patches);
+  if (out != null) {
+    await fsp.writeFile(path, out, "utf8");
+    cache = null;
+    return;
+  }
+  console.warn("[storymap] settings.yaml: a edição no lugar não se provou — regravando pelo caminho completo (os comentários se perdem).");
+  const next = structuredClone(readFileSettings()) as unknown as Record<string, unknown>;
+  for (const p of patches) {
+    let cur = next;
+    for (const k of p.path.slice(0, -1)) cur = (cur[k] && typeof cur[k] === "object" ? cur[k] : (cur[k] = {})) as Record<string, unknown>;
+    cur[p.path[p.path.length - 1]] = p.value;
+  }
+  await writeRunnerSettings(next as unknown as RunnerSettings);
+}
+
 /** Which AGILEHARNESS_AUTORUN_* env overrides are currently active (so the UI can flag them). */
 export function activeEnvOverrides(): string[] {
   const e = process.env;
@@ -1420,7 +1453,6 @@ export function resolveColumnArgs(def: StatusDef, config: RunnerSettings): strin
 export function cardComplexitySignals(card: Card): CardComplexitySignals {
   return {
     storyType: card.storyType,
-    riceEffort: card.rice?.effort,
     taskCount: card.tasks?.length ?? 0,
     severity: card.severity ?? card.bugReport?.severity,
   };

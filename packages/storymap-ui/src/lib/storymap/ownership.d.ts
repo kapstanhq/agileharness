@@ -16,6 +16,12 @@ export declare function isBoardYamlPath(filePath: string): boolean;
 /** True when filePath is a board's PRD (`storymap/boards/<b>/docs/prd.md`) — owner:human. */
 export declare function isPrdDocPath(filePath: string): boolean;
 
+/** True when filePath is a board's Business Model Canvas (`storymap/boards/<b>/docs/business-model-canvas.md`) — owner:human. */
+export declare function isBmcDocPath(filePath: string): boolean;
+
+/** True when filePath is a board's style guide (`storymap/boards/<b>/design/style-guide.md`) — one writer: the server. */
+export declare function isStyleGuideDocPath(filePath: string): boolean;
+
 /** True when filePath is a card .md path (owner:agent territory). */
 export declare function isCardPath(filePath: string): boolean;
 

@@ -233,3 +233,15 @@ describe("sweepCardBudgets — aprova o que esperava a cota e avisa quem passou 
     expect(broken.lines.join("\n")).toMatch(/a varredura falhou — disco fora/);
   });
 });
+
+describe("fase 7 — o LOTE é julgado uma vez, com o teto dele", () => {
+  it("a linha do líder traz o teto do lote: o aviso usa ele, não o do card sozinho", async () => {
+    const lead = cardWith([]);
+    // teto do card sozinho = 40 (o do settings no mundo de teste); o lote de 2 itens = US$ 20
+    const w = sweepWorld([{ ...row(lead, 21, true), capUSD: 20 }]);
+    expect((await sweepCardBudgets(w.deps)).warned).toEqual([{ board: "b", cardId: "story-x" }]);
+    expect(w.deps.warn).toHaveBeenCalledWith("agent-conductor-story-x-ab12", capLine(21, 20));
+    const under = sweepWorld([{ ...row(lead, 19, true), capUSD: 20 }]);
+    expect((await sweepCardBudgets(under.deps)).warned).toEqual([]);
+  });
+});

@@ -36,7 +36,7 @@ import type { PropEntry, PropValue } from "@/lib/storymap/doc/doc-model";
 /** Fired on the section block's own root DOM node (bubbles) when "Pedir ao agente" is clicked. */
 export const DOC_SECTION_AGENT_EVENT = "doc-section-agent";
 
-const SECTION_TONES = ["hero", "neutral"] as const;
+const SECTION_TONES = ["hero", "neutral", "note"] as const;
 
 // ── icon-by-name (docProperties labels) ─────────────────────────────────────────────────────────
 
@@ -168,7 +168,11 @@ const SectionBlock = createReactBlockSpec(
       return (
         <div data-doc-section data-tone={tone === "hero" ? "hero" : "neutral"} className="group/section w-full">
           <div className="flex items-baseline justify-between gap-2">
-            {binding || !editor.isEditable ? (
+            {tone === "note" ? (
+              // uma região SÓ-LEITURA anotada (o dado estruturado do guia de estilo): o rótulo é uma LEGENDA
+              // discreta — repetido como título de seção em cada seção, ele virava um segundo H2 por seção.
+              <div className="min-w-0 flex-1 text-[12.5px] font-medium text-fg-subtle">{label}</div>
+            ) : binding || !editor.isEditable ? (
               // ANCORADA: o rótulo é a âncora do commit — texto, não campo (ver o cabeçalho).
               // `div`, NUNCA `p`/`h2`: o reset do BlockNote (`.bn-default-styles p,h1..h6,li
               // {font-size:inherit}`) vence uma utility do Tailwind por especificidade e achatava o
@@ -202,9 +206,9 @@ const SectionBlock = createReactBlockSpec(
               />
             )}
 
-            {editor.isEditable && binding && (
+            {editor.isEditable && binding && tone !== "note" && (
               <div
-                className="flex shrink-0 items-center gap-1 opacity-0 transition group-hover/section:opacity-100 focus-within:opacity-100"
+                className="flex shrink-0 items-center gap-1 opacity-0 transition group-hover/section:opacity-100 focus-within:opacity-100 nohover:opacity-100"
                 contentEditable={false}
               >
                 <button

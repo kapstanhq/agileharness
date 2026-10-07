@@ -17,7 +17,7 @@ import { defaultDisposition, dispositionFor } from "../runner/orchestrator-polic
 import { chatSurfaceFor } from "../copilot/chat-surfaces";
 import { hitlPurposeById } from "../hitl/purpose-registry";
 import { RISK_CLASSES } from "../types";
-import { docEntry, docTypes } from "./doc-registry";
+import { docEntry, docTypes, retiredDocMessage, unknownDocMessage } from "./doc-registry";
 import { validateSchema } from "./doc-schema";
 
 const WRITE_ANN = { readOnlyHint: false, destructiveHint: false };
@@ -66,14 +66,14 @@ describe("doc-write — o token de LEITURA monta a caneta (é o ponto inteiro)",
 describe("doc-write — a superfície que consome a capacidade EXISTE", () => {
   // Capacidade declarada com ZERO produtores é a forma nº1 de "feature no ar que ninguém alcança".
   it("a tela do canvas tem conversa declarada, e o propósito dela resolve", () => {
-    const surface = chatSurfaceFor("canvas");
-    expect(surface, "a tela `canvas` precisa de entrada em CHAT_SURFACES").toBeDefined();
+    const surface = chatSurfaceFor("negocio");
+    expect(surface, "a página `negocio` precisa de entrada em CHAT_SURFACES").toBeDefined();
     const purpose = hitlPurposeById(surface!.purposeId);
     expect(purpose, `propósito "${surface!.purposeId}" não existe no registro`).toBeDefined();
   });
 
   it("o propósito roda com token de LEITURA e sem caneta no repositório", () => {
-    const purpose = hitlPurposeById(chatSurfaceFor("canvas")!.purposeId)!;
+    const purpose = hitlPurposeById(chatSurfaceFor("negocio")!.purposeId)!;
     expect(purpose.mcpLevel, "a escrita vem da classe `doc-write`, não do token full").toBe("ro");
     for (const tool of ["Write", "Edit", "NotebookEdit"]) {
       expect(purpose.deniedTools ?? "", `${tool} tem de estar negado`).toContain(tool);
@@ -88,25 +88,57 @@ describe("doc-write — a superfície que consome a capacidade EXISTE", () => {
   });
 });
 
+describe("o BMC e as personas: o agente da página PROPÕE — e a superfície cumpre o que promete", () => {
+  // A regra do dono (06/10) é «no BMC e nas personas, agente propõe». Se o token `ro` da página não montasse
+  // `propose_change`, o Estrategista prometeria «você aprova no Inbox» sem ter como propor — e o prompt o
+  // mandaria escrever direto, o que o servidor recusa. A corrente inteira, num lugar só.
+  it("o token de LEITURA monta propose_change (uma proposta não toca o canônico); aprovar segue só do dono", () => {
+    expect(riskClassForTool("propose_change")).toBe("doc-write");
+    expect(levelAllows("ro", "propose_change", WRITE_ANN)).toBe(true);
+    expect(levelAllows("ro", "approve_change", { readOnlyHint: false, destructiveHint: true })).toBe(false);
+  });
+
+  it("a persona manda PROPOR no BMC e nas personas, e escrever o resto do PRD", () => {
+    const prompt = hitlPurposeById("doc-editor")!.defaultPrompt;
+    expect(prompt).toMatch(/Business Model Canvas e a seção «Personas» do PRD são do DONO/);
+    expect(prompt).toMatch(/propose_change/);
+  });
+
+  it("os textos das páginas dizem o mesmo: o Estrategista propõe no Inbox; no PRD, as personas são do dono", () => {
+    expect(chatSurfaceFor("negocio")!.blurb).toMatch(/propõe.*Inbox/);
+    expect(chatSurfaceFor("produto")!.blurb).toMatch(/personas são suas/i);
+  });
+});
+
 describe("doc-registry — o allowlist fail-closed", () => {
   it("docType desconhecido devolve undefined (o chamador recusa)", () => {
     expect(docEntry("../../etc/passwd")).toBeUndefined();
     expect(docEntry("nao-existe")).toBeUndefined();
   });
 
-  it("todo documento registrado tem schema bem formado e rota", () => {
-    expect(docTypes().length).toBeGreaterThan(0);
+  it("todo documento registrado tem schema bem formado e rótulo; os que têm página são os de NEGÓCIO e PRODUTO", () => {
+    expect(docTypes()).toEqual(["prd", "business-model-canvas", "contexto"]);
     for (const type of docTypes()) {
       const entry = docEntry(type)!;
       expect(validateSchema(entry.schema), `schema de ${type}`).toEqual([]);
-      expect(entry.view, `rota de ${type}`).toBeTruthy();
       expect(entry.label, `rótulo de ${type}`).toBeTruthy();
     }
+    expect(docEntry("prd")?.view).toBe("produto");
+    expect(docEntry("business-model-canvas")?.view).toBe("negocio");
+    // o contexto dos agentes NÃO tem página: é lido e escrito por read_doc/write_doc, pelo motor e pelas skills
+    expect(docEntry("contexto")?.view).toBeUndefined();
   });
 
-  it("o Lean Canvas declara a projeção do LEGADO — sem ela, o agente gravaria vazio por cima", () => {
+  it("o BMC declara a projeção do LEGADO (o Lean Canvas) — sem ela, o agente gravaria vazio por cima", () => {
     // A armadilha concreta: sem `legacyProject`, um board ainda não migrado lê o esqueleto VAZIO, e o
     // primeiro write_doc materializa um .md vazio POR CIMA do canvas que ainda vivia no board.yaml.
-    expect(docEntry("lean-canvas")?.legacyProject).toBeTypeOf("function");
+    expect(docEntry("business-model-canvas")?.legacyProject).toBeTypeOf("function");
+    expect(docEntry("business-model-canvas")?.legacyFile?.schema.docType).toBe("lean-canvas");
+  });
+
+  it("o Lean Canvas SAIU do registro, e a recusa aponta o docType novo", () => {
+    expect(docEntry("lean-canvas")).toBeUndefined();
+    expect(retiredDocMessage("lean-canvas")).toContain('"business-model-canvas"');
+    expect(unknownDocMessage("nao-existe")).toContain("prd, business-model-canvas, contexto");
   });
 });

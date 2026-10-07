@@ -247,7 +247,7 @@ describe("statusMovedSince — o ledger prova o move que a base não vê", () =>
     }
   });
   it("o salto que LEVOU o card ao status da base no mesmo segundo do commit (%ct é em segundos) ⇒ não", () => {
-    expect(statusMovedSince([hop("2026-06-01T20:00:00.400Z", { from: "priorizar", to: "a", actor: "cascade" })], CARD, BASE, "r1")).toBe(false);
+    expect(statusMovedSince([hop("2026-06-01T20:00:00.400Z", { from: "interview", to: "a", actor: "cascade" })], CARD, BASE, "r1")).toBe(false);
   });
   it("outro card, base sem instante legível ou sem status ⇒ não", () => {
     expect(statusMovedSince([hop("2026-06-01T20:05:00Z", { cardId: "x" })], CARD, BASE)).toBe(false);

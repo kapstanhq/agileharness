@@ -5,13 +5,13 @@
 // projeção é read-only até alguém gravar) e o corte da prosa em ITENS é revisado por um humano na
 // tela, que é onde a decisão pertence.
 //
-// O mapa, e ele é o refactor inteiro em três linhas:
-//   `positioning`    → seção `posicionamento`   (prosa; era uma frase, continua uma frase)
-//   `businessMetric` → seção `metricaNegocio`   (itens; a prosa achatada é cortada)
-//   `desiredOutcome` → seção `resultadoAlvo`    (itens; idem)
+// O mapa (PRD formato 2 — ver `prd.ts`):
+//   `positioning`    → seção `propostaValor`    (prosa; era uma frase, continua uma frase)
+//   `businessMetric` → seção `metricasSucesso`  (itens com o prefixo «Métrica de negócio: »)
+//   `desiredOutcome` → seção `metricasSucesso`  (itens com o prefixo «Resultado-alvo: »)
 //
-// As outras dezesseis seções do PRD nascem VAZIAS, e isso é o ponto: elas são exatamente o que a
-// escada não dizia. Um board migrado abre com o que sempre teve e com o esqueleto do que faltava.
+// As outras seções do PRD nascem VAZIAS, e isso é o ponto: elas são exatamente o que a escada não
+// dizia. Um board migrado abre com o que sempre teve e com o esqueleto do que faltava.
 //
 // Os três campos do `board.yaml` NÃO são apagados por este arquivo nem por ninguém nesta onda. Eles
 // continuam sendo a fonte enquanto o `.md` não existir, continuam protegidos de escrita direta por
@@ -24,14 +24,17 @@ import { blockIdFactory, type DocBlock } from "../doc-model";
 import { orderedSections } from "../doc-schema";
 import type { SchemaDoc, SectionContent } from "../schema-codec";
 import { splitLegacyProse } from "./lean-canvas-legacy";
-import { PRD_SCHEMA } from "./prd";
+import { PRD_FORMAT, PRD_SCHEMA } from "./prd";
 
-/** De qual campo legado cada seção do PRD se abastece, e em que forma ela o recebe. */
-const FROM_LADDER: Record<string, { field: keyof BoardConfig; as: "prose" | "items" }> = {
-  posicionamento: { field: "positioning", as: "prose" },
-  metricaNegocio: { field: "businessMetric", as: "items" },
-  resultadoAlvo: { field: "desiredOutcome", as: "items" },
-};
+/**
+ * De qual campo legado cada seção do PRD se abastece, em que forma e com que prefixo — na ordem em
+ * que entram (duas fontes caem em «Métricas de sucesso»; o prefixo diz de qual degrau veio cada uma).
+ */
+const FROM_LADDER: readonly { section: string; field: keyof BoardConfig; as: "prose" | "items"; prefix?: string }[] = [
+  { section: "propostaValor", field: "positioning", as: "prose" },
+  { section: "metricasSucesso", field: "desiredOutcome", as: "items", prefix: "Resultado-alvo: " },
+  { section: "metricasSucesso", field: "businessMetric", as: "items", prefix: "Métrica de negócio: " },
+];
 
 function ladderText(config: BoardConfig, field: keyof BoardConfig): string {
   const value = config[field];
@@ -43,7 +46,7 @@ function ladderText(config: BoardConfig, field: keyof BoardConfig): string {
  * uma frase — cortá-la em itens inventaria uma estrutura que ninguém escreveu); `items` passa pelo
  * MESMO corte conservador do canvas, que só separa onde o autor já tinha separado.
  */
-function ladderBlocks(text: string, as: "prose" | "items", nextId: () => string): DocBlock[] {
+function ladderBlocks(text: string, as: "prose" | "items", nextId: () => string, prefix = ""): DocBlock[] {
   if (!text) return [];
   if (as === "prose") {
     return text
@@ -52,7 +55,7 @@ function ladderBlocks(text: string, as: "prose" | "items", nextId: () => string)
       .filter(Boolean)
       .map((t): DocBlock => ({ kind: "paragraph", id: nextId(), text: t }));
   }
-  return splitLegacyProse(text).map((t): DocBlock => ({ kind: "bullet", id: nextId(), text: t }));
+  return splitLegacyProse(text).map((t): DocBlock => ({ kind: "bullet", id: nextId(), text: `${prefix}${t}` }));
 }
 
 /**
@@ -65,8 +68,9 @@ export function projectLegacyPrd(config: BoardConfig): SchemaDoc {
   const sections: SectionContent[] = [];
 
   for (const rule of orderedSections(PRD_SCHEMA)) {
-    const source = FROM_LADDER[rule.key];
-    const blocks = source ? ladderBlocks(ladderText(config, source.field), source.as, nextId) : [];
+    const blocks = FROM_LADDER.filter((s) => s.section === rule.key).flatMap((s) =>
+      ladderBlocks(ladderText(config, s.field), s.as, nextId, s.prefix),
+    );
     if (!blocks.length && !rule.required) continue;
     sections.push({ key: rule.key, label: rule.label, blocks });
   }
@@ -74,7 +78,7 @@ export function projectLegacyPrd(config: BoardConfig): SchemaDoc {
   return {
     docType: PRD_SCHEMA.docType,
     title: PRD_SCHEMA.title.kind === "fixed" ? PRD_SCHEMA.title.text : "PRD",
-    frontmatter: { doc: PRD_SCHEMA.docType },
+    frontmatter: { doc: PRD_SCHEMA.docType, format: PRD_FORMAT },
     sections,
     tail: [],
   };
@@ -82,9 +86,9 @@ export function projectLegacyPrd(config: BoardConfig): SchemaDoc {
 
 /**
  * Há escada estratégica declarada? A tela distingue "board que nunca declarou norte nenhum" de
- * "board migrado que ainda não escreveu" — e priorizar sem norte produz ruído confiante, então a
+ * "board migrado que ainda não escreveu" — e ordenar o trabalho sem norte produz ruído confiante, então a
  * diferença importa a quem lê.
  */
 export function hasLegacyStrategy(config: BoardConfig): boolean {
-  return Object.values(FROM_LADDER).some((s) => ladderText(config, s.field).length > 0);
+  return FROM_LADDER.some((s) => ladderText(config, s.field).length > 0);
 }

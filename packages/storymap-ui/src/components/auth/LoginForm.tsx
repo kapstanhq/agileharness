@@ -10,10 +10,23 @@
 //
 // O campo é MONO e fica num poço `bg-inset` porque o que se digita ali é um segredo de MÁQUINA, e
 // não um nome de usuário — a tipografia diz a verdade sobre o que a coisa é.
+//
+// A AÇÃO principal é a sólida GRAFITE do resto do app (o «Enviar» do Jido, `BTN_SOLID`: tinta `fg` sobre o papel,
+// 12:1 no claro e invertida no escuro) — o verde do `primary` e o âmbar no campo/caixinha faziam do login a única
+// tela colorida. O foco segue visível: o campo escurece a borda (fg-muted, ~5:1 contra a borda em repouso) e o
+// botão ganha o anel de foco do app no teclado.
 
 import { useEffect, useRef, useState } from "react";
 
+import { cn } from "@/lib/cn";
 import { safeNextPath } from "@/lib/auth/next-path";
+
+/**
+ * A ação principal da tela (Entrar / Ir para o board) — a sólida grafite do app, com anel de foco no teclado. O anel é
+ * `fg` (o mesmo `outline-fg` da barra do app): o âmbar sobre a tela clara dava ~2:1, abaixo dos 3:1 do WCAG 1.4.11.
+ */
+const PRIMARY_ACTION =
+  "w-full rounded-lg bg-fg px-4 py-2.5 text-sm font-semibold text-surface transition hover:bg-fg/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg focus-visible:ring-offset-2 focus-visible:ring-offset-canvas disabled:cursor-not-allowed disabled:opacity-40";
 
 /**
  * O destino, saneado no cliente TAMBÉM (o servidor já saneou).
@@ -132,7 +145,7 @@ export function LoginForm({ next }: { next?: string }) {
             aria-describedby={error ? "login-error" : undefined}
             // 16px é o piso que impede o iOS de dar zoom ao focar o campo — abaixo disso a tela
             // "pula" no celular, que é de onde o operador costuma entrar.
-            className="w-full rounded-lg border border-line bg-inset px-3 py-2.5 pr-11 font-mono text-[16px] leading-normal text-fg outline-none transition placeholder:text-fg-subtle focus:border-accent focus:ring-2 focus:ring-accent/40 disabled:opacity-60"
+            className="w-full rounded-lg border border-line bg-inset px-3 py-2.5 pr-11 font-mono text-[16px] leading-normal text-fg outline-none transition placeholder:text-fg-subtle focus:border-fg-muted focus:ring-2 focus:ring-fg/10 disabled:opacity-60"
             placeholder="cole aqui"
           />
           <button
@@ -141,7 +154,7 @@ export function LoginForm({ next }: { next?: string }) {
             // Um token colado precisa ser CONFERÍVEL — o olho não é enfeite, é como se descobre
             // que veio truncado do copiar-e-colar.
             aria-label={reveal ? "Ocultar token" : "Mostrar token"}
-            className="absolute inset-y-0 right-0 flex w-11 items-center justify-center rounded-r-lg text-fg-subtle transition hover:text-fg focus:outline-none focus-visible:text-fg"
+            className="absolute inset-y-0 right-0 flex w-11 items-center justify-center rounded-r-lg text-fg-subtle transition hover:text-fg focus:outline-none focus-visible:text-fg focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-fg"
           >
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden>
               <path
@@ -172,7 +185,7 @@ export function LoginForm({ next }: { next?: string }) {
           type="checkbox"
           checked={remember}
           onChange={(e) => setRemember(e.target.checked)}
-          className="h-4 w-4 shrink-0 cursor-pointer rounded border-line accent-[rgb(var(--accent))]"
+          className="h-4 w-4 shrink-0 cursor-pointer rounded border-line accent-[rgb(var(--fg))]"
         />
         Manter conectado neste dispositivo
       </label>
@@ -180,7 +193,7 @@ export function LoginForm({ next }: { next?: string }) {
       <button
         type="submit"
         disabled={disabled}
-        className="w-full rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-fg transition hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+        className={PRIMARY_ACTION}
       >
         {busy ? "Entrando…" : locked ? `Bloqueado — ${formatCountdown(lockedUntil - now)}` : "Entrar"}
       </button>
@@ -225,7 +238,7 @@ export function LoggedInPanel({ next }: { next?: string }) {
     <div className="space-y-4">
       <a
         href={target}
-        className="block w-full rounded-lg bg-primary px-4 py-2.5 text-center text-sm font-semibold text-primary-fg transition hover:bg-primary-hover"
+        className={cn(PRIMARY_ACTION, "block text-center")}
       >
         {target === "/" ? "Ir para o board" : "Continuar de onde parei"}
       </a>

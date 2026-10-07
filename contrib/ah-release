@@ -228,7 +228,7 @@ rollback() {
 say "1/7 checkout da tag no clone de release"
 git -C "$REL" fetch -q "$SRC" "refs/tags/$TAG:refs/tags/$TAG" 2>/dev/null || git -C "$REL" fetch -q "$SRC" tag "$TAG"
 git -C "$REL" checkout -q --detach "$TAG"
-[ "$(git -C "$REL" rev-parse --short HEAD)" = "$SHA" ] || { echo "o clone de release não ficou no sha da tag" >&2; exit 3; }
+[ "$(git -C "$REL" rev-parse HEAD)" = "$FULL_SHA" ] || { echo "o clone de release não ficou no sha da tag" >&2; exit 3; }
 
 say "2/7 dependências (lockfile congelado)"
 ( cd "$REL" && bun install --frozen-lockfile )

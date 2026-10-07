@@ -60,8 +60,8 @@ type CaptureImage = { id: string; name: string; dataUrl: string };
 type CaptureStep = "input" | "review" | "hub" | "story-review";
 
 /** ① dica de intenção (chips) — em voz humana; mapeada a intentHint no propose(). "auto" = classificação automática.
- *  WS-9: a "Necessidade" (dor crua → ◆) saiu — a captura estruturada não cunha ideia; dor crua vai para a
- *  bancada de Ideias. Restam Automático / Melhoria ou função / Algo quebrado. */
+ *  WS-9: a "Necessidade" (dor crua → ◆) saiu — a captura estruturada não cunha ideia; dor crua vira um item
+ *  da Triagem (story de usuário). Restam Automático / Melhoria ou função / Algo quebrado. */
 type CaptureIntent = "auto" | "story" | "bug";
 type IntentChip = {
   value: CaptureIntent;
@@ -146,7 +146,6 @@ export function SmartCaptureModal({
   onClose,
   onCreated,
   onOpenCard,
-  onOpenIdeas,
   initialText,
 }: {
   boardId: string;
@@ -162,8 +161,6 @@ export function SmartCaptureModal({
   onCreated?: (created: Card[]) => void;
   /** open a freshly created pipeline card (closes the modal) — wired by the board. */
   onOpenCard?: (id: string) => void;
-  /** open the Ideias bench (closes the modal) — wired by the board. */
-  onOpenIdeas?: () => void;
 }) {
   const [text, setText] = useState(initialText ?? "");
   const [images, setImages] = useState<CaptureImage[]>([]);
@@ -440,17 +437,6 @@ export function SmartCaptureModal({
       setError("A desambiguação não retornou uma classificação válida — tente de novo.");
       return;
     }
-    if (plan.kind === "bancada") {
-      // WS-9 (D15): o veredito é DOR CRUA — a captura não cria ideia. NÃO altera o item (o ⚠ fica, então
-      // não é um falso "resolvido"); guia o humano para a bancada de Ideias, o ponto de entrada leve onde
-      // a dor é registrada deliberadamente. Se o item só descreve a dor, ele deve ser removido da proposta.
-      const dor = plan.title || item.title;
-      setError(
-        `«${dor}» é uma dor crua — a captura não cria ideias. Registre-a na bancada de Ideias ` +
-          `(botão "Ideias") e remova este item se ele só descreve a dor.`,
-      );
-      return;
-    }
     if (plan.kind === "stamp") {
       setProposal((p) => (p ? { ...p, items: p.items.map((i) => (i.tempId === tempId ? plan.item : i)) } : p));
       return;
@@ -538,10 +524,6 @@ export function SmartCaptureModal({
 
   const openCard = (id: string) => {
     onOpenCard?.(id);
-    onClose();
-  };
-  const openIdeas = () => {
-    onOpenIdeas?.();
     onClose();
   };
 
@@ -654,7 +636,6 @@ export function SmartCaptureModal({
               onGenerate={(idea) => setConfirmGenOne(idea)}
               onToggleSelect={toggleHubSelect}
               onOpenCard={openCard}
-              onOpenIdeas={openIdeas}
             />
           )}
 
@@ -1183,7 +1164,6 @@ function HubPhase({
   onGenerate,
   onToggleSelect,
   onOpenCard,
-  onOpenIdeas,
 }: {
   opps: Card[];
   pipeline: Card[];
@@ -1201,7 +1181,6 @@ function HubPhase({
   onGenerate: (idea: Card) => void;
   onToggleSelect: (id: string) => void;
   onOpenCard: (id: string) => void;
-  onOpenIdeas: () => void;
 }) {
   const selectable = opps.length > 1; // lote só faz sentido com >1 dor
   const selectionActive = selected.size > 0;
@@ -1272,7 +1251,8 @@ function HubPhase({
               disabled: busy || batchBusy,
             },
           }}
-          onOpen={onOpenIdeas}
+          // a bancada de Ideias saiu (fase 2): a ideia É um card, e abri-la é abrir a página dele
+          onOpen={() => onOpenCard(idea.id)}
         />
       ))}
 

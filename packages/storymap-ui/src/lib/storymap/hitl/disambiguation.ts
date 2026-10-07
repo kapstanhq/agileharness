@@ -18,9 +18,6 @@ export interface DisambiguationResult {
 
 export type DisambiguationPlan =
   | { kind: "invalid" }
-  // WS-9: the verdict is "dor crua" — capture NEVER mints an idea, so route the human to the
-  // Ideias bench (the deliberate light entry) instead of stamping/recasting the item into a ◆.
-  | { kind: "bancada"; title?: string; rationale?: string }
   | { kind: "stamp"; item: ProposedItem }
   | { kind: "recast"; toType: CardType; toStoryType: StoryType | null; title?: string; rationale?: string };
 
@@ -35,9 +32,9 @@ function asStr(v: unknown): string | undefined {
  * {idea, story} (o contrato da capture-disambiguation) — qualquer outra coisa é `invalid` e o
  * chamador NÃO deve limpar o ⚠ (evita o falso "resolvido").
  *
- * WS-9 (D15): a captura NUNCA cunha ideia. Um veredito `type:"idea"` (= dor crua) NÃO carimba
- * nem reescreve o item para ◆ — retorna `bancada`, e o chamador aponta o humano para a bancada de
- * Ideias (o item de captura fica como está, para ser descartado). Para `type:"story"`: mudança de tipo
+ * WS-9 (D15): a captura NUNCA cunha ideia (◆). Um veredito `type:"idea"` (= dor crua) vira uma story de
+ * USUÁRIO — a bancada de Ideias saiu (fase 2, decisão do dono: «a ideia vira item da Triagem»), então a dor
+ * entra pela Triagem, que é onde a captura grava, e lá é triada como qualquer item. Para `type:"story"`: mudança de tipo
  * OU de subtipo (#1) exige `recast` (reescrita profunda); só refino de título/racional no mesmo tipo → `stamp`.
  */
 export function planDisambiguation(item: ProposedItem, done: unknown): DisambiguationPlan {
@@ -49,25 +46,23 @@ export function planDisambiguation(item: ProposedItem, done: unknown): Disambigu
   const title = asStr(d.title);
   const rationale = asStr(d.rationale);
 
-  // Dor crua → a bancada, nunca um ◆ nascido da captura.
-  if (toType === "idea") {
-    return { kind: "bancada", title, rationale };
-  }
-
-  const toStoryType: StoryType | null =
-    typeof d.storyType === "string" && STORY_TYPES.has(d.storyType as StoryType)
+  // Dor crua → um item da Triagem (story de usuário), nunca um ◆ nascido da captura.
+  const rawPain = toType === "idea";
+  const toStoryType: StoryType | null = rawPain
+    ? "user"
+    : typeof d.storyType === "string" && STORY_TYPES.has(d.storyType as StoryType)
       ? (d.storyType as StoryType)
       : item.storyType ?? "user";
 
-  const changed = toType !== item.type || toStoryType !== (item.storyType ?? null);
+  const changed = "story" !== item.type || toStoryType !== (item.storyType ?? null);
   if (changed) {
-    return { kind: "recast", toType, toStoryType, title, rationale };
+    return { kind: "recast", toType: "story", toStoryType, title, rationale };
   }
   return {
     kind: "stamp",
     item: {
       ...item,
-      type: toType,
+      type: "story",
       storyType: toStoryType,
       title: title || item.title,
       rationale: rationale || item.rationale,

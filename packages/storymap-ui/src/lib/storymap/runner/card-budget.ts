@@ -30,6 +30,40 @@ export interface BudgetRaiseSettings {
 }
 export const DEFAULT_BUDGET_RAISE: BudgetRaiseSettings = { maxPct: 30, fiveHourMaxPct: 70 };
 
+/**
+ * O TETO POR TIPO DE CARD (decisão do dono): o gasto de IA que um card faz sem pedir nada — US$ 30 numa história,
+ * US$ 10 num conserto (bug). Acima dele, o card pede o aumento (`request_budget`) e a régua de sempre decide: dentro do
+ * envelope de +%, com a caixa «passar do teto de gasto» ligada e a cota no ritmo, o sistema aprova UM aumento; o resto
+ * é do dono. Vale só quando o alvo liga o teto por card (`autorun.cardBudgetUSD`), e nunca o SOBE: o teto do card é o
+ * menor dos dois.
+ */
+export const CARD_SPEND_CEILING_USD = { story: 30, bug: 10 } as const;
+
+/** O card é um CONSERTO? (o modo `fix`, o tipo `bug` ou um relato de bug). PURA. */
+export function isBugCard(card: Partial<Pick<Card, "mode" | "storyType" | "bugReport">>): boolean {
+  return card.mode === "fix" || card.storyType === "bug" || !!card.bugReport;
+}
+
+/** O teto por tipo deste card (US$). PURA. */
+export function cardSpendCeilingUSD(card: Partial<Pick<Card, "mode" | "storyType" | "bugReport">>): number {
+  return isBugCard(card) ? CARD_SPEND_CEILING_USD.bug : CARD_SPEND_CEILING_USD.story;
+}
+
+/** O teto DESTE card: o menor entre o do settings e o do tipo dele; sem teto no settings, nenhum. PURA. */
+export function cardCapUSD(settingsCap: number | null | undefined, card: Partial<Pick<Card, "mode" | "storyType" | "bugReport">>): number | null {
+  if (typeof settingsCap !== "number" || !(settingsCap > 0)) return null;
+  return Math.min(settingsCap, cardSpendCeilingUSD(card));
+}
+
+/**
+ * A régua do aumento PARA ESTE BOARD: com a caixa «passar do teto de gasto» desligada no perfil de autonomia
+ * (autonomy-profile.ts `spendRaise`), todo aumento vai ao dono — o mesmo efeito de `maxPct: 0`, só para este board.
+ * PURA.
+ */
+export function budgetRaiseFor(settings: BudgetRaiseSettings, spendRaise: boolean): BudgetRaiseSettings {
+  return spendRaise ? settings : { ...settings, maxPct: 0 };
+}
+
 const WEEK_MS = 7 * 24 * 60 * 60_000;
 const ASKED_BY = /^teto:(\d+(?:\.\d{1,2})?)$/;
 /** A opção que aprova o aumento é SEMPRE a primeira. */
@@ -124,12 +158,24 @@ export type BudgetVerdict =
   /** acima do envelope, ou já houve um aumento: é do dono. */
   | { kind: "owner"; toUSD: number; why: string };
 
-/** A régua inteira do pedido de aumento. PURA. */
-export function judgeBudgetRequest(input: { capUSD: number | null | undefined; card: Pick<Card, "questions">; toUSD: number; pace: QuotaPace; settings: BudgetRaiseSettings }): BudgetVerdict {
-  const { capUSD, card, toUSD, pace, settings } = input;
+/**
+ * A régua inteira do pedido de aumento. PURA. `capUSD` é o teto DESTE card ({@link cardCapUSD}). `spendRaise: false`
+ * (a caixa do perfil desligada) ⇒ todo aumento é do dono.
+ */
+export function judgeBudgetRequest(input: {
+  capUSD: number | null | undefined;
+  card: Pick<Card, "questions">;
+  toUSD: number;
+  pace: QuotaPace;
+  settings: BudgetRaiseSettings;
+  spendRaise?: boolean;
+}): BudgetVerdict {
+  const { capUSD, card, toUSD, pace } = input;
+  const settings = budgetRaiseFor(input.settings, input.spendRaise !== false);
   if (typeof capUSD !== "number" || !(capUSD > 0)) return { kind: "no-cap" };
   const inForce = effectiveCardBudgetUSD(capUSD, card) as number;
   if (!(toUSD > inForce)) return { kind: "not-needed", capUSD: inForce };
+  if (input.spendRaise === false) return { kind: "owner", toUSD, why: "a autonomia deste board deixa todo aumento de teto de gasto com você" };
   if (approvedRaises(card).length > 0) return { kind: "owner", toUSD, why: "este card já teve um aumento de teto — o segundo é decisão sua" };
   const ceiling = Math.round(capUSD * (1 + settings.maxPct / 100) * 100) / 100;
   if (!(settings.maxPct > 0) || toUSD > ceiling) {
@@ -196,15 +242,24 @@ export function budgetRaiseDecision(input: { board: string; card: Pick<Card, "id
 export interface BudgetSweepCard {
   board: string;
   card: Card;
+  /** a caixa «passar do teto de gasto» do perfil do board (autonomy-profile.ts); ausente ⇒ ligada (o legado). */
+  spendRaise?: boolean;
   /** o gasto do card: ledger + a estimativa das sessões vivas. */
   spentUSD: number;
   /** a sessão do condutor vivo do card, se houver (para o aviso de teto). */
   liveConductor: { sessionId: string; tmuxSession: string } | null;
+  /**
+   * Fase 7 — o teto desta linha quando ele não é o do card sozinho: o do LOTE (conductor-batch.ts `batchCapUSD`), na
+   * linha do líder — o lote é julgado UMA vez, com o gasto da sessão mais o ledger de todos os itens. Ausente ⇒ o teto
+   * do card ({@link CardBudgetSweepDeps.capUSD}).
+   */
+  capUSD?: number | null;
 }
 
 export interface CardBudgetSweepDeps {
   masterEnabled(): boolean;
-  capUSD(): number | null;
+  /** o teto do settings; com o card, o teto DESTE card ({@link cardCapUSD}). */
+  capUSD(card?: Card): number | null;
   settings(): BudgetRaiseSettings;
   quota(): QuotaReading | null;
   /** os cards não terminais que têm pedido de teto aberto OU condutor vivo. */
@@ -242,18 +297,19 @@ export async function sweepCardBudgets(deps: CardBudgetSweepDeps): Promise<CardB
   const report: CardBudgetSweepReport = { approved: [], warned: [] };
   try {
     if (!deps.masterEnabled()) return report;
-    const capUSD = deps.capUSD();
-    if (capUSD == null) return report;
+    const settingsCap = deps.capUSD();
+    if (settingsCap == null) return report;
     const now = (deps.now ?? Date.now)();
     const settings = deps.settings();
     const pace = quotaPace(deps.quota(), now, settings);
     const alive = new Set<string>();
     for (const row of await deps.cards()) {
       const { board, card } = row;
+      const capUSD = (row.capUSD !== undefined ? row.capUSD : deps.capUSD(card)) ?? settingsCap;
       // 1 — o pedido que esperava a cota: a mesma régua de quando ele foi feito, com a cota de agora.
       for (const req of openBudgetRequests(card)) {
         if (req.ownerOnly) continue; // o dono desfez a aprovação do sistema: agora é dele
-        const verdict = judgeBudgetRequest({ capUSD, card, toUSD: req.toUSD, pace, settings });
+        const verdict = judgeBudgetRequest({ capUSD, card, toUSD: req.toUSD, pace, settings, spendRaise: row.spendRaise });
         if (verdict.kind !== "approved") continue;
         if (!(await deps.approve(board, card.id, req.questionId, verdict.why).catch(() => false))) continue;
         await deps.record(budgetRaiseDecision({ board, card, questionId: req.questionId, capUSD, toUSD: req.toUSD, why: verdict.why, at: new Date(now).toISOString() })).catch(() => {});

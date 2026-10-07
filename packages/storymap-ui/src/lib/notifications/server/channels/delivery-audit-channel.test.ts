@@ -120,6 +120,20 @@ describe("auditDeliveryArrival — o registro da entrega sem aprovação do dono
     await auditDeliveryArrival({ ...human.deps, recordDecision: r2 }, moved(UNSAMPLED));
     expect(r2).not.toHaveBeenCalled();
   });
+
+  // Fase 6 (6D): «verificador» só quando o verificador lançado pelo serviço rodou e aprovou ESTA mudança.
+  it("sem o veredito do verificador a entrega é «auto-certificada»; com ele, «verifier»", async () => {
+    const { deps } = world(UNSAMPLED);
+    const self = vi.fn(async () => {});
+    await auditDeliveryArrival({ ...deps, recordDecision: self, verifiedDelivery: async () => null }, moved(UNSAMPLED));
+    expect(self).toHaveBeenCalledWith(expect.objectContaining({ kind: "delivery-skip", agent: "auto-certificada", what: expect.stringMatching(/auto-certificada/) }));
+    const noDep = vi.fn(async () => {});
+    await auditDeliveryArrival({ ...deps, recordDecision: noDep }, moved(UNSAMPLED));
+    expect(noDep).toHaveBeenCalledWith(expect.objectContaining({ agent: "auto-certificada" }));
+    const verified = vi.fn(async () => {});
+    await auditDeliveryArrival({ ...deps, recordDecision: verified, verifiedDelivery: async () => ({ runId: "r-v", model: "sonnet" }) }, moved(UNSAMPLED));
+    expect(verified).toHaveBeenCalledWith(expect.objectContaining({ kind: "delivery-skip", agent: "verifier", why: expect.stringMatching(/verificador independente/) }));
+  });
 });
 
 describe("a entrega TÉCNICA sorteada vai ao auditor independente, nunca ao dono (grill 2, D)", () => {

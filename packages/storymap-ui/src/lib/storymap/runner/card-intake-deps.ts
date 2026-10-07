@@ -15,7 +15,8 @@ import { createHash } from "node:crypto";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { atomicWriteFile } from "@/lib/storymap/atomic-write";
-import { boardDocPath, runnerStateDir } from "@/lib/storymap/paths";
+import { runnerStateDir } from "@/lib/storymap/paths";
+import { readPrdWithContext } from "@/lib/storymap/board-strategy";
 import { listBoards, readBoardConfig, readCards } from "@/lib/storymap/repo";
 import type { BoardFootprint } from "@/lib/storymap/card-routing";
 import { intakeRules, type IntakeCandidate, type IntakeReason } from "@/lib/storymap/card-intake";
@@ -297,7 +298,8 @@ export function defaultIntakeDeps(): IntakeDeps {
     },
     readConfig: (board) => readBoardConfig(board).catch(() => null),
     readCards: (board) => readCards(board),
-    readScope: (board) => fsp.readFile(boardDocPath(board, "prd"), "utf8").catch(() => null),
+    // o PRD (formato novo, já migrado em memória) + o contexto dos agentes — os dois arquivos que o PRD antigo era
+    readScope: (board) => readPrdWithContext(board).catch(() => null),
     ask: async (prompt, maxUsd) => {
       const { runClaudeJson } = await import("@/lib/storymap/smart-capture/claude");
       return runClaudeJson(prompt, { model: "sonnet", effort: "low", maxBudgetUSD: maxUsd, timeoutMs: 60_000, context: { label: "Verificação de entrada", view: "triagem" } });

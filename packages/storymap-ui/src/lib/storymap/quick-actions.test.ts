@@ -38,9 +38,6 @@ const BASE_CARD = {
   narrative: { role: "", want: "", soThat: "" },
   acceptance: [],
   tasks: [],
-  rice: {},
-  kano: null,
-  funnelStage: null,
   findings: [],
   order: 10,
   created: null,
@@ -58,9 +55,10 @@ describe("a ponte do modelo para o botão compacto", () => {
     const a = optionAsQuickAction({
       id: "x", label: "Publicar em produção", consequence: "Publica.", tone: "danger", auditCls: "deploy",
       invoke: { kind: "move-card", boardId: "b", cardId: "c1", status: "deploy" }, done: "ok", disabled: { reason: "em voo" },
-      confirm: { title: "t", body: "b" },
     });
-    expect(a).toMatchObject({ label: "Publicar em produção", description: "Publica.", disabled: "em voo", confirm: { title: "t", body: "b" } });
+    expect(a).toMatchObject({ label: "Publicar em produção", description: "Publica.", disabled: "em voo" });
+    // fase 3 — um clique: o modelo não pede confirmação, então o botão do card também não
+    expect(a?.confirm).toBeUndefined();
     expect(optionAsQuickAction({ id: "y", label: "Responder", consequence: "c", tone: "primary", auditCls: "write-board", invoke: { kind: "answer-question", boardId: "b", cardId: "c1", questionId: "q1" }, done: "ok" })).toBeNull();
     expect(optionAsQuickAction(null)).toBeNull();
   });

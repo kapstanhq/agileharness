@@ -9,6 +9,8 @@ import { placementSpec, placementViolation } from "./gate-core";
 import { CARD_STALLED_FINDING_ID, DEPLOY_UNPROVEN_FINDING_ID, ENTRY_EFFECT_FAILED_FINDING_ID, exitStepAttempt } from "./demands";
 import { deriveBoardConfigForPersist, readBoardConfig, readCard } from "./repo";
 import { withKeyedLock } from "./serialize";
+import { patchYamlScalarsChecked, patchYamlToMatch, type YamlScalarDelete, type YamlScalarPatch } from "./runner/settings-yaml";
+import { parseYamlMap } from "./frontmatter";
 import { isReopenMode } from "./types";
 import type { BoardConfig, Card, TrashManifest } from "./types";
 import { scheduleBoardDataFlush } from "./runner/board-data-flush";
@@ -62,6 +64,8 @@ export function cardToFrontmatter(card: Card): Record<string, unknown> {
     ...(card.serves && isStory && card.storyType && card.storyType !== "user"
       ? { serves: card.serves }
       : {}),
+    // A funcionalidade do PRD (fase 7) — sparse: só um id não vazio vai ao disco (null/ausente ⇒ a chave some).
+    ...(card.feature?.trim() ? { feature: card.feature.trim() } : {}),
     // Per-instance routing override (pipeline-owned) — sparse: emit ONLY when there is something to route
     // by (a non-empty skip set OR a WS4 profile/model-effort cap). Absent ⇒ the rules decide live. The
     // WS4 sub-fields (profile/modelCap/effortCap/rationale) are each emitted sparsely — a caps-only routing
@@ -140,6 +144,19 @@ export function cardToFrontmatter(card: Card): Record<string, unknown> {
       : {}),
     // A marca de cadeia de conserto de revisão (runner/review-rounds.ts) — sparse. Sem ela o teto de rodadas perderia a
     // conta na próxima escrita do card.
+    // A marca de LOTE do condutor (fase 7) — sparse, gravada só pelo servidor (claim_batch/batch_drop). Sem esta linha a
+    // próxima escrita do card a apagaria e soltaria o item do lote.
+    ...(card.batch
+      ? {
+          batch: {
+            id: card.batch.id,
+            lead: card.batch.lead,
+            sessionId: card.batch.sessionId,
+            at: card.batch.at,
+            ...(card.batch.planHash ? { planHash: card.batch.planHash } : {}),
+          },
+        }
+      : {}),
     ...(card.reviewChain ? { reviewChain: { root: card.reviewChain.root, round: card.reviewChain.round, ...(card.reviewChain.extra ? { extra: true } : {}) } } : {}),
     // A trilha de boards (card-transfer.ts) — sparse. Sem esta linha a próxima escrita apagaria de onde o card veio, e o
     // juiz da triagem poderia devolvê-lo ao board de origem.
@@ -179,41 +196,6 @@ export function cardToFrontmatter(card: Card): Record<string, unknown> {
       : {}),
     acceptance: card.acceptance ?? [],
     tasks: (card.tasks ?? []).map((t) => ({ id: t.id, title: t.title, done: t.done })),
-    rice: {
-      reach: card.rice?.reach ?? null,
-      impact: card.rice?.impact ?? null,
-      confidence: card.rice?.confidence ?? null,
-      effort: card.rice?.effort ?? null,
-    },
-    kano: card.kano ?? null,
-    funnelStage: card.funnelStage ?? null,
-    // Prioridade argumentada (reasoning-first) — esparso: só emitido quando avaliada.
-    ...(card.priorityCall
-      ? {
-          priorityCall: {
-            rank: card.priorityCall.rank,
-            rationale: card.priorityCall.rationale,
-            ...(card.priorityCall.riskiestAssumption ? { riskiestAssumption: card.priorityCall.riskiestAssumption } : {}),
-            source: card.priorityCall.source,
-            assessedAt: card.priorityCall.assessedAt,
-            // Ordinais WSJF — esparsos: um call legado (sem eles) continua serializando idêntico.
-            // `cohortAt` sai como String porque o YAML re-lê um ISO nu como Date e quebra o round-trip.
-            ...(card.priorityCall.wsjf
-              ? {
-                  wsjf: {
-                    value: card.priorityCall.wsjf.value,
-                    urgency: card.priorityCall.wsjf.urgency,
-                    unlock: card.priorityCall.wsjf.unlock,
-                    size: card.priorityCall.wsjf.size,
-                    basis: card.priorityCall.wsjf.basis ?? [],
-                    cohortSize: card.priorityCall.wsjf.cohortSize ?? 0,
-                    cohortAt: String(card.priorityCall.wsjf.cohortAt ?? ""),
-                  },
-                }
-              : {}),
-          },
-        }
-      : {}),
     // Lean bet block + authorship class — sparse. D15 field-drop fix: bet/owner were in the Zod
     // contract AND coerceCard, but never serialized — any app write silently erased them. The bet is
     // emitted only when it has assumptions (mirrors coerceBet, which nulls an assumption-less block).
@@ -229,7 +211,7 @@ export function cardToFrontmatter(card: Card): Record<string, unknown> {
     ...(card.owner ? { owner: card.owner } : {}),
     // Triage/intake — lean: only emitted when set (keeps build cards slim).
     ...(card.severity ? { severity: card.severity } : {}),
-    // Bug priority axes (Fase 2) — only emitted when set.
+    // Bug triage metadata — only emitted when set.
     ...(card.frequency ? { frequency: card.frequency } : {}),
     ...(typeof card.hasWorkaround === "boolean" ? { hasWorkaround: card.hasWorkaround } : {}),
     ...(card.labels?.length ? { labels: card.labels } : {}),
@@ -546,20 +528,6 @@ export function cardToFrontmatter(card: Card): Record<string, unknown> {
             ...(card.idea.candidateSolutions?.length ? { candidateSolutions: card.idea.candidateSolutions } : {}),
             ...(card.idea.keyAssumption ? { keyAssumption: card.idea.keyAssumption } : {}),
             ...(card.idea.successSignal ? { successSignal: card.idea.successSignal } : {}),
-            ...(card.idea.valueSize
-              ? { valueSize: { reach: card.idea.valueSize.reach ?? null, impact: card.idea.valueSize.impact ?? null } }
-              : {}),
-            ...(card.idea.priorityCall
-              ? {
-                  priorityCall: {
-                    rank: card.idea.priorityCall.rank,
-                    rationale: card.idea.priorityCall.rationale,
-                    ...(card.idea.priorityCall.riskiestAssumption ? { riskiestAssumption: card.idea.priorityCall.riskiestAssumption } : {}),
-                    source: card.idea.priorityCall.source,
-                    assessedAt: card.idea.priorityCall.assessedAt,
-                  },
-                }
-              : {}),
           },
         }
       : {}),
@@ -783,7 +751,14 @@ async function writeBoardConfigUnlocked(boardId: string, config: BoardConfig): P
   // triggering Fase 5). deriveBoardConfigForPersist round-trips to the same resolved config.
   const persisted = await deriveBoardConfigForPersist(boardId, config);
   const out = yaml.dump(persisted, { lineWidth: 120, noRefs: true });
-  await atomicWriteFile(boardConfigPath(boardId), out);
+  const file = boardConfigPath(boardId);
+  // Os COMENTÁRIOS do board.yaml são documentação do time, e o `yaml.dump` os apaga. Quando a gravação só mudou
+  // ESCALARES (um nome, um toggle, um número), edita só essas linhas no lugar — provado por leitura de volta contra o
+  // MESMO objeto que a reescrita gravaria. Qualquer outra mudança (listas, blocos), ou uma prova que falha, reescreve.
+  const current = await fs.readFile(file, "utf8").catch(() => null);
+  const patched = current == null ? null : patchYamlToMatch(current, parseYamlMap(out));
+  if (patched === current && current != null) return;
+  await atomicWriteFile(file, patched ?? out);
 }
 
 export async function writeBoardConfig(boardId: string, config: BoardConfig): Promise<void> {
@@ -792,6 +767,25 @@ export async function writeBoardConfig(boardId: string, config: BoardConfig): Pr
   // run) and was left UNCOMMITTED until a later run settled. Version it via the debounced scoped flush —
   // the single choke point for every config write (save/patch/delete persona+system, governance approve).
   scheduleBoardDataFlush();
+}
+
+/**
+ * Um TOGGLE do `board.yaml` (chave escalar única, ex.: `organizeOnly`) gravado NO LUGAR, sob a MESMA trava da config:
+ * só a linha da chave muda — comentários, ordem e o resto do arquivo atravessam byte a byte (o `yaml.dump` de
+ * {@link writeBoardConfig} apagava os comentários a cada clique). Provado por leitura de volta; devolve `false` sem
+ * gravar nada quando a edição textual não se prova (o chamador cai no caminho completo). Quick-fix yaml-comments —
+ * o gravador que preserva comentários em qualquer mudança é da fase 6.
+ */
+export async function patchBoardConfigScalars(boardId: string, patches: readonly (YamlScalarPatch | YamlScalarDelete)[]): Promise<boolean> {
+  const written = await withKeyedLock(configLockKey(boardId), async () => {
+    const file = boardConfigPath(boardId);
+    const out = patchYamlScalarsChecked(await fs.readFile(file, "utf8"), patches);
+    if (out == null) return false;
+    await atomicWriteFile(file, out);
+    return true;
+  });
+  if (written) scheduleBoardDataFlush();
+  return written;
 }
 
 /**

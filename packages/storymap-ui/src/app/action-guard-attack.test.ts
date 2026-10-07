@@ -83,14 +83,13 @@ vi.mock("@/lib/storymap/runner/config", async (orig) => {
     loadRunnerConfig: () => ({ autorun: { publishQueue: { enabled: true }, staging: { enabled: true } } }),
   };
 });
-vi.mock("@/lib/storymap/runner/delivery-deps", () => ({ collectDelivery: async () => ({}) }));
 vi.mock("@/app/audit-actions", () => ({ logHumanActionAction: vi.fn(async () => ({ ok: true })) }));
 
 import { SESSION_COOKIE, signSession, SESSION_TTL_MS } from "@/lib/auth/session";
 import { SESSION_SECRET_ENV, TOKEN_ENV } from "@/lib/auth/env";
 import { runWithMcpActor } from "@/lib/storymap/mcp/actor";
 import { deleteCardAction } from "@/app/actions";
-import { publishStagedAction } from "@/app/delivery-actions";
+import { cancelPublishAction, publishStagedAction } from "@/app/delivery-actions";
 
 const mk = (over: Partial<Card>): Card =>
   ({ id: "x", type: "story", title: "t", parent: null, links: [], ...over }) as Card;
@@ -183,5 +182,30 @@ describe("o operador legítimo e os agentes NÃO perdem nada", () => {
     cookieJar = null; // sem request store — engine, fs.watch, tick do copiloto, teste
     const r = await deleteCardAction({ boardId: "b", cardId: "story-alvo" });
     expect(r.ok).toBe(true);
+  });
+});
+
+// Revisão da fase 3: os itens «publish-held»/«stage-idle» dizem que as alavancas são do OPERADOR — e as actions não
+// conferiam quem chama. Publicar por cima da guarda e cancelar um pedido agora recusam agente (MCP) e serviço.
+describe("as alavancas do operador na publicação", () => {
+  it("publicar POR CIMA da guarda: o agente pelo MCP (mesmo full) é recusado, nada entra na fila", async () => {
+    cookieJar = {};
+    const r = await runWithMcpActor({ level: "full" }, () => publishStagedAction({ board: "storymap", overrideEmbargo: true }));
+    expect(r).toMatchObject({ ok: false, error: expect.stringMatching(/do operador/) });
+    expect(enqueueCalls).toEqual([]);
+  });
+  it("o operador com sessão publica por cima da guarda", async () => {
+    cookieJar = { [SESSION_COOKIE]: await validCookie() };
+    const r = await publishStagedAction({ board: "storymap", overrideEmbargo: true });
+    expect(r.ok).toBe(true);
+    expect(enqueueCalls).toHaveLength(1);
+  });
+  it("cancelar um pedido: o agente pelo MCP e o serviço são recusados", async () => {
+    cookieJar = {};
+    const mcp = await runWithMcpActor({ level: "full" }, () => cancelPublishAction({ id: "req-1", board: "storymap" }));
+    expect(mcp).toMatchObject({ ok: false, error: expect.stringMatching(/do operador/) });
+    cookieJar = null;
+    const svc = await cancelPublishAction({ id: "req-1", board: "storymap" });
+    expect(svc).toMatchObject({ ok: false, error: expect.stringMatching(/do operador/) });
   });
 });

@@ -131,7 +131,7 @@ export function EntityRow({
             // em telas de toque (sem hover) o checkbox fica sempre visível para iniciar a seleção.
             checkState !== "off" || selectionActive
               ? "opacity-100"
-              : "opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100",
+              : "opacity-0 group-hover:opacity-100 nohover:opacity-100",
           )}
         >
           <TriCheckbox state={checkState} onChange={() => onToggleSelect?.()} label={`Selecionar ${title}`} />
@@ -151,7 +151,7 @@ export function EntityRow({
         {actions.length > 0 && (
           // No mobile (< sm) as ações ficam OCULTAS (não ocupam largura → o título não é espremido); a
           // ação avulsa fica acessível abrindo o detalhe. Em sm+ aparecem no hover/foco da linha.
-          <span className="hidden items-center gap-1 transition focus-within:opacity-100 group-hover:opacity-100 sm:flex sm:opacity-0">
+          <span className="hidden items-center gap-1 transition focus-within:opacity-100 group-hover:opacity-100 sm:flex sm:opacity-0 sm:nohover:opacity-100">
             {actions.map((a) => (
               <ActionButton key={a.id} action={a} busy={busyActionId === a.id} variant="row" />
             ))}

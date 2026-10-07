@@ -33,8 +33,8 @@ analyze, propose the CRUD, **confirm with the user via AskUserQuestion**, then a
 > the data files under `storymap/boards/<board>/cards/` + `board.yaml`. NEVER touch
 > `packages/storymap-ui/`. New cards start at `status: triage` (the staging intake, no
 > gate) — they rest there, off the autorun cascade, until a human routes them to `enriquecer`.
-> Never set a gated status (`priorizar`/`pronta`/`desenvolver`) without its field — that's
-> for `harness-enrich`/priorização/`harness-tasks` and the `validate-storymap-gate` hook will block it.
+> Never set a gated status (`pronta`/`desenvolver`) without its field — that's
+> for `harness-enrich`/`harness-plan` and the `validate-storymap-gate` hook will block it.
 
 ## When to Use
 
@@ -93,8 +93,7 @@ into `narrative`; if they wrote a one-liner, infer the three parts.
      **re-confirm**. Loop until they approve. Never write before an explicit approval.
 
 4. **Apply.** Write/modify the `.md` files exactly as approved:
-   - New card frontmatter follows `storymap/README.md` (arrays default `[]`, `rice`
-     four nulls, `created`/`updated` = today `YYYY-MM-DD`, one field per line). For a
+   - New card frontmatter follows `storymap/README.md` (arrays default `[]`, `created`/`updated` = today `YYYY-MM-DD`, one field per line). For a
      story, set `storyType` and the `narrative` (store only the core in role/want/
      soThat — the connector comes from the type). Backbone (activity/step) gets no
      `storyType`/`narrative`.
@@ -103,7 +102,8 @@ into `narrative`; if they wrote a one-liner, infer the three parts.
    - Use the board's brand voice — the `voice.lexicon` of its style guide (`storymap/boards/<board>/design/style-guide.md`) and the `brandbook:` its `board.yaml` declares; with neither, write plainly, no slang.
 
 5. **Report.** List each card created/updated with its `id` and file path, and suggest
-   the next step (`/harness-enrich <board>/<id>` to refine, then tasks → RICE → build).
+   the next step (`/harness-enrich <board>/<id>` to refine, then plan & tasks → build; the order of the work is the card's
+   position in its Kanban column).
 
 ### Guardrails
 

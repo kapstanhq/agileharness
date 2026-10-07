@@ -13,6 +13,7 @@ import { resolveActionCaller } from "@/lib/auth/action-guard";
 import { intakeGate, intakeModeFor } from "@/lib/storymap/runner/card-intake-deps";
 import { revalidatePath } from "next/cache";
 import { readBoardConfig, readCard, readCards } from "@/lib/storymap/repo";
+import { arrivalOrder } from "@/lib/storymap/kanban-features";
 import { applyReopen, isReopenableStatus, isReopenDestination, REOPEN_KINDS, type ReopenDestination } from "@/lib/storymap/reopen";
 import { appendTransition, readTransitions, type Transition } from "@/lib/storymap/runner/transitions";
 import { currentMcpActor, isScopedActor, mcpActorAttribution, transitionActorLabel } from "@/lib/storymap/mcp/actor";
@@ -64,6 +65,7 @@ import {
   moveRefusal,
   republishRefusal,
   runSkillRefusal,
+  syncRefusal,
   unknownStatusRefusal,
 } from "@/lib/storymap/preconditions";
 import { entryEffect } from "@/lib/storymap/entry-effect";
@@ -91,7 +93,7 @@ import {
 import { listTrashManifests, readTrashManifest, removeTrashEntry, writeTrashManifest } from "@/lib/storymap/trash";
 import { ADDRESSES_REL, ideaFingerprint } from "@/lib/storymap/idea";
 import { makeCtx, validateLink } from "@/lib/storymap/link-graph";
-import { loadRunnerConfig, writeRunnerSettings } from "@/lib/storymap/runner/config";
+import { loadRunnerConfig, patchRunnerSettingsScalars, writeRunnerSettings } from "@/lib/storymap/runner/config";
 import { declaredCodePrefixes, stagingBranchOf } from "@/lib/storymap/runner/staging";
 import { lensNamesOf } from "@/lib/storymap/inbox/entries";
 import { getCapacityGovernor, type KeepaliveNowResult } from "@/lib/storymap/runner/capacity-service";
@@ -129,7 +131,7 @@ import {
   writeWireframe,
 } from "@/lib/storymap/sidecars";
 import { brandVoiceNote } from "@/lib/storymap/style-guide";
-import { isNonConfigArtifact, applyGovernanceChange, supersededPendingDrafts } from "@/lib/storymap/governance";
+import { isNonConfigArtifact, applyGovernanceChange, supersededPendingDrafts, retiredDraftReason } from "@/lib/storymap/governance";
 import { checkGovernanceApproval } from "@/lib/storymap/governance-check";
 import { designReturnTarget, unresolvedChanges } from "@/lib/storymap/design-canvas";
 import { withKeyedLock } from "@/lib/storymap/serialize";
@@ -147,7 +149,7 @@ import { normalizeTaskTitle, type ExtendedCardOutcome } from "@/lib/storymap/sma
 import { emptyCardFields, makeDraftCard, nextOrder } from "@/lib/storymap/draft";
 import { servesIsPlacement } from "@/lib/storymap/unplaced";
 import { buildIdeaTasksPrompt, buildProposalPrompt, buildRecastPrompt } from "@/lib/storymap/smart-capture/prompt";
-import { boardStrategy } from "@/lib/storymap/board-strategy";
+import { boardStrategy, withBoardPersonas } from "@/lib/storymap/board-strategy";
 import { applyGovernedChange } from "@/lib/storymap/doc/doc-governance";
 import { parseProposal } from "@/lib/storymap/smart-capture/parse";
 import { guardCaptureIdeas } from "@/lib/storymap/smart-capture/commit";
@@ -170,7 +172,7 @@ import {
   sanitizeIntakeText,
 } from "@/lib/storymap/triage/parse";
 import type { TriageOutcome, TriageReport } from "@/lib/storymap/triage/types";
-import { defaultQuestionCategory, effectiveAutonomy, resolveProxyAudit } from "@/lib/storymap/autonomy";
+import { agentAnswerRefusal, defaultQuestionCategory, effectiveAutonomy, resolveProxyAudit } from "@/lib/storymap/autonomy";
 import { appendRecordedDecision, recordedDecisionError, recordedDecisionRefusal } from "@/lib/storymap/recorded-decisions";
 import { optInsRefusal } from "@/lib/storymap/card-opt-ins";
 import { applyCostImpact, costImpactError, costImpactVerdict, moneyTextOf, type CostImpactInput, type CostImpactVerdict } from "@/lib/storymap/cost-impact";
@@ -182,7 +184,7 @@ import { undoInboxReceipt } from "@/lib/storymap/runner/receipt-undo";
 import { receiptFromInput } from "@/lib/storymap/inbox/receipts";
 import { staleArchiveBrief, staleArchivePlan, staleArchiveReceiptText, type StaleArchiveRequest } from "@/lib/storymap/inbox/stale-archive";
 import type { ReceiptUndo } from "@/lib/storymap/inbox/decision";
-import { applyDeliveryAuditOutcome } from "@/lib/storymap/delivery-audit";
+import { applyDeliveryAuditOutcome, proxyAuditReopenRefine } from "@/lib/storymap/delivery-audit";
 import { isAutonomyMode } from "@/lib/storymap/types";
 import type {
   AutonomyMode,
@@ -202,18 +204,14 @@ import type {
   FindingStatus,
   GovernanceChange,
   GovernanceDraft,
-  OrchestratorMode,
   Persona,
   RecordedDecision,
-  RiskClass,
-  RiskDisposition,
   RunnerSettings,
   SystemDef,
   Task,
   TrashManifest,
   WireframeDoc,
 } from "@/lib/storymap/types";
-import { autonomousModeSafe, lintRiskMatrix } from "@/lib/storymap/runner/orchestrator-policy";
 
 type Result<T = unknown> = { ok: true; data?: T } | { ok: false; error: string };
 
@@ -270,7 +268,19 @@ export async function answerQuestionAction(input: {
     // resposta de um token de agente nem adia nem entra no registro do servidor.
     const caller = await resolveActionCaller();
     const fromAgent = caller === "mcp-token";
+    const refused: { why?: string } = {};
+    // a config só importa para um agente (o piso da marca e, escopado, o perfil de autonomia)
+    const agentCfg = fromAgent ? await readBoardConfig(input.boardId).catch(() => null) : null;
+    const scoped = fromAgent && isScopedActor();
     const card = await updateCardOnDisk(input.boardId, input.cardId, (prev) => {
+      // Um AGENTE nunca sobrescreve a resposta do dono, nem responde o que é dele (autonomy.ts agentAnswerRefusal) —
+      // re-julgado aqui, sob a trava, sobre o card FRESCO (a tool MCP já recusou antes; isto fecha a corrida).
+      const target = (prev.questions ?? []).find((q) => q.id === input.questionId);
+      const why = fromAgent && target ? agentAnswerRefusal(target, agentCfg, scoped ? prev : null) : null;
+      if (why) {
+        refused.why = why;
+        return null;
+      }
       const questions = answerQuestion(prev.questions ?? [], input.questionId, input.answer, today(), input.selectedOptionIds, input.answeredBy);
       // O TETO DE RODADAS (review-rounds.ts): «Parar» ADIA o card na mesma escrita — adiado, nenhum agente gasta mais nele
       // (fora da fila do condutor, da cascata e do Inbox) nem o leva rumo ao ar (owner-waiting.ts segura o adiado).
@@ -292,6 +302,7 @@ export async function answerQuestionAction(input: {
           : {}),
       };
     });
+    if (refused.why) return { ok: false, error: `a pergunta ${input.questionId}: ${refused.why}.` };
     if (!card) return { ok: false, error: `card não encontrado: ${input.cardId}` };
     revalidateBoard(input.boardId);
 
@@ -443,7 +454,7 @@ export async function getOpenQuestionsCountAction(input: {
  * de Decidir sem o item cru (o corpo do kind só a folha aberta precisa).
  */
 export async function getInboxSummaryAction(): Promise<
-  Result<{ total: number; acompanhar: number; byBoard: Record<string, number>; entries: InboxEntry[] }>
+  Result<{ total: number; acompanhar: number; byBoard: Record<string, number>; acompanharByBoard: Record<string, number>; entries: InboxEntry[] }>
 > {
   await requireSession("getInboxSummaryAction");
   try {
@@ -452,8 +463,9 @@ export async function getInboxSummaryAction(): Promise<
     const byBoard = Object.fromEntries(snapshot.boards.map((b) => [b.id, b.decidir]));
     const total = snapshot.boards.reduce((n, b) => n + b.decidir, 0);
     const acompanhar = snapshot.boards.reduce((n, b) => n + b.acompanhar, 0);
+    const acompanharByBoard = Object.fromEntries(snapshot.boards.map((b) => [b.id, b.acompanhar]));
     const entries = decidir.map(({ item: _item, ...slim }) => slim);
-    return { ok: true, data: { total, acompanhar, byBoard, entries } };
+    return { ok: true, data: { total, acompanhar, byBoard, acompanharByBoard, entries } };
   } catch (e) {
     return fail(e);
   }
@@ -731,8 +743,9 @@ export async function proposeCardsAction(input: {
     const hasImages = (input.images?.length ?? 0) > 0;
     // images alone (e.g. a print) are a valid capture; require text only when there's no image.
     if (!text && !hasImages) return { ok: false, error: "Escreva o que você quer capturar (ou anexe uma imagem)." };
+    // as personas RESOLVIDAS (PRD + board.yaml): é o vocabulário que o prompt oferece e o parse aceita
     const [config, cards, imgs] = await Promise.all([
-      readBoardConfig(input.boardId),
+      readBoardConfig(input.boardId).then((c) => withBoardPersonas(input.boardId, c)),
       readCards(input.boardId),
       writeCaptureImages(input.images),
     ]);
@@ -776,7 +789,7 @@ export async function proposeTasksForIdeaAction(input: {
 }): Promise<Result<{ proposal: Proposal; idea: { id: string; title: string } }>> {
   await requireSession("proposeTasksForIdeaAction");
   try {
-    const [config, cards] = await Promise.all([readBoardConfig(input.boardId), readCards(input.boardId)]);
+    const [config, cards] = await Promise.all([readBoardConfig(input.boardId).then((c) => withBoardPersonas(input.boardId, c)), readCards(input.boardId)]);
     const idea = cards.find((c) => c.id === input.cardId);
     if (!idea || idea.type !== "idea") return { ok: false, error: "Ideia não encontrada." };
     const o = idea.idea;
@@ -826,7 +839,7 @@ export async function recastProposedItemAction(input: {
 }): Promise<Result<{ item: ProposedItem }>> {
   await requireSession("recastProposedItemAction");
   try {
-    const [config, cards] = await Promise.all([readBoardConfig(input.boardId), readCards(input.boardId)]);
+    const [config, cards] = await Promise.all([readBoardConfig(input.boardId).then((c) => withBoardPersonas(input.boardId, c)), readCards(input.boardId)]);
     const prompt = buildRecastPrompt({
       config,
       cards,
@@ -965,8 +978,7 @@ export async function commitProposalAction(input: {
     const extended: ExtendedCardOutcome[] = [];
 
     // WS-9 (D15) — a captura NUNCA cunha ideia. Cinto-e-suspensório no chokepoint de escrita: itens
-    // `type:"idea"` (heurística do prompt escapou, OU sidecar legado) são IGNORADOS com um warning
-    // apontando a bancada; um `addresses` de story para um ◆ do MESMO lote é limpo (o ◆ nunca nasce, então o
+    // `type:"idea"` (heurística do prompt escapou, OU sidecar legado) são IGNORADOS com um warning; um `addresses` de story para um ◆ do MESMO lote é limpo (o ◆ nunca nasce, então o
     // alvo não resolve). NUNCA lança sobre um ◆ legado — só o materializar é barrado. Ver commit.ts.
     const guarded = guardCaptureIdeas(input.items);
     const itemsToCreate = guarded.items;
@@ -1146,11 +1158,9 @@ export async function commitProposalAction(input: {
         }
 
         // WS-9 (D15): a captured IDEA (◆) is NEVER materialized here — it was already filtered out
-        // above (guardCaptureIdeas) into an `idea-ignored` warning that points the human at the
-        // Ideias bench. The old Fatia-3A branch (mint a status:null idea card from a captured ◆)
-        // is retired: ideas are born ONLY via the deliberate bench (create_idea / the view),
-        // never as a reflex of structured capture. So every item reaching here is a
-        // story or backbone (activity/step).
+        // above (guardCaptureIdeas) into an `idea-ignored` warning. The Ideias screen is gone: a new idea
+        // enters as a Triagem story (the MCP `create_idea` is now an alias that sends a `type:"story"` item
+        // through this same path). So every item reaching here is a story or backbone (activity/step).
 
         // Routing by storyType for the planning path (mirrors triage/parse.ts:acceptRoute +
         // reportIssueAction's resting-triage intake). A bug/chore captured via planning must NOT
@@ -1831,7 +1841,7 @@ export async function updateCardAction(input: {
     // inside the write lock, so mergeCardOnSave preserves the latest pipeline state
     // from disk (see card-merge.ts + the storymap-drawer-pipeline-fields-clobber bug).
     // Captured inside the lock from the FRESH on-disk card (not the possibly-stale drawer/MCP
-    // snapshot), so we can tell a genuine status change from a plain body/title/RICE edit and only
+    // snapshot), so we can tell a genuine status change from a plain body/title edit and only
     // fire autorun on the former — mirroring moveCardAction's prevStatus guard.
     let prevStatus: string | null | undefined;
     // R6 (escopo de tipos do ritmo): a troca de tipo feita sob escopo, para a trilha de auditoria depois da gravação.
@@ -1904,7 +1914,7 @@ export async function updateCardAction(input: {
     // Status select) that LANDS the card in an autorun:true+trigger column must fire the cascade
     // through the SAME shared, gate-respecting helper a UI drag / MCP move_card use — instead of
     // depending on the fs watcher. Fires ONLY when the PERSISTED status differs from what was on disk
-    // before the save, so: a plain body/title/RICE edit (status untouched) does NOT spawn, and the
+    // before the save, so: a plain body/title edit (status untouched) does NOT spawn, and the
     // audit#4 preserve branch (which sets merged.status = prev.status → card.status === prevStatus)
     // does NOT re-fire an already-advanced card. Best-effort + dedup-guarded, like the other paths
     // (story-ex0150, extends story-ex0114).
@@ -1994,6 +2004,11 @@ export async function moveCardAction(input: {
     // real status change from a same-column reorder (the Kanban passes the unchanged
     // status alongside the new `order`) and only fire autorun on the former.
     let prevStatus: string | null | undefined;
+    // A ORDEM DO TRABALHO é a posição na coluna: um card que CHEGA a outra coluna (troca de status sem `order`
+    // explícito — o arrastar já manda o seu) vai para o FIM dela (kanban-features.ts `arrivalOrder`), e a fila segue
+    // por chegada até o dono usar «Fazer antes». Os vizinhos são lidos antes do lock (só o `order` deles conta). Um
+    // desfazer restaura o estado de antes — inclusive a posição que o card tinha —, então não reposiciona.
+    const neighbours = input.status && input.order === undefined && !input.isUndo ? await readCards(input.boardId) : null;
     // Re-read fresh inside the lock + apply ONLY the position delta, so a concurrent
     // skill writing this card's content (acceptance/tasks/findings) isn't clobbered.
     const moved = await updateCardOnDisk(input.boardId, input.cardId, (card) => {
@@ -2038,7 +2053,12 @@ export async function moveCardAction(input: {
         serves:
           input.serves !== undefined ? (input.serves ? input.serves : undefined) : card.serves,
         release: input.release !== undefined ? input.release : card.release,
-        order: input.order !== undefined ? input.order : card.order,
+        order:
+          input.order !== undefined
+            ? input.order
+            : neighbours && nextStatus
+              ? (arrivalOrder(neighbours, config, card, card.status, nextStatus) ?? card.order)
+              : card.order,
         status: nextStatus,
         questions: enteringTerminal ? resolveStaleQuestions(card.questions ?? [], today()) : card.questions,
         // Override condicional de findings (exactOptionalPropertyTypes: nunca atribuir `undefined` explícito).
@@ -2085,6 +2105,13 @@ export async function moveCardAction(input: {
       // O ATOR continua sendo quem agiu (o operador); "foi um desfazer" é CONTEXTO e vai no `note` —
       // misturar os dois eixos corromperia a leitura de quem move card neste board.
       void appendTransition({ board: input.boardId, cardId: input.cardId, from: prevStatus ?? null, to: moved.status, actor: transitionActorLabel(), ...(input.isUndo ? { note: "undo" } : {}) });
+      // Fase 6 (6D) — a CAIXA DE CORREIO DO CARD: o movimento do DONO num card conduzido vira evento e aviso fixo à sessão
+      // viva do condutor (runner/card-intents.ts). Só o dono: o movimento de um agente não é intenção do dono.
+      if (transitionActorLabel() === "human") {
+        void import("@/lib/storymap/runner/card-intents-deps")
+          .then((m) => m.noteOwnerCardIntentNow(input.boardId, moved, input.isUndo ? "undo-move" : "move", { from: prevStatus ?? null, to: moved.status ?? null }))
+          .catch(() => {});
+      }
       if (input.isUndo) return { ok: true, data: { outcome } }; // desfazer restaura estado: sem autorun, sem entry effect
       void evaluateAutorunOnEntry(input.boardId, input.cardId).catch((err) =>
         console.error(`[moveCardAction autorun ${input.boardId}/${input.cardId}]`, err),
@@ -2110,6 +2137,59 @@ export async function moveCardAction(input: {
       outcome = entryEffectStartedOutcome(effect, landedName);
     }
     return { ok: true, data: { outcome } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * Fase 7 — «Aprovar» a entrega (ou a publicação) de um LOTE do condutor: UMA decisão do dono move TODOS os itens do lote
+ * parados no mesmo passo (`fromStatus`), cada um pelo MESMO caminho de uma aprovação de um card só — `moveCardAction`:
+ * o gate do destino, o portão de um agente escopado, o ledger, a caixa de correio e o efeito de entrada. Um item que o
+ * passo recusa fica onde está, com o motivo no recibo; os outros seguem. «Devolver» continua por item (no card). Só o
+ * operador: um agente não aprova entrega.
+ */
+export async function approveBatchDeliveryAction(input: {
+  boardId: string;
+  batchId: string;
+  fromStatus: string;
+  status: string;
+}): Promise<Result<{ outcome: ActionOutcome; moved: string[]; refused: Array<{ cardId: string; error: string }> }>> {
+  await requireSession("approveBatchDeliveryAction");
+  try {
+    const refusedBy = await operatorOnly("Aprovar o lote");
+    if (refusedBy) return { ok: true, data: { outcome: { status: "refused", message: refusedBy }, moved: [], refused: [] } };
+    const [config, cards] = await Promise.all([readBoardConfig(input.boardId), readCards(input.boardId)]);
+    // o líder primeiro (a ordem em que o dono leu o item), depois pelo id
+    const items = cards
+      .filter((c) => c.batch?.id === input.batchId && c.status === input.fromStatus)
+      .sort((a, b) => Number(b.id === b.batch?.lead) - Number(a.id === a.batch?.lead) || a.id.localeCompare(b.id));
+    if (items.length === 0) {
+      return { ok: true, data: { outcome: { status: "refused", message: "Nenhum item deste lote espera neste passo agora." }, moved: [], refused: [] } };
+    }
+    const moved: string[] = [];
+    const refused: Array<{ cardId: string; error: string }> = [];
+    let started = false;
+    for (const c of items) {
+      const res = await moveCardAction({ boardId: input.boardId, cardId: c.id, status: input.status });
+      const said = res.ok ? res.data?.outcome : undefined;
+      if (!res.ok) refused.push({ cardId: c.id, error: res.error });
+      else if (said?.status === "refused") refused.push({ cardId: c.id, error: said.message });
+      else {
+        moved.push(c.id);
+        if (said?.status === "started") started = true;
+      }
+    }
+    const stepName = config.statuses.find((s) => s.id === input.status)?.name ?? input.status;
+    const titleOf = (id: string) => items.find((c) => c.id === id)?.title ?? id;
+    const why = refused.map((r) => `«${titleOf(r.cardId)}»: ${r.error}`).join("; ");
+    const outcome: ActionOutcome =
+      moved.length === 0
+        ? { status: "refused", message: `Nenhum item do lote foi para «${stepName}». ${why}` }
+        : refused.length === 0
+          ? { status: started ? "started" : "done", message: `${moved.length === 1 ? "O item do lote foi" : `Os ${moved.length} itens do lote foram`} para «${stepName}».${started ? " Se algo não der certo, o card e o Inbox dizem por quê." : ""}` }
+          : { status: started ? "started" : "done", message: `${moved.length} de ${items.length} itens do lote foram para «${stepName}»; ${refused.length === 1 ? "um ficou" : `${refused.length} ficaram`} — ${why}` };
+    return { ok: true, data: { outcome, moved, refused } };
   } catch (e) {
     return fail(e);
   }
@@ -2214,9 +2294,11 @@ export async function refineCardAction(input: {
     }
     const today = new Date().toISOString().slice(0, 10);
     let refineFrom: string | null = null;
+    let refineBefore: Card | null = null;
     const next = await updateCardOnDisk(input.boardId, input.cardId, (card) => {
       if (card.type !== "story") throw new Error("Só stories podem ser refinadas.");
       refineFrom = card.status ?? null;
+      refineBefore = card;
       return {
         ...applyReopen(card, {
           mode: "refine",
@@ -2229,6 +2311,8 @@ export async function refineCardAction(input: {
     if (!next) return { ok: false, error: `card não encontrado: ${input.cardId}` };
     revalidateBoard(input.boardId);
     if (next.status) void appendTransition({ board: input.boardId, cardId: input.cardId, from: refineFrom, to: next.status, actor: "human", note: "reopen:refine" });
+    // Fase 6 (6D) — a caixa de correio do card: o pedido do dono chega ao condutor vivo (runner/card-intents.ts).
+    if (transitionActorLabel() === "human") void import("@/lib/storymap/runner/card-intents-deps").then((m) => m.noteOwnerCardIntentNow(input.boardId, refineBefore as Card | null, "refine")).catch(() => {});
     // A reopen is a REAL status change — fire the cascade in-process (mirrors move/triage actions) so the
     // mode-aware override (harness-refine) runs WITHOUT depending on an open SSE tab + the fs-watcher
     // (story-ex0114/ex0150), and supersede any parked integration of this card.
@@ -2290,6 +2374,7 @@ export async function reportBugAction(input: {
     const steps = Array.isArray(input.steps) ? input.steps.map((s) => String(s).trim()).filter(Boolean) : [];
     const today = new Date().toISOString().slice(0, 10);
     let fixFrom: string | null = null;
+    let fixBefore: Card | null = null;
     // R6 (escopo de tipos do ritmo): «Reportar bug» RE-TIPA a story como `bug` (applyReopen) — é uma troca de tipo por outra
     // porta, e sem esta pergunta um agente classificaria uma funcionalidade ainda não entregue como erro e ela passaria pelo
     // escopo. A mesma régua do update_card: sob escopo, só o dono re-tipa uma funcionalidade já classificada. A exceção é a
@@ -2298,6 +2383,7 @@ export async function reportBugAction(input: {
     const next = await updateCardOnDisk(input.boardId, input.cardId, (card) => {
       if (card.type !== "story") throw new Error("Só stories podem ser corrigidas.");
       fixFrom = card.status ?? null;
+      fixBefore = card;
       typeChange = null;
       const scope = effectiveScope(boardPaceRow(input.boardId), Date.now());
       if (scope && (card.storyType ?? "user") !== "bug") {
@@ -2335,6 +2421,8 @@ export async function reportBugAction(input: {
     }
     revalidateBoard(input.boardId);
     if (next.status) void appendTransition({ board: input.boardId, cardId: input.cardId, from: fixFrom, to: next.status, actor: "human", note: "reopen:fix" });
+    // Fase 6 (6D) — a caixa de correio do card: o pedido do dono chega ao condutor vivo (runner/card-intents.ts).
+    if (transitionActorLabel() === "human") void import("@/lib/storymap/runner/card-intents-deps").then((m) => m.noteOwnerCardIntentNow(input.boardId, fixBefore as Card | null, "report-bug")).catch(() => {});
     // A reopen is a REAL status change — fire the cascade in-process (mirrors move/triage actions) so the
     // mode-aware override (harness-fix) runs WITHOUT depending on an open SSE tab + the fs-watcher, and
     // supersede any parked integration of this card.
@@ -2401,8 +2489,10 @@ export async function discontinueCardAction(input: {
     // (Quando `level && hasExecutor`, o destino é o executor `descontinuar` — NÃO terminal — e o harness-retire
     // arquiva depois; esse caminho é coberto no display por liveOpenBlockers, já que ele grava o .md direto.)
     const destTerminal = !!config.statuses.find((s) => s.id === status)?.terminal;
+    let retireBefore: Card | null = null;
     const next = await updateCardOnDisk(input.boardId, input.cardId, (card) => {
       if (card.type !== "story") throw new Error("Só stories podem ser descontinuadas.");
+      retireBefore = card;
       const reopened = {
         ...applyReopen(card, {
           mode: "retire",
@@ -2427,6 +2517,8 @@ export async function discontinueCardAction(input: {
     if (!next) return { ok: false, error: `card não encontrado: ${input.cardId}` };
     revalidateBoard(input.boardId);
     if (next.status) void appendTransition({ board: input.boardId, cardId: input.cardId, from: next.retirement?.fromStatus ?? null, to: next.status, actor: "human", note: "reopen:retire" });
+    // Fase 6 (6D) — a caixa de correio do card: o pedido do dono chega ao condutor vivo (runner/card-intents.ts).
+    if (transitionActorLabel() === "human") void import("@/lib/storymap/runner/card-intents-deps").then((m) => m.noteOwnerCardIntentNow(input.boardId, retireBefore as Card | null, "retire")).catch(() => {});
     // story-ex0118: descontinuar virou automático (harness-retire autorun, lane oculta) — dispara a cascata
     // in-process igual às outras reaberturas, para o harness-retire rodar sem depender de uma aba SSE aberta.
     void evaluateAutorunOnEntry(input.boardId, input.cardId).catch((err) =>
@@ -2514,6 +2606,8 @@ export async function deferCardAction(input: {
         fresh.deferred ? null : { ...fresh, deferred: deferralFor({ reason, today, by: input.by ?? "human", reviewOn: input.reviewOn, rootId: input.cardId, cardId: t.id }) },
       );
       if (written) done.push(t.id);
+      // Fase 6 (6D) — a caixa de correio do card: cada card adiado com condutor vivo recebe o aviso fixo do dono.
+      if (written && transitionActorLabel() === "human") void import("@/lib/storymap/runner/card-intents-deps").then((m) => m.noteOwnerCardIntentNow(input.boardId, written, "defer")).catch(() => {});
     }
     revalidateBoard(input.boardId);
     return { ok: true, data: { deferred: done } };
@@ -2633,6 +2727,18 @@ export async function deleteCardAction(input: {
   await requireSession("deleteCardAction");
   try {
     const cards = await readCards(input.boardId);
+    // Fase 6 (6D) — excluir CHECA SE O CARD ESTÁ OCUPADO (o próprio card, não só os dependentes): com alguém trabalhando
+    // nele agora (uma reserva — o condutor, uma sessão — ou um run do engine), apagá-lo por baixo deixaria o trabalho sem
+    // card e o train com uma integração que não aplica. A recusa diz o caminho: parar quem trabalha, ou adiar.
+    const self = cards.find((c) => c.id === input.cardId);
+    if (self && (await busyCardIds(input.boardId, [self])).has(input.cardId)) {
+      return {
+        ok: false,
+        error:
+          "Alguém está trabalhando neste card agora (um condutor, uma sessão ou um run). Pare quem trabalha nele primeiro " +
+          "(«Parar condutor», ou cancele o run) ou use «Adiar — não agora», que guarda o trabalho e dá para trazer de volta.",
+      };
+    }
     // A hierarquia não se apaga por baixo: um card que ANCORA outros não pode ser removido enquanto eles
     // dependem dele. Antes, apagar um step/activity com filhos os deixava órfãos (com um ack sistêmico
     // `system:parent-deleted` para o lint não ficar vermelho) — ou seja, a própria deleção FABRICAVA a
@@ -2680,6 +2786,11 @@ export async function deleteCardAction(input: {
         ...(groupKey ? { group: groupKey } : {}),
       });
       if (moved !== false) trashed.push(id);
+      // Fase 6 (6D) — a caixa de correio do card: o card apagado pelo dono com condutor vivo recebe o aviso fixo.
+      if (moved !== false && transitionActorLabel() === "human") {
+        const before = cards.find((c) => c.id === id);
+        if (before) void import("@/lib/storymap/runner/card-intents-deps").then((m) => m.noteOwnerCardIntentNow(input.boardId, before, "delete")).catch(() => {});
+      }
     }
     // Só restam as arestas LATERAIS (`links`) de quem ficou: a ancoragem foi tratada acima, então nenhuma deleção
     // pode mais produzir órfão. Limpa o link pendente relendo cada card fresco, para não clobberar uma
@@ -2778,6 +2889,12 @@ export async function updateBoardConfigAction(input: {
       if (!!current?.organizeOnly !== !!input.config.organizeOnly) {
         return { ok: false, error: "O modo «só organização» do board é uma decisão do operador: só muda pela tela, não por um agente." };
       }
+      // A AUTONOMIA (autonomy-profile.ts) também: o perfil e as chaves que ele mantém coerentes só mudam pelo painel,
+      // com a sessão do operador (setBoardAutonomyAction). Um agente salva o resto da config; estas, nunca.
+      const { autonomyKeysFingerprint } = await import("@/lib/storymap/autonomy-profile");
+      if (current && autonomyKeysFingerprint(current) !== autonomyKeysFingerprint(input.config)) {
+        return { ok: false, error: "A autonomia do board é uma decisão do operador: só muda pelo painel «Autonomia», não por um agente." };
+      }
     }
     await writeBoardConfig(input.boardId, input.config);
     revalidateBoard(input.boardId);
@@ -2787,83 +2904,9 @@ export async function updateBoardConfigAction(input: {
   }
 }
 
-/**
- * Fase 5.1 — set a board's orchestrator MODE (off/paired/autonomous) from the Copiloto config tab, via the
- * existing board-config write path (persists the delta + versions board.yaml to main). SECURITY: reject
- * `autonomous` while the server-side riskMatrix enforcement (item 6.5) is NOT wired — otherwise the only
- * containment for an autonomous tick is the skill prompt (guidance, not a gate). Mirrors the UI's blocking gate.
- */
-export async function setBoardOrchestratorModeAction(input: {
-  boardId: string;
-  mode: OrchestratorMode;
-  /**
-   * A AUTONOMIA que o operador escolheu no MESMO gesto de ligar o modo (o popover "o que ele pode fazer
-   * sozinho?"). Gravar mode e matriz numa ÚNICA escrita é o que evita o buraco anterior: ligar `autonomous`
-   * deixava a matriz no default (todo write-board = `ask`), então o "auto" recém-ligado só sabia LER e
-   * enfileirar aprovações — parecia autônomo e não era. Ausente ⇒ preserva a matriz atual do board.
-   */
-  riskMatrix?: Partial<Record<RiskClass, RiskDisposition>>;
-}): Promise<Result> {
-  await requireSession("setBoardOrchestratorModeAction");
-  try {
-    if (input.mode === "autonomous" && !autonomousModeSafe()) {
-      return {
-        ok: false,
-        error:
-          "Modo autônomo bloqueado: o enforcement server-side da matriz de risco (item 6.5) ainda não está ativo — sem ele a única contenção do tick é o prompt da skill. Habilite após o 6.5.",
-      };
-    }
-    const config = await readBoardConfig(input.boardId);
-    const candidate = {
-      ...(config.orchestrator ?? { mode: "off" as OrchestratorMode }),
-      mode: input.mode,
-      ...(input.riskMatrix ? { riskMatrix: input.riskMatrix } : {}),
-    };
-    // a matriz passa pelo MESMO lint da setBoardRiskMatrixAction (um deploy/run:auto REPROVA) — o caminho de
-    // escrita nunca pode ser mais frouxo que o editor dedicado.
-    const errors = lintRiskMatrix(candidate);
-    if (errors.length) return { ok: false, error: errors.join("; ") };
-    const next: BoardConfig = { ...config, orchestrator: candidate };
-    await writeBoardConfig(input.boardId, next);
-    revalidateBoard(input.boardId);
-    // Item 2 — ativar autonomous dispara um tick IMEDIATO só deste board (fire-and-forget, lazy import) em vez
-    // de esperar até 30min pelo próximo tick global. Inerte sem AGILEHARNESS_MCP_TOKEN_ORCH (spawnOrchestrator pula).
-    if (input.mode === "autonomous") {
-      void import("@/lib/storymap/runner/orchestrator-run")
-        .then(({ runBoardTickNow }) => runBoardTickNow(input.boardId, "você acabou de ligar o modo autônomo"))
-        .catch(() => {});
-    }
-    return { ok: true };
-  } catch (e) {
-    return fail(e);
-  }
-}
-
-/**
- * F3.4 — set a board's riskMatrix (risk CLASS → auto/ask/never) from the Copiloto quick-settings / config tab.
- * Espelho de setBoardOrchestratorModeAction (readBoardConfig → spread orchestrator → writeBoardConfig →
- * revalidateBoard), preservando mode/maxActionsPerHour. LINTA antes de gravar: um deploy/destructive/run/
- * merge-resolve:auto (NEVER_AUTO) REPROVA com a mensagem do lint — a UI mostra o clamp, a escrita o recusa.
- */
-export async function setBoardRiskMatrixAction(input: {
-  boardId: string;
-  riskMatrix: Partial<Record<RiskClass, RiskDisposition>>;
-}): Promise<Result> {
-  await requireSession("setBoardRiskMatrixAction");
-  try {
-    const config = await readBoardConfig(input.boardId);
-    const prev = config.orchestrator ?? { mode: "off" as OrchestratorMode };
-    const candidate = { ...prev, riskMatrix: input.riskMatrix };
-    const errors = lintRiskMatrix(candidate);
-    if (errors.length) return { ok: false, error: errors.join("; ") };
-    const next: BoardConfig = { ...config, orchestrator: candidate };
-    await writeBoardConfig(input.boardId, next);
-    revalidateBoard(input.boardId);
-    return { ok: true };
-  } catch (e) {
-    return fail(e);
-  }
-}
+// setBoardOrchestratorModeAction e setBoardRiskMatrixAction SAÍRAM: o modo do Jido e a matriz de risco agora são
+// escritos pelo escritor ÚNICO da autonomia (`setBoardAutonomyAction`, app/board-autonomy-actions.ts), que grava o
+// perfil e as chaves coerentes numa só escrita — duas portas a mais seriam duas verdades sobre o mesmo ato.
 
 /**
  * Read the current economy mode from settings.yaml (for the top-nav chip).
@@ -2895,12 +2938,13 @@ export async function getReviewLensNamesAction(): Promise<Result<{ lensNames: Re
 /**
  * Toggle economy mode on/off — writes settings.yaml and revalidates board routes.
  * Economy ON: caps all runs at sonnet/high; skips autorun for harness-refine and harness-fix.
+ * Grava SÓ a chave, no lugar (quick-fix yaml-comments): antes reescrevia o arquivo inteiro a partir de
+ * `loadRunnerConfig()` — apagando os comentários e levando para o arquivo os overrides de ENV em vigor.
  */
 export async function setEconomyModeAction(input: { enabled: boolean }): Promise<Result> {
   await requireSession("setEconomyModeAction");
   try {
-    const current = loadRunnerConfig();
-    await writeRunnerSettings({ ...current, economyMode: input.enabled });
+    await patchRunnerSettingsScalars([{ path: ["economyMode"], value: input.enabled === true }]);
     revalidatePath("/board", "layout");
     return { ok: true };
   } catch (e) {
@@ -3467,6 +3511,9 @@ export async function syncCardAction(input: {
       readBoardConfig(input.boardId).catch(() => null),
     ]);
     if (!card) return { ok: false, error: `card não encontrado: ${input.cardId}` };
+    // As MESMAS recusas de «Rodar» (preconditions.ts): card conduzido ou adiado — antes o botão passava por cima delas.
+    const refused = syncRefusal(card);
+    if (refused) return { ok: false, error: refused };
     const res = getRunnerEngine().runSkill(input.boardId, card.id, SYNC_TRIGGER, SYNC_STATUS_DEF, {
       origin: "manual",
       headroomUrl: resolveHeadroomUrl(config, process.env),
@@ -3889,10 +3936,132 @@ export async function setCardDriverAction(input: {
   }
 }
 
+// ── O card conduzido que ninguém assumiu (fase 3) — as duas saídas do operador no Inbox ─────────────────────────
+
 /**
- * `set_card_autonomy` — the per-story exception to the board's AUTONOMY KEY (autonomy.ts): `ultra` hands this
- * story's proxiable decisions (interview, UI choice) to the proxy; `human` keeps them with the owner even on an
- * ultra board; `null` follows the board again. An OWNER decision: the MCP tool is full-token only. Turning a story
+ * Tira o condutor do card, sob a trava do despacho (runner/conductor.ts `withConductorDispatchLock`): sai da fila,
+ * as sessões de condutor DESTE card são encerradas (só as de nome de condutor — o trabalho da cópia de trabalho fica
+ * guardado: encerrar o terminal não apaga a cópia), as reservas delas são soltas e `mutate` grava o card (o driver sai).
+ * O caller é conferido ANTES: as duas ações são do operador.
+ */
+async function releaseConductedCard(
+  boardId: string,
+  cardId: string,
+  mutate: (card: Card) => Card,
+  intent?: "stop-conductor" | "return-to-flow",
+): Promise<{ card: Card | null; ended: string[] }> {
+  const [{ withConductorDispatchLock, dropQueuedConductorCard, diskConductorQueueStore, CONDUCTOR_TMUX_NAME }, { allSessions, sessionCardIds }, { getCardClaims, sessionClaimActor }] = await Promise.all([
+    import("@/lib/storymap/runner/conductor"),
+    import("@/lib/storymap/runner/session-worktree"),
+    import("@/lib/storymap/runner/claims"),
+  ]);
+  return withConductorDispatchLock(async () => {
+    // o card existe ANTES de qualquer efeito: um id errado não pode matar sessões nem soltar claims de ninguém
+    const before = await readCard(boardId, cardId);
+    if (!before) return { card: null, ended: [] };
+    // a caixa de correio do card (fase 6): o evento do dono e o aviso à sessão viva ANTES de ela ser encerrada
+    if (intent) await import("@/lib/storymap/runner/card-intents-deps").then((m) => m.noteOwnerCardIntentNow(boardId, before, intent)).catch(() => null);
+    // fase 7 — o LOTE: a alavanca no LÍDER (ou num item cuja sessão já não existe) vale para o lote inteiro — os itens
+    // esperam o operador como o líder (decisão do dono), e o aviso da sessão morta é um só (demands.ts groupBatchStops).
+    // Num item de um lote VIVO, só o item sai (a sessão segue com os outros; o aviso do dono a manda soltar o item).
+    const sessions = (await allSessions()).filter((s) => s.board === boardId && sessionCardIds(s).includes(cardId));
+    const lead = before.batch?.lead;
+    const wholeBatch = !!before.batch?.id && (lead === cardId || !sessions.some((s) => s.cardId === lead));
+    const batchMates = wholeBatch
+      ? (await readCards(boardId)).filter((c) => c.id !== cardId && c.batch?.id === before.batch?.id && c.routing?.driver === "conductor").map((c) => c.id)
+      : [];
+    const targets = [cardId, ...batchMates];
+    for (const id of targets) await dropQueuedConductorCard(diskConductorQueueStore(), boardId, id);
+    const ended: string[] = [];
+    for (const s of sessions) {
+      // a sessão só morre pela alavanca do card que ELA conduz (o líder); num item de um lote vivo, só o claim do item sai
+      const owns = s.cardId === cardId || wholeBatch;
+      if (owns && s.tmuxSession && CONDUCTOR_TMUX_NAME.test(s.tmuxSession) && (await killSession(s.tmuxSession)).ok) ended.push(s.tmuxSession);
+      for (const id of owns ? sessionCardIds(s).filter((x) => targets.includes(x) || x === s.cardId) : [cardId]) {
+        await getCardClaims()
+          .release(boardId, id, sessionClaimActor(s.agentId))
+          .catch(() => {});
+      }
+    }
+    // a marca do LOTE sai junto com o condutor: o card que deixa o condutor deixa o lote (o plano aprovado, o teto e o
+    // gasto do lote não o seguem para uma rodada nova, nem o Inbox o junta a entregas que não são mais dele)
+    const leave = (fresh: Card): Card => {
+      const next = mutate(fresh);
+      return next.batch ? { ...next, batch: undefined } : next;
+    };
+    for (const id of batchMates) await updateCardOnDisk(boardId, id, leave).catch(() => null);
+    const card = await updateCardOnDisk(boardId, cardId, leave);
+    return { card, ended };
+  });
+}
+
+/** Só a sessão do operador no navegador decide sobre o condutor de um card: um agente (MCP) e o próprio serviço não. */
+async function operatorOnly(what: string): Promise<string | null> {
+  return (await resolveActionCaller()) === "operator-session" ? null : `${what} é do operador: só pelo Inbox ou pelo card, com a sua sessão.`;
+}
+
+/** De onde o operador clicou (o registro das ações humanas): o Inbox ou a página do card (fase 6). */
+type ConductorLeverSurface = "inbox" | "card";
+
+/**
+ * «Parar condutor» (fase 3, decisão do dono) — o condutor do card encerrou (ou calou) e ninguém assumiu: encerra a
+ * sessão dele, se ainda houver, tira o card da fila e do condutor e o GUARDA como adiado na mesma escrita — sem o
+ * adiamento, a varredura de órfãos o readmitiria e abriria outro condutor. Desfaz-se com «Trazer de volta».
+ */
+export async function stopConductorAction(input: { boardId: string; cardId: string; surface?: ConductorLeverSurface }): Promise<Result<{ ended: string[]; outcome: ActionOutcome }>> {
+  await requireSession("stopConductorAction");
+  try {
+    const refused = await operatorOnly("Parar o condutor");
+    if (refused) return { ok: false, error: refused };
+    const { card, ended } = await releaseConductedCard(input.boardId, input.cardId, (fresh) => {
+      const routing = withoutDriver(fresh);
+      return {
+        ...fresh,
+        ...(routing !== undefined ? { routing } : {}),
+        deferred: fresh.deferred ?? deferralFor({ reason: `condutor parado pelo dono ${input.surface === "card" ? "no card" : "no Inbox"}`, today: today(), by: "human", rootId: fresh.id, cardId: fresh.id }),
+      };
+    }, "stop-conductor");
+    if (!card) return { ok: false, error: `card não encontrado: ${input.cardId}` };
+    revalidateBoard(input.boardId);
+    void logHumanActionAction({ surface: input.surface ?? "inbox", tool: "stopConductorAction", cls: "write-board", boardId: input.boardId, cardId: input.cardId, note: ended.length ? `sessões encerradas: ${ended.join(", ")}` : "sem sessão viva" }).catch(() => {});
+    return { ok: true, data: { ended, outcome: { status: "done", message: "O condutor parou e o card ficou guardado como adiado. Para retomar, traga o card de volta." } } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * «Devolver ao fluxo» (fase 3, decisão do dono) — o card sai do condutor e volta à cascata das colunas: fila, sessão
+ * e driver saem, e o agente do passo atual roda já (quando o passo tem um). Num passo que é do condutor, o despacho
+ * chama um condutor novo na próxima varredura — e o recibo diz isso.
+ */
+export async function returnCardToFlowAction(input: { boardId: string; cardId: string; surface?: ConductorLeverSurface }): Promise<Result<{ ended: string[]; outcome: ActionOutcome }>> {
+  await requireSession("returnCardToFlowAction");
+  try {
+    const refused = await operatorOnly("Devolver o card ao fluxo");
+    if (refused) return { ok: false, error: refused };
+    const { card, ended } = await releaseConductedCard(input.boardId, input.cardId, (fresh) => {
+      const routing = withoutDriver(fresh);
+      return routing === undefined ? fresh : { ...fresh, routing };
+    }, "return-to-flow");
+    if (!card) return { ok: false, error: `card não encontrado: ${input.cardId}` };
+    revalidateBoard(input.boardId);
+    void logHumanActionAction({ surface: input.surface ?? "inbox", tool: "returnCardToFlowAction", cls: "write-board", boardId: input.boardId, cardId: input.cardId, note: ended.length ? `sessões encerradas: ${ended.join(", ")}` : "sem sessão viva" }).catch(() => {});
+    const run = await runCardSkillAction({ boardId: input.boardId, cardId: input.cardId });
+    const message = run.ok
+      ? `O card voltou às colunas e o agente do passo começou.`
+      : `O card voltou às colunas. ${run.error.replace(/\.$/, "")} — se este passo for de condutor, o sistema chama um condutor novo.`;
+    return { ok: true, data: { ended, outcome: { status: "done", message } } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
+ * `set_card_autonomy` — the per-story exception to the board's AUTONOMY PROFILE (autonomy-profile.ts). It overrides
+ * ONLY the three story boxes `spec`/`design`/`delivery`: `ultra` turns them on for this story, `human` turns them off
+ * even when the board has them on; `null` follows the board again. Publish, deploy, spend, copilot and Sentinel stay
+ * the board's. It is no longer in the card UI (only the MCP tool, full-token only). Turning a story
  * ultra with questions already open offers them to the proxy right away (the same nudge an ask gets).
  */
 export async function setCardAutonomyAction(input: {
@@ -4129,6 +4298,9 @@ export async function undoInboxReceiptAction(input: { boardId: string; receiptId
             .then(({ getMergeQueue }) => getMergeQueue().reconcileCardMergeEntries(board, cardId))
             .catch(() => {});
         },
+        // Fase 6 (6D): o desfazer de um movimento desfaz só o que AQUELE movimento disparou (e avisa o condutor vivo).
+        undoMoveEffects: (board, card, forward) =>
+          import("@/lib/storymap/runner/card-intents-deps").then((m) => m.undoForwardMoveEffects(board, card, forward)),
       },
       { board: input.boardId, receiptId: input.receiptId },
     );
@@ -4201,16 +4373,33 @@ export async function resolveProxyAuditAction(input: {
   try {
     if (input.outcome !== "confirmed" && input.outcome !== "reopened") return { ok: false, error: "outcome: confirmed | reopened" };
     let found = false;
+    let from: string | null = null;
+    let refined = false;
+    // fase 6 — reabrir num card JÁ ENTREGUE vira o refino dele (delivery-audit.ts `proxyAuditReopenRefine`): a pergunta
+    // reaberta sozinha ficava num card terminal, fora do Inbox e de qualquer agente
+    const config = input.outcome === "reopened" ? await readBoardConfig(input.boardId).catch(() => null) : null;
     const card = await updateCardOnDisk(input.boardId, input.cardId, (prev) => {
       const next = resolveProxyAudit(prev.questions ?? [], input.questionId, input.outcome, today());
       if (next === (prev.questions ?? [])) return null;
       found = true;
-      return { ...prev, questions: next };
+      from = prev.status ?? null;
+      const withQuestions = { ...prev, questions: next };
+      const before = (prev.questions ?? []).find((q) => q.id === input.questionId);
+      const reopened = config && before ? proxyAuditReopenRefine(withQuestions, config, { question: before.text, proxyAnswer: before.answer ?? "", today: today() }) : null;
+      refined = reopened !== null;
+      return reopened ?? withQuestions;
     });
     if (!found || !card) {
       return { ok: false, error: `nenhuma auditoria de proxy pendente em ${input.cardId}/${input.questionId}` };
     }
     revalidateBoard(input.boardId);
+    if (refined && card.status) {
+      // a mesma pós-reabertura do «Reabrir» da auditoria de entrega: o salto no ledger e a cascata (o refino roda no destino)
+      void appendTransition({ board: input.boardId, cardId: input.cardId, from, to: card.status, actor: "human", note: "reopen:proxy-audit" });
+      void evaluateAutorunOnEntry(input.boardId, input.cardId).catch((err) =>
+        console.error(`[resolveProxyAuditAction autorun ${input.boardId}/${input.cardId}]`, err),
+      );
+    }
     return { ok: true, data: { card } };
   } catch (e) {
     return fail(e);
@@ -4348,7 +4537,7 @@ export async function getCardTransitionsAction(input: {
 
 /**
  * Aggregated cost/turns metrics for a whole board (story-ex9516) — per-card
- * rows sorted by total cost desc + the board-wide total. Drives the /board/[id]/metricas table.
+ * rows sorted by total cost desc + the board-wide total. Drives the cost line of the quota popover (shell/QuotaRing).
  */
 export async function getBoardMetricsAction(input: {
   boardId: string;
@@ -4687,6 +4876,9 @@ export async function approveGovernanceDraftAction(input: {
     const draft = await readGovernanceDraft(input.boardId, input.draftId);
     if (!draft) return { ok: false, error: "Proposta não encontrada." };
     if (draft.status !== "pending") return { ok: false, error: `Proposta já ${draft.status === "approved" ? "aprovada" : "rejeitada"}.` };
+    // mirava uma seção do formato antigo de um documento: vencida, com o motivo em palavras (nunca «Seção desconhecida»)
+    const retired = retiredDraftReason(draft);
+    if (retired) return { ok: false, error: retired };
 
     const board = await readBoardConfig(input.boardId);
 
@@ -4825,8 +5017,7 @@ export async function setCardLinksAction(input: {
  * with a clear reason): every requested skip must be a REAL step, must be DISPENSABLE, and can NEVER be
  * LOAD-BEARING (plano-tecnico/desenvolver/revisar-codigo/qa-*). A named `profile` must exist in the board's
  * routeProfiles. Stamps `decidedBy: "human"`. Empty skips + no caps/profile CLEARS the routing (back to the
- * rules). Returns a `note` (non-fatal) when skipping `priorizar` without a priorityCall — the card would
- * then fail-close at its priority gate; the human should set priority first (the writer coherence rule).
+ * rules).
  */
 export async function setCardRouteAction(input: {
   boardId: string;
@@ -4857,12 +5048,6 @@ export async function setCardRouteAction(input: {
     const effortCap = input.effortCap ?? prof?.effortCap;
     const current = await readCard(input.boardId, input.cardId);
     if (!current) return { ok: false, error: "Card não encontrado." };
-    // Writer coherence (non-fatal): skipping `priorizar` without an argued priority makes the card
-    // fail-close at its priority gate — surface it so the human sets priority first (/harness-prioritize).
-    const note =
-      skips.includes("priorizar") && !current.priorityCall
-        ? "Aviso: pulou 'priorizar' sem priorityCall — o card vai travar no gate de prioridade (fail-closed). Defina a prioridade antes (/harness-prioritize)."
-        : undefined;
     // An empty route (no skips, no caps, no profile) CLEARS the override (routing = null → rules decide).
     const hasOverride = skips.length > 0 || !!input.profile || !!modelCap || !!effortCap;
     const routing: CardRouting | null = hasOverride
@@ -4886,7 +5071,7 @@ export async function setCardRouteAction(input: {
     }));
     if (!updated) return { ok: false, error: "Card não encontrado." };
     revalidateBoard(input.boardId);
-    return { ok: true, data: { card: updated, ...(note ? { note } : {}) } };
+    return { ok: true, data: { card: updated } };
   } catch (e) {
     return fail(e);
   }
@@ -5089,6 +5274,22 @@ export async function clearCapacityLatchAction(input: { reason: string }): Promi
 }
 
 /**
+ * «Agora não» do item «Ative o aviso no celular» (fase 3): grava a dispensa da oferta no estado do runner, e o item some
+ * do Inbox de todos os boards — o dono que não quer push não é lembrado em todo Inbox. Ativar segue pela engrenagem.
+ */
+export async function dismissPushOfferAction(): Promise<Result<{ outcome: ActionOutcome }>> {
+  await requireSession("dismissPushOfferAction");
+  try {
+    const { dismissPushOffer } = await import("@/lib/notifications/server/push-store");
+    dismissPushOffer(new Date().toISOString());
+    revalidatePath("/inbox");
+    return { ok: true, data: { outcome: { status: "done", message: "Certo, o Inbox não lembra mais. Para ativar depois, use a engrenagem da barra, em Avisos." } } };
+  } catch (e) {
+    return fail(e);
+  }
+}
+
+/**
  * ENGATA a trava do governador de capacidade pelo painel (o freio de mão do operador). Engatar é o sentido
  * SEGURO: qualquer chamador que passe o guard pode puxar o freio; soltar é que é só do operador. `hard` também
  * para os runs automáticos em voo (voltam quando a trava sair).
@@ -5141,6 +5342,14 @@ export async function rejectLockedCommandAction(input: { boardId: string; id: st
   await requireSession("rejectLockedCommandAction");
   return lockedExecDecision(input.boardId, (caller) =>
     getLockedExecService().reject({ id: String(input?.id ?? ""), caller, reason: input?.reason ?? null }),
+  );
+}
+
+/** «Adicionar um motivo» depois do «Não rodar»: explica a recusa ao agente, sem mudar a decisão. Só o dono. */
+export async function explainLockedCommandRejectionAction(input: { boardId: string; id: string; reason: string }): Promise<Result<{ status: string }>> {
+  await requireSession("explainLockedCommandRejectionAction");
+  return lockedExecDecision(input.boardId, (caller) =>
+    getLockedExecService().explainRejection({ id: String(input?.id ?? ""), caller, reason: String(input?.reason ?? "") }),
   );
 }
 

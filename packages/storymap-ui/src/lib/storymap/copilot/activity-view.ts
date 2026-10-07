@@ -101,7 +101,7 @@ const TOOL_WORDS: Readonly<Record<string, readonly [string, string]>> = {
   move_card: ["moveu um card de coluna", "mover um card de coluna"],
   update_card: ["atualizou um card", "atualizar um card"],
   create_card: ["criou um card", "criar um card"],
-  create_idea: ["registrou uma ideia", "registrar uma ideia"],
+  create_idea: ["registrou uma ideia na Triagem", "registrar uma ideia na Triagem"],
   triage_finding: ["tratou um aviso", "tratar um aviso"],
   answer_question: ["respondeu uma pergunta", "responder uma pergunta"],
   ask_question: ["fez uma pergunta", "fazer uma pergunta"],

@@ -881,11 +881,13 @@ function declaredFailureClassOf(msg: string, rules: readonly TargetFailureRule[]
  * Returns undefined when there is no signal to attribute (stays sparse). PURE.
  *
  * `rules` ausente = alvo sem declaração: só o baseline universal. Um caller de servidor passa `qaOf(target)`.
+ * `clock` é a costura do teste: o orçamento ({@link QA_FAILURE_SCAN_BUDGET_MS}) mede o tempo por ele, então um relógio
+ * falso prova o corte da leitura sem depender da carga da máquina. Em produção, `performance.now()`.
  */
-export function classifyFailure(signals: FailureSignals, rules?: FailureRules): FailureClass | undefined {
+export function classifyFailure(signals: FailureSignals, rules?: FailureRules, clock?: () => number): FailureClass | undefined {
   const msg = typeof signals.message === "string" ? signals.message : "";
   if (msg) {
-    const declared = declaredFailureClassOf(msg, rules?.failureClasses);
+    const declared = declaredFailureClassOf(msg, rules?.failureClasses, clock);
     if (declared) return declared;
     const ownPorts = [TOOL_DEFAULT_PORT, ...(rules?.selfPort ? [rules.selfPort] : []), ...(rules?.ports ?? [])];
     const portRe = portsPattern(ownPorts);

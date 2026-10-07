@@ -13,7 +13,7 @@ import { routeSkip, triggerForCard } from "@/lib/storymap/skip-routing";
 import { isConducted } from "@/lib/storymap/driver";
 import { isDeployStep } from "@/lib/storymap/demands";
 import { OWNER_DECISION_STOP_REASON, ownerPublishHold } from "@/lib/storymap/owner-waiting";
-import type { BoardConfig, Card, StatusDef, TriggerId } from "@/lib/storymap/types";
+import { stepAutoruns, type BoardConfig, type Card, type StatusDef, type TriggerId } from "@/lib/storymap/types";
 
 /**
  * The STOP reason for a card a CONDUCTOR drives (`routing.driver: conductor`). A named constant because the
@@ -95,6 +95,8 @@ export function dependencyWait(card: Card, cardsById: ReadonlyMap<string, Pick<C
  *   - the card has no status, OR its status id is unknown to the board  → STOP
  *   - the status is one THIS card instance skips (routeSkip)             → FORWARD past it
  *   - the status is manual (autorun !== true)                            → STOP
+ *   - the status autoruns only in the COLUMNS mode and the board runs the conductor (stepAutoruns false)
+ *                                                                        → FORWARD past it (a passage)
  *   - the status has a `trigger` (≠ suppressTrigger)                    → RUN that skill
  *   - the status's trigger === suppressTrigger (didn't advance)         → STOP (no retry loop)
  *   - the status is a gated landing (no trigger)                         → FORWARD (see decideForward)
@@ -158,6 +160,11 @@ export function decideCascade(card: Card, config: BoardConfig, opts: CascadeOpts
   // what lets the shell stay silent instead of logging a misleading "autorun:false".
   if (conducted && effectiveTrigger) return { action: "stop", reason: CONDUCTOR_STOP_REASON };
   if (!reopenOverride && status.autorun !== true) return { action: "stop", reason: "manual" };
+  // O PIPELINE HÍBRIDO (types.ts `stepAutoruns`): num board com condutor, um passo `autorunOnlyInColumns` não dispara a
+  // sua skill — o condutor faz esse trabalho. Um card que NÃO é conduzido (o conduzido já parou acima) só ATRAVESSA o
+  // passo, como numa passagem sem skill: o gate do próximo passo continua valendo. Sem isto, uma story especificada
+  // pararia na Entrevista para sempre a caminho de «A fazer», onde o condutor a pega.
+  if (!reopenOverride && !stepAutoruns(status, config)) return decideForward(card, status, config, opts);
   if (effectiveTrigger) {
     if (opts.suppressTrigger && effectiveTrigger === opts.suppressTrigger) {
       return { action: "stop", reason: "already-ran" };

@@ -39,8 +39,14 @@ import type { BoardConfig, ReleaseMode, StatusDef } from "./types";
  */
 export const DEFAULT_RELEASE_MODE: ReleaseMode = "manual";
 
-/** O modo declarado por este board, com o default seguro quando ele não declarou. */
-export function releaseModeOf(config: Pick<BoardConfig, "release"> | null | undefined): ReleaseMode {
+/**
+ * O modo deste board, com o default seguro quando ele não declarou. Com o PERFIL de autonomia explícito
+ * (autonomy-profile.ts — a caixa «publicar»), ele vence: o painel grava as duas chaves coerentes, e se `release.mode`
+ * for editado à mão depois, quem manda é a caixa que o dono marcou.
+ */
+export function releaseModeOf(config: (Pick<BoardConfig, "release"> & Partial<Pick<BoardConfig, "autonomy">>) | null | undefined): ReleaseMode {
+  const publish = config?.autonomy?.agentDecides?.publish;
+  if (typeof publish === "boolean") return publish ? "auto" : "manual";
   const mode = config?.release?.mode;
   return mode === "auto" || mode === "manual" ? mode : DEFAULT_RELEASE_MODE;
 }

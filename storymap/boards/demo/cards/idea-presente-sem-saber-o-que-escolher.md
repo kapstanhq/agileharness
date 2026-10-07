@@ -22,9 +22,6 @@ idea:
     - Quiz de 3 perguntas que devolve 3 títulos
     - Vale-presente com curadoria posterior
     - Lista pública de desejos do presenteado
-  valueSize:
-    reach: 1200
-    impact: 3
 order: 10
 created: '2026-08-01'
 updated: '2026-08-01'

@@ -147,6 +147,10 @@ export interface OrchestratorState {
   /** 5.5 — per-HOUR count of AUTO-executed guarded tool calls (anti-runaway). When the count hits
    *  policy.maxActionsPerHour the guard degrades an `auto` call to `ask`. Rolls over when the hour changes. */
   actions?: { hourKey: string; count: number };
+  /** Fase 6 — o MESMO contador, POR PAPEL (mcp/actor.ts ActorRoleKind): condutores, Sentinela, chat e agentes de fora
+   *  não dividem mais um balde só (num caso real a sessão externa do dono e os condutores somaram 54 de 60 numa hora, e os
+   *  bloqueios não diziam de quem). O agente que não se nomeia (`external`) segue no `actions` acima, o balde de antes. */
+  actionsByRole?: Partial<Record<string, { hourKey: string; count: number }>>;
   /** Circuit breaker for ABORTIVE spawns — runs that were born and died WITHOUT ever looking at the board
    *  (exit≠0 AND $0). They are a DEFECT, not work: charging them to the daily tick budget let a burst of crashes eat
    *  a whole day of autonomy while the copiloto told the operator "parei por budget" — the one
@@ -199,6 +203,8 @@ export function applyTick(
   mode: OrchestratorMode,
   costUSD = 0,
   workSig?: string,
+  /** fase 6 — `false`: o tique não gastou nada (a Sentinela olhou o board a $0; o gasto dela tem teto próprio). */
+  debit = true,
 ): OrchestratorState {
   const s = rolloverBudget(state, now);
   const at = new Date(now).toISOString();
@@ -210,7 +216,7 @@ export function applyTick(
     mode,
     lastTickAt: at,
     lastTick: { at, outcome: "ran" }, // 3.5a — the ran path also records the outcome for the chat/cockpit
-    budget: { ...s.budget, ticksToday: s.budget.ticksToday + 1, costToday: s.budget.costToday + costUSD },
+    budget: debit ? { ...s.budget, ticksToday: s.budget.ticksToday + 1, costToday: s.budget.costToday + costUSD } : s.budget,
     ...(workSig !== undefined ? { noop: { workSig, ranStreak } } : {}),
   };
 }
@@ -244,6 +250,28 @@ export function applyAction(state: OrchestratorState, now: number): Orchestrator
   const key = hourKey(now);
   const count = state.actions?.hourKey === key ? state.actions.count + 1 : 1;
   return { ...state, actions: { hourKey: key, count } };
+}
+
+/** O balde de um papel: `external` (o agente sem nome) é o `actions` de sempre; os outros, o seu próprio. PURA. */
+function roleBucket(state: OrchestratorState, roleKind: string): { hourKey: string; count: number } | undefined {
+  return roleKind === "external" ? state.actions : state.actionsByRole?.[roleKind];
+}
+
+/** Fase 6 — o PAPEL está abaixo do limite por hora? Cada papel tem o seu balde (o teto é o do board). PURA. */
+export function rateWithinLimitForRole(state: OrchestratorState, roleKind: string, maxPerHour: number | undefined, now: number): boolean {
+  if (!maxPerHour || maxPerHour <= 0) return true;
+  const b = roleBucket(state, roleKind);
+  if (b?.hourKey !== hourKey(now)) return true;
+  return b.count < maxPerHour;
+}
+
+/** Fase 6 — conta UMA ação automática no balde do papel. PURA. */
+export function applyActionForRole(state: OrchestratorState, roleKind: string, now: number): OrchestratorState {
+  if (roleKind === "external") return applyAction(state, now);
+  const key = hourKey(now);
+  const cur = state.actionsByRole?.[roleKind];
+  const count = cur?.hourKey === key ? cur.count + 1 : 1;
+  return { ...state, actionsByRole: { ...(state.actionsByRole ?? {}), [roleKind]: { hourKey: key, count } } };
 }
 
 /** WS-5.4 — how many spawns an actionable item may absorb (without its own progress) before it leaves the
@@ -558,7 +586,7 @@ export async function readOrchestratorState(board: string, now = Date.now()): Pr
     const raw = JSON.parse(await fs.readFile(statePath(board), "utf8"));
     if (raw && raw.v === 1 && raw.budget && typeof raw.budget.day === "string") {
       // 5.5 GOTCHA — a NEW state field MUST be whitelisted here or readOrchestratorState silently drops it every
-      // read (same class as the cardToFrontmatter serializer footgun). `actions` (rate limiter) added.
+      // read (same class as the cardToFrontmatter serializer footgun). `actions` (rate limiter) added; fase 6: `actionsByRole`.
       // WS-4.1 MIGRATION: a legacy single `lease {owner, expiresAt}` maps into the matching slot ONCE (then we
       // always persist the new shape); a state already on the new shape reads its slots directly.
       const legacy = raw.lease as { owner?: string; expiresAt?: string } | null | undefined;
@@ -570,7 +598,7 @@ export async function readOrchestratorState(board: string, now = Date.now()): Pr
       // `{streak: n, doctrine: "pre"}` HERE, on read. `"pre"` never equals the live doctrine version, so the
       // items given up on under the OLD rule come back to the actionable set on the first tick after deploy —
       // the migration IS the rescue (no script, no click).
-      return { v: 1, mode: raw.mode, lastTickAt: raw.lastTickAt, lastTick: raw.lastTick, budget: raw.budget, pairedLease, tickLease, noop: raw.noop, noopByItem: coerceNoopByItem(raw.noopByItem), actions: raw.actions, failures: raw.failures, recoveryHandoffs: coerceRecoveryHandoffs(raw.recoveryHandoffs) };
+      return { v: 1, mode: raw.mode, lastTickAt: raw.lastTickAt, lastTick: raw.lastTick, budget: raw.budget, pairedLease, tickLease, noop: raw.noop, noopByItem: coerceNoopByItem(raw.noopByItem), actions: raw.actions, ...(raw.actionsByRole && typeof raw.actionsByRole === "object" && !Array.isArray(raw.actionsByRole) ? { actionsByRole: raw.actionsByRole } : {}), failures: raw.failures, recoveryHandoffs: coerceRecoveryHandoffs(raw.recoveryHandoffs) };
     }
   } catch {
     /* absent/corrupt → default */

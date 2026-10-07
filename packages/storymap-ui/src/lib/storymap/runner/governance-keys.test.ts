@@ -54,3 +54,12 @@ it("o merge train aplica a devolução no board.yaml que aterrissa (catraca estr
   expect(src).toMatch(/lineData\.filter\(\(p\) => BOARD_YAML_RE\.test\(p\)\)/);
   expect(src).toMatch(/restoreGovernanceKeys\(landed, liveText\)/);
 });
+
+it("o merge train devolve a exceção de autonomia do CARD à de main (catraca estrutural)", () => {
+  const src = readFileSync(fileURLToPath(new URL("./merge-queue.ts", import.meta.url)), "utf8");
+  // lida ANTES do patch, para todo card que o run traz (patch por linha e 3-way)…
+  expect(src).toMatch(/for \(const f of data\.filter\(\(p\) => CARD_MD_RE\.test\(p\)\)\) \{[\s\S]{0,200}cardGovLive\.set\(f, cardGovernanceOf\(/);
+  // …e devolvida depois do 3-way, sob a trava do card
+  expect(src).toMatch(/restoreCardGovernance\(landed, live\)/);
+  expect(src.indexOf("restoreCardGovernance(landed, live)")).toBeGreaterThan(src.indexOf("mergeCardThreeWay(baseCard, mainCard, runCard"));
+});

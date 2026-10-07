@@ -15,7 +15,7 @@ import { dump } from "js-yaml";
 import { coerceAutonomy, coerceBoardNotifications, coerceBoardView, coerceCard, deriveBoardConfigForPersist, readBaseTemplateConfig, readBoardConfig } from "./repo";
 import { serializeCard } from "./write";
 import { parseBoardConfig, parseCard } from "./contracts";
-import { FIXTURE_BOARD } from "./board-fixture";
+import { FIXTURE_BOARD, FIXTURE_LEGACY_BOARD } from "./board-fixture";
 import { findRepoRoot, resetRepoRootCache } from "./paths";
 
 const roundTrip = (raw: Record<string, unknown>) => {
@@ -62,9 +62,26 @@ describe("board `view.lanes` — type · coerce · contract · persist", () => {
     expect((await deriveBoardConfigForPersist(FIXTURE_BOARD, { ...base, view: undefined })).view).toBeUndefined();
   });
 
-  it("um board sem os blocos lê `view` ausente e `autonomy` só com as classes do dono herdadas do `_base` (sem modo ⇒ human)", async () => {
+  it("a vista HERDADA do `_base` não é gravada no board.yaml (senão o board deixaria de seguir o mapa padrão)", async () => {
     const cfg = await readBoardConfig(FIXTURE_BOARD);
-    expect("view" in cfg).toBe(false);
+    expect(cfg.view).toBeDefined(); // herdada
+    expect("view" in (await deriveBoardConfigForPersist(FIXTURE_BOARD, cfg))).toBe(false);
+  });
+
+  it("o board de pipeline própria NÃO herda as raias do `_base` (elas citam passos que ele não tem)", async () => {
+    const legacy = await readBoardConfig(FIXTURE_LEGACY_BOARD);
+    expect(legacy.view).toBeUndefined();
+    // …e a vista que ele declarar é dele: grava inteira, mesmo que coincida com a do `_base`.
+    const baseView = (await readBaseTemplateConfig()).view;
+    expect((await deriveBoardConfigForPersist(FIXTURE_LEGACY_BOARD, { ...legacy, view: baseView })).view).toEqual(baseView);
+  });
+
+  it("um board sem os blocos HERDA as raias do `_base` e lê `autonomy` só com as classes do dono herdadas (sem modo ⇒ human)", async () => {
+    const cfg = await readBoardConfig(FIXTURE_BOARD);
+    // A vista padrão (as seis raias do quadro) mora no `_base`; o board que não declara a sua lê a herdada — a MESMA.
+    const baseView = (await readBaseTemplateConfig()).view;
+    expect(baseView?.lanes?.length ?? 0).toBeGreaterThan(0);
+    expect(cfg.view).toEqual(baseView);
     // o `_base` declara as quatro classes do dono; nenhum board liga o modo por herança.
     // Os tetos mensais NÃO vêm do `_base`: cada board declara os seus (sem teto, todo aumento de custo vai ao dono).
     // as classes herdadas SÃO as que o `_base` declara (o default do código é só o piso neutro, ver decision-class.test.ts)

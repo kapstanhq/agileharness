@@ -35,3 +35,22 @@ export function hopNoteWords(note: string): string {
   return d ? `${KIND[kind]} ${DETAIL[d] ?? d}` : KIND[kind];
 }
 
+/** As palavras de QUEM moveu, na linha do tempo do card (CardStageHistory): o papel gravado em português. PURA. */
+export function hopActorWords(actor: string): string {
+  const fixed: Record<string, string> = {
+    human: "você",
+    cascade: "automático",
+    system: "sistema",
+    merge: "integração",
+    sentinel: "Sentinela",
+    chat: "chat",
+    proxy: "procurador",
+    critic: "revisor independente",
+  };
+  if (fixed[actor]) return fixed[actor];
+  if (actor.startsWith("conductor:")) return "condutor";
+  if (actor.startsWith("external:")) return "agente de fora";
+  if (actor.startsWith("session:")) return "sessão de agente";
+  if (actor.startsWith("run:")) return "agente";
+  return actor;
+}

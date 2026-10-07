@@ -289,3 +289,69 @@ test('(lote D) NENHUMA lib alcançável: a guarda continua permitindo (fail-open
     fs.rmSync(fx.root, { recursive: true, force: true });
   }
 });
+
+// ── Os documentos markdown do dono (PRD e Business Model Canvas) ─────────────
+// Antes o recorte do hook só deixava passar o board.yaml, e as linhas do PRD/BMC em `evaluateOwnerGuard` nunca
+// eram alcançadas — um run reescrevia o PRD calado. O contexto dos agentes (docs/contexto.md) segue livre.
+
+function withRun(runId, fn) {
+  const savedEnv = process.env.AGILEHARNESS_AUTORUN_RUN_ID;
+  if (runId === null) delete process.env.AGILEHARNESS_AUTORUN_RUN_ID;
+  else process.env.AGILEHARNESS_AUTORUN_RUN_ID = runId;
+  try {
+    fn();
+  } finally {
+    if (savedEnv === undefined) delete process.env.AGILEHARNESS_AUTORUN_RUN_ID;
+    else process.env.AGILEHARNESS_AUTORUN_RUN_ID = savedEnv;
+  }
+}
+
+const docsDir = path.join(boardsDir, 'docs');
+fs.mkdirSync(docsDir, { recursive: true });
+
+test('run + docs/prd.md (Write ou Edit) → BLOCKED, apontando propose_change', () => {
+  const prd = path.join(docsDir, 'prd.md');
+  fs.writeFileSync(prd, '---\ndoc: prd\nformat: 2\n---\n\n## Problema\n\n- Leitores não acham a edição certa.\n', 'utf8');
+  withRun('run-prd', () => {
+    const w = check.test(writeInput(prd, '---\ndoc: prd\nformat: 2\n---\n\n## Problema\n\n- Outro problema.\n'));
+    assert.ok(w, 'a escrita do run no PRD tem de ser bloqueada');
+    assert.match(w.message, /run-prd/);
+    assert.match(w.fix, /propose_change/);
+    const e = check.test(editInput(prd, 'Leitores não acham a edição certa.', 'Outro problema.'));
+    assert.ok(e, 'o Edit do run no PRD tem de ser bloqueado');
+  });
+});
+
+test('run + docs/business-model-canvas.md → BLOCKED (artifact canvas)', () => {
+  const bmc = path.join(docsDir, 'business-model-canvas.md');
+  withRun('run-bmc', () => {
+    const r = check.test(writeInput(bmc, '## Segmentos de clientes\n\n- Clubes de leitura.\n'));
+    assert.ok(r);
+    assert.match(r.fix, /artifact: "canvas"/);
+  });
+});
+
+test('run + design/style-guide.md (Write ou Edit) → BLOCKED, apontando write_styleguide', () => {
+  const designDir = path.join(boardsDir, 'design');
+  fs.mkdirSync(designDir, { recursive: true });
+  const guide = path.join(designDir, 'style-guide.md');
+  fs.writeFileSync(guide, '---\nvoice:\n  tone: sereno\n---\n\nO tom da livraria.\n', 'utf8');
+  withRun('run-guia', () => {
+    const w = check.test(writeInput(guide, '---\nvoice:\n  tone: gritado\n---\n'));
+    assert.ok(w, 'a escrita do run no guia tem de ser bloqueada');
+    assert.match(w.fix, /write_styleguide/);
+    assert.ok(check.test(editInput(guide, 'sereno', 'gritado')), 'o Edit do run no guia tem de ser bloqueado');
+  });
+  withRun(null, () => {
+    assert.strictEqual(check.test(writeInput(guide, 'humano edita')), null);
+  });
+});
+
+test('run + docs/contexto.md → ALLOWED; humano + docs/prd.md → ALLOWED', () => {
+  withRun('run-ctx', () => {
+    assert.strictEqual(check.test(writeInput(path.join(docsDir, 'contexto.md'), '## Decisões já tomadas\n\n- Só livros físicos.\n')), null);
+  });
+  withRun(null, () => {
+    assert.strictEqual(check.test(writeInput(path.join(docsDir, 'prd.md'), '## Problema\n\n- Novo.\n')), null);
+  });
+});

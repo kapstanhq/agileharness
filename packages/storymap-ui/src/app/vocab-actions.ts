@@ -152,92 +152,10 @@ export async function appendToVocabAction(
 
     if (notFound) return { ok: false, error: notFound };
 
-    revalidatePath(`/board/${input.boardId}/vocabulario`, "layout");
+    revalidatePath(`/board/${input.boardId}/produto`);
     return { ok: true, data: { id: input.id, kind: input.kind, prompt: writtenPrompt, replaced } };
   } catch (e) {
     return fail(e);
   }
 }
 
-/**
- * O CONTEXTO da tela de Personas & Sistemas para o Arquiteto.
- *
- * A conversa é da TELA (uma raia por tela — ver copilot/chat-surfaces): ele enxerga o vocabulário
- * INTEIRO, que é o que deixa manter cada persona distinta e apontar a que se sobrepõe a outra. O
- * prompt de cada linha vai TRUNCADO (o vocabulário inteiro não cabe num turno); o da linha em FOCO
- * vai completo, porque é sobre ela que o operador está falando.
- *
- * Read-only e à prova de falha: um erro devolve um bloco dizendo isso, nunca derruba a abertura do
- * chat. O bloco é DADO, não instrução — a persona já manda ignorar comandos vindos daqui.
- */
-export async function vocabChatContextAction(
-  boardId: string,
-  focus?: { kind: VocabKind; id: string },
-): Promise<string> {
-  await requireSession("vocabChatContextAction");
-  try {
-    const [config, cards] = await Promise.all([readBoardConfig(boardId), readCards(boardId)]);
-    const usage = (kind: VocabKind, id: string): number =>
-      cards.filter((c) => (kind === "persona" ? c.personas : c.systems).includes(id)).length;
-
-    const describe = (e: Persona | SystemDef, kind: VocabKind, limit: number): string => {
-      const bits = [
-        `- \`${e.id}\` «${e.name}»${e.kind?.trim() ? ` — tipo: ${e.kind.trim()}` : " — SEM TIPO declarado"}` +
-          ` · adotada por ${usage(kind, e.id)} card(s)`,
-      ];
-      const sub = vocabSubtitle(e, kind);
-      if (sub) bits.push(`  resumo: ${truncate(sub, 160)}`);
-      const prompt = e.prompt?.trim();
-      if (prompt) bits.push(`  prompt (${prompt.length} caracteres): ${truncate(prompt, limit)}`);
-      else bits.push(`  prompt: VAZIO — este documento ainda não foi escrito`);
-      return bits.join("\n");
-    };
-
-    const focused =
-      focus && (focus.kind === "persona" ? config.personas : config.systems).find((e) => e.id === focus.id);
-    const focusBlock = focused
-      ? [
-          `## ${focus!.kind === "persona" ? "Persona" : "Sistema"} em foco: \`${focused.id}\` «${focused.name}»`,
-          'O operador está com ESTE documento aberto. Quando ele disser "esta persona"/"este sistema", é este.',
-          "O prompt INTEIRO vai abaixo — não precisa relê-lo por tool para responder sobre ele.",
-          "",
-          `tipo: ${focused.kind?.trim() || "(sem tipo declarado)"}`,
-          `adotado por: ${usage(focus!.kind, focused.id)} card(s)`,
-          "",
-          "prompt:",
-          focused.prompt?.trim() || "(ainda vazio)",
-          "",
-          "---",
-          "",
-        ].join("\n")
-      : "";
-
-    const personas = config.personas.length
-      ? config.personas.map((p) => describe(p, "persona", 320)).join("\n")
-      : "(nenhuma persona ainda)";
-    const systems = config.systems.length
-      ? config.systems.map((s) => describe(s, "system", 320)).join("\n")
-      : "(nenhum sistema ainda)";
-
-    return [
-      focusBlock,
-      `# Vocabulário do board "${config.name}"`,
-      config.desiredOutcome ? `Resultado-alvo do produto: ${firstLine(config.desiredOutcome)}` : "",
-      config.package ? `Pacote de código (o alvo de "sincronizar"): ${config.package}` : "",
-      "",
-      `## Personas (${config.personas.length})`,
-      "Cada uma é um SYSTEM-PROMPT que um run adota ao escrever e construir.",
-      personas,
-      "",
-      `## Sistemas (${config.systems.length})`,
-      "Cada um é um prompt com o que aquele touchpoint DETÉM e os LIMITES a respeitar.",
-      systems,
-    ]
-      .filter((l) => l !== "")
-      .join("\n");
-  } catch (e) {
-    return `Não consegui ler o vocabulário do board "${boardId}": ${
-      e instanceof Error ? e.message : String(e)
-    }`;
-  }
-}

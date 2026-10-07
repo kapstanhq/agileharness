@@ -18,8 +18,6 @@ const board: BoardConfig = {
   statuses: [
     { id: "refinada", name: "r", gate: "hasRefinement" },
     { id: "com-tasks", name: "t", gate: "hasTasks" },
-    { id: "so-rice", name: "rc", gate: "hasRice" },
-    { id: "pronta", name: "p", gate: "hasPrioritization" },
     { id: "qa", name: "qa", gate: "hasNoBlockers" },
     { id: "rev", name: "rev", gate: "hasQaPassed" },
     { id: "tp", name: "tp", gate: "hasTechPlan" },
@@ -50,11 +48,6 @@ const CORPUS: Array<{ name: string; fm: string; status: string }> = [
   { name: "qaPassed bare true (user) → pass", fm: "id: c\ntype: story\nstoryType: user\nqaPassed: true", status: "rev" },
   { name: "qaPassed quoted string (user) → agree", fm: 'id: c\ntype: story\nstoryType: user\nqaPassed: "true"', status: "rev" },
   { name: "qaPassed absent but not user → pass", fm: "id: c\ntype: story\nstoryType: technical", status: "rev" },
-  // rice numbers — stringy vs numeric, zero/negative effort
-  { name: "rice full numeric → pass", fm: "id: c\ntype: story\nrice:\n  reach: 100\n  impact: 2\n  confidence: 0.8\n  effort: 4", status: "so-rice" },
-  { name: "rice effort 0 → block", fm: "id: c\ntype: story\nrice:\n  reach: 100\n  impact: 2\n  confidence: 0.8\n  effort: 0", status: "so-rice" },
-  { name: "rice effort quoted '0' → agree", fm: 'id: c\ntype: story\nrice:\n  reach: 100\n  impact: 2\n  confidence: 0.8\n  effort: "0"', status: "so-rice" },
-  { name: "rice with a null field → block", fm: "id: c\ntype: story\nrice:\n  reach: null\n  impact: 2\n  confidence: 0.8\n  effort: 4", status: "so-rice" },
   // narrative / acceptance
   { name: "refinement: narrative + acceptance → pass", fm: `id: c\ntype: story\n${N}\nacceptance:\n  - Dado A Quando B Então C`, status: "refinada" },
   { name: "refinement: narrative only (acceptance []) → block", fm: `id: c\ntype: story\n${N}\nacceptance: []`, status: "refinada" },
@@ -68,11 +61,6 @@ const CORPUS: Array<{ name: string; fm: string; status: string }> = [
   { name: "findings blocker open WITHOUT title → both allow (malformed finding ignored)", fm: "id: c\ntype: story\nfindings:\n  - id: f1\n    severity: blocker\n    status: open", status: "qa" },
   { name: "findings blocker fixed → both pass", fm: 'id: c\ntype: story\nfindings:\n  - id: f1\n    severity: blocker\n    status: fixed\n    title: "x"', status: "qa" },
   { name: "findings absent → both pass", fm: "id: c\ntype: story", status: "qa" },
-  // type-aware prioritization
-  { name: "bug no frequency → block", fm: "id: c\ntype: story\nstoryType: bug\nseverity: high", status: "pronta" },
-  { name: "bug severity+frequency → pass", fm: "id: c\ntype: story\nstoryType: bug\nseverity: high\nfrequency: often", status: "pronta" },
-  { name: "melhoria impact+effort → pass", fm: "id: c\ntype: story\nmode: refine\nrice:\n  impact: 2\n  effort: 2", status: "pronta" },
-  { name: "feature RICE+kano+funnel → pass", fm: "id: c\ntype: story\nrice:\n  reach: 100\n  impact: 2\n  confidence: 0.8\n  effort: 4\nkano: performance\nfunnelStage: activation", status: "pronta" },
   // briefs (nested) + duplicateOf (trim)
   { name: "wireframeChosen set → pass", fm: "id: c\ntype: story\nwireframeChosen: wf-1", status: "wf" },
   { name: "refineBrief set → pass", fm: 'id: c\ntype: story\nrefinement:\n  brief: "melhorar contraste"', status: "refinar" },
@@ -150,10 +138,7 @@ describe("gate-core parity: raw-yaml (hook) vs coerceCard (app) reach the same v
 // future "fix" that silently tightens the hook (or loosens the app) is caught.
 describe("gate-core parity: documented leniency — hook allows, app blocks on malformed inputs", () => {
   const lenient: Array<{ name: string; fm: string; status: string; appGate: GateId }> = [
-    { name: "invalid bug frequency (typo) — coerce drops it", fm: "id: c\ntype: story\nstoryType: bug\nseverity: high\nfrequency: muito", status: "pronta", appGate: "hasPrioritization" },
-    { name: "invalid feature kano/funnel (typos) — coerce drops them", fm: "id: c\ntype: story\nkano: musthave\nfunnelStage: ativacao\nrice:\n  reach: 10\n  impact: 2\n  confidence: 1\n  effort: 2", status: "pronta", appGate: "hasPrioritization" },
     { name: "blocker finding with invalid status — coerce defaults to open", fm: "id: c\ntype: story\nfindings:\n  - title: SQLi no login\n    severity: blocker\n    status: pending", status: "qa", appGate: "hasNoBlockers" },
-    { name: "RICE effort .inf (non-finite) — coerce nulls it", fm: "id: c\ntype: story\nrice:\n  reach: 10\n  impact: 2\n  confidence: 1\n  effort: .inf", status: "so-rice", appGate: "hasRice" },
     // deploy-truth — the hook checks ONLY `sha` (the `at` round-trips as a Date in raw yaml, and the
     // source enum lives in coerceDeployProof — duplicating either in gate-core would re-create B4 drift).
     // A stamp with a sha but a missing `at` / unknown `source` is therefore hook-ALLOWED, app-BLOCKED

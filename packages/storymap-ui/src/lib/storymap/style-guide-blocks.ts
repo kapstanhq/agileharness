@@ -1,9 +1,8 @@
-// 🟥 Style Guide — THE section registry (D5, 00-conteudo-do-guia.md). One source for the 10
-// canonical sections, shared by the VIEW (which lays out the "estilo" block), the SERVER (which
+// 🟥 Style Guide — THE section registry (D5, 00-conteudo-do-guia.md). One source for the 11
+// canonical sections (the original 10 + Componentes, fase 2), shared by the VIEW (which lays out the "estilo" block), the SERVER (which
 // prompts the authoring assistant with the key list + quality bar) and the coercer (which drops any
 // section key this registry doesn't know). Duplicating this list is how an agent starts hallucinating
-// section keys the UI can't render — so it lives here, once. Mirrors canvas-blocks.ts's anatomy
-// (CANVAS_BLOCKS) on purpose — same shape, same reasons.
+// section keys the UI can't render — so it lives here, once.
 
 /** How a section is authored/rendered: pure structured tokens, pure prose, or both. */
 export type StyleSectionKind = "tokens" | "prose" | "mixed";
@@ -17,12 +16,12 @@ export interface StyleSectionDef {
   kind: StyleSectionKind;
   /**
    * The section's cell in the view's 2-column grid (lg+). Static class strings on purpose: Tailwind
-   * scans source text, so a computed class would never be generated (mirrors CanvasBlockDef.cell).
+   * scans source text, so a computed class would never be generated (a static class string).
    */
   cell?: string;
 }
 
-// Registry order = compiled-.md order = agent fill order (00-conteudo-do-guia.md §"As 10 seções").
+// Registry order = compiled-.md order = agent fill order (00-conteudo-do-guia.md §"As 10 seções", + Componentes).
 export const STYLE_SECTIONS: readonly StyleSectionDef[] = [
   {
     key: "identity",
@@ -79,6 +78,13 @@ export const STYLE_SECTIONS: readonly StyleSectionDef[] = [
     hint: "Pares preferido/evite, proibidos (lintável) e exceções documentadas — cobre microcopy de interface.",
     kind: "mixed",
     cell: "lg:col-span-1",
+  },
+  {
+    key: "components",
+    label: "Componentes",
+    hint: "Um item por componente que se repete (botão, cartão, campo, aviso) com UMA regra de uso — quando usar e quando não.",
+    kind: "mixed",
+    cell: "lg:col-span-2",
   },
   {
     key: "antiPatterns",

@@ -88,10 +88,28 @@ AUTOMÁTICA ÚNICA disparada pelo tick in-process (não uma sessão humana). Pro
    despeje no `text` a sua investigação — branch/run IDs, hashes de commit, "N commits atrás",
    diagnóstico passo-a-passo, log de terminal: isso é "vazamento de terminal" que soterra a decisão
    real (já aconteceu: ~150 palavras de terminal antes do "autoriza publicar?").
+   **O formato do Inbox — linguagem simples (vale para toda pergunta).** O Inbox mostra cada pergunta a uma
+   pessoa em três partes, e cada campo é uma delas: `context:` = **o que aconteceu** (1–2 frases simples: quem
+   fez o quê e o que está em jogo; ≤ 400 caracteres), `text:` = **o que você precisa da pessoa** (UMA pergunta;
+   ≤ 240 caracteres), `options:` = **as respostas possíveis** (2–4; cada `label` é uma AÇÃO CURTA que vira um
+   botão de um clique, ≤ 60 caracteres — o porquê vai em `pros`/`cons`), `recommendation:` = a sua sugestão
+   (vira o botão «Usar a sugestão»). Sem jargão nessas partes: nada de arquivo, sha, branch, run, gate, merge,
+   deploy, worktree, finding — diga em palavras («a busca», «a publicação», «o aviso da revisão»). Pela tool
+   `ask_question`, pergunta vazia ou fora desses tamanhos é recusada. Exemplo (inventado, da livraria):
+
+   ```yaml
+   context: "A busca do catálogo já acha livros pelo título. Para achar pelo autor, ela pode ignorar acentos ou exigir a grafia exata."
+   text: "A busca por autor deve ignorar acentos?"
+   options:
+     - { id: o1, label: "Ignorar acentos (Jose acha José)", pros: ["acha mais livros"], recommended: true }
+     - { id: o2, label: "Exigir a grafia exata", cons: ["quem digita sem acento não acha nada"] }
+   ```
    Pergunte com `questions` (a forma ESTRUTURADA: `text`, `context` curto com as stakes, `options` quando
    houver caminhos) e **SEMPRE com `category`** — o contrato a exige, e é o que a chave de autonomia do board
-   lê: `interview` (decisão de produto/UX — numa story em modo **ultra** um PROXY a responde, com premissas
-   registradas), `delivery` (integrar/publicar uma entrega — do dono), `money` (gasto, fornecedor, preço, API
+   lê (`board_autonomy({board})` — leia o perfil, nunca deduza do yaml): `interview` (decisão de produto/UX —
+   com a caixa `spec` ligada um PROXY cego a responde, com premissas registradas), `delivery` (integrar uma
+   entrega — do dono, salvo com a caixa `delivery` ligada; «Aprovar entrega» com a caixa desligada é travada em
+   código), `guardrail` (mudar teste existente — revisor de diff; até ele existir, do dono), `money` (gasto, fornecedor, preço, API
    paga, publicação externa, PRD/metas — SEMPRE do dono; comece o `context` com `[humano]`). `texts` (texto
    livre) fica sem categoria e é do dono — use-o só para uma diretriz, nunca para uma decisão que o proxy
    deveria poder tomar. A diligência/evidência (o `deploy_plan` escopado, os shas, o diagnóstico) vai
@@ -102,7 +120,7 @@ AUTOMÁTICA ÚNICA disparada pelo tick in-process (não uma sessão humana). Pro
 8. **Espere via `wait_for_run`/`wait_for_session_idle`/`wait_for_approval`**, nunca poll cego.
 9. **Reporte** (template de status ao fim) e **ENCERRE**. Se nada a fazer, encerre em silêncio (o
    pré-check zero-token normalmente já evita te acordar sem trabalho).
-10. **Board SÓ-NEGÓCIO** (`autonomy.mode: ultra` — o system prompt de acordar diz): o dono não é técnico e só decide
+10. **Board SÓ-NEGÓCIO** (alguma caixa de story ligada no perfil — `board_autonomy`; o system prompt de acordar diz): o dono não é técnico e só decide
     dinheiro, marca fora do produto, PRD/metas e dados de pessoas. O seu papel ali é a RECUPERAÇÃO TÉCNICA e só
     ela — é o que te acorda: execução que morreu (re-tente; nunca no-op nem corte de orçamento), conflito ou merge
     falho no train (`resolve_merge`), publicação que falhou (re-publique pelo ritual; nunca a que pediu o dono) e
@@ -172,7 +190,7 @@ Se QUALQUER passo acima estiver ambíguo, **não publique**: aguarde. Publicar e
 A esteira padrão (cada coluna tem `gate`, `trigger` da skill, e `autorun`):
 
 ```
-Triagem → Especificar(harness-enrich) → Entrevista(harness-interview) → Estimar(harness-prioritize)
+Triagem → Especificar(harness-enrich) → Entrevista(harness-interview)
   → A fazer → Jornada(harness-ux) → Telas(harness-ui) → Aprovar design → Pronto p/ dev
   → Plano & Tarefas(harness-plan) → Desenvolver(harness-do) → Revisão de código(harness-review)
   → QA/Testes(harness-qa) → Aprovar entrega → Integrar → Homologar(stage)
@@ -183,7 +201,7 @@ Triagem → Especificar(harness-enrich) → Entrevista(harness-interview) → Es
 - **Autorun:** mover um card pra uma coluna `autorun:true` dispara a skill `harness-*`
   daquela coluna — um Claude headless processa o card e o avança. Pra construir uma
   feature, normalmente BASTA `create_card`/`usm_capture` com escopo claro e rotear
-  pra `Especificar`; a cascata enriquece → prioriza → planeja → desenvolve → revisa →
+  pra `Especificar`; a cascata enriquece → planeja → desenvolve → revisa →
   testa sozinha.
 - **Gates:** mover pra uma coluna cujo gate não está cumprido é **rejeitado** (a tool
   devolve o motivo). Não force — cumpra o pré-requisito ou rode a skill que o gera.
@@ -234,8 +252,8 @@ Triagem → Especificar(harness-enrich) → Entrevista(harness-interview) → Es
 
 ## Backlog grooming (right-size ANTES de gastar build)
 
-Cada passagem de um card pelo pipeline custa **runs headless reais** (enrich → prioritize
-→ plan → do → review → qa = ~6 runs, $ e minutos — só o plan de um card médio pode custar dezenas de turns). Então **o tamanho do card é alavanca de custo, de conflito e de risco**, não
+Cada passagem de um card pelo pipeline custa **runs headless reais** (enrich → plan → do
+→ review → qa = ~5 runs, $ e minutos — só o plan de um card médio pode custar dezenas de turns). Então **o tamanho do card é alavanca de custo, de conflito e de risco**, não
 só de organização:
 
 - **Itens pequenos relacionados desenvolvidos SEPARADOS** = N× o overhead de pipeline **+**
@@ -321,14 +339,15 @@ arquivos (minimiza conflito), (d) entrega um incremento demonstrável.
   (ou você mesmo) para um card, saiba quem o detém — o claim tem **dono, escopo
   (`code`/`board`) e TTL**. Implementação de código é **card-exclusiva**: 1 implementer por
   card. Para agentes o claim é ENFORCED (acquire em card ocupado recusa **dizendo quem é o
-  holder** — decida esperar ou re-priorizar); para você, humano, é ADVISORY (avisa, nunca
+  holder** — decida esperar ou pegar outro card); para você, humano, é ADVISORY (avisa, nunca
   bloqueia). Claim **não é lock de integridade** (isso é o train/gates/worktrees) e nunca
   vira campo do card. Órfão expira sozinho; o steward ceifa.
 - **Card CONDUZIDO (`routing.driver: conductor`) não é seu.** O condutor dele move, pergunta e
   entrega; se ele morreu, quem decide é o operador. Não mova, não responda perguntas, não re-drive e
   não passe gate num card com o driver — o tick já não acorda por ele e o steward o deixa em paz.
   Pergunta de DINHEIRO (`category: money`) e pergunta que o PROXY de uma story ultra está respondendo
-  também não são suas (`answer_question` recusa a primeira). Nem as AUDITORIAS do dono — "Resposta do
+  também não são suas (`answer_question` recusa a primeira — e recusa sobrescrever uma resposta do dono, ou responder
+  a pergunta que ele reabriu ou que o proxy devolveu: essas são dele para sempre). Nem as AUDITORIAS do dono — "Resposta do
   proxy" e "Entrega autônoma" (a amostra das entregas de stories ultra que chegaram ao ar sem aprovação
   prévia): confirmar ou reabrir é dele, e o tick não acorda por elas.
 - **Distribua trabalho por INTENÇÃO, com `suggest_work`.** Para saber o próximo card
@@ -456,5 +475,5 @@ bug dizendo o que acontece e o esperado. A recusa diz o que corrigir — e, no b
 - As instruções do repositório do alvo (CLAUDE.md/AGENTS.md, se houver) e `target_profile({board})` — os comandos, o ambiente e as regras DESTE repositório.
 - `packages/storymap-ui/` — o app do board (porta 3008, `bun run dev`).
 - `storymap/boards/<board>/cards/*.md` — os cards como Markdown.
-- Skills da esteira: `/harness-enrich` `/harness-interview` `/harness-prioritize` `/harness-plan`
+- Skills da esteira: `/harness-enrich` `/harness-interview` `/harness-plan`
   `/harness-do` `/harness-review` `/harness-qa` `/harness-refine` `/harness-fix` `/harness-retire` `/harness-ship`.

@@ -168,7 +168,7 @@ export function buildJudgeContextNote(req: JudgeRequest, verdictPath: string): s
     .join("\n");
 }
 
-/** DI surface — the real spawn in prod, a fake in tests. Mirrors OrchestratorSpawnDeps. */
+/** DI surface — the real spawn in prod, a fake in tests. Same shape as the other headless spawns (Sentinela, críticos). */
 export interface JudgeSpawnDeps {
   /** the `claude` binary (settings.autorun.claudeBin) */
   claudeBin: string;

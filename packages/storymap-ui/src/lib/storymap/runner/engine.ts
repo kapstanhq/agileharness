@@ -156,7 +156,7 @@ export function styleGuidePathFor(boardId: string, boardConfig: BoardConfig | nu
  * the board from having a guide), so nesting this note inside buildContextNote would silently kill it
  * on exactly the boards that most need reference-led/synthesis grounding. One line, path-only,
  * instructs the agent to read the guide BEFORE UI/copy/frontend work and ignore it otherwise — keeps
- * the cost (~30 tokens/run) FLAT across every trigger (enrich/prioritize included — risco 5 do
+ * the cost (~30 tokens/run) FLAT across every trigger (enrich included — risco 5 do
  * README) instead of growing with guide content. NEVER inlines the guide's prose (which may carry
  * quotes/`$`/newlines) — only the derived path + version, both shell-safe by construction, so this
  * note is safe on the compaction-proof --append-system-prompt-file channel same as buildContextNote.
@@ -173,7 +173,7 @@ export function buildStyleGuideNote(boardId: string, boardConfig: BoardConfig | 
 /**
  * SM-09: build the per-app context note injected into the spawn prompt — an explicit instruction to
  * read the target app's conventions (+ the board's brandbook when one exists) BEFORE any code or copy,
- * so even a `.md`-only skill (enrich/prioritize/tasks/plan/ux) honors the app's conventions and brand
+ * so even a `.md`-only skill (enrich/tasks/plan/ux) honors the app's conventions and brand
  * voice it would otherwise never load (the worktree auto-loads ONLY the repository-root instructions).
  * ONDE ficam as convenções é do ALVO, não da ferramenta: vêm de `target.docs.conventions` (settings.yaml). Sem essa
  * declaração a nota NÃO inventa um caminho — manda ler «as instruções do repositório e do pacote <pkg>» (README,
@@ -224,9 +224,12 @@ export function buildContextNote(
     // não: um `read_doc`/leitura num PRD vazio devolve o esqueleto, que É a resposta certa ("este
     // board ainda não declarou norte") — enquanto a nota condicional de antes simplesmente OMITIA a
     // existência do documento, e o agente seguia sem saber que havia onde olhar.
-    note += ` O PRD deste board — problema, público, posicionamento, objetivos, escopo e as decisões JÁ TOMADAS — vive em storymap/boards/${board}/docs/prd.md (ou, se o arquivo ainda não existir, na escada estratégica do storymap/boards/${board}/board.yaml). Leia-o e mantenha a especificação alinhada a ele; a seção "Decisões já tomadas" existe para você NÃO re-decidir o que já foi decidido.`;
+    //
+    // O PRD foi dividido em dois (formato 2): o documento de NEGÓCIO do dono (`prd.md`) e o contexto dos
+    // agentes (`contexto.md`, onde ficam as decisões já tomadas). A nota aponta os dois.
+    note += ` O PRD deste board — problema, para quem é, proposta de valor, funcionalidades, fluxo de uso, métricas de sucesso e o que fica fora do escopo — vive em storymap/boards/${board}/docs/prd.md; o contexto para os agentes — as DECISÕES JÁ TOMADAS, o "pronto quando", requisitos, restrições e riscos — vive em storymap/boards/${board}/docs/contexto.md (leia os dois com a tool read_doc, docType "prd" e "contexto"). Mantenha a especificação alinhada ao PRD; a seção "Decisões já tomadas" do contexto existe para você NÃO re-decidir o que já foi decidido.`;
     if (personaIds.length > 0) {
-      note += ` Este item atende a(s) persona(s) ${personaIds.join(", ")} — leia o bloco \`personas\` em storymap/boards/${board}/board.yaml e escreva sob a ótica dela(s).`;
+      note += ` Este item atende a(s) persona(s) ${personaIds.join(", ")} — leia a seção "Personas" do PRD (um título por persona; se ela não estiver lá, o bloco \`personas\` em storymap/boards/${board}/board.yaml) e escreva sob a ótica dela(s).`;
     }
     if (systemIds.length > 0) {
       note += ` Ele toca o(s) sistema(s) ${systemIds.join(", ")} — leia o bloco \`systems\` em storymap/boards/${board}/board.yaml e respeite as capacidades e limites descritos.`;
@@ -596,8 +599,8 @@ const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 // (rm/mv via Bash) during refinement, and harness-refine/harness-fix + harness-sync-card run
 // read-only diagnosis (git/grep via Bash) over the live codebase → all need full
 // autonomy headless. harness-ux/harness-interview/harness-ui advance the card via `bun packages/storymap-ui/scripts/advance-card.ts`
-// (a Bash command) at the end, so they need Bash without prompts too. harness-tasks/
-// harness-prioritize/harness-plan only edit storymap data → acceptEdits. harness-grill only writes
+// (a Bash command) at the end, so they need Bash without prompts too. harness-tasks and
+// harness-plan only edit storymap data → acceptEdits. harness-grill only writes
 // questions into the card (no Bash advance — human-in-the-loop) → acceptEdits.
 /** Needs `--dangerously-skip-permissions` (runs Bash/writes code). FULL_AUTONOMY_SKILLS deriva do
  * AGENTS registry (skill-registry.ts) — antes era um Set próprio em lockstep. É o MESMO fato que
@@ -1008,7 +1011,7 @@ const defaultReadBoardConfig: BoardConfigReader = (board) => readBoardConfig(boa
  * Reads a card's FULL record from disk (null if absent/unreadable). Injected (DI, like
  * {@link CardStatusReader}) so the complexity-aware spawn-flag resolution
  * (story-ex9520) — which derives (model, effort) from the card's
- * storyType/rice/tasks — is unit-testable without the filesystem. Fail-open to null: a read error
+ * storyType/tasks — is unit-testable without the filesystem. Fail-open to null: a read error
  * leaves the spawn on the column policy ({@link resolveColumnArgs}), identical to the pre-routing engine.
  */
 export type CardReader = (board: string, cardId: string) => Promise<Card | null>;
@@ -1367,7 +1370,7 @@ export class RunnerEngine {
     // reads the real board.yaml. Defaults fail-open to null (the re-drive is skipped → legacy pause).
     private readBoardConfig: BoardConfigReader = defaultReadBoardConfig,
     // story-ex9520: reads the FULL card at enqueue so the spawn flags are
-    // routed by complexity (storyType/rice/tasks) within the column ceiling. DI (a fake in tests); prod
+    // routed by complexity (storyType/tasks) within the column ceiling. DI (a fake in tests); prod
     // reads the real card. Fail-open to null → the spawn degrades to the column policy (resolveColumnArgs).
     private readCard: CardReader = defaultReadCard,
     // story-ex9516: the durable run ledger. settle() writes ONE record per
@@ -2535,7 +2538,7 @@ export class RunnerEngine {
       // story-ex0052: the ONE classification that gates the whole worktree + split-train lifecycle.
       // isCode:true skills (do/review/qa/fix/refine/retire/sync-card) write product code → they get an
       // EPHEMERAL worktree + the merge train. isCode:false skills (capture/enrich/grill/interview/
-      // tasks/prioritize/plan/ux/ui) ONLY mutate storymap/boards/** → they spawn in the MAIN tree (like
+      // tasks/plan/ux/ui) ONLY mutate storymap/boards/** → they spawn in the MAIN tree (like
       // a human editing the board live) and commit their board-data straight to main via the per-cwd
       // serializer at settle, with NO branch and NO merge-train entry. Read once so the create-gate and
       // the settle-commit branch can never disagree (a divergence would orphan or double-commit).

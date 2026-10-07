@@ -22,9 +22,6 @@ idea:
     - Trilha editorial curada por selo
     - Selo visual de 'edição pequena' na vitrine
     - Newsletter dedicada ao acervo raro
-  valueSize:
-    reach: 400
-    impact: 3
 order: 30
 created: '2026-08-01'
 updated: '2026-08-01'

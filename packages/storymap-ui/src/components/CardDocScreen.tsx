@@ -2,7 +2,7 @@
 
 // CardDocScreen — o card como PÁGINA (`/board/[b]/card/[id]`). Desde a aposentadoria do
 // CardEditorDrawer, esta é a ÚNICA superfície de detalhe de card do app: todo clique em card, de
-// qualquer tela (Kanban, Mapa, Inbox, Priorização), chega aqui, e o Voltar devolve à tela de origem
+// qualquer tela (Kanban, Inbox), chega aqui, e o Voltar devolve à tela de origem
 // real (BackButton → useHistoryBack; o `backHref` é só a rede para quem abriu num link direto).
 //
 // TRÊS VISÕES da mesma verdade, e cada campo tem UMA delas:
@@ -10,7 +10,7 @@
 //                 (canvas de design, bloqueios, histórico, trajeto) via <CardDocument>
 //   · Markdown  — a fonte canônica do mesmo documento, editável (md-codec)
 //   · Campos    — o que o documento NÃO sabe dizer: classificação, narrativa (escrita), lugar,
-//                 vocabulário, tasks, prioridade, rota, links (<CardFields>)
+//                 vocabulário, tasks, rota, links (<CardFields>)
 // As três dividem UM rascunho, UMA barra de alterações e UM save — era isso que o drawer, sendo uma
 // superfície paralela com estado próprio, não conseguia oferecer.
 //
@@ -23,7 +23,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Archive, Bug, FileText, RefreshCw, SlidersHorizontal, Trash2, Wand2 } from "lucide-react";
+import { Archive, Bug, CircleStop, CornerUpLeft, FileText, RefreshCw, SlidersHorizontal, Trash2, Wand2 } from "lucide-react";
 import { cardHref } from "@/lib/storymap/deep-links";
 import { BoardHeader } from "@/components/BoardHeader";
 import { CardDocument } from "@/components/CardDocument";
@@ -36,8 +36,9 @@ import { ConfirmDialog, MovePreview } from "@/components/ConfirmDialog";
 import { RefineModal } from "@/components/RefineModal";
 import { BugModal } from "@/components/BugModal";
 import { DiscontinueModal } from "@/components/DiscontinueModal";
-import { deferCardAction, deleteCardAction, syncCardAction, undeferCardAction, updateCardAction } from "@/app/actions";
+import { deferCardAction, deleteCardAction, returnCardToFlowAction, stopConductorAction, syncCardAction, undeferCardAction, updateCardAction } from "@/app/actions";
 import { isOrganizeOnly } from "@/lib/storymap/organize-only-core";
+import { isConducted } from "@/lib/storymap/driver";
 import {
   CARD_ALLOWED_BLOCKS,
   CARD_DOC_TYPE,
@@ -119,13 +120,10 @@ export function CardDocScreen({
     (draft.parent ?? null) !== (card.parent ?? null) ||
     (draft.release ?? null) !== (card.release ?? null) ||
     (draft.serves ?? null) !== (card.serves ?? null) ||
-    (draft.kano ?? null) !== (card.kano ?? null) ||
-    (draft.funnelStage ?? null) !== (card.funnelStage ?? null) ||
     JSON.stringify(draft.narrative) !== JSON.stringify(card.narrative) ||
     JSON.stringify(draft.personas) !== JSON.stringify(card.personas) ||
     JSON.stringify(draft.systems) !== JSON.stringify(card.systems) ||
     JSON.stringify(draft.tasks) !== JSON.stringify(card.tasks) ||
-    JSON.stringify(draft.rice) !== JSON.stringify(card.rice) ||
     JSON.stringify(draft.links) !== JSON.stringify(card.links);
 
   const dirty =
@@ -250,7 +248,49 @@ export function CardDocScreen({
     } else toast(res.error);
   };
 
+  // Fase 6 — o card CONDUZIDO tem as duas alavancas do operador aqui também (antes só no Inbox, quando o condutor já tinha
+  // morrido): parar encerra a sessão e guarda o card como adiado; devolver tira o driver e o card volta às colunas. As
+  // duas ações conferem no servidor que quem clica é o operador, e o condutor vivo recebe o aviso antes de encerrar.
+  const conducted = isConducted(card);
+  const [conductorBusy, setConductorBusy] = useState(false);
+  const conductorLever = async (which: "stop" | "return") => {
+    const ok = window.confirm(
+      which === "stop"
+        ? "Parar o condutor deste card? A sessão é encerrada (o trabalho já feito fica guardado) e o card fica adiado até você trazer de volta."
+        : "Devolver este card ao fluxo das colunas? A sessão do condutor é encerrada e o agente do passo atual assume.",
+    );
+    if (!ok) return;
+    setConductorBusy(true);
+    const res = which === "stop" ? await stopConductorAction({ boardId: config.id, cardId: card.id, surface: "card" }) : await returnCardToFlowAction({ boardId: config.id, cardId: card.id, surface: "card" });
+    setConductorBusy(false);
+    if (res.ok) {
+      toast(res.data?.outcome.message ?? "Feito.", "success");
+      router.refresh();
+    } else toast(res.error);
+  };
+
   const menuItems: DocMenuItem[] = [
+    ...(conducted
+      ? [
+          {
+            key: "stop-conductor",
+            icon: CircleStop,
+            label: conductorBusy ? "Parando…" : "Parar condutor",
+            hint: "Encerra a sessão do condutor agora e guarda o card como adiado — nada roda nele até você trazer de volta",
+            disabled: conductorBusy,
+            onClick: () => void conductorLever("stop"),
+          } as DocMenuItem,
+          {
+            key: "return-to-flow",
+            icon: CornerUpLeft,
+            label: "Devolver ao fluxo",
+            hint: "Tira o card do condutor: a sessão é encerrada e o agente do passo atual (as colunas) assume",
+            disabled: conductorBusy,
+            onClick: () => void conductorLever("return"),
+          } as DocMenuItem,
+          { key: "div-conductor", divider: true } as DocMenuItem,
+        ]
+      : []),
     // board só de organização: o «Sincronizar» roda um agente — some (editar, mover, adiar e excluir ficam)
     ...(isOrganizeOnly(config)
       ? []
@@ -327,13 +367,13 @@ export function CardDocScreen({
           barras empilhadas roubavam altura e diziam a mesma coisa duas vezes.
 
           `view="card"` e não `"kanban"`: esta tela é o detalhe de UM card, alcançada de QUALQUER
-          seção (Kanban, Mapa, Inbox, Priorização). Declarando-se Kanban ela acendia o bloco
+          seção (Kanban, Inbox — e, antes, Mapa e Priorização). Declarando-se Kanban ela acendia o bloco
           **Software** no centro da barra — abrir uma story do Mapa fazia o realce saltar de Produto
           para Software, dizendo que você tinha trocado de seção sem ter trocado. `card` é
           transversal (não mora em grupo nenhum, como `processes`), então nenhum bloco acende. O
           `backHref` abaixo segue no Kanban de propósito: ele é só a rede do link direto — quem
           chegou navegando volta à tela real pelo `useHistoryBack` do BackButton. */}
-      <BoardHeader boards={boards} config={config} view="card" subnav={false} />
+      <BoardHeader boards={boards} config={config} view="card" />
       <div className="min-h-0 flex-1">
         <DocShell
           docType={CARD_DOC_TYPE}

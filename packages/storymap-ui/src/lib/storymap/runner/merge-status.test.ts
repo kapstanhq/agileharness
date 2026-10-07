@@ -1,15 +1,14 @@
 // A régua de estado do train — e o lint que impede a sexta cópia dela de nascer.
 //
 // O motivo destes testes existirem não é o conteúdo das listas (que é curto e óbvio), é a HISTÓRIA: a
-// mesma pergunta tinha cinco respostas escritas à mão, e a versão anterior deste defeito — `laneOf` ×
-// `trainInFlight` divergindo em dois status — fez trabalho SUMIR da página de Entrega sem que nenhuma
-// das duas listas estivesse "errada" isoladamente.
+// mesma pergunta tinha cinco respostas escritas à mão, e a versão anterior deste defeito — duas réguas de
+// raia (`laneOf` × `trainInFlight`, da antiga página de Entrega) divergindo em dois status — fez trabalho
+// SUMIR da tela sem que nenhuma das duas listas estivesse "errada" isoladamente.
 
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { isActiveMergeStatus, isLiveMergeStatus, isParkedMergeStatus } from "./merge-status";
-import { trainInFlight, trainIsMoving } from "./delivery-view";
+import { isActiveMergeStatus, isLiveMergeStatus, isParkedMergeStatus, trainInFlight, trainIsMoving } from "./merge-status";
 import type { MergeQueueStatus } from "./types";
 
 const TODOS: MergeQueueStatus[] = [
@@ -57,7 +56,7 @@ describe("as réguas da VISÃO derivam da do motor — e a diferença é exatame
 
   it("nenhum status é 'em voo' para a tela e ao mesmo tempo invisível para as duas raias", () => {
     // O invariante que o vão anterior violava: todo status ou pertence à raia do train, ou volta para a
-    // sessão. Nunca a lugar nenhum. (`laneOf` é testado em delivery-view.test; aqui travamos a régua.)
+    // sessão. Nunca a lugar nenhum. Aqui travamos a régua que a coluna do trem do Kanban usa.
     for (const s of TODOS) expect(typeof trainInFlight(s)).toBe("boolean");
     expect(TODOS.filter(trainInFlight)).toEqual([
       "waiting",

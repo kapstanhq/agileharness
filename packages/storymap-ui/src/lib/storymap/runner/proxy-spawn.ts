@@ -6,8 +6,9 @@
 //   1. THE CLEAN CONTEXT. A fresh temp dir that is not a checkout of anything, an env with EVERY MCP token
 //      stripped, no MCP server mounted, and the containment posture (autonomy-sandbox) around its shell. The proxy
 //      is never the conductor's session: it does not see the conductor's reasoning, and the conductor's own
-//      opinion is removed from what it does see — the `recommended` flags and prose `recommendation`s are
-//      stripped from the questions, and the variants' comparison note is left out. A proxy fed the asker's
+//      opinion is removed from what it does see — the `recommended` flags, prose `recommendation`s, the options'
+//      pros/cons and their ORDER (shuffled) are stripped from the questions, and the variants' comparison note is
+//      left out. A proxy fed the asker's
 //      preference is a rubber stamp, not a stand-in for the owner.
 //   2. THE ANSWERS AS A FILE. A machine-read contract (`.harness-proxy-answers.json`), never the final prose. Each
 //      answer must carry its PREMISSAS (what it assumed, from which source) and a 0..1 confidence, or it is not an
@@ -43,7 +44,7 @@ import { applyHeadroomEnv } from "./headroom";
 import { DEFAULT_SURFACE_BUDGET_USD } from "./run-budget";
 import { sanitizeSpawnEnv } from "./spawn-env";
 import { withHarnessTempDir } from "./temp";
-import { effectiveQuestionCategory } from "@/lib/storymap/autonomy";
+import { auditDraw, effectiveQuestionCategory } from "@/lib/storymap/autonomy";
 import type { CardQuestion, ModelTier } from "@/lib/storymap/types";
 
 /** The proxy's wall clock. It reads a prepared context and writes one file — minutes, not an hour. */
@@ -73,7 +74,8 @@ export interface ProxyQuestion {
   category: ProxyCategory;
   context?: string;
   mode?: "single" | "multi";
-  options?: Array<{ id: string; label: string; pros?: string[]; cons?: string[] }>;
+  /** as opções NUAS, na ordem embaralhada — sem prós/contras nem recomendação do autor ({@link blindQuestion}). */
+  options?: Array<{ id: string; label: string }>;
 }
 
 /** A UI variant (a `screen` artifact of the card's design canvas) for a `ui-choice` question. */
@@ -88,6 +90,8 @@ export interface OwnerDecision {
   cardTitle: string;
   question: string;
   answer: string;
+  /** o dono reabriu a resposta do procurador nesta pergunta e respondeu ele mesmo — uma CORREÇÃO (vai no topo). */
+  correction?: true;
 }
 
 /** Everything the proxy may know. Built by the dispatcher from the board's own documents — nothing else. */
@@ -103,6 +107,9 @@ export interface ProxyRequest {
   /** the TECHNOLOGY the owner asked for on this card (card-opt-ins.ts) — a hard constraint on technical answers. */
   techPreference?: string;
   prd?: string | null;
+  /** fase 6 — o pacote de contexto do card (PRD por seção, «Fora do escopo», classes e correções do dono); quando vem,
+   *  substitui o PRD cortado. */
+  contextPack?: string | null;
   personas: Array<{ id: string; name: string; role?: string; prompt?: string }>;
   styleGuide?: string | null;
   history: OwnerDecision[];
@@ -128,7 +135,35 @@ export interface ProxyResult {
   error?: string;
 }
 
-/** Strip the ASKER's opinion from a question (the recommended flag, the prose recommendation). PURE. */
+/** A marca de recomendação que o autor às vezes cola no RÓTULO da opção («(recomendado)», «[recomendada]»). */
+const RECOMMENDED_MARK = /\s*[([]\s*recomendad[ao]s?\s*[)\]]\s*/gi;
+
+/**
+ * A ordem das opções que o procurador vê: um embaralhamento DETERMINÍSTICO pela pergunta (o mesmo a cada chamada — um
+ * teste o fixa, e uma auditoria refaz por que o procurador viu o que viu). A ordem do autor é opinião: a primeira
+ * opção costuma ser a dele. Os ids não mudam, então a resposta (`selectedOptionIds`) continua apontando a opção certa.
+ */
+function shuffledFor<T>(items: readonly T[], key: string): T[] {
+  const out = [...items];
+  // Park–Miller (minimal standard): seed em [1, 2^31−2]; o produto cabe exato num double.
+  let seed = Math.floor(auditDraw(key) * 0x7ffffffe) + 1;
+  const next = () => {
+    seed = (seed * 48271) % 0x7fffffff;
+    return (seed - 1) / 0x7ffffffe;
+  };
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(next() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+/**
+ * O procurador CEGO: tira da pergunta toda a opinião de QUEM PERGUNTOU — a opção marcada `recommended`, a
+ * `recommendation` em prosa, os prós e contras (são o argumento do autor, escrito para levar à opção dele), a marca
+ * «(recomendado)» no rótulo e a ORDEM das opções (embaralhada). Fica o que se decide: o texto, o contexto (os fatos) e
+ * as opções nuas. PURA.
+ */
 export function blindQuestion(q: CardQuestion): ProxyQuestion | null {
   const category = effectiveQuestionCategory(q);
   if (!category || !PROXY_CATEGORIES.includes(category)) return null;
@@ -140,12 +175,7 @@ export function blindQuestion(q: CardQuestion): ProxyQuestion | null {
     ...(q.options?.length
       ? {
           mode: q.mode ?? "single",
-          options: q.options.map((o) => ({
-            id: o.id,
-            label: o.label,
-            ...(o.pros?.length ? { pros: o.pros } : {}),
-            ...(o.cons?.length ? { cons: o.cons } : {}),
-          })),
+          options: shuffledFor(q.options, `${q.id}\n${q.text}`).map((o) => ({ id: o.id, label: o.label.replace(RECOMMENDED_MARK, " ").trim() || o.label })),
         }
       : {}),
   };
@@ -190,8 +220,8 @@ export function buildProxyPrompt(answersPath: string, ownerClasses: ReadonlyArra
     "  volta ao dono na amostra do que o usuário vê. Do dono é só o que fala FORA do produto.",
     "- Escolha de tela: julgue as variantes pela rubrica — aderência ao guia de estilo, qualidade, originalidade,",
     "  acabamento e funcionalidade para a persona. Escolha UMA opção; diga por quê nas premissas.",
-    "- `confidence` é a SUA confiança de 0 a 1 de que o dono responderia igual. Seja honesto: abaixo de 0.5 a",
-    "  resposta vai para a auditoria do dono.",
+    // fase 6 — a régua da auditoria NÃO vai no prompt (revelada, a confiança informada ficava sempre acima dela)
+    "- `confidence` é a SUA confiança de 0 a 1 de que o dono responderia igual. Seja honesto.",
     "",
     `Escreva as respostas em \`${answersPath}\` como JSON, e SÓ isso:`,
     `{"answers":[{"questionId":"q1","answer":"<texto>","selectedOptionIds":["o2"],"assumptions":"<premissas + fonte>","confidence":0.8},`,
@@ -232,7 +262,9 @@ export function buildProxyContextNote(req: ProxyRequest): string {
     lines.push(fence("Tecnologia pedida pelo dono — restrição, não sugestão", clip(req.techPreference, 1_000)), "");
   }
   if (req.body?.trim()) lines.push(fence("Corpo do card", clip(req.body, 6_000)), "");
-  lines.push(req.prd?.trim() ? fence("PRD do board", clip(req.prd, PRD_MAX_CHARS)) : "### PRD do board\n(o board não tem PRD — sem ele, recuse o que depender de escopo/público)", "");
+  // o pacote já vem com as próprias cercas de dado (context-pack.ts) — entra como está, sem cerca por cima
+  if (req.contextPack?.trim()) lines.push("### Contexto do board (o pacote do serviço: PRD por seção, «Fora do escopo», classes e correções do dono)", req.contextPack.trim(), "");
+  else lines.push(req.prd?.trim() ? fence("PRD do board", clip(req.prd, PRD_MAX_CHARS)) : "### PRD do board\n(o board não tem PRD — sem ele, recuse o que depender de escopo/público)", "");
   if (req.personas.length) {
     lines.push("### Personas");
     for (const p of req.personas) lines.push(`- **${p.name}** (${p.id})${p.role ? ` — ${p.role}` : ""}${p.prompt ? `\n  ${clip(p.prompt, 600)}` : ""}`);
@@ -240,8 +272,8 @@ export function buildProxyContextNote(req: ProxyRequest): string {
   }
   if (req.styleGuide?.trim()) lines.push(fence("Guia de estilo", clip(req.styleGuide, STYLE_GUIDE_MAX_CHARS)), "");
   if (req.history.length) {
-    lines.push("### Decisões que o DONO já tomou neste board (as mais recentes primeiro)");
-    for (const d of req.history.slice(0, HISTORY_MAX_ITEMS)) lines.push(`- [${d.cardTitle}] ${d.question} → ${d.answer}`);
+    lines.push("### Decisões que o DONO já tomou neste board (as correções dele primeiro, depois as mais parecidas com estas perguntas)");
+    for (const d of req.history.slice(0, HISTORY_MAX_ITEMS)) lines.push(`- ${d.correction ? "[correção do dono] " : ""}[${d.cardTitle}] ${d.question} → ${d.answer}`);
     lines.push("");
   } else {
     lines.push("### Decisões passadas do dono\n(nenhuma registrada ainda)", "");
@@ -258,7 +290,7 @@ export function buildProxyContextNote(req: ProxyRequest): string {
     if (q.options?.length) {
       lines.push(`Opções (${q.mode === "multi" ? "várias" : "uma"}):`);
       for (const o of q.options) {
-        lines.push(`- ${o.id}: ${o.label}${o.pros?.length ? ` · prós: ${o.pros.join("; ")}` : ""}${o.cons?.length ? ` · contras: ${o.cons.join("; ")}` : ""}`);
+        lines.push(`- ${o.id}: ${o.label}`);
       }
     }
     lines.push("");

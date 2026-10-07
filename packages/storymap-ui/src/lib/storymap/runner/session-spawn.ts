@@ -49,6 +49,7 @@ import {
   openSessionWorktree,
   registerSession,
   roleNeedsWorktree,
+  sessionCardIds,
   updateSession,
   type AgentRole,
   type AgentSession,
@@ -58,6 +59,7 @@ import {
 import type { CardDriver, EffortLevel, ModelTier, SessionModel } from "@/lib/storymap/types";
 import { conductorCommand } from "@/lib/storymap/driver";
 import { CAPACITY_HELD_MARKER, type GateVerdict, type Initiator } from "./capacity-governor";
+import { MCP_TOOLSET_HEADER, type McpToolset } from "@/lib/storymap/mcp/toolsets";
 
 /** How the fleet names a session's tmux: `agent-<slug|short id>`. The `agent-` prefix is what tells the
  *  reaper, the /processes lanes and a human at a keyboard that the tool owns this session. */
@@ -196,6 +198,11 @@ export interface SessionPromptInput {
   branch?: string;
   /** WS-6.3 — this process REPLACES one that ran out of context; the tree/branch/claims are already ours. */
   handoff?: boolean;
+  /**
+   * Fase 7 — os ITENS do lote que esta sessão já segura além do card (`sessionCardIds` sem o líder). Só uma reciclagem
+   * os tem: o processo novo precisa saber que os claims deles também são seus. Ausente/vazio ⇒ sessão de um card só.
+   */
+  batchCardIds?: readonly string[];
 }
 
 /**
@@ -218,6 +225,9 @@ export function buildSessionPrompt(i: SessionPromptInput): string {
     lines.push(
       `CARD: ${i.board}/${i.cardId}${i.cardTitle ? ` — ${i.cardTitle}` : ""} (o claim já é SEU; leia o card com get_card).`,
     );
+    if (i.batchCardIds?.length) {
+      lines.push(`LOTE: ${i.batchCardIds.map((id) => `${i.board}/${id}`).join(", ")} (itens do lote deste card — os claims também já são SEUS).`);
+    }
   } else if (i.board) {
     lines.push(`BOARD: ${i.board} (trabalho sem card — legítimo; integra igual).`);
   }
@@ -257,20 +267,164 @@ export function buildSessionPrompt(i: SessionPromptInput): string {
 
 // ── the CLI args ─────────────────────────────────────────────────────────────────────────────────────────
 
+// ── a superfície ENXUTA do condutor ──────────────────────────────────────────────────────────────────────
+//
+// MEDIDO (123 sessões de condutor): o início de uma sessão custava ~236k tokens — 66% de todo o input delas —
+// porque o spawn herdava TUDO do operador: os conectores do claude.ai, os plugins, as MCPs globais e todas as
+// tools nativas do CLI. O condutor só precisa do MCP do AgileHarness (o `--mcp-config` da sessão) e de um punhado de
+// tools nativas. Só o PAPEL condutor muda: o terminal que o próprio operador abre (`claude_new` sem driver) segue
+// herdando o ambiente dele, exatamente como hoje.
+
+/**
+ * As tools nativas que RODAM COMANDO DE SHELL. A trava dura do host (o hook `hard-deny` nos managed settings) casa só
+ * com `Bash` — uma sessão que tenha outra destas roda comando sem passar por ela (medido: `Monitor` executa o `command`
+ * dele no mesmo shell, e o hook sai cedo para todo `tool_name` que não seja Bash). Nenhuma sessão que o serviço abre
+ * pode ganhar uma delas além de `Bash`.
+ */
+export const SHELL_RUNNING_TOOLS = ["Bash", "Monitor", "PowerShell"] as const;
+
+/** A única tool de shell que a trava dura do host cobre (o `matcher` do hook gerenciado). */
+export const HARD_DENY_COVERED_SHELL_TOOLS: readonly string[] = ["Bash"];
+
+/**
+ * As tools NATIVAS que um condutor usa de fato: Agent (os especialistas e o verificador de contexto limpo), o shell
+ * e os arquivos do próprio worktree (Bash/Read/Edit/Write/Glob/Grep), TaskStop (parar o servidor de dev ou a suíte
+ * longa que ele subiu com `Bash` em segundo plano), WebFetch/WebSearch (documentação oficial antes de prescrever um
+ * conserto) e ToolSearch. `Monitor` SAIU: ele roda comando de shell por fora da trava dura (ver
+ * {@link SHELL_RUNNING_TOOLS}), e o `Bash` com `run_in_background` cobre o servidor de dev e a suíte longa. O slash command
+ * `/harness-conductor` continua registrado com esta lista (verificado no evento `init` do CLI 2.1.289).
+ *
+ * ToolSearch FICA, medido no CLI 2.1.289 (`-p`, stream-json, um servidor MCP de 140 tools, `--strict-mcp-config`):
+ * SEM ela o CLI não adia nenhum schema MCP — os 140 entram no 1º turno (~125k tokens, sonnet e opus); COM ela os
+ * schemas são adiados e o 1º turno custa ~7,6k, a tool MCP chamada depois de um `select:`. Nos dois casos a tool MCP
+ * é chamável. Tirá-la só faz o adiamento nunca acontecer — o oposto do que a superfície enxuta quer. É só leitura.
+ * `Skill` fica FORA de propósito: sem ela a lista de skills (~13k tokens) não entra no contexto, e o slash command
+ * do spawn continua funcionando; as menções a `Skill:` nos agentes do alvo são opcionais («quando necessário»).
+ */
+export const CONDUCTOR_TOOLS = ["Agent", "Bash", "Read", "Edit", "Write", "Glob", "Grep", "TaskStop", "WebFetch", "WebSearch", "ToolSearch"] as const;
+
+/**
+ * O recorte de superfície de uma sessão pelo seu driver. PURA. Condutor ⇒ só o MCP do `--mcp-config`
+ * (`--strict-mcp-config`) e só as {@link CONDUCTOR_TOOLS}; qualquer outra sessão ⇒ nada muda (herda o operador).
+ */
+export function sessionToolScope(driver: CardDriver | undefined): { tools?: readonly string[]; strictMcpConfig?: boolean } {
+  return driver === "conductor" ? { tools: CONDUCTOR_TOOLS, strictMcpConfig: true } : {};
+}
+
+/**
+ * O conjunto de tools MCP do PAPEL da sessão (mcp/toolsets.ts) — o que o servidor monta para ela, por baixo do nível do
+ * token. Condutor ⇒ `conductor` (as ~40 que um condutor usa, das ~140 que o `orch` monta); qualquer outra sessão ⇒
+ * nenhum recorte (a superfície inteira do nível, como hoje). PURA.
+ */
+export function sessionMcpToolset(driver: CardDriver | undefined): McpToolset | undefined {
+  return driver === "conductor" ? "conductor" : undefined;
+}
+
+// ── o PACOTE DE CONTEXTO (context-pack.ts) ───────────────────────────────────────────────────────────────────
+//
+// O condutor nasce com o norte do produto no PROMPT DE SISTEMA (`--append-system-prompt-file`): o canal que é re-emitido a
+// cada turno e sobrevive à compactação — o mesmo que os runs headless já usam (engine.ts). Antes o contexto de negócio
+// chegava por instrução («leia o PRD…»), e só uma fração das sessões o lia. O arquivo mora ao lado do `.mcp.json` da
+// sessão (gitignored, 0600) e é REESCRITO a cada spawn/reciclagem: o hash no cabeçalho diz à sessão nova se o norte mudou
+// (a skill manda anotá-lo no diário e comparar), e hash + tokens ficam na linha do registro da sessão (telemetria).
+//
+// SÓ COM A SKILL DIVIDIDA. A skill monolítica antiga (sem `ref/`) manda ler o PRD e os documentos inteiros: com ela, o
+// pacote só SOMA tokens a cada turno. O alvo só recebe a skill nova quando o operador sobrescreve a cópia dele
+// (skills-sync guarda uma cópia divergente). Por isso o pacote só é entregue quando o worktree da sessão tem
+// `.claude/skills/harness-conductor/ref/` (dep `hasSplitConductorSkill`).
+
+/** Onde a skill dividida do condutor deixa as regras completas, relativo à raiz do worktree. */
+export const CONDUCTOR_SKILL_REF_DIR = path.join(".claude", "skills", "harness-conductor", "ref");
+
+/** Onde mora o pacote de uma sessão: `storymap/.runner/sessions/<sessionId>.pack.md`. */
+export function sessionContextPackPath(stateDir: string, sessionId: string): string {
+  return path.join(stateDir, "sessions", `${sessionId}.pack.md`);
+}
+
+/** O que o spawn recebe do montador do pacote (context-pack.ts → `loadContextPack`). */
+export interface SessionContextPack {
+  text: string;
+  hash: string;
+  tokens: number;
+}
+
+/**
+ * Escreve o pacote da sessão e devolve o caminho + o hash, ou null (sem pacote, sem card, ou a escrita falhou). FAIL-OPEN
+ * de propósito: uma sessão sem pacote ainda cumpre o contrato (a skill manda ler as fontes); uma sessão que NÃO nasce por
+ * causa de um arquivo de contexto seria o pior dos dois.
+ */
+export async function writeSessionContextPack(
+  fs: Pick<typeof fsp, "mkdir" | "writeFile">,
+  stateDir: string,
+  sessionId: string,
+  pack: SessionContextPack | null | undefined,
+): Promise<{ path: string; hash: string; tokens: number } | null> {
+  if (!pack?.text?.trim()) return null;
+  const file = sessionContextPackPath(stateDir, sessionId);
+  try {
+    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    await fs.writeFile(file, pack.text, { encoding: "utf8", mode: 0o600 });
+    return { path: file, hash: pack.hash, tokens: pack.tokens };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Apaga os arquivos que o spawn escreveu para uma sessão (`<id>.mcp.json` com o token, `<id>.pack.md`). Chamado quando a
+ * sessão sai do registro (session-worktree.ts `removeSessionFiles`). Ausente já é sucesso; nunca lança.
+ */
+export async function removeSessionArtifacts(
+  fs: Pick<typeof fsp, "rm">,
+  stateDir: string,
+  sessionId: string,
+): Promise<void> {
+  for (const file of [sessionMcpConfigPath(stateDir, sessionId), sessionContextPackPath(stateDir, sessionId)]) {
+    await fs.rm(file, { force: true }).catch(() => {});
+  }
+}
+
+/** Carrega (pelo dep injetado) e escreve o pacote de uma sessão de CONDUTOR num card. Nunca lança. */
+async function conductorPackFor(
+  deps: SessionSpawnDeps,
+  driver: CardDriver | undefined,
+  sessionId: string,
+  card: { board: string; cardId: string } | null,
+  cwd: string,
+): Promise<{ path: string; hash: string; tokens: number } | null> {
+  if (driver !== "conductor" || !card || !deps.contextPack) return null;
+  // skill antiga no worktree ⇒ sem pacote (ver o cabeçalho desta seção); sem o dep ⇒ assume a skill dividida
+  if (deps.hasSplitConductorSkill && !(await deps.hasSplitConductorSkill(cwd).catch(() => false))) return null;
+  const pack = await deps.contextPack(card.board, card.cardId).catch(() => null);
+  return writeSessionContextPack(deps.fs, deps.stateDir, sessionId, pack);
+}
+
 /**
  * The argv for the session's `claude`. THE PROMPT IS FIRST and everything else follows — see fact 1 in the
  * header: `--mcp-config` is variadic, so a prompt placed after it is eaten as a config path and the CLI dies
  * before the session exists. Do not "tidy" the order. PURE.
+ *
+ * `--tools` é VARIÁDICO também: a lista vai como UM argumento separado por vírgula (a forma que o `--help` do CLI
+ * documenta, "Bash,Edit,Read"), e o token seguinte é sempre uma flag — nunca um valor que ela possa engolir.
  */
 export function buildSessionClaudeArgs(input: {
   prompt: string;
   model?: SessionModel;
   effort?: EffortLevel;
   mcpConfigPath?: string;
+  /** as tools NATIVAS permitidas (`--tools`); ausente ⇒ o default do CLI (todas). */
+  tools?: readonly string[];
+  /** `--strict-mcp-config`: só as MCPs do `--mcp-config` (nenhuma do operador). Sem config ⇒ nenhuma MCP. */
+  strictMcpConfig?: boolean;
+  /** `--append-system-prompt-file`: o pacote de contexto (um caminho só; a flag não é variádica). */
+  appendSystemPromptFile?: string;
 }): string[] {
   const args: string[] = [input.prompt];
   if (input.model) args.push("--model", input.model);
   if (input.effort) args.push("--effort", input.effort);
+  if (input.tools && input.tools.length > 0) args.push("--tools", input.tools.join(","));
+  if (input.strictMcpConfig) args.push("--strict-mcp-config");
+  if (input.appendSystemPromptFile) args.push("--append-system-prompt-file", input.appendSystemPromptFile);
   // LAST, and last on purpose (variadic): nothing may follow it.
   if (input.mcpConfigPath) args.push("--mcp-config", input.mcpConfigPath);
   return args;
@@ -316,6 +470,8 @@ export async function writeSessionMcpConfig(
   port: number,
   /** a prova de sessão a escrever (testes injetam); omitida ⇒ a cunhada pelo serviço. */
   sessionProof?: string | null,
+  /** o PAPEL da sessão (mcp/toolsets.ts): o servidor monta só as tools dele. Ausente ⇒ a superfície inteira do nível. */
+  toolset?: McpToolset,
 ): Promise<string | null> {
   const clean = token?.trim();
   if (!clean) return null;
@@ -323,12 +479,16 @@ export async function writeSessionMcpConfig(
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   // a sessão se nomeia pelo sessionId do registro: a trilha e o diário do board dizem QUAL agente fez cada chamada; e
   // leva a prova que o serviço cunhou para ela (mcp/session-proof.ts), o vínculo do servidor para o que decide por sessão
-  await fs.writeFile(
-    file,
-    buildOrchestratorMcpConfig(clean, port, { kind: "session", id: sessionId }, sessionProof === undefined ? currentSessionProof(sessionId) : sessionProof),
-    { encoding: "utf8", mode: 0o600 },
-  );
+  const base = buildOrchestratorMcpConfig(clean, port, { kind: "session", id: sessionId }, sessionProof === undefined ? currentSessionProof(sessionId) : sessionProof);
+  await fs.writeFile(file, toolset ? withToolsetHeader(base, toolset) : base, { encoding: "utf8", mode: 0o600 });
   return file;
+}
+
+/** O config do MCP com o cabeçalho do papel no servidor `storymap` (o único que o arquivo monta). PURA. */
+function withToolsetHeader(config: string, toolset: McpToolset): string {
+  const parsed = JSON.parse(config) as { mcpServers: Record<string, { headers?: Record<string, string> }> };
+  for (const server of Object.values(parsed.mcpServers)) server.headers = { ...(server.headers ?? {}), [MCP_TOOLSET_HEADER]: toolset };
+  return JSON.stringify(parsed);
 }
 
 // ── the honest-spawn probe ───────────────────────────────────────────────────────────────────────────────
@@ -401,6 +561,13 @@ export interface SessionSpawnDeps {
   /** The session inherits `bypassPermissions` AS ROOT ⇒ its command must carry `IS_SANDBOX=1` (fact 4). Resolved
    *  per call by the production wiring ({@link hostNeedsRootBypass}); absent/false ⇒ the command is unchanged. */
   rootBypass?: boolean;
+  /** O PACOTE DE CONTEXTO do card (context-pack.ts `loadContextPack`), só para sessão de condutor. Ausente ⇒ sem pacote. */
+  contextPack?(board: string, cardId: string): Promise<SessionContextPack | null>;
+  /**
+   * O worktree (cwd) da sessão carrega a skill do condutor DIVIDIDA ({@link CONDUCTOR_SKILL_REF_DIR})? Falso ⇒ sem
+   * pacote. Ausente ⇒ assume que sim (testes, instalação sem disco).
+   */
+  hasSplitConductorSkill?(cwd: string): Promise<boolean>;
 }
 
 /**
@@ -456,6 +623,8 @@ export type SpawnSessionResult =
       claim: CardClaim | null;
       /** false ⇒ no `orch` token on the box: the session has NO AgileHarness tools (the contract is degraded). */
       mcpMounted: boolean;
+      /** o pacote de contexto entregue no prompt de sistema (condutor), com o hash das fontes; ausente ⇒ nenhum. */
+      contextPack?: { path: string; hash: string; tokens: number };
     }
   | { ok: false; code: SpawnFailureCode; reason: string; queue?: FleetQueueRow[]; holder?: CardClaim };
 
@@ -582,9 +751,17 @@ export async function spawnWorkSession(deps: SessionSpawnDeps, input: SpawnSessi
   }
   const cardRoute = card ? await deps.cardRoute(card.board, card.cardId).catch(() => null) : null;
   const route = resolveSessionRoute({ role: input.role, override: input.model, cardRoute });
-  const mcpPath = await writeSessionMcpConfig(deps.fs, deps.stateDir, session.sessionId, deps.mcpToken, deps.port).catch(
-    () => null,
-  );
+  const mcpPath = await writeSessionMcpConfig(
+    deps.fs,
+    deps.stateDir,
+    session.sessionId,
+    deps.mcpToken,
+    deps.port,
+    undefined,
+    sessionMcpToolset(input.driver),
+  ).catch(() => null);
+  const cwd = session.worktreePath ?? deps.repoRoot;
+  const pack = await conductorPackFor(deps, input.driver, session.sessionId, card, cwd);
   const prompt = buildSessionPrompt({
     ...(input.command ? { command: input.command } : {}),
     sessionId: session.sessionId,
@@ -598,10 +775,16 @@ export async function spawnWorkSession(deps: SessionSpawnDeps, input: SpawnSessi
     branch: session.branch,
     handoff: !!input.agentId,
   });
-  const cwd = session.worktreePath ?? deps.repoRoot;
   const command = buildSessionCommand(
     deps.claudeBin,
-    buildSessionClaudeArgs({ prompt, model: route.model, effort: route.effort, mcpConfigPath: mcpPath ?? undefined }),
+    buildSessionClaudeArgs({
+      prompt,
+      model: route.model,
+      effort: route.effort,
+      mcpConfigPath: mcpPath ?? undefined,
+      ...sessionToolScope(input.driver),
+      ...(pack ? { appendSystemPromptFile: pack.path } : {}),
+    }),
     { rootBypass: deps.rootBypass },
   );
   const created = await deps.tmux.create(tmuxSession, command, cwd);
@@ -631,8 +814,9 @@ export async function spawnWorkSession(deps: SessionSpawnDeps, input: SpawnSessi
     cwd,
     transcriptFile,
     model: route.model,
+    ...(pack ? { contextPack: { hash: pack.hash, tokens: pack.tokens } } : {}),
   });
-  return { ok: true, session: stamped ?? session, tmuxSession, route, claim, mcpMounted: !!mcpPath };
+  return { ok: true, session: stamped ?? session, tmuxSession, route, claim, mcpMounted: !!mcpPath, ...(pack ? { contextPack: pack } : {}) };
 }
 
 // ── RECYCLING (6.3) ──────────────────────────────────────────────────────────────────────────────────────
@@ -673,9 +857,17 @@ export async function recycleSession(deps: SessionSpawnDeps, input: { sessionId:
   const card = cur.board && cur.cardId ? { board: cur.board, cardId: cur.cardId } : null;
   const cardRoute = card ? await deps.cardRoute(card.board, card.cardId).catch(() => null) : null;
   const route = resolveSessionRoute({ role: cur.role, override: cur.model as SessionModel | undefined, cardRoute });
-  const mcpPath = await writeSessionMcpConfig(deps.fs, deps.stateDir, cur.sessionId, deps.mcpToken, deps.port).catch(
-    () => null,
-  );
+  const mcpPath = await writeSessionMcpConfig(
+    deps.fs,
+    deps.stateDir,
+    cur.sessionId,
+    deps.mcpToken,
+    deps.port,
+    undefined,
+    sessionMcpToolset(cur.driver),
+  ).catch(() => null);
+  // o pacote é RE-MONTADO (as fontes podem ter mudado desde o spawn; o hash novo diz isso à sessão nova)
+  const pack = await conductorPackFor(deps, cur.driver, cur.sessionId, card, cur.worktreePath ?? deps.repoRoot);
   // A recycled CONDUCTOR must wake up inside the conductor skill again (with the handoff note telling it to
   // read its journal first) — without the leading command the new process would be a generic fleet agent
   // holding a conductor's claim and tree.
@@ -692,6 +884,8 @@ export async function recycleSession(deps: SessionSpawnDeps, input: { sessionId:
     worktreePath: cur.worktreePath,
     branch: cur.branch,
     handoff: true,
+    // o lote é da linha do registro (que a reciclagem mantém): o processo novo herda os itens com os claims
+    batchCardIds: sessionCardIds(cur).filter((id) => id !== cur.cardId),
   });
   const cwd = cur.worktreePath ?? deps.repoRoot;
   // A DIFFERENT tmux name, because the old session is still alive at this point (see ORDER above). The name is
@@ -701,7 +895,15 @@ export async function recycleSession(deps: SessionSpawnDeps, input: { sessionId:
     tmuxSession,
     buildSessionCommand(
       deps.claudeBin,
-      buildSessionClaudeArgs({ prompt, model: route.model, effort: route.effort, mcpConfigPath: mcpPath ?? undefined }),
+      // o condutor reciclado nasce com a MESMA superfície enxuta do despachado (o driver vem da linha do registro)
+      buildSessionClaudeArgs({
+        prompt,
+        model: route.model,
+        effort: route.effort,
+        mcpConfigPath: mcpPath ?? undefined,
+        ...sessionToolScope(cur.driver),
+        ...(pack ? { appendSystemPromptFile: pack.path } : {}),
+      }),
       { rootBypass: deps.rootBypass },
     ),
     cwd,
@@ -716,6 +918,13 @@ export async function recycleSession(deps: SessionSpawnDeps, input: { sessionId:
   const previousTmux = cur.tmuxSession;
   if (previousTmux && previousTmux !== tmuxSession) await deps.tmux.kill(previousTmux).catch(() => {});
   const transcriptFile = (await deps.findTranscript(startedAt).catch(() => null)) ?? undefined;
-  const stamped = await updateSession(deps.worktree, cur.sessionId, { tmuxSession, cwd, transcriptFile, model: route.model });
+  const stamped = await updateSession(deps.worktree, cur.sessionId, {
+    tmuxSession,
+    cwd,
+    transcriptFile,
+    model: route.model,
+    // a telemetria do pacote acompanha o processo: sem pacote nesta reciclagem, a linha não guarda o hash do anterior
+    contextPack: pack ? { hash: pack.hash, tokens: pack.tokens } : undefined,
+  });
   return { ok: true, session: stamped ?? cur, tmuxSession, previousTmux, route };
 }

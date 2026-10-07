@@ -26,8 +26,11 @@
 // `--require-ready` turns it into a non-zero exit for callers that must not accept a maybe.
 
 import { mkdir, stat, readFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const DEFAULT_BREAKPOINTS = "375x812,1440x900";
 const DEFAULT_OUT = ".artifacts/screenshots";
@@ -183,13 +186,37 @@ async function countAriaBusy(page) {
   return page.evaluate(() => document.querySelectorAll('[aria-busy="true"]').length);
 }
 
-async function withBrowser(fn) {
-  let chromium;
-  try {
-    ({ chromium } = await import("playwright"));
-  } catch (err) {
-    throw new Error(`playwright não instalado/resolvível: ${err.message}`);
+/**
+ * ONDE procurar o Playwright, em ordem. Um `import("playwright")` nu resolve a partir DESTE arquivo — o diretório
+ * da ferramenta (`$AGILEHARNESS_TOOL_ROOT/../../scripts`), que não declara playwright: medido no host, a resolução
+ * falhava ali e passava no repositório do produto. Quem instala o Playwright (e os navegadores) é o PRODUTO, para a
+ * suíte E2E dele: então o alvo vem primeiro (`AGILEHARNESS_TARGET`, depois o cwd do run, que é o worktree do alvo) e a
+ * própria ferramenta fica por último. PURA.
+ */
+export function playwrightSearchBases({ target, cwd, scriptDir }) {
+  return [...new Set([target, cwd, scriptDir].filter((b) => typeof b === "string" && b.trim()).map((b) => path.resolve(b)))];
+}
+
+/** Carrega o Playwright da primeira base que o resolve; o erro nomeia TODAS as bases tentadas. */
+export function loadPlaywright(bases, load = (base) => createRequire(path.join(base, "noop.js"))("playwright")) {
+  const errors = [];
+  for (const base of bases) {
+    try {
+      return { playwright: load(base), from: base };
+    } catch (err) {
+      errors.push(`${base} (${String(err?.message ?? err).split("\n")[0]})`);
+    }
   }
+  throw new Error(`playwright não instalado/resolvível — procurei em: ${errors.join("; ")}. Instale no repositório do produto (\`bunx playwright install chromium\`).`);
+}
+
+async function withBrowser(fn) {
+  const bases = playwrightSearchBases({
+    target: process.env.AGILEHARNESS_TARGET,
+    cwd: process.cwd(),
+    scriptDir: path.dirname(fileURLToPath(import.meta.url)),
+  });
+  const { chromium } = loadPlaywright(bases).playwright;
   const browser = await chromium.launch(launchOptions());
   try {
     return await fn(browser);
@@ -300,8 +327,19 @@ async function main() {
   return sweep(opts);
 }
 
-main().catch((err) => {
-  process.stderr.write(`visual-sweep FALHOU: ${err?.message ?? err}\n`);
-  process.stdout.write(JSON.stringify({ ok: false, error: String(err?.message ?? err) }) + "\n");
-  process.exit(1);
-});
+// Só roda quando é O comando (não quando um teste importa as peças puras acima).
+const invokedDirectly = (() => {
+  try {
+    return realpathSync(process.argv[1] ?? "") === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
+
+if (invokedDirectly) {
+  main().catch((err) => {
+    process.stderr.write(`visual-sweep FALHOU: ${err?.message ?? err}\n`);
+    process.stdout.write(JSON.stringify({ ok: false, error: String(err?.message ?? err) }) + "\n");
+    process.exit(1);
+  });
+}

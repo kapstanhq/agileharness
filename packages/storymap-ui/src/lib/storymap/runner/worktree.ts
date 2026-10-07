@@ -16,7 +16,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { runnerStateDir } from "@/lib/storymap/paths";
 import { BOARD_DATA_PATHSPEC, loadRunnerConfig } from "./config";
-import { type GitExec, makeGit, pushHeadToOrigin, quote } from "./git";
+import { EMPTY_TREE as EMPTY_TREE_SHA, execErrorDetail, type GitExec, makeGit, type PrePushScan, pushHeadToOrigin, quote } from "./git";
 import { declaredCodePrefixes, isCodePath, pathsTouchCode, stagingBranchOf } from "./staging";
 import { layoutOf } from "@/lib/storymap/target-profile";
 // run-base only type-imports `ExecFn` from here (erased at runtime), so this value import is acyclic.
@@ -507,10 +507,122 @@ export function agentWorktreePath(repoRoot: string, sessionId: string): string {
  * independent of cwd. The caller runs it and FAILS CLOSED on any non-zero exit (2 = secret found,
  * 1 = internal scan error after SM-08).
  */
-export function secretScanCommand(repoRoot: string, target: "staged" | { range: string }): string {
+export function secretScanCommand(
+  repoRoot: string,
+  // `messages`: also scan the range's commit MESSAGES (the split's commits carry the author's free text).
+  // `perCommit`: scan EACH commit of the range against its first parent, not the net `A..B` diff (an
+  // add-then-remove pair is clean net, but the push publishes the commit that added the secret).
+  target: "staged" | { range: string; messages?: boolean; perCommit?: boolean },
+): string {
   const scanner = path.join(repoRoot, "scripts", "git-hooks", "scan-secrets.mjs");
-  const selector = target === "staged" ? "--staged" : `--range ${target.range}`;
+  const selector =
+    target === "staged"
+      ? "--staged"
+      : `--range ${target.range}${target.messages ? " --messages" : ""}${target.perCommit ? " --per-commit" : ""}`;
   return `${quote(process.execPath)} ${quote(scanner)} ${selector}`;
+}
+
+/** A linha que um scanner que conhece `--per-commit`/`--messages` imprime em `--capabilities` (scan-secrets.mjs). */
+export const SCANNER_CAPABILITIES_PREFIX = "scan-secrets-capabilities:";
+/** Tempo de scan por commit do range (medido: 32–76 ms/commit no alvo real; 200 dá folga de ~3×). */
+export const PRE_PUSH_SCAN_MS_PER_COMMIT = 200;
+/** Teto do timeout escalado — um range maior que isso é anomalia, e o erro interno (não persistido) avisa. */
+export const PRE_PUSH_SCAN_TIMEOUT_CAP_MS = 15 * 60_000;
+
+/** O timeout do scan de `commits` commits: o base + o custo por commit, até o teto. PURA. */
+export function scaledScanTimeout(baseMs: number, commits: number): number {
+  const n = Number.isFinite(commits) && commits > 0 ? commits : 0;
+  return Math.min(PRE_PUSH_SCAN_TIMEOUT_CAP_MS, Math.max(baseMs, baseMs + n * PRE_PUSH_SCAN_MS_PER_COMMIT));
+}
+
+/** A saída de `--capabilities` anuncia `--per-commit` E `--messages`? PURA. */
+export function scannerSupportsPerCommit(stdout: string): boolean {
+  const line = stdout.split("\n").find((l) => l.startsWith(SCANNER_CAPABILITIES_PREFIX));
+  if (!line) return false;
+  const caps = new Set(line.slice(SCANNER_CAPABILITIES_PREFIX.length).trim().split(/\s+/));
+  return caps.has("per-commit") && caps.has("messages");
+}
+
+// A sonda de capacidade por cópia do scanner, válida enquanto o arquivo não mudar (mtime + tamanho).
+const scannerCapsCache = new Map<string, { stamp: string; perCommit: boolean }>();
+// O AVISO de varredura degradada, por cópia do scanner — lido pelo snapshot do train (ops / runner_status).
+const degradedScanners = new Map<string, string>();
+
+/** Os avisos vivos de varredura pré-push DEGRADADA (scanner do alvo sem `--per-commit`/`--messages`). */
+export function prePushScanNotes(): string[] {
+  return [...degradedScanners.values()];
+}
+
+/** Só para teste: esquece as sondas e os avisos. */
+export function resetPrePushScanStateForTests(): void {
+  scannerCapsCache.clear();
+  degradedScanners.clear();
+}
+
+async function probeScannerCapabilities(exec: ExecFn, scannerRoot: string, cwd: string): Promise<boolean> {
+  const scanner = path.join(scannerRoot, "scripts", "git-hooks", "scan-secrets.mjs");
+  const stamp = await fsp
+    .stat(scanner)
+    .then((st) => `${st.mtimeMs}:${st.size}`)
+    .catch(() => null);
+  const cached = stamp ? scannerCapsCache.get(scanner) : undefined;
+  if (cached && cached.stamp === stamp) return cached.perCommit;
+  let perCommit = false;
+  try {
+    const { stdout } = await exec(`${quote(process.execPath)} ${quote(scanner)} --capabilities`, { cwd, timeout: EXEC_TIMEOUT_MS });
+    perCommit = scannerSupportsPerCommit(String(stdout ?? ""));
+  } catch {
+    perCommit = false; // uma cópia antiga ignora a flag e varre o índice — exit 2 ali também é «não sabe»
+  }
+  if (stamp) scannerCapsCache.set(scanner, { stamp, perCommit });
+  return perCommit;
+}
+
+/**
+ * O {@link PrePushScan} de um checkout: roda o scanner de `scannerRoot` sobre o range que o push publica, POR
+ * COMMIT e com as mensagens. Exit 2 = achado; qualquer outro não-zero = erro interno (fail-closed nos dois).
+ * O range vem de `prePushRange` (shas resolvidos ou a árvore vazia) — nunca texto livre no shell.
+ *
+ * DEGRADA COM AVISO, nunca em silêncio nem travando tudo: o scanner é a cópia DO ALVO, e uma cópia antiga ignora
+ * `--per-commit`/`--messages` sem erro (varreria só o diff líquido fingindo varrer a história). A sonda
+ * `--capabilities` decide: sem as duas, o scan roda no modo antigo (`--range`, o diff líquido — mais do que o push
+ * tinha antes deste portão) e o aviso fica visível em {@link prePushScanNotes} até a cópia do alvo ser atualizada.
+ * Bloquear todo push por isso pararia a publicação inteira por uma versão de arquivo.
+ *
+ * O TIMEOUT escala com o número de commits do range ({@link scaledScanTimeout}): com o fixo, um acúmulo de
+ * ~800+ commits estourava sempre, o erro interno recusava o push, o range seguinte ficava maior — e a publicação
+ * nunca mais voltava sozinha.
+ */
+export function makePrePushScan(exec: ExecFn, scannerRoot: string, cwd: string, timeout: number): PrePushScan {
+  return async (range) => {
+    if (!/^[0-9a-f]{40,64}\.\.(HEAD|[0-9a-f]{40,64})$/.test(range)) {
+      return { internalError: true, detail: `range pré-push inesperado: ${range.slice(0, 80)}` };
+    }
+    const perCommit = await probeScannerCapabilities(exec, scannerRoot, cwd);
+    if (perCommit) {
+      degradedScanners.delete(scannerRoot);
+    } else if (!degradedScanners.has(scannerRoot)) {
+      const note =
+        `varredura pré-push DEGRADADA em ${scannerRoot}: a cópia do scanner (scripts/git-hooks/scan-secrets.mjs) não ` +
+        `anuncia --per-commit/--messages em --capabilities — só o diff líquido do range é varrido (mensagens e commits ` +
+        `intermediários não). Atualize esse arquivo no alvo a partir do AgileHarness; o aviso some no próximo push.`;
+      degradedScanners.set(scannerRoot, note);
+      console.warn(`[worktree] ${note}`);
+    }
+    const [from, to] = range.split("..");
+    const revs = from === EMPTY_TREE_SHA ? quote(to) : `${quote(from)}..${quote(to)}`;
+    const count = await exec(`git rev-list --count ${revs}`, { cwd, timeout: EXEC_TIMEOUT_MS })
+      .then(({ stdout }) => Number.parseInt(String(stdout ?? "").trim(), 10))
+      .catch(() => 0);
+    try {
+      const target = perCommit ? { range, messages: true, perCommit: true } : { range };
+      await exec(secretScanCommand(scannerRoot, target), { cwd, timeout: scaledScanTimeout(timeout, count) });
+      return null;
+    } catch (err) {
+      const code = (err as { code?: unknown })?.code;
+      return { internalError: code !== 2, detail: execErrorDetail(err) || `exit ${String(code)}` };
+    }
+  };
 }
 
 /**
@@ -565,16 +677,32 @@ export async function commitAllPending(
 // (injeção silenciosa — trailers mutilados em commits integrados reais); um backtick ímpar (a truncagem
 // de 140 chars cortando um code-span) matava o commit com "EOF in backquote substitution" e o teardown
 // destruía o trabalho do run. A mensagem vai num ARQUIVO temporário (`git commit -F`), então só o PATH
-// controlado toca o shell. Nome único por invocação (pid+seq) — um nome fixo compartilhado é corrida
-// entre workers paralelos (mesma lição do patch do release.ts).
-let commitMsgSeq = 0;
+// controlado toca o shell. O arquivo vive em {@link withPrivateMessageFile} (diretório privado, nunca um nome
+// previsível no /tmp compartilhado).
 async function commitWithMessageFile(exec: ExecFn, cwd: string, message: string): Promise<void> {
-  const file = path.join(os.tmpdir(), `harness-commit-msg-${process.pid}-${++commitMsgSeq}.txt`);
-  await fsp.writeFile(file, message, "utf8");
+  await withPrivateMessageFile(message, (file) =>
+    exec(`git commit --no-verify -F ${quote(file)}`, { cwd, timeout: EXEC_TIMEOUT_MS }),
+  );
+}
+
+/**
+ * Grava `message` num arquivo PRIVADO, entrega o caminho a `fn` e apaga tudo no fim — lance `fn` ou não.
+ *
+ * O QUE ISTO IMPEDE: a mensagem de commit é texto livre AINDA NÃO VARRIDO (o scan de segredo roda depois do
+ * commit) — exatamente onde um token vazado estaria. Num nome previsível do `/tmp` compartilhado, com o modo
+ * padrão (0644 sob umask 022), qualquer usuário local lia o arquivo, e um nome previsível pode ser criado
+ * antes por outro. Aqui: `mkdtemp` (nome aleatório, diretório 0700) + arquivo `0600` com `wx` (nunca
+ * reaproveita um que já exista), e o DIRETÓRIO inteiro sai no `finally`.
+ */
+export async function withPrivateMessageFile<T>(message: string, fn: (file: string) => Promise<T>): Promise<T> {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), "harness-msg-"));
   try {
-    await exec(`git commit --no-verify -F ${quote(file)}`, { cwd, timeout: EXEC_TIMEOUT_MS });
+    await fsp.chmod(dir, 0o700); // mkdtemp já cria 0700; explícito para não depender da plataforma
+    const file = path.join(dir, "COMMIT_MSG");
+    await fsp.writeFile(file, message, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    return await fn(file);
   } finally {
-    await fsp.unlink(file).catch(() => {}); // best-effort; tmpdir é limpo pelo SO
+    await fsp.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
@@ -962,8 +1090,10 @@ export function makeWorktreeOps(exec: ExecFn, fs: WorktreeFs = defaultWorktreeFs
       // Push HEAD via the shared cumulative-push + reconcile-on-non-ff helper. A GitRunner over the same
       // injected exec, anchored at repoRoot. FAIL-OPEN: a push failure is reported, never thrown — git
       // push is cumulative, so the next code run's merge-back push (or the next board commit) recovers it.
+      // O portão pré-push (scan por commit + retenção persistida) roda DENTRO de pushHeadToOrigin: um commit
+      // que o train reprovou e não conseguiu desfazer não sai por este settle (git.ts, prePushGate).
       const git = makeGit(exec as unknown as GitExec, { cwd: repoRoot, timeoutMs: EXEC_TIMEOUT_MS });
-      const push = await pushHeadToOrigin(git);
+      const push = await pushHeadToOrigin(git, makePrePushScan(exec, repoRoot, repoRoot, EXEC_TIMEOUT_MS));
       if (!push.pushed) {
         console.error(`[worktree] board-data push para origin falhou (não-fatal): ${push.detail}`);
       }

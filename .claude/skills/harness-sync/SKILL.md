@@ -35,7 +35,7 @@ Make the board reflect what the app actually is: scan the code, diff against the
 > at `triage` (the staging intake) — a human routes them into the build flow from there;
 > map an already-shipped feature as `concluida` ONLY when it also satisfies that
 > stage's nature (it's truly done) — but a gated status still needs its field, so prefer
-> proposing `concluida` only for stories you also fill `acceptance`/`tasks`/`rice` for,
+> proposing `concluida` only for stories you also fill `acceptance`/`tasks` for,
 > otherwise stage a partially-built feature at the pipeline stage its evidence justifies
 > (filling that stage's gate field). The
 > `validate-storymap-gate` hook will reject a gated status missing its field.

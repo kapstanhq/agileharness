@@ -20,7 +20,9 @@ export type CopilotStatusLevel =
   /** autônomo de verdade, mas a matriz só permite `read` ⇒ ele lê e PEDE aprovação p/ qualquer escrita. */
   | "auto-readonly"
   /** autônomo, armado, com token e com permissão de escrever no board ⇒ age sozinho. */
-  | "auto-active";
+  | "auto-active"
+  /** fase 6 — autônomo, mas o BOARD está pausado (o ritmo do board): nada novo começa sozinho; o selo não promete. */
+  | "auto-paused";
 
 export interface CopilotStatus {
   level: CopilotStatusLevel;
@@ -46,6 +48,8 @@ export interface CopilotStatusInput {
   /** a disposição RESOLVIDA de `deploy` — distingue Copiloto (ask/never) de Autônomo (auto) no chip ativo.
    *  Ausente ⇒ tratado como não-auto (Copiloto). */
   deploy?: RiskDisposition;
+  /** fase 6 — o board está pausado/desarmado pelo ritmo (board-pace): o motivo, ou null/ausente quando ele anda. */
+  paused?: string | null;
 }
 
 /** O estado REAL do Jido no board. PURA. */
@@ -90,6 +94,15 @@ export function copilotStatus(s: CopilotStatusInput): CopilotStatus {
       inert: true,
     };
   }
+  if (s.paused) {
+    return {
+      level: "auto-paused",
+      tone: "neutral",
+      label: "pausado",
+      detail: `O board está pausado (${s.paused}): nada novo começa sozinho aqui até você retomar. O chat continua respondendo.`,
+      inert: true,
+    };
+  }
   if (s.writeBoard !== "auto") {
     return {
       level: "auto-readonly",
@@ -110,7 +123,7 @@ export function copilotStatus(s: CopilotStatusInput): CopilotStatus {
       tone: "ok",
       label: "publica",
       detail:
-        "Autônomo: orquestra este board de ponta a ponta — move, roda a skill da coluna, resolve merge E PUBLICA em produção sozinho. Abrir shell (run-free) e apagar dados (destructive) continuam exigindo você.",
+        "Autônomo: move, roda a skill da coluna, resolve merge e PUBLICA em produção sozinho, dentro da matriz de risco. As histórias andam com o condutor; a Sentinela cuida do que sai do trilho. Abrir shell (run-free) e apagar dados (destructive) continuam exigindo você.",
       inert: false,
     };
   }

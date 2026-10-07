@@ -96,6 +96,11 @@ export interface StyleGuideDoc {
     lexicon: { preferred: { use: string; avoid: string }[]; forbidden: string[]; exceptions: string[] };
     prose: string;
   };
+  /**
+   * Os COMPONENTES do produto e a regra de uso de cada um ("Botão primário — um por tela, a ação que fecha a
+   * tarefa"). Opcional e vazio por padrão: um guia antigo, sem a seção, coerce para `{items: [], prose: ""}`.
+   */
+  components: { items: { name: string; rule: string }[]; prose: string };
   /** symptom → fix, concrete and observable. */
   antiPatterns: { symptom: string; fix: string }[];
   /** known visual debt — so an agent doesn't re-report the resquício as a new bug (D-target-vs-debt). */
@@ -339,6 +344,20 @@ function coerceVoice(raw: unknown): StyleGuideDoc["voice"] {
   };
 }
 
+function coerceComponents(raw: unknown): StyleGuideDoc["components"] {
+  const r = obj(raw);
+  const items = (Array.isArray(r.items) ? r.items : [])
+    .map((it: unknown) => {
+      const o = obj(it);
+      const name = str(o.name, 80);
+      const rule = str(o.rule, 300);
+      return name || rule ? { name, rule } : null;
+    })
+    .filter((c): c is { name: string; rule: string } => c != null)
+    .slice(0, STYLE_GUIDE_BOUNDS.MAX_LIST_ITEMS);
+  return { items, prose: str(r.prose) };
+}
+
 function coerceAntiPattern(raw: unknown): StyleGuideDoc["antiPatterns"][number] | null {
   const r = obj(raw);
   const symptom = str(r.symptom, 200);
@@ -397,6 +416,7 @@ export function coerceStyleGuideDoc(raw: unknown): StyleGuideDoc {
     shape: coerceShape(r.shape),
     motion: coerceMotion(r.motion),
     voice: coerceVoice(r.voice),
+    components: coerceComponents(r.components),
     antiPatterns: coerceAntiPatterns(r.antiPatterns),
     debt: coerceDebt(r.debt),
     ...(tokenBindings ? { tokenBindings } : {}),
@@ -435,6 +455,8 @@ export function isEmptyStyleGuideDoc(doc: StyleGuideDoc): boolean {
     doc.voice.lexicon.forbidden.length === 0 &&
     doc.voice.lexicon.exceptions.length === 0 &&
     !doc.voice.prose &&
+    doc.components.items.length === 0 &&
+    !doc.components.prose &&
     doc.antiPatterns.length === 0 &&
     doc.debt.knownIssues.length === 0 &&
     !doc.tokenBindings
@@ -586,6 +608,51 @@ export function checkAA(doc: StyleGuideDoc): AAReport {
   return { pairs };
 }
 
+// ── A escrita de um AGENTE numa seção (decisão do dono, 06/10) ───────────────
+//
+// O guia tem duas classes de dono: o TOM (voice) é marca — do dono; agentes só propõem, na conversa. Cores,
+// tipografia, estética e componentes os agentes MANTÊM, com o contraste conferido: uma escrita de agente que
+// faria um par de cor que passava (ou não existia) reprovar o AA é recusada — o agente não pode piorar o guia
+// que outros agentes seguem. (Para o humano o AA continua informativo: é ele quem decide aceitar a dívida.)
+
+/** As seções que um agente NÃO escreve: são do dono (classe marca). */
+export const OWNER_STYLE_SECTIONS: readonly string[] = ["voice"];
+
+export type AgentStyleWrite = { ok: true; doc: StyleGuideDoc } | { ok: false; error: string };
+
+/**
+ * PURA. O guia `prev` com UMA seção trocada por `value` (no formato que `get_styleguide` devolve), ou a recusa
+ * dita em linguagem que o agente consegue corrigir. Recusa: seção desconhecida, seção do dono, valor que não
+ * tem o formato da seção (o coerce o reduziria a vazio) e regressão de contraste AA.
+ */
+export function agentStyleSectionWrite(prev: StyleGuideDoc, section: string, value: unknown): AgentStyleWrite {
+  if (!STYLE_SECTIONS.some((s) => s.key === section)) {
+    return { ok: false, error: `Seção desconhecida: "${section}". As do guia: ${STYLE_SECTIONS.map((s) => s.key).join(", ")}.` };
+  }
+  if (OWNER_STYLE_SECTIONS.includes(section)) {
+    return {
+      ok: false,
+      error:
+        `"${section}" (o tom de voz) é do dono: não escreva — proponha na conversa o texto exato que você mudaria, ` +
+        "e ele aplica na página de Design.",
+    };
+  }
+  const next = coerceStyleGuideDoc({ ...prev, [section]: value });
+  const blank = coerceStyleGuideDoc(null) as unknown as Record<string, unknown>;
+  const written = (next as unknown as Record<string, unknown>)[section];
+  const hasValue = value !== null && value !== undefined && !(typeof value === "object" && Object.keys(value as object).length === 0);
+  if (hasValue && JSON.stringify(written) === JSON.stringify(blank[section])) {
+    return { ok: false, error: `O valor não tem o formato da seção "${section}" — leia o guia com get_styleguide e mande a seção no mesmo formato.` };
+  }
+  const failedBefore = new Set(checkAA(prev).pairs.filter((p) => p.level === "fail").map((p) => p.role));
+  const regressions = checkAA(next).pairs.filter((p) => p.level === "fail" && !failedBefore.has(p.role));
+  if (regressions.length) {
+    const list = regressions.map((p) => `${p.role} (${p.ratio}:1)`).join(", ");
+    return { ok: false, error: `Recusado pelo contraste AA: ${list} não passa(m) — o mínimo é 4.5:1 (3:1 para texto grande). Ajuste as cores e tente de novo.` };
+  }
+  return { ok: true, doc: next };
+}
+
 // ── Compiler (D3 — the canonical is never a byte of the LLM) ────────────────
 
 const COMPILED_HEADER =
@@ -668,6 +735,11 @@ function renderSectionBody(doc: StyleGuideDoc, key: string): string {
       if (doc.voice.lexicon.forbidden.length) lines.push("", `Proibido: ${doc.voice.lexicon.forbidden.join(", ")}`);
       if (doc.voice.lexicon.exceptions.length) lines.push("", `Exceções: ${doc.voice.lexicon.exceptions.join(", ")}`);
       if (doc.voice.prose) lines.push("", doc.voice.prose);
+      return lines.join("\n");
+    }
+    case "components": {
+      const lines = doc.components.items.map((c) => `- ${c.name}${c.rule ? ` — ${c.rule}` : ""}`);
+      if (doc.components.prose) lines.push("", doc.components.prose);
       return lines.join("\n");
     }
     case "antiPatterns":

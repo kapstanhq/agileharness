@@ -11,7 +11,7 @@ const draft: GovernanceDraft = {
   status: "pending",
   reason: "segunda versão",
   origin: null,
-  changes: [{ artifact: "prd", field: "resumo", label: "Resumo", before: "texto de 23/09", after: "texto novo" }],
+  changes: [{ artifact: "prd", field: "propostaValor", label: "Proposta de valor", before: "texto de 23/09", after: "texto novo" }],
   createdAt: new Date().toISOString().slice(0, 10),
   decidedAt: null,
 };
@@ -39,7 +39,7 @@ describe("collectBoardCockpitItems — governança com conflito de DOCUMENTO (B8
   it("o item traz o conflito e a mesma recusa que a ação de aprovar devolveria", async () => {
     const items = await collectBoardCockpitItems("b");
     const gov = items.find((i) => i.kind === "governance");
-    expect(gov).toMatchObject({ kind: "governance", conflicts: ["Resumo"] });
+    expect(gov).toMatchObject({ kind: "governance", conflicts: ["Proposta de valor"] });
     expect(gov && gov.kind === "governance" && gov.conflictMessage).toMatch(/O documento mudou desde a proposta/);
   });
 });

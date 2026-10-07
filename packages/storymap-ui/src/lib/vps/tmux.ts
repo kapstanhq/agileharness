@@ -432,7 +432,17 @@ export type DeliveryResult =
 export async function deliverToSession(
   name: string,
   rawText: string,
-  opts?: { submit?: boolean; confirmMaster?: boolean; multiline?: boolean },
+  opts?: {
+    submit?: boolean;
+    confirmMaster?: boolean;
+    multiline?: boolean;
+    /**
+     * A TRAVA de um texto que vai ser DIGITADO num shell (o modo `type`): devolve o motivo da recusa, ou null. Num agente
+     * Claude o texto é um prompt (a sessão dele passa pela própria trava a cada comando); num shell cada linha É um
+     * comando, que nunca passaria pelo hook do host — quem chama por MCP pede a trava aqui (mcp/dev-tools.ts).
+     */
+    screenShell?: (text: string) => Promise<string | null>;
+  },
 ): Promise<DeliveryResult> {
   if (!isSafeSessionName(name)) return { ok: false, error: "nome de sessão inválido (use [A-Za-z0-9_-])." };
   if (!(await hasSession(name))) return { ok: false, error: `sessão "${name}" não encontrada` };
@@ -443,6 +453,10 @@ export async function deliverToSession(
     opts,
   );
   if (!plan.ok) return { ok: false, error: plan.reason };
+  if (plan.mode !== "paste" && opts?.screenShell) {
+    const refused = await opts.screenShell(plan.text).catch((err) => `a trava não pôde ser consultada (${err instanceof Error ? err.message : String(err)})`);
+    if (refused) return { ok: false, error: `recusado pela trava dura do host: ${refused}` };
+  }
 
   if (plan.mode === "paste") {
     const pasted = await pasteBlock(name, plan.text, "ah-send");

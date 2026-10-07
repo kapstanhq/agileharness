@@ -1,24 +1,23 @@
 // 🧭 O DIGEST do PRD — o norte do board em algumas linhas, para os prompts que não podem carregar o
 // documento inteiro.
 //
-// Por que existe, em vez de simplesmente injetar o PRD: ele entra em TODO prompt de priorização, de
-// captura e no cabeçalho de cada card. Um PRD bem escrito tem dezesseis seções e é longo de
-// propósito — inliná-lo em cada turno pagaria o documento inteiro por uma decisão que só precisa do
-// norte, e afogaria o que o prompt realmente pergunta. Quem precisa do resto chama `read_doc`; o
-// ponteiro para o arquivo viaja no contexto de todo run.
+// Por que existe, em vez de simplesmente injetar o PRD: ele entra em prompts de captura, de triagem e
+// no cabeçalho de cada card. Mesmo o PRD de sete seções é longo de propósito — inliná-lo em cada
+// turno pagaria o documento inteiro por uma decisão que só precisa do norte. Quem precisa do resto
+// chama `read_doc`; o ponteiro para o arquivo viaja no contexto de todo run.
 //
-// O CORTE (as cinco seções abaixo) é: o que orienta uma decisão e é barato de ler.
-//   · `resumo`          — a orientação: o que é isto, para quem, por que agora;
-//   · `posicionamento`  — a promessa contra a qual tudo se mede (era a escada inteira, antes);
-//   · `resultadoAlvo`   — o vértice ao qual as stories sobem (leading);
-//   · `metricaNegocio`  — o resultado do resultado (lagging);
-//   · `escopo`          — o que está dentro e o que está fora. É a seção que mais corta ruído: uma
-//                         demanda que cai em «Fora, por ora» não precisa ser pontuada, precisa ser
-//                         recusada.
+// O CORTE (PRD formato 2 — as seis seções abaixo, todas menos o fluxo de uso):
+//   · `propostaValor`   — a promessa contra a qual tudo se mede;
+//   · `problema`        — a dor que justifica o card;
+//   · `personas`        — para quem (só os nomes dos grupos e as primeiras linhas: o teto corta);
+//   · `metricasSucesso` — o resultado que o produto persegue e o número que ele move;
+//   · `funcionalidades` — o que o produto faz, por arco;
+//   · `foraEscopo`      — o que NÃO fazer. É a seção que mais corta ruído: uma demanda que cai aqui
+//                         não precisa ser pontuada, precisa ser recusada.
 //
-// O que ficou de FORA e por quê: problema, público, jornadas, requisitos, decisões, riscos. Todas
-// importam — para ESCREVER o card, não para decidir a ordem dele. Elas são caras (listas longas) e
-// o agente que precisa delas está numa tarefa em que ler o documento é o trabalho.
+// O que ficou de FORA e por quê: o fluxo de uso (lista longa, serve a quem ESCREVE o card) e todo o
+// `contexto.md` (decisões, requisitos, riscos) — o agente que precisa disso está numa tarefa em que
+// ler o documento é o trabalho.
 //
 // PURO: sem `node:fs`, sem React. Recebe o `SchemaDoc` já carregado — quem chama `loadDoc` é a casca
 // (server action, tool de MCP, engine), que já é assíncrona.
@@ -28,11 +27,12 @@ import { sectionContent, sectionItems, type SchemaDoc } from "./schema-codec";
 
 /** As seções que moldam decisão e são baratas — o digest é exatamente isto, nesta ordem. */
 export const PRD_DIGEST_SECTIONS = [
-  { key: "resumo", label: "Resumo", as: "prose" },
-  { key: "posicionamento", label: "Posicionamento", as: "prose" },
-  { key: "resultadoAlvo", label: "Resultado-alvo", as: "items" },
-  { key: "metricaNegocio", label: "Métrica de negócio", as: "items" },
-  { key: "escopo", label: "Escopo", as: "grouped" },
+  { key: "propostaValor", label: "Proposta de valor", as: "prose" },
+  { key: "problema", label: "Problema", as: "grouped" },
+  { key: "personas", label: "Personas", as: "grouped" },
+  { key: "metricasSucesso", label: "Métricas de sucesso", as: "items" },
+  { key: "funcionalidades", label: "Funcionalidades", as: "grouped" },
+  { key: "foraEscopo", label: "Fora do escopo", as: "items" },
 ] as const;
 
 /**
@@ -72,8 +72,8 @@ function digestLine(doc: SchemaDoc, spec: (typeof PRD_DIGEST_SECTIONS)[number]):
 
   if (spec.as === "items") return `${spec.label}: ${truncate(items.map((i) => i.text.trim()).join("; "))}`;
 
-  // `grouped` — o grupo autoral é o dado, não decoração: em «Escopo», "Nesta versão" e "Fora, por
-  // ora" são leituras OPOSTAS do mesmo item, e achatá-las diria a coisa errada.
+  // `grouped` — o grupo autoral é o dado, não decoração: em «Personas» o grupo É a persona, e em
+  // «Funcionalidades» é o arco de uso; achatá-los diria de quem é cada linha errado.
   const grupos = new Map<string, string[]>();
   for (const item of items) {
     const g = item.group?.trim() || "—";
@@ -90,8 +90,8 @@ function digestLine(doc: SchemaDoc, spec: (typeof PRD_DIGEST_SECTIONS)[number]):
 
 /**
  * O norte do board como bloco de texto. Vazio ⇒ o board não declarou norte nenhum, e quem depende
- * disto deve DIZER isso em vez de seguir: priorizar sem norte produz ruído confiante, que é pior
- * que não priorizar (a ordem sai com aparência de julgamento e sem julgamento nenhum dentro).
+ * disto deve DIZER isso em vez de seguir: ordenar o trabalho sem norte produz ruído confiante, que é pior
+ * que não ordenar (a ordem sai com aparência de julgamento e sem julgamento nenhum dentro).
  */
 export function prdDigest(doc: SchemaDoc | null | undefined): string {
   if (!doc) return "";
@@ -100,7 +100,7 @@ export function prdDigest(doc: SchemaDoc | null | undefined): string {
     .join("\n");
 }
 
-/** O board declarou norte? (o gate de priorização, e o aviso que a tela mostra quando não.) */
+/** O board declarou norte? (o aviso que a tela mostra quando não.) */
 export function hasPrdDigest(doc: SchemaDoc | null | undefined): boolean {
   return prdDigest(doc).length > 0;
 }

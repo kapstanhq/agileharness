@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // advance-card — board-aware "advance to the next pipeline step" for headless skill runs.
 //
-// A shared harness-* skill no longer hardcodes its next status (`status: priorizar`); after
+// A shared harness-* skill no longer hardcodes its next status; after
 // writing its output fields it runs THIS to advance to the next step of the CURRENT
 // board's pipeline — so the same skill flows correctly on boards with different pipelines
 // (storymap has interview/ui steps; orbit/acme don't). Reuses the exact primitives the

@@ -150,7 +150,8 @@ describe("por construção: a única porta é a action do operador", () => {
   });
 
   it("o painel do ritmo oferece o botão nos dois sentidos, com confirmação, e chama a action do operador", () => {
-    const src = readFileSync(path.join(__dirname, "..", "components", "nav", "BoardPaceChip.tsx"), "utf8");
+    // fase 1: o painel do ritmo saiu do cabeçalho (nav/BoardPaceChip) para a 2ª barra do Kanban
+    const src = readFileSync(path.join(__dirname, "..", "components", "kanban", "KanbanPaceControl.tsx"), "utf8");
     expect(src).toContain("setOrganizeOnlyAction({ boardId, on })");
     expect(src).toMatch(/window\.confirm\(on \? ORGANIZE_ONLY_CONFIRM_ON : ORGANIZE_ONLY_CONFIRM_OFF\)/);
     expect(src).toMatch(/organize \? ORGANIZE_ONLY_TURN_OFF : ORGANIZE_ONLY_TURN_ON/);

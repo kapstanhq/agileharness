@@ -250,7 +250,7 @@ describe("isLoadBearing (WS4)", () => {
     expect(isLoadBearing("qa-manual")).toBe(true);
   });
   it("is false for dispensable/discovery steps", () => {
-    for (const id of ["interview", "design-ux", "design-ui", "com-design", "ready", "priorizar"]) {
+    for (const id of ["interview", "design-ux", "design-ui", "com-design", "ready", "opcional"]) {
       expect(isLoadBearing(id)).toBe(false);
     }
   });
@@ -261,8 +261,8 @@ describe("isLoadBearing (WS4)", () => {
 
 describe("isDispensable (WS4 facet + fallback + load-bearing guard)", () => {
   it("is true for a step that declares dispensable:true (the facet)", () => {
-    const priorizar: StatusDef = { id: "priorizar", name: "Priorizar", dispensable: true };
-    expect(isDispensable(priorizar)).toBe(true);
+    const opcional: StatusDef = { id: "opcional", name: "Opcional", dispensable: true };
+    expect(isDispensable(opcional)).toBe(true);
   });
   it("NEVER true for a load-bearing step, even with a malicious dispensable:true", () => {
     const evil: StatusDef = { id: "desenvolver", name: "Desenvolver", dispensable: true };
@@ -284,9 +284,9 @@ describe("routeSkip — WS4 facet honoured; load-bearing skip IGNORED", () => {
   const withSkips = (skips: string[]): RoutableCard =>
     card({ routing: { skips, decidedBy: "agent", decidedAt: "2026-07-10" } });
 
-  it("honours routing.skips for a dispensable:true step (express profile skips priorizar)", () => {
-    const priorizar: StatusDef = { id: "priorizar", name: "Priorizar", dispensable: true };
-    expect(routeSkip(priorizar, withSkips(["priorizar"]))).toBe(true);
+  it("honours routing.skips for a dispensable:true step (a profile skips an optional step)", () => {
+    const opcional: StatusDef = { id: "opcional", name: "Opcional", dispensable: true };
+    expect(routeSkip(opcional, withSkips(["opcional"]))).toBe(true);
   });
 
   it("IGNORES routing.skips for a load-bearing step even with dispensable:true (LOAD_BEARING wins)", () => {
@@ -310,11 +310,11 @@ describe("routeSkip — WS4 facet honoured; load-bearing skip IGNORED", () => {
 });
 
 describe("routeSkipsValidationError (WS4 — server-side validation for set_card_route)", () => {
-  const priorizar: StatusDef = { id: "priorizar", name: "Priorizar", dispensable: true };
-  const statuses: StatusDef[] = [interview, ...DESIGN_BLOCK, priorizar, plano, desenvolver, qa];
+  const opcional: StatusDef = { id: "opcional", name: "Opcional", dispensable: true };
+  const statuses: StatusDef[] = [interview, ...DESIGN_BLOCK, opcional, plano, desenvolver, qa];
 
   it("null (valid) for a set of dispensable steps", () => {
-    expect(routeSkipsValidationError(["priorizar", "design-ux"], statuses)).toBeNull();
+    expect(routeSkipsValidationError(["opcional", "design-ux"], statuses)).toBeNull();
     expect(routeSkipsValidationError([], statuses)).toBeNull();
   });
 
@@ -336,15 +336,15 @@ describe("routeSkipsValidationError (WS4 — server-side validation for set_card
 
 describe("resolveRouteProfile (4.2 — materialize a named profile to skips/caps)", () => {
   const profiles: Record<string, RouteProfile> = {
-    express: { skips: ["priorizar", "design-ux"], modelCap: "sonnet", effortCap: "low", description: "trivial" },
-    lean: { skips: ["priorizar"] },
+    express: { skips: ["opcional", "design-ux"], modelCap: "sonnet", effortCap: "low", description: "trivial" },
+    lean: { skips: ["opcional"] },
   };
 
   it("returns the profile's skips + caps for a known name", () => {
-    expect(resolveRouteProfile("express", profiles)).toEqual({ skips: ["priorizar", "design-ux"], modelCap: "sonnet", effortCap: "low" });
+    expect(resolveRouteProfile("express", profiles)).toEqual({ skips: ["opcional", "design-ux"], modelCap: "sonnet", effortCap: "low" });
   });
   it("omits caps a profile doesn't declare", () => {
-    expect(resolveRouteProfile("lean", profiles)).toEqual({ skips: ["priorizar"] });
+    expect(resolveRouteProfile("lean", profiles)).toEqual({ skips: ["opcional"] });
   });
   it("returns null for an unknown name / undefined name / undefined profiles", () => {
     expect(resolveRouteProfile("missing", profiles)).toBeNull();
@@ -354,6 +354,6 @@ describe("resolveRouteProfile (4.2 — materialize a named profile to skips/caps
   it("returns a COPY of skips (mutating the result must not corrupt the profile)", () => {
     const r = resolveRouteProfile("lean", profiles)!;
     r.skips.push("x");
-    expect(profiles.lean.skips).toEqual(["priorizar"]);
+    expect(profiles.lean.skips).toEqual(["opcional"]);
   });
 });

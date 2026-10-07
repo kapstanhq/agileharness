@@ -36,11 +36,6 @@ vi.mock("@/lib/storymap/repo", () => ({
     // Sem `release` declarado ⇒ o default seguro (`manual`), que é o que o teste abaixo espera.
   })),
 }));
-// Colaboradores que `collectDelivery` usa e que este teste não exercita — presentes só para o módulo carregar.
-vi.mock("./fleet-view", () => ({ collectFleet: vi.fn(async () => []) }));
-vi.mock("./fleet-deps", () => ({ defaultFleetDeps: {} }));
-vi.mock("./publish-queue", () => ({ listPublishRequests: vi.fn(async () => []) }));
-vi.mock("./worktree", () => ({ defaultExec: vi.fn() }));
 
 import { frontierOf } from "./delivery-deps";
 

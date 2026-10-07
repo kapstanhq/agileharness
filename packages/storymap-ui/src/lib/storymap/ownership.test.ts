@@ -13,6 +13,8 @@ import {
   isProposalPath,
   isBoardYamlPath,
   isPrdDocPath,
+  isBmcDocPath,
+  isStyleGuideDocPath,
   isCardPath,
   evaluateOwnerGuard,
 } from "./ownership.js";
@@ -36,7 +38,7 @@ describe("o PRD é owner:human — o documento mais alto do board", () => {
     expect(v?.owner).toBe("human");
     // A recusa tem de ser SEGUÍVEL: sem as duas saídas o agente só sabe que não pode, e tenta de novo.
     expect(v?.fix).toContain("propose_change");
-    expect(v?.fix).toContain("/prd");
+    expect(v?.fix).toContain("/produto");
   });
 
   it("reconhece o caminho em qualquer board e com separador do Windows; NÃO casa vizinhos", () => {
@@ -56,6 +58,48 @@ describe("o PRD é owner:human — o documento mais alto do board", () => {
       board: "acme",
       runId: "run-123",
     })).toBeNull();
+  });
+});
+
+describe("o Business Model Canvas é owner:human; o contexto dos agentes NÃO é", () => {
+  it("um run que reescreve o BMC é BLOQUEADO, e a recusa aponta propose_change e a tela de Negócio", () => {
+    const v = evaluateOwnerGuard({
+      filePath: "storymap/boards/acme/docs/business-model-canvas.md",
+      board: "acme",
+      runId: "run-123",
+    });
+    expect(v, "o BMC ficou desprotegido — um run reescreve a aposta de negócio, calado").not.toBeNull();
+    expect(v?.owner).toBe("human");
+    expect(v?.fields).toEqual(["canvas"]);
+    expect(v?.fix).toContain("propose_change");
+    expect(v?.fix).toContain("/negocio");
+  });
+
+  it("reconhece o caminho (inclusive com separador do Windows) e não casa vizinhos", () => {
+    expect(isBmcDocPath("storymap/boards/acme/docs/business-model-canvas.md")).toBe(true);
+    expect(isBmcDocPath("storymap\\boards\\acme\\docs\\business-model-canvas.md")).toBe(true);
+    expect(isBmcDocPath("storymap/boards/acme/docs/prd.md")).toBe(false);
+    expect(isBmcDocPath("storymap/boards/acme/docs/contexto.md")).toBe(false);
+  });
+
+  it("docs/contexto.md é território dos agentes — escrita livre", () => {
+    expect(evaluateOwnerGuard({ filePath: "storymap/boards/acme/docs/contexto.md", board: "acme", runId: "run-123" })).toBeNull();
+  });
+});
+
+describe("o guia de estilo tem um escritor só (o servidor) — o tom é do dono", () => {
+  it("um run que edita design/style-guide.md direto é BLOQUEADO, e a recusa aponta write_styleguide", () => {
+    const v = evaluateOwnerGuard({ filePath: "storymap/boards/acme/design/style-guide.md", board: "acme", runId: "run-123" });
+    expect(v, "um run trocaria o tom da marca por Edit, por cima da recusa do write_styleguide").not.toBeNull();
+    expect(v?.owner).toBe("human");
+    expect(v?.fix).toContain("write_styleguide");
+  });
+
+  it("reconhece o caminho (inclusive com separador do Windows) e não casa vizinhos", () => {
+    expect(isStyleGuideDocPath("storymap/boards/acme/design/style-guide.md")).toBe(true);
+    expect(isStyleGuideDocPath("storymap\\boards\\acme\\design\\style-guide.md")).toBe(true);
+    expect(isStyleGuideDocPath("storymap/boards/acme/design/refs/style-guide.md")).toBe(false);
+    expect(evaluateOwnerGuard({ filePath: "storymap/boards/acme/design/refs/nota.md", board: "acme", runId: "run-123" })).toBeNull();
   });
 });
 

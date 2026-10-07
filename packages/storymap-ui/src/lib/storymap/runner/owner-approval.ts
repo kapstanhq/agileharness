@@ -24,7 +24,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { findRepoRoot } from "@/lib/storymap/paths";
 import { buildOwnerApproval, declaredStaleMarkers, recordRefusedAsStale, runDeclaredRecord, type OwnerApproval, type OwnerApprovalRequest } from "./deploy-proof";
-import { cardBoardOf, freshApprovals, grantDeployApprovals, isRerequesting, markRerequested, mutateDeployBlocks, readDeployBlocks, type DeployBlockRow } from "./deploy-blocks";
+import { cardBoardOf, freshApprovals, grantDeployApprovals, markRerequested, mutateDeployBlocks, readDeployBlocks, type DeployBlockRow } from "./deploy-blocks";
 
 const pexec = promisify(execFile);
 
@@ -81,7 +81,7 @@ export async function authorizeOwnerPublish(deps: OwnerApprovalDeps, input: { bo
   const requests = row?.decider === "owner" ? freshApprovals(row) : [];
   if (!row || requests.length === 0) {
     if (row?.decider === "owner" && row.staleApprovals?.length) {
-      return { ok: false, error: `O código guardado mudou desde este pedido — nada foi autorizado. Refaça o pedido pela Esteira do board «${row.board}» («Refazer os pedidos de publicação»).` };
+      return { ok: false, error: `O código guardado mudou desde este pedido — nada foi autorizado. Refaça o pedido pelo Inbox do board «${row.board}» («Refazer o pedido agora»).` };
     }
     return { ok: false, error: "Não há autorização pendente para esta publicação: ela já foi dada, ou o plano de publicação mudou. Atualize o Inbox." };
   }
@@ -128,7 +128,7 @@ export function rerequestWords(o: RerequestOutcome, pkg: string): string {
   if (o.reason === "no-publisher") {
     return `Nenhum board publica o pacote «${pkg}» (nenhum board.yaml declara o deploy dele), então não há como refazer o pedido daqui: declare o deploy desse pacote no board que o publica, ou publique por fora.`;
   }
-  return `O sistema tentou refazer o pedido no board «${o.board ?? "?"}», mas a medição não rodou: ${o.error}. Nada foi publicado; tente de novo pela Esteira desse board («Refazer os pedidos de publicação»).`;
+  return `O sistema tentou refazer o pedido no board «${o.board ?? "?"}», mas a medição não rodou: ${o.error}. Nada foi publicado; tente de novo pelo Inbox desse board («Refazer o pedido agora»).`;
 }
 
 /** As dependências de {@link rerequestPublishRequests} — o livro, o board que publica e a medição/o deploy dele. */
@@ -150,7 +150,7 @@ export interface RerequestDeps {
  * REFAZ os pedidos de publicação do pacote `pkg` NA HORA, no board que o PUBLICA (o cujo deploy declara o pacote): marca
  * as causas do dono dele «refazendo o pedido…» e roda a medição (o `deploy.planCommand`, sem a janela) ou, sem plano, o
  * deploy do board — mesmo sem nada staged: com itens do dono pendentes o deploy não publica nada, só refaz os pedidos
- * (a saída 3). O mesmo caminho serve o «stale» de uma autorização e o botão do operador na Esteira. Sem board que publique
+ * (a saída 3). O mesmo caminho serve o «stale» de uma autorização e o «Refazer o pedido agora» do Inbox. Sem board que publique
  * o pacote ⇒ diz isso (nada marcado).
  */
 export async function rerequestPublishRequests(
@@ -169,47 +169,13 @@ export async function rerequestPublishRequests(
   return { ok: true, board: pub.board, via: ran.via };
 }
 
-/** As linhas `needs-human` do board — os pedidos de publicação que esperam alguém (o que o botão da Esteira refaz). PURA. */
+/** As linhas `needs-human` do board — os pedidos de publicação que esperam alguém (o que «Refazer o pedido agora» refaz). PURA. */
 export function needsHumanRows(rows: readonly DeployBlockRow[], board: string): DeployBlockRow[] {
   return rows.filter((r) => r.board === board && r.phase === "needs-human");
 }
 
-/** O que a Esteira diz dos pedidos de publicação do board — com a MESMA régua do Inbox. */
-export interface PublishRequestsSummary {
-  /** as linhas `needs-human` do board (o que o botão «Refazer» refaz). */
-  pending: number;
-  /** as que têm um pedido do dono que AINDA VALE para decidir agora (o «Autorizar» do Inbox). */
-  decide: number;
-  /** as que só têm pedidos que o sistema sabe velhos (o Inbox manda refazer pela Esteira). */
-  stale: number;
-  /** o que seguram as que não pedem nada ao dono agora (já autorizado, ou a causa não pede autorização): as unidades. */
-  waitingOn: string[];
-  rerequesting: boolean;
-}
-
 /**
- * Os pedidos de publicação do board como a Esteira os conta: só é «decisão no Inbox» a linha do dono com pedido que ainda
- * vale (fora do refazer); a que não pede nada agora (o dono já autorizou e ela espera outra publicação, ou a causa não
- * traz pedido) diz o que ela espera — a Esteira dizia «1 pedido espera alguém — a decisão está no Inbox» com o Inbox
- * vazio. PURA.
- */
-export function publishRequestsSummary(rows: readonly DeployBlockRow[], board: string, now: number): PublishRequestsSummary {
-  const mine = needsHumanRows(rows, board);
-  const rerequesting = (r: DeployBlockRow) => isRerequesting(r, now);
-  const asks = (r: DeployBlockRow) => r.decider === "owner" && freshApprovals(r).length > 0;
-  const staleOnly = (r: DeployBlockRow) => r.decider === "owner" && !asks(r) && (r.staleApprovals?.length ?? 0) > 0;
-  const quiet = mine.filter((r) => !rerequesting(r) && !asks(r) && !staleOnly(r));
-  return {
-    pending: mine.length,
-    decide: mine.filter((r) => !rerequesting(r) && asks(r)).length,
-    stale: mine.filter((r) => !rerequesting(r) && staleOnly(r)).length,
-    waitingOn: [...new Set(quiet.flatMap((r) => (r.units.length ? r.units : [r.pkg])))],
-    rerequesting: mine.some(rerequesting),
-  };
-}
-
-/**
- * O botão do operador na Esteira («Refazer os pedidos de publicação»): a MESMA re-medição do «stale», para cada pacote das
+ * O botão do operador no Inbox («Refazer o pedido agora»; até a fase 3, o da Esteira): a MESMA re-medição do «stale», para cada pacote das
  * linhas `needs-human` do board. Sem linha assim ⇒ diz que não há o que refazer. Devolve uma frase por pacote.
  */
 export async function rerequestBoardPublishRequests(

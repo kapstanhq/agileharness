@@ -17,21 +17,17 @@ import type { BoardConfig, Card, CardType } from "./types";
 const BASE = {
   id: "c1", type: "story" as CardType, title: "T", storyType: "user", status: null, parent: null, release: null,
   personas: [], systems: [], links: [], narrative: { role: "", want: "", soThat: "" }, acceptance: [], tasks: [],
-  rice: {}, kano: null, funnelStage: null, findings: [], order: 10, created: null, updated: null, body: "",
+  findings: [], order: 10, created: null, updated: null, body: "",
 } as unknown as Card;
 
 // A `user` card that satisfies (most) forward gates — so decideAdvance actually EXERCISES the `advance`
 // branch across the pipeline instead of blocking at the first gate. `as unknown as Card` keeps the fixture
-// terse (the exact PriorityCall/kano shapes are irrelevant to the walk).
+// terse (the exact field shapes are irrelevant to the walk).
 const MAX_FIELDS = {
   storyType: "user",
   narrative: { role: "r", want: "w", soThat: "s" },
   acceptance: ["a"],
   tasks: [{ id: "t1", title: "t", done: true }],
-  rice: { reach: 10, impact: 2, confidence: 0.8, effort: 1 },
-  priorityCall: { rank: 1, rationale: "r", riskiestAssumption: "y", source: "reasoning", assessedAt: "2026-01-01" },
-  kano: "must-be",
-  funnelStage: "activation",
   techPlanReady: true,
   wireframeChosen: "o1",
   qaPassed: true,
@@ -62,6 +58,10 @@ function checkParity(cfg: BoardConfig, make: (status: string) => Card) {
       // may still carry a recommendation, but ONLY a terminal one. An inverted assertion: if this flips
       // (moveTargets recommends a NON-terminal on a `done`) either walk regressed.
       if (rec) expect(rec.status.terminal ?? false, `done ${at}: recommends non-terminal ${rec.status.id}`).toBe(true);
+    } else if (d.gate.startsWith("espera o dono")) {
+      // blocked by the OWNER HOLD (owner-waiting.ts — e.g. «Aprovar entrega» locked in code while the profile's
+      // `delivery` box is off): it holds AGENTS only. The human's move popover may — and should — still recommend
+      // that step: approving the delivery IS the owner's next move. So here the recommendation is free.
     } else {
       // blocked: the gate for `to` failed, so moveTargets can NEVER recommend `to` itself (it isn't eligible).
       expect(rec?.status.id, `blocked ${at}: recommends the blocked step`).not.toBe(d.to);
@@ -97,7 +97,7 @@ describe("D3 parity — decideAdvance × moveTargets.recommended", () => {
 
   it("a mandatory forward gate blocks with NO recommendation (the walk stops at the unmet gate)", async () => {
     const cfg = await readBoardConfig(subjectBoards()[0]);
-    // A gate-min user card at `interview` cannot enter `priorizar` (hasRefinement unmet) — a MANDATORY gate.
+    // A gate-min user card at `interview` cannot enter `pronta` (hasRefinement unmet) — a MANDATORY gate.
     const card = minCard("interview");
     const d = decideAdvance(card, cfg);
     expect(d.action).toBe("blocked");

@@ -7,6 +7,8 @@
 
 import type { BoardConfig, GovernanceArtifact, GovernanceChange, GovernanceDraft, GovernanceDraftStatus } from "./types";
 import { GOVERNANCE_ARTIFACTS } from "./types";
+import { BMC_BLOCK_KEYS } from "./doc/schemas/business-model-canvas";
+import { PRD_SCHEMA } from "./doc/schemas/prd";
 
 const VALID_STATUSES: readonly GovernanceDraftStatus[] = ["pending", "approved", "rejected"];
 
@@ -185,6 +187,37 @@ export function isGovernanceDraftStale(draft: Pick<GovernanceDraft, "status" | "
   const nascida = Date.parse(`${draft.createdAt}T00:00:00Z`);
   if (!Number.isFinite(nascida)) return false;
   return now - nascida > GOVERNANCE_DRAFT_TTL_DAYS * 24 * 60 * 60 * 1000;
+}
+
+/**
+ * A proposta PENDENTE mira uma seção do formato ANTIGO de um documento (um bloco do Lean Canvas — `problem`,
+ * `solution`… — ou uma seção do PRD formato 1 — `posicionamento`, `escopo`…)? Devolve a primeira mudança assim, ou
+ * `null`. PURA.
+ *
+ * Uma proposta dessas nasceu antes da fase 2 e não tem mais onde aterrissar: aprovar dava «Seção desconhecida» e ela
+ * ficava presa no Inbox. Traduzir a chave não basta — o `after` dela era a lista INTEIRA de um bloco antigo, e o
+ * bloco novo junta vários antigos (gravar por cima apagaria o resto). Então ela sai do Inbox como VENCIDA, com o
+ * motivo dito em palavras ({@link retiredDraftReason}); quem ainda quiser a mudança pede uma nova, já no formato novo.
+ */
+export function retiredDraftChange(draft: Pick<GovernanceDraft, "status"> & Partial<Pick<GovernanceDraft, "changes">>): GovernanceChange | null {
+  if (draft.status !== "pending") return null;
+  const prdKeys = new Set(PRD_SCHEMA.sections.map((s) => s.key));
+  for (const c of draft.changes ?? []) {
+    if (c.artifact === "canvas" && c.field != null && !BMC_BLOCK_KEYS.includes(c.field)) return c;
+    if (c.artifact === "prd" && c.field != null && !prdKeys.has(c.field)) return c;
+  }
+  return null;
+}
+
+/** O motivo, em palavras, de uma proposta do formato antigo ter saído do Inbox — `null` quando não é o caso. PURA. */
+export function retiredDraftReason(draft: Pick<GovernanceDraft, "status"> & Partial<Pick<GovernanceDraft, "changes">>): string | null {
+  const c = retiredDraftChange(draft);
+  if (!c) return null;
+  const doc = c.artifact === "canvas" ? "o Business Model Canvas" : "o PRD";
+  return (
+    `Ela mudava «${c.field}», uma parte do formato antigo que não existe mais (${doc} mudou de formato). ` +
+    "Saiu do Inbox sem mudar nada — se ainda fizer sentido, peça uma nova proposta."
+  );
 }
 
 /**

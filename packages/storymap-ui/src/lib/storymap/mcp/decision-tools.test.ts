@@ -101,7 +101,9 @@ describe("request_extra_cycle (a regra do ciclo extra)", () => {
   });
 
   it("a skill do condutor pede o ciclo extra por esta tool — e não mais por ask_question technical", () => {
-    const skill = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../../.claude/skills/harness-conductor/SKILL.md"), "utf8");
+    // a skill é NÚCLEO + ref/: o VERIFICAR por inteiro (o P3 e o ciclo extra) mora em ref/verificar.md; o núcleo repete a chamada
+    const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../../../.claude/skills/harness-conductor");
+    const skill = [readFileSync(path.join(dir, "SKILL.md"), "utf8"), readFileSync(path.join(dir, "ref", "verificar.md"), "utf8")].join("\n");
     expect(skill).toContain("request_extra_cycle({board, cardId, loopsUsed: 2");
     expect(skill).not.toMatch(/P3 after loop 2: DECLARE it — `ask_question` with `category: "technical"`/);
   });

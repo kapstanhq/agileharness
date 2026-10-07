@@ -17,7 +17,7 @@
 
 import { CLAIM_TTL_SESSION_MS, isClaimLive, sessionClaimActor, type CardClaim, type ClaimKind, type ClaimScope } from "./claims";
 import { claimForRole } from "./session-spawn";
-import type { AgentSession } from "./session-worktree";
+import { sessionCardIds, type AgentSession } from "./session-worktree";
 
 export interface SessionClaimDeps {
   sessions(): Promise<AgentSession[]>;
@@ -42,7 +42,8 @@ export async function claimCardForSession(
 ): Promise<ClaimCardResult> {
   const s = (await deps.sessions()).find((x) => x.sessionId === input.sessionId);
   if (!s) return { ok: false, reason: `sessão ${input.sessionId} desconhecida (já descartada?) — o claim é da sessão que o pede` };
-  if (s.board && s.cardId && (s.board !== input.board || s.cardId !== input.cardId)) {
+  // Um card por sessão — exceto os ITENS do lote dela (fase 7, `sessionCardIds`): re-pedir o claim de um deles renova.
+  if (s.board && s.cardId && (s.board !== input.board || !sessionCardIds(s).includes(input.cardId))) {
     return {
       ok: false,
       reason:

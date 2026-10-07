@@ -15,6 +15,7 @@ import yaml from "js-yaml";
 import { BOARD_ID_RE, refuseBoardId, registerBoard, setBoardAutorun } from "./board-registry";
 import { boardConfigPath, boardDir, findRepoRoot, resetRepoRootCache } from "./paths";
 import { listBoards, readBoardConfig, readCards } from "./repo";
+import { pipelineMode, stepAutoruns } from "./types";
 
 const temporarios: string[] = [];
 
@@ -139,11 +140,43 @@ describe("registerBoard — cria um board que o LEITOR REAL enxerga", () => {
     await registerBoard({ id: "loja", name: "Loja", package: "packages/loja" });
     const bruto = readFileSync(boardConfigPath("loja"), "utf8");
     const doc = yaml.load(bruto) as Record<string, unknown>;
-    expect(Object.keys(doc).sort()).toEqual(["autorunDisabled", "id", "name", "package"]);
+    expect(Object.keys(doc).sort()).toEqual(["autorunDisabled", "conductor", "id", "name", "package"]);
     // O PAR: o delta é minúsculo, mas o RESOLVIDO é completo. Um board que re-inlinasse a pipeline
     // teria `statuses` no arquivo e ficaria surdo a mudanças futuras do canônico.
     expect(doc.statuses).toBeUndefined();
     expect((await readBoardConfig("loja")).statuses.length).toBeGreaterThan(10);
+  });
+
+  // O pipeline híbrido: board novo nasce COM CONDUTOR (entra em «A fazer» e nas reaberturas Corrigir/Refinar — senão um
+  // refino visual atravessaria Jornada/Telas mudas e pararia no gate do desenho), e por isso os passos do meio marcados
+  // `autorunOnlyInColumns` não disparam skill nele — mas continua DESARMADO, como sempre.
+  it("board novo nasce com condutor (modo condutor) e desarmado", async () => {
+    raizComBase();
+    await registerBoard({ id: "loja", name: "Loja" });
+    const doc = yaml.load(readFileSync(boardConfigPath("loja"), "utf8")) as Record<string, unknown>;
+    expect(doc.conductor).toEqual({ enabled: true, fromStatus: ["pronta", "corrigir", "refinar"] });
+    const cfg = await readBoardConfig("loja");
+    expect(pipelineMode(cfg)).toBe("conductor");
+    expect(cfg.autorunDisabled).toBe(true);
+    const interview = cfg.statuses.find((s) => s.id === "interview")!;
+    expect(interview.autorun).toBe(true); // o autorado continua lá (o modo por colunas o usa)
+    expect(stepAutoruns(interview, cfg)).toBe(false); // mas no modo condutor não dispara
+    expect(stepAutoruns(cfg.statuses.find((s) => s.id === "enriquecer")!, cfg)).toBe(true);
+  });
+
+  // O que o modo MUDA, medido sobre o `_base` inteiro: só os passos com skill que têm `autorun: true` E a marca. Os
+  // marcados `autorun: false` (Dúvidas, Pronto p/ dev, Revisão de código) param nos dois modos — os textos que diziam
+  // «no modo por colunas cada passo roda a sua skill» mentiam sobre eles.
+  it("stepAutoruns sobre o _base inteiro: entre os dois modos só Entrevista, Jornada e Telas mudam", async () => {
+    raizComBase();
+    await registerBoard({ id: "loja", name: "Loja" });
+    const cfg = await readBoardConfig("loja");
+    const running = (mode: "conductor" | "columns") => cfg.statuses.filter((s) => s.trigger && stepAutoruns(s, { ...cfg, pipeline: mode })).map((s) => s.id);
+    const columns = running("columns");
+    const conductor = running("conductor");
+    expect(conductor.every((id) => columns.includes(id))).toBe(true);
+    expect(columns.filter((id) => !conductor.includes(id)).sort()).toEqual(["design-ui", "design-ux", "interview"]);
+    for (const id of ["grill", "ready", "revisar-codigo", "desenvolver", "qa-automatizado"]) expect(columns).not.toContain(id);
   });
 
   it("`package` relativo entra; caminho absoluto ou com `..` é recusado", async () => {

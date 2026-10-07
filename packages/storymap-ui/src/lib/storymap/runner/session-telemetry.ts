@@ -23,6 +23,33 @@ export function sessionTelemetryId(sessionId: string): string {
   return `session:${sessionId}`;
 }
 
+/**
+ * Fase 7 — the ledger id of a BATCH ITEM's share of a conductor session (`session:<id>#<cardId>`). The lead keeps the
+ * plain {@link sessionTelemetryId}, so a single-card session records exactly as before. PURE.
+ */
+export function batchItemTelemetryId(sessionId: string, cardId: string): string {
+  return `${sessionTelemetryId(sessionId)}#${cardId}`;
+}
+
+/**
+ * The cards a conductor session's spend is split across: the lead first, then every item that was EVER in its batch
+ * (an item that left the batch still consumed part of the session). PURE.
+ */
+export function sessionSpendCards(s: Pick<AgentSession, "cardId" | "batch">): string[] {
+  const out: string[] = [];
+  for (const id of [s.cardId, ...(s.batch?.cardIds ?? []), ...(s.batch?.dropped ?? []).map((d) => d.cardId)]) {
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+/** Split `n` into `parts` integer shares that sum to `n` (the remainder goes to the first shares). PURE. */
+function splitInt(n: number | null, parts: number): Array<number | null> {
+  if (n == null) return Array.from({ length: parts }, () => null);
+  const base = Math.floor(n / parts);
+  return Array.from({ length: parts }, (_, i) => base + (i < n - base * parts ? 1 : 0));
+}
+
 /** Does this session's spend belong in a card's ledger? Today: a CONDUCTOR on a card. PURE. */
 export function isRecordableSession(s: Pick<AgentSession, "driver" | "board" | "cardId">): boolean {
   return s.driver === "conductor" && !!s.board && !!s.cardId;
@@ -48,9 +75,16 @@ export async function recordSessionSpend(deps: SessionTelemetryDeps, s: AgentSes
   if (!isRecordableSession(s)) return "not-recordable";
   const board = s.board!;
   const cardId = s.cardId!;
-  const id = sessionTelemetryId(s.sessionId);
-  const prior = await deps.telemetry.listByCard(board, cardId).catch(() => []);
-  if (prior.some((r) => r.id === id)) return "already";
+  // Fase 7 — a session that carried a BATCH writes one row per card, each with its share of the cost (costUSD/N, the
+  // tokens split the same way): the per-item numbers stay readable and sum to the real cost. The lead keeps the plain id.
+  const cards = sessionSpendCards(s);
+  const rowId = (c: string) => (c === cardId ? sessionTelemetryId(s.sessionId) : batchItemTelemetryId(s.sessionId, c));
+  const missing: string[] = [];
+  for (const c of cards) {
+    const prior = await deps.telemetry.listByCard(board, c).catch(() => []);
+    if (!prior.some((r) => r.id === rowId(c))) missing.push(c);
+  }
+  if (!missing.length) return "already";
   const est = await deps.readCost(s).catch(() => null);
   if (!est || est.requests === 0) {
     (deps.log ?? console.log)(`[session-cost] ${board}/${cardId} sessão ${s.sessionId.slice(0, 8)}: nenhum transcript legível — gasto não registrado`);
@@ -58,28 +92,35 @@ export async function recordSessionSpend(deps: SessionTelemetryDeps, s: AgentSes
   }
   const now = (deps.now ?? Date.now)();
   const opened = Date.parse(s.openedAt);
-  await deps.telemetry.recordRun({
-    id,
-    board,
-    cardId,
-    trigger: CONDUCTOR_SKILL,
-    startedAt: Number.isFinite(opened) ? opened : now,
-    durationMs: Number.isFinite(opened) ? Math.max(0, now - opened) : null,
-    turns: est.requests,
-    inputTokens: est.inputTokens,
-    outputTokens: est.outputTokens,
-    costUSD: est.costUSD,
-    model: est.model,
-    effort: null,
-    summary: null,
-    toolsUsed: null,
-    specialistsUsed: null,
-    toolGap: null,
-    role: "session",
-    status: "ok",
-  });
+  const n = cards.length;
+  const turns = splitInt(est.requests, n);
+  const input = splitInt(est.inputTokens, n);
+  const output = splitInt(est.outputTokens, n);
+  for (const [i, c] of cards.entries()) {
+    if (!missing.includes(c)) continue;
+    await deps.telemetry.recordRun({
+      id: rowId(c),
+      board,
+      cardId: c,
+      trigger: CONDUCTOR_SKILL,
+      startedAt: Number.isFinite(opened) ? opened : now,
+      durationMs: Number.isFinite(opened) ? Math.max(0, now - opened) : null,
+      turns: turns[i],
+      inputTokens: input[i],
+      outputTokens: output[i],
+      costUSD: est.costUSD == null ? null : n > 1 ? Math.round((est.costUSD / n) * 1e6) / 1e6 : est.costUSD,
+      model: est.model,
+      effort: null,
+      summary: null,
+      toolsUsed: null,
+      specialistsUsed: null,
+      toolGap: null,
+      role: "session",
+      status: "ok",
+    });
+  }
   (deps.log ?? console.log)(
-    `[session-cost] ${board}/${cardId} sessão condutora ${s.sessionId.slice(0, 8)}: ` +
+    `[session-cost] ${board}/${cardId}${n > 1 ? ` (lote de ${n} cards, ${n} linhas)` : ""} sessão condutora ${s.sessionId.slice(0, 8)}: ` +
       `${est.costUSD == null ? "custo desconhecido (modelo sem preço)" : `~$${est.costUSD.toFixed(2)}`} ` +
       `(${est.requests} requisições${est.approximate ? ", ESTIMATIVA aproximada" : ", estimativa"}) registrado no ledger do card`,
   );

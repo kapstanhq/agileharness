@@ -1,5 +1,5 @@
 // O pedido de autorização do dono que a main deixou velho é refeito pelo sistema (auto-rerequest.ts) — o botão
-// «Refazer os pedidos de publicação» da Esteira vira saída de emergência, não o caminho normal.
+// «Refazer o pedido agora» (o botão do Inbox; antes, o da Esteira) vira saída de emergência, não o caminho normal.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OwnerApprovalRequest } from "./deploy-proof";
@@ -279,7 +279,7 @@ describe("o livro e o botão", () => {
     const out = await authorizeOwnerPublish(deps, { board: "estufa", causeKey: "estufa:owner:money" });
     expect(recorded).toEqual([]);
     expect(out.ok).toBe(false);
-    expect(!out.ok && out.error).toContain("Refazer os pedidos de publicação");
+    expect(!out.ok && out.error).toContain("Refazer o pedido agora"); // a alavanca do próprio item do Inbox (a Esteira saiu na fase 3)
   });
 });
 

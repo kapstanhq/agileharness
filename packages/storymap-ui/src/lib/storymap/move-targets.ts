@@ -19,7 +19,7 @@ export interface MoveTarget {
  * pointer. These columns sit in the pipeline array order between human review and the
  * terminal "Concluída", so the recommendation must walk PAST them (when inactive) to reach
  * the real finish — instead of stalling on a lane the card isn't entering. A MANDATORY
- * readiness gate (hasTasks, hasPrioritization, …) is the opposite: when it fails the card
+ * readiness gate (hasTasks, hasRefinement, …) is the opposite: when it fails the card
  * genuinely isn't ready, so the recommendation stops there rather than skipping real work.
  */
 // The reopen lanes (refinar/corrigir/descontinuar) DERIVE from REOPEN_KINDS via REOPEN_GATES; the

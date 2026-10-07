@@ -1,7 +1,7 @@
 // suggest-work — WS-6.5: "what should I pick up next?", answered DETERMINISTICALLY.
 //
 // An idle session (or the copilot dispatching one) asks this when it finishes a card. It is CODE, not an
-// LLM: the ranking is a pure function of the board's own pipeline + priority, so two agents asking at the
+// LLM: the ranking is a pure function of the board's own pipeline + column positions, so two agents asking at the
 // same instant get the SAME answer, and the answer is auditable ("why was this first?" has an arithmetic
 // reply, not a vibe).
 //
@@ -13,7 +13,6 @@
 // stuck-lock class that claims' TTL exists to kill. Suggestion advises; the claim decides.
 
 import { CODE_SKILLS } from "./skill-registry";
-import { wsjfRatio, type WsjfCall } from "../wsjf";
 import type { TriggerId } from "../types";
 import type { AgentRole } from "./session-worktree";
 
@@ -30,11 +29,9 @@ export interface WorkCandidate {
   trigger?: TriggerId;
   /** the status is a terminal/done column. */
   terminal?: boolean;
-  /** priorityCall tier: 0 Baixa · 1 Média · 2 Alta · 3 Crítica (higher = more urgent). Ausente =
-   *  NÃO AVALIADO, que não é o mesmo que "Baixa" — ordena depois de todo mundo. */
-  rank?: number;
-  /** a razão WSJF, que desempata dentro do tier. Ausente em call legado (só rank). */
-  wsjf?: number;
+  /** a POSIÇÃO do card na coluna (`card.order` — menor = mais acima = vem antes). É o que o dono arruma com
+   *  «Fazer antes» / «Pode esperar»; ausente ⇒ 0 (empata e cai no id). */
+  order?: number;
   /** WHO holds a live claim on this card, if anyone (the card is taken). */
   claimedBy?: string;
   /** the card has an open blocker finding — it cannot progress until a human clears it. */
@@ -47,7 +44,8 @@ export interface WorkSuggestion {
   title: string;
   status: string;
   trigger?: TriggerId;
-  rank: number;
+  /** the card's position key in its column (`card.order`) — the order the owner set. */
+  order: number;
   /** the one-line arithmetic of WHY this sits where it sits — the ranking must be explainable. */
   why: string;
 }
@@ -80,13 +78,10 @@ function roleAccepts(role: AgentRole | undefined, c: WorkCandidate): boolean {
  *  1. RIGHTMOST COLUMN FIRST. Work already in flight beats starting new work — a card sitting in QA is one
  *     step from shipping, while a fresh card in Spec is a whole pipeline away. This is the WIP-before-new-work
  *     rule that keeps N agents from starting everything and finishing nothing.
- *  2. Then PRIORITY (rank 3 Crítica → 0 Baixa). Card NÃO AVALIADO vem por ÚLTIMO, não no meio: com o
- *     `?? 0` anterior ele empatava com um card legitimamente avaliado como Baixa, e num board onde
- *     ninguém tinha nota TODO candidato empatava em 0 — a prioridade não decidia nada e a ordem caía
- *     inteira no cardId (ordem alfabética de id, disfarçada de ranking). É a mesma regra de honestidade
- *     da tela: sem avaliação não se finge posição.
- *  3. Então o WSJF, que desempata DENTRO do tier (dois cards "Alta" não são igualmente urgentes).
- *  4. Então cardId, purely to make the order total (never a coin flip between two equal cards).
+ *  2. Then the card's POSITION in its column (`order`, top first) — the order the owner set by moving the card
+ *     («Fazer antes» / «Pode esperar»), the same one the Kanban shows. There is no score: what comes first is
+ *     what sits on top.
+ *  3. Then cardId, purely to make the order total (never a coin flip between two equal cards).
  *
  * Excluded outright: terminal columns (nothing to do), columns with no trigger (a HUMAN column — suggesting
  * it would send an agent to do a human's job), cards with an open blocker (a human must clear it first), and
@@ -102,9 +97,8 @@ export function rankWorkCandidates(
   const sorted = [...eligible].sort(
     (a, b) =>
       b.columnIndex - a.columnIndex || // 1. WIP first (rightmost column)
-      (b.rank ?? -1) - (a.rank ?? -1) || // 2. priority tier; não-avaliado (-1) vai para o FIM
-      (b.wsjf ?? 0) - (a.wsjf ?? 0) || // 3. desempate DENTRO do tier
-      a.cardId.localeCompare(b.cardId), // 4. total order — determinism, not preference
+      (a.order ?? 0) - (b.order ?? 0) || // 2. the position in the column — top first
+      a.cardId.localeCompare(b.cardId), // 3. total order — determinism, not preference
   );
   const take = sorted.slice(0, Math.max(1, opts.count ?? 3));
   return take.map((c) => ({
@@ -113,11 +107,10 @@ export function rankWorkCandidates(
     title: c.title,
     status: c.status,
     trigger: c.trigger,
-    rank: c.rank ?? 0,
+    order: c.order ?? 0,
     why:
       `coluna ${c.status} (posição ${c.columnIndex} — mais à direita primeiro: WIP antes de trabalho novo)` +
-      `, ${c.rank == null ? "sem prioridade avaliada (vai por último)" : `prioridade ${c.rank}/3`}` +
-      `${c.wsjf != null ? ` · WSJF ${c.wsjf.toFixed(1)}` : ""}, sem claim vivo`,
+      `, ordem ${c.order ?? 0} na coluna (mais acima primeiro), sem claim vivo`,
   }));
 }
 
@@ -146,7 +139,7 @@ export async function collectWorkCandidates(
         id: string;
         title: string;
         status?: string | null;
-        priorityCall?: { rank: number; wsjf?: WsjfCall | null } | null;
+        order?: number | null;
         findings?: Array<{ severity?: string; status?: string }> | null;
       }>
     >;
@@ -174,8 +167,7 @@ export async function collectWorkCandidates(
       columnIndex: st.index,
       trigger: st.trigger,
       terminal: st.terminal,
-      rank: card.priorityCall?.rank,
-      wsjf: wsjfRatio(card.priorityCall?.wsjf) ?? undefined,
+      order: typeof card.order === "number" && Number.isFinite(card.order) ? card.order : undefined,
       claimedBy: claimed.get(card.id),
       // An OPEN blocker is the board's own "a human must act" signal — the same one `hasNoBlockers` gates on.
       blocked: (card.findings ?? []).some((f) => f?.severity === "blocker" && f?.status === "open"),

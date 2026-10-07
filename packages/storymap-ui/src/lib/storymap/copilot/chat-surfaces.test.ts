@@ -1,17 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { CHAT_SURFACES, chatDockFor, chatSurfaceFor } from "./chat-surfaces";
+import { CHAT_SURFACES, chatSurfaceFor } from "./chat-surfaces";
 import { hitlPurposeById } from "../hitl/purpose-registry";
 
 describe("chat-surfaces — o registro de conversas por TELA", () => {
-  it("a tela de Ideias tem UMA conversa (não uma por ideia)", () => {
-    const s = chatSurfaceFor("ideias");
-    expect(s?.purposeId).toBe("idea-explorer");
+  it("as três páginas de documento têm conversa — e só elas (fase 2)", () => {
+    // Negócio, Produto e Design: cada página edita UM documento, e a conversa do compositor do rodapé é a DELE.
+    expect(CHAT_SURFACES.map((s) => s.view).sort()).toEqual(["design", "negocio", "produto"]);
+    for (const v of ["negocio", "produto", "design"]) expect(chatSurfaceFor(v)?.purposeId).toBe("doc-editor");
+    // as telas apagadas não deixam raia órfã para trás
+    for (const v of ["ideias", "vocabulario", "canvas", "prd"]) expect(chatSurfaceFor(v)).toBeUndefined();
   });
 
-  it("a tela do PRD tem conversa, e ela reusa o propósito de documento", () => {
+  it("a página do PRD tem conversa, e ela reusa o propósito de documento", () => {
     // O PRD é o documento mais alto do board; escrevê-lo sem agente ao lado era o defeito da tela que
     // ele substituiu (o Posicionamento não tinha chat NENHUM — `chatSurfaceFor` devolvia undefined).
-    const s = chatSurfaceFor("prd");
+    const s = chatSurfaceFor("produto");
     expect(s?.purposeId, "o PRD ficou sem conversa").toBe("doc-editor");
     // As duas técnicas que não existem no canvas — são elas que justificam um repertório próprio.
     const ids = (s?.techniques ?? []).map((t) => t.id);
@@ -80,12 +83,5 @@ describe("chat-surfaces — o registro de conversas por TELA", () => {
         // Um fragmento curto não é um método: ele precisa dizer o que fazer, em que ordem e o que não fazer.
         expect(t.prompt.length, `«${t.id}» não descreve um método`).toBeGreaterThan(120);
       }
-  });
-
-  // A bancada de Ideias é tela de TRABALHO com o agente: a conversa é o meio, não uma consulta ocasional.
-  // Se um dia ela virar gaveta, que seja uma decisão consciente e não um default que escorregou.
-  it("a tela de Ideias ancora a conversa no layout (rail), e o default é rail", () => {
-    expect(chatDockFor("ideias")).toBe("rail");
-    expect(chatDockFor("uma-tela-sem-entrada")).toBe("rail");
   });
 });

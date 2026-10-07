@@ -27,9 +27,6 @@ function card(over: Partial<Card> = {}): Card {
     narrative: { role: null, want: null, soThat: null },
     acceptance: [],
     tasks: [],
-    rice: { reach: null, impact: null, confidence: null, effort: null },
-    kano: null,
-    funnelStage: null,
     findings: [],
     order: 10,
     created: null,
@@ -136,14 +133,17 @@ describe("composeCardDocument — section order + content", () => {
     expect(md).toContain("O modal mistura run state…");
   });
 
-  it("renders the prioritization as one compact line", () => {
-    const md = cardDocumentMarkdown(
-      composeCardDocument(card({ rice: { reach: 100, impact: 2, confidence: 0.8, effort: 2 }, kano: "must-be", funnelStage: "retention" }), ctx()),
-    );
-    expect(md).toContain("## Priorização");
-    expect(md).toMatch(/\*\*RICE [\d.,]+\*\* \(R 100 · I 2 · C 0\.8 · E 2\)/);
-    expect(md).toContain("KANO:");
-    expect(md).toContain("Funil:");
+  // A priorização saiu na fase 5 (a ordem do trabalho é a posição na coluna). Um card ANTIGO que ainda traz
+  // `rice`/`kano`/`funnelStage`/`priorityCall` no frontmatter não pode ressuscitar a seção pelo documento.
+  it("não projeta mais uma seção de priorização, nem para um card antigo com RICE/KANO no frontmatter", () => {
+    const antigo = {
+      rice: { reach: 100, impact: 2, confidence: 0.8, effort: 2 },
+      kano: "must-be",
+      funnelStage: "retention",
+      priorityCall: { rank: 0, rationale: "x" },
+    } as unknown as Partial<Card>;
+    const md = cardDocumentMarkdown(composeCardDocument(card({ body: "corpo", ...antigo }), ctx()));
+    expect(md).not.toMatch(/Priorização|RICE|KANO|Funil/);
   });
 
   it("flags the live run in the history with ▸ agora", () => {
@@ -189,22 +189,21 @@ describe("composeCardDocument — section order + content", () => {
     expect(md).not.toContain("## Histórico");
   });
 
-  it("keeps the canonical order: aceite/corpo → notas → bloqueios → priorização", () => {
+  it("keeps the canonical order: aceite/corpo → notas → bloqueios → histórico", () => {
     const c = card({
       acceptance: ["crit"],
       body: "corpo",
       findings: [finding()],
-      rice: { reach: 1, impact: 1, confidence: 1, effort: 1 },
     });
-    const md = cardDocumentMarkdown(composeCardDocument(c, ctx({ plan: "passo 1" })));
+    const md = cardDocumentMarkdown(composeCardDocument(c, ctx({ plan: "passo 1", rollups: [rollup()] })));
     const iAceite = md.indexOf("Critérios de aceite");
     const iNotas = md.indexOf("Notas de execução");
     const iBloq = md.indexOf("Bloqueios");
-    const iPrior = md.indexOf("Priorização");
+    const iHist = md.indexOf("## Histórico");
     expect(iAceite).toBeGreaterThanOrEqual(0);
     expect(iAceite).toBeLessThan(iNotas);
     expect(iNotas).toBeLessThan(iBloq);
-    expect(iBloq).toBeLessThan(iPrior);
+    expect(iBloq).toBeLessThan(iHist);
   });
 });
 

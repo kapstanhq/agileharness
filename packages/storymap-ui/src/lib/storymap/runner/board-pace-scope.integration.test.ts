@@ -185,7 +185,8 @@ afterEach(() => {
   vi.useRealTimers();
   if (prevDir === undefined) delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
   else process.env.AGILEHARNESS_RUNNER_STATE_DIR = prevDir;
-  rmSync(dir, { recursive: true, force: true });
+  // um registro assíncrono atrasado pode cair na pasta durante a limpeza (ENOTEMPTY sob carga): o rm do Node repete
+  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("só consertos e manutenção — o board da livraria, do ponto de vista do dono", () => {

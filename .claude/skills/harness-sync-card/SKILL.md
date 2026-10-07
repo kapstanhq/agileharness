@@ -7,7 +7,7 @@ description: >-
   storymap/boards/<board>/cards/<id>.md, DIAGNOSES the live implementation that the
   card describes (which routes/components/actions/functions exist TODAY) READ-ONLY,
   updates ALL of the card's fields to match reality (title, narrative, acceptance,
-  tasks done-state, RICE/KANO/funnel when derivable, personas/systems, a `## Estado
+  tasks done-state, personas/systems, a `## Estado
   atual` diagnosis in the body) and REPOSITIONS the card into the status the FACTS
   justify — respecting the pipeline gates and a conservative "done" ceiling. Unlike
   the board-level `/harness-sync`, this is single-card and never asks. Use when the user
@@ -76,9 +76,8 @@ For a whole-board reconciliation with confirmation, use `/harness-sync <board>` 
      (Gherkin recommended). Don't list criteria the code doesn't meet as if met.
    - **tasks** — mark `done: true` for work the code already ships; keep/append
      `done: false` for what's still missing. Keep stable task ids.
-   - **rice / kano / funnelStage** — fill ONLY when derivable from the card +
-     evidence; never invent numbers to satisfy a gate. Leave as-is/null otherwise.
    - **personas / systems** — set from the board vocabulary to match the surface.
+   - **`feature`** — set it to the PRD funcionalidade id from `get_vocabulary` → `features` (no fit ⇒ leave it empty: «Outros»; never invent one).
    - **storyType** — correct it if the nature (user/technical/spike/bug/chore) drifted.
    - **body** — write a concise **`## Estado atual`** section: the diagnosis (key
      files + what exists vs. what's missing), the evidence level (in-code only vs.
@@ -98,8 +97,8 @@ For a whole-board reconciliation with confirmation, use `/harness-sync <board>` 
    - **Not implemented + thin card** → `triage` (the staging intake) — or `enriquecer` if
      there's already enough narrative to enrich next.
    - **Specced but not built** → the matching pre-build stage by what's filled (each gate
-     now guards the producer's entry): `priorizar` (narrative+acceptance) · `pronta`
-     (RICE+KANO+funnel) · `com-design` (wireframe chosen) · `quebrar-tasks` (tech plan) ·
+     now guards the producer's entry): `pronta` (narrative+acceptance) · `com-design`
+     (wireframe chosen) · `quebrar-tasks` (tech plan) ·
      `desenvolver` (tasks).
    - **Partially implemented** → the pipeline stage that matches what's really there.
    - **Fully implemented but NO evidence of human validation** → ceiling is
@@ -120,7 +119,7 @@ For a whole-board reconciliation with confirmation, use `/harness-sync <board>` 
 - **story** — full reconciliation above + reposition in the pipeline.
 - **activity / step** (backbone) — reconcile title/description and the structural
   `## Estado atual`; set a coherent `status` if the board uses one for backbone, but
-  do NOT force story-only fields (narrative/acceptance/tasks/rice). These are
+  do NOT force story-only fields (narrative/acceptance/tasks). These are
   structure, not pipeline stories.
 
 ## Guardrails

@@ -27,14 +27,12 @@ import { ChevronDown, Plus, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { VOCAB_PALETTE } from "@/components/Swatches";
 import { slugify } from "@/lib/storymap/id";
-import { formatRiceScore, riceScore } from "@/lib/storymap/rice";
 import { isDeliveryStory } from "@/lib/storymap/unplaced";
 import { optInsEditable } from "@/lib/storymap/card-opt-ins";
-import { KANO_CATEGORIES, FUNNEL_STAGES, STORY_TYPE_DEFS, STORY_TYPE_BY_ID, narrativeSentence } from "@/lib/storymap/frameworks";
-import type { KanoCategory, FunnelStage, StoryType } from "@/lib/storymap/frameworks";
+import { STORY_TYPE_DEFS, STORY_TYPE_BY_ID, narrativeSentence } from "@/lib/storymap/frameworks";
+import type { StoryType } from "@/lib/storymap/frameworks";
 import { savePersonaAction, saveSystemAction } from "@/app/actions";
-import type { BoardConfig, Card, CardType, NamedColor, Rice, StoryNarrative, Task } from "@/lib/storymap/types";
-import { PriorityBlock } from "@/components/PriorityBlock";
+import type { BoardConfig, Card, CardType, NamedColor, StoryNarrative, Task } from "@/lib/storymap/types";
 import { PlacementBlock } from "@/components/PlacementBlock";
 import { RouteBlock } from "@/components/RouteBlock";
 import { DOC } from "@/components/doc/typography";
@@ -55,7 +53,7 @@ export interface CardFieldsProps {
   boardId: string;
   config: BoardConfig;
   cards: Card[];
-  /** O card COMO ESTÁ EM DISCO — os blocos autocontidos (Prioridade/Rota/Lugar) escrevem sozinhos. */
+  /** O card COMO ESTÁ EM DISCO — os blocos autocontidos (Rota/Lugar) escrevem sozinhos. */
   card: Card;
   /** O rascunho editável (dono: a página). */
   draft: Card;
@@ -91,12 +89,6 @@ export function CardFields({
   const [linkTarget, setLinkTarget] = useState("");
   const [linkRel, setLinkRel] = useState(config.linkTypes[0]?.id ?? "");
   const [tasksExpanded, setTasksExpanded] = useState(false);
-
-  const setRice = (key: keyof Rice, raw: string) => {
-    const trimmed = raw.trim();
-    const value = trimmed === "" ? null : Number(trimmed);
-    onChange({ rice: { ...draft.rice, [key]: Number.isFinite(value as number) ? value : null } });
-  };
 
   const addTask = () => {
     const title = newTask.trim();
@@ -429,74 +421,6 @@ export function CardFields({
         </div>
       </Section>
 
-      {/* ── Prioridade ──────────────────────────────────────────────────────────────────────── */}
-      {mode !== "create" && isStory && (
-        <Section title="Prioridade">
-          <PriorityBlock boardId={boardId} card={card} kind="story" />
-
-          <details className="group mt-4 rounded-lg border border-line">
-            <summary className="cursor-pointer list-none px-3 py-2 text-[13px] font-medium text-fg-subtle transition hover:text-fg">
-              <span className="inline-flex items-center gap-1.5">
-                <ChevronDown className="h-3.5 w-3.5 transition group-open:rotate-180" />
-                Priorização numérica (RICE / KANO / funil — legado)
-              </span>
-            </summary>
-            <div className="space-y-3 px-3 pb-3 pt-1">
-              {/* Sem este aviso o bloco é uma ARMADILHA — e é fácil cair nela: classificar
-                  cards em KANO não gera ranking algum, porque a ordem nunca veio daqui. */}
-              <p className="rounded-md bg-fg/[0.04] px-2 py-1.5 text-[12px] leading-snug text-fg-subtle">
-                Estes campos <strong className="font-semibold">não</strong> produzem a ordem do backlog —
-                quem prioriza é a nota WSJF (bloco acima). Ficam para interpretar cards antigos e
-                satisfazer o gate legado.
-              </p>
-              <div>
-                <div className="mb-1 flex items-center justify-between">
-                  <Label>RICE</Label>
-                  <RiceScorePill rice={draft.rice} />
-                </div>
-                <div className="grid grid-cols-4 gap-2">
-                  <RiceInput label="Reach" value={draft.rice.reach} onChange={(v) => setRice("reach", v)} />
-                  <RiceInput label="Impact" value={draft.rice.impact} onChange={(v) => setRice("impact", v)} />
-                  <RiceInput label="Confid." value={draft.rice.confidence} onChange={(v) => setRice("confidence", v)} />
-                  <RiceInput label="Effort" value={draft.rice.effort} onChange={(v) => setRice("effort", v)} />
-                </div>
-                <p className="mt-1 text-[11px] text-fg-subtle">Score = (Reach × Impact × Confidence) ÷ Effort</p>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Field label="KANO (satisfação)">
-                  <select
-                    value={draft.kano ?? ""}
-                    onChange={(e) => onChange({ kano: (e.target.value || null) as KanoCategory | null })}
-                    className={inputCls}
-                  >
-                    <option value="">—</option>
-                    {KANO_CATEGORIES.map((k) => (
-                      <option key={k.id} value={k.id}>
-                        {k.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Funil (objetivo)">
-                  <select
-                    value={draft.funnelStage ?? ""}
-                    onChange={(e) => onChange({ funnelStage: (e.target.value || null) as FunnelStage | null })}
-                    className={inputCls}
-                  >
-                    <option value="">—</option>
-                    {FUNNEL_STAGES.map((f) => (
-                      <option key={f.id} value={f.id}>
-                        {f.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-              </div>
-            </div>
-          </details>
-        </Section>
-      )}
-
       {/* ── Rota ────────────────────────────────────────────────────────────────────────────── */}
       {mode !== "create" && isStory && (
         <Section title="Rota">
@@ -725,49 +649,10 @@ function VocabField({
   );
 }
 
-function RiceInput({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: number | null;
-  onChange: (raw: string) => void;
-}) {
-  return (
-    <label className="flex flex-col gap-1">
-      <span className="text-[11px] font-medium text-fg-subtle">{label}</span>
-      <input
-        type="number"
-        inputMode="decimal"
-        step="any"
-        value={value ?? ""}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder="—"
-        className={cn(inputCls, "px-1.5 text-center text-[14px] tabular-nums")}
-      />
-    </label>
-  );
-}
-
-function RiceScorePill({ rice }: { rice: Rice }) {
-  const label = formatRiceScore(riceScore(rice));
-  return (
-    <span
-      className={cn(
-        "rounded px-1.5 py-0.5 text-[12px] font-semibold tabular-nums",
-        label != null ? "bg-surface-hover text-fg-muted" : "bg-surface-hover text-fg-subtle",
-      )}
-    >
-      {label != null ? `Score ${label}` : "Score —"}
-    </span>
-  );
-}
-
 /**
  * A narrativa ágil em três partes. Os conectores (Como/quero/para vs. Para/precisamos/de modo que)
  * seguem o storyType. Aviso suave quando incompleta — o gate `hasRefinement` é quem obriga na
- * entrada de "Refinada".
+ * entrada de "A fazer".
  */
 function NarrativeFields({
   storyType,
@@ -800,7 +685,7 @@ function NarrativeFields({
       </p>
       {!complete && (
         <p className="mt-0.5 text-[12px] leading-snug text-fg-subtle">
-          Recomendado preencher as três partes — torna-se obrigatório para entrar em “Refinada”.
+          Recomendado preencher as três partes — torna-se obrigatório para entrar em “A fazer”.
         </p>
       )}
     </div>

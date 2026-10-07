@@ -121,6 +121,12 @@ export interface AgentSession {
   spawnedBy?: "human" | "copilot";
   /** the model the session runs (WS-7 decides the default per role); informational for the fleet view. */
   model?: string;
+  /**
+   * O PACOTE DE CONTEXTO que esta sessão recebeu no prompt de sistema (condutor — session-spawn.ts): o hash das fontes e a
+   * estimativa em tokens, regravados a cada spawn/reciclagem. É a telemetria do pacote (tamanho real em produção) e o que
+   * a skill compara depois de uma reciclagem para saber se o norte mudou. Ausente ⇒ a sessão nasceu sem pacote.
+   */
+  contextPack?: { hash: string; tokens: number };
   /** WS-6.1 — the tmux session name that currently HOSTS this agent. Changes on recycle; absent for a
    *  session with no process attached (e.g. opened by a Claude Code session that is not tmux-hosted). */
   tmuxSession?: string;
@@ -170,6 +176,40 @@ export interface AgentSession {
    * (card-live-status.ts) o lê pelo feed `card-live`.
    */
   progress?: SessionProgress;
+  /**
+   * O LOTE desta sessão de condutor (fase 7): correções/manutenções da MESMA funcionalidade que ela pegou além do
+   * líder (`cardId` continua sendo o LÍDER). Ausente ⇒ sessão de um card só. Ver {@link SessionBatch}.
+   */
+  batch?: SessionBatch;
+}
+
+/**
+ * O lote de uma sessão de condutor ({@link AgentSession.batch}).
+ *   • `featureKey` — a funcionalidade comum (feature-key.ts `featureKeyOf(...).id`);
+ *   • `cardIds`    — os ITENS além do líder, na ordem em que entraram;
+ *   • `dropped`    — os itens que saíram do lote (`batch_drop`), com o motivo — nunca voltam a este lote;
+ *   • `closed`     — o plano do lote foi submetido: nenhum item novo entra (`claim_batch` recusa).
+ */
+export interface SessionBatch {
+  id: string;
+  featureKey: string;
+  cardIds: string[];
+  dropped: { cardId: string; reason: string; at: string }[];
+  closed?: true;
+}
+
+/**
+ * TODOS os cards que esta sessão segura: o líder (`cardId`) e os itens do lote, sem repetição e sem os que saíram do
+ * lote. É a leitura de VIDA/POSSE de uma sessão (renovação de claim, vigia de card parado, fim da sessão, vaga ocupada):
+ * toda leitura de `s.cardId` que pergunta «esta sessão cuida deste card?» passa por aqui. PURA.
+ */
+export function sessionCardIds(s: Pick<AgentSession, "cardId" | "batch">): string[] {
+  const dropped = new Set((s.batch?.dropped ?? []).map((d) => d.cardId));
+  const out: string[] = [];
+  for (const id of [s.cardId, ...(s.batch?.cardIds ?? [])]) {
+    if (id && !out.includes(id) && (id === s.cardId || !dropped.has(id))) out.push(id);
+  }
+  return out;
 }
 
 export interface SessionStore {
@@ -330,8 +370,15 @@ export interface SessionWorktreeDeps {
    * Called with the registry row of a session that is about to LEAVE the fleet through `discardSessionWorktree`
    * — the last moment its tree/transcripts are known (the conductor's spend is booked here: session-telemetry.ts).
    * Best-effort, OUTSIDE the registry lock (it reads transcripts); a throw never blocks the discard.
+   * `end.handoff`: a sessão DECLAROU que passou a submissão ao merge train e encerra (conductor-handoff.ts).
    */
-  onSessionEnd?: (session: AgentSession) => Promise<void>;
+  onSessionEnd?: (session: AgentSession, end?: { handoff?: boolean }) => Promise<void>;
+  /**
+   * Apaga os arquivos que o spawn escreveu PARA a sessão fora da árvore (`storymap/.runner/sessions/<id>.mcp.json` e
+   * `<id>.pack.md` — session-spawn.ts `removeSessionArtifacts`), depois que ela saiu do registro. Sem isto eles se
+   * acumulavam para sempre (um token por sessão morta, e até ~15KB de contexto de produto). Best-effort; ausente ⇒ nada.
+   */
+  removeSessionFiles?: (sessionId: string) => Promise<void>;
   /**
    * O instante da última escrita de um arquivo (ms), ou null — o tick da frota ({@link reconcileFleet}) o usa no
    * TRANSCRIPT de cada sessão viva para mover `lastActivityAt` por evidência. Ausente ⇒ o tick não lê transcript.
@@ -698,13 +745,17 @@ export type DiscardSessionResult =
  */
 export async function discardSessionWorktree(
   deps: SessionWorktreeDeps,
-  input: { sessionId: string },
+  /** `handoff`: a sessão passou a submissão ao merge train e encerra — o serviço reabre o card no veredito (conductor-handoff.ts). */
+  input: { sessionId: string; handoff?: boolean },
 ): Promise<DiscardSessionResult> {
   if (deps.onSessionEnd) {
     const row = (await deps.store.load().catch(() => [] as AgentSession[])).find((s) => s.sessionId === input.sessionId);
-    if (row) await deps.onSessionEnd(row).catch(() => {});
+    if (row) await deps.onSessionEnd(row, { handoff: input.handoff === true }).catch(() => {});
   }
-  return withSessionsLock(() => discardSessionWorktreeUnlocked(deps, input));
+  const res = await withSessionsLock(() => discardSessionWorktreeUnlocked(deps, { sessionId: input.sessionId }));
+  // a sessão saiu do registro: os arquivos que o spawn escreveu para ela (token MCP, pacote de contexto) saem também
+  if (res.ok && deps.removeSessionFiles) await deps.removeSessionFiles(input.sessionId).catch(() => {});
+  return res;
 }
 
 async function discardSessionWorktreeUnlocked(
@@ -954,7 +1005,7 @@ async function registerSessionUnlocked(
 export async function updateSession(
   deps: SessionWorktreeDeps,
   sessionId: string,
-  patch: Partial<Pick<AgentSession, "tmuxSession" | "cwd" | "transcriptFile" | "model" | "task" | "role" | "board" | "cardId">>,
+  patch: Partial<Pick<AgentSession, "tmuxSession" | "cwd" | "transcriptFile" | "model" | "task" | "role" | "board" | "cardId" | "contextPack" | "batch">>,
 ): Promise<AgentSession | null> {
   return withSessionsLock(() => updateSessionUnlocked(deps, sessionId, patch));
 }
@@ -962,7 +1013,7 @@ export async function updateSession(
 async function updateSessionUnlocked(
   deps: SessionWorktreeDeps,
   sessionId: string,
-  patch: Partial<Pick<AgentSession, "tmuxSession" | "cwd" | "transcriptFile" | "model" | "task" | "role" | "board" | "cardId">>,
+  patch: Partial<Pick<AgentSession, "tmuxSession" | "cwd" | "transcriptFile" | "model" | "task" | "role" | "board" | "cardId" | "contextPack" | "batch">>,
 ): Promise<AgentSession | null> {
   try {
     const sessions = await deps.store.load();
@@ -1024,7 +1075,7 @@ export function nextSessionProgress(prev: SessionProgress | undefined, input: Re
 }
 
 /**
- * Grava o relato de progresso na sessão que trabalha no card (`report_progress`). A sessão é achada pelo CARD —
+ * Grava o relato de progresso na sessão que trabalha no card (`report_progress`). A sessão é achada pelo CARD (o líder ou um item do lote) —
  * o condutor, quando há um; senão a de heartbeat mais recente —, e o relato vale como heartbeat E como atividade
  * (é uma chamada de tool sobre o próprio trabalho). Nunca toca o card.
  */
@@ -1035,8 +1086,9 @@ export async function reportSessionProgress(
   return withSessionsLock(async () => {
     const now = (deps.now ?? Date.now)();
     const sessions = await deps.store.load();
+    // fase 7: o relato de um ITEM do lote vale para a sessão que conduz o lote (`sessionCardIds`), não só o do líder
     const mine = sessions
-      .filter((s) => s.board === input.board && s.cardId === input.cardId)
+      .filter((s) => s.board === input.board && sessionCardIds(s).includes(input.cardId))
       .sort(
         (a, b) =>
           Number(b.driver === "conductor") - Number(a.driver === "conductor") ||
@@ -1181,12 +1233,16 @@ async function reconcileFleetUnlocked(
   // The same proof of life, applied to the RESERVATION. Best-effort per session: a renew that fails (the claim
   // lapsed and someone else took the card) is not this function's problem to solve — the session finds out when
   // it tries to submit, and the fleet view shows the card as someone else's.
+  // Fase 7: TODOS os cards da sessão — o líder e cada item do lote (`sessionCardIds`). Renovar só o líder deixava o
+  // claim de um item vencer em 60 min embaixo de um condutor vivo, e o item ficava livre para outro ator.
   if (deps.renewClaim) {
     await Promise.all(
       alive
-        .filter((s) => s.board && s.cardId)
-        .map((s) =>
-          deps.renewClaim!(s.board!, s.cardId!, sessionClaimActor(s.agentId), CLAIM_TTL_SESSION_MS).catch(() => {}),
+        .filter((s) => s.board)
+        .flatMap((s) =>
+          sessionCardIds(s).map((cardId) =>
+            deps.renewClaim!(s.board!, cardId, sessionClaimActor(s.agentId), CLAIM_TTL_SESSION_MS).catch(() => {}),
+          ),
         ),
     );
   }

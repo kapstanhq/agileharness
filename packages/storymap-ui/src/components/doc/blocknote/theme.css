@@ -36,6 +36,15 @@
   --bn-border-radius: 8px;
 }
 
+/* A FONTE do editor é a da página. O BlockNote crava a pilha dele (`Inter, SF Pro Display, …, Helvetica Neue`) em
+   `.bn-default-styles`, o contêiner do conteúdo — e numa máquina sem Inter isso caía em Helvetica/Arial: clicar em
+   Editar trocava a fonte do documento inteiro debaixo do cursor. Aqui o conteúdo herda a `--bn-font-family` acima
+   (= a `--font-sans` do app), com especificidade para vencer a regra de fábrica. */
+.bn-root[data-color-scheme] .bn-default-styles,
+.bn-root[data-color-scheme] .bn-editor {
+  font-family: var(--bn-font-family);
+}
+
 /* Notion-like density: the DocShell (DocShell.tsx) already centers + sizes the reading column, so
    BlockNote's own default 54px inline padding on `.bn-editor` would double it up. */
 .bn-root .bn-editor {

@@ -87,6 +87,16 @@ export function useSessionMeter(
   };
 }
 
+/** A sessão tem um medidor REAL — contexto lido do servidor, maior que zero. PURA. */
+export function hasRealMeter(session: Pick<SessionState, "meter">): boolean {
+  return !!session.meter && session.meter.contextTokens > 0;
+}
+
+/** O rótulo curto do anel no canto da conversa: «Contexto 12%» com medidor real, «Contexto» sem. PURA. */
+export function contextRingLabel(session: Pick<SessionState, "meter" | "pct">): string {
+  return hasRealMeter(session) ? `Contexto ${session.pct}%` : "Contexto";
+}
+
 /** O raio do anel na viewBox de 16 — o resto (circunferência, offset) sai daqui. */
 const RING_R = 6;
 const RING_C = 2 * Math.PI * RING_R;
@@ -104,8 +114,11 @@ const RING_C = 2 * Math.PI * RING_R;
  * Os dígitos continuam a um toque: este anel É o gatilho do menu da sessão (ver {@link SessionMenu}).
  */
 export function ContextRing({ session, active }: { session: SessionState; active: boolean }) {
-  const { meter, pct, tone } = session;
-  const filled = meter ? Math.max(2, pct) : 0;
+  const { pct, tone } = session;
+  // Só PINTA com um medidor de verdade (uma sessão com contexto lido): sem ele o anel é só o trilho cinza — um arco
+  // verde mínimo numa conversa sem número nenhum parecia dizer algo que não sabe.
+  const real = hasRealMeter(session);
+  const filled = real ? Math.max(2, pct) : 0;
   return (
     <svg viewBox="0 0 16 16" className="h-4 w-4 shrink-0" aria-hidden>
       {/* o trilho — o anel vazio existe SEMPRE, senão uma conversa nova não teria medidor nenhum na tela. */}
@@ -121,7 +134,7 @@ export function ContextRing({ session, active }: { session: SessionState; active
         transform="rotate(-90 8 8)"
         strokeDasharray={RING_C}
         strokeDashoffset={RING_C * (1 - filled / 100)}
-        className={cn("transition-all duration-500", RING[tone], active && "animate-pulse")}
+        className={cn("transition-all duration-500", real ? RING[tone] : "stroke-transparent", real && active && "animate-pulse")}
       />
     </svg>
   );
@@ -135,18 +148,26 @@ export function ContextRing({ session, active }: { session: SessionState; active
  * desenhada com um ↺ que promete DESFAZER — o operador hesitava justamente por não saber o que perdia. O que
  * fica aqui é o que a leitura destes números justifica: compactar (sem trocar de conversa) e a verbosidade.
  */
+/** O gatilho do anel no canto: ícone + rótulo, a altura dos outros ícones da fileira. */
+const CORNER_TRIGGER =
+  "inline-flex h-10 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-fg-muted transition hover:bg-surface-hover hover:text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-fg md:h-8 md:px-2";
+
 export function SessionMenu({
   session,
   active,
   onCompact,
   responseMode,
   setResponseMode,
+  placement = "composer",
 }: {
   session: SessionState;
   active: boolean;
   onCompact: () => void;
   responseMode: HitlResponseMode;
   setResponseMode: (m: HitlResponseMode) => void;
+  /** onde o anel mora: na barra do composer (abre para cima, à esquerda) ou no CANTO do topo da conversa sobre a tela
+   *  (ao lado do histórico e do "Fechar" — abre para baixo, alinhado à direita, para não sair da janela). */
+  placement?: "composer" | "corner";
 }) {
   const { meter, pct, tone, idleMs } = session;
   // align=left: o menu mora na BORDA ESQUERDA do composer — ancorado à direita, o painel abria para fora da tela.
@@ -156,12 +177,25 @@ export function SessionMenu({
     <Popover
       label="Contexto e ações da conversa"
       title={
-        meter
+        hasRealMeter(session) && meter
           ? `Contexto: ${formatTokens(meter.contextTokens)} de ${formatTokens(meter.contextWindow || CHAT_CONTEXT_WINDOW)} (${pct}%) · ${session.advice}`
           : "Conversa nova — sem contexto acumulado."
       }
-      align="left"
-      trigger={<ContextRing session={session} active={active} />}
+      align={placement === "corner" ? "right" : "left"}
+      direction={placement === "corner" ? "down" : "up"}
+      // No CANTO da conversa o anel ganha RÓTULO (do md para cima; no celular, o nome acessível e o title): um anel sem
+      // nome ao lado do histórico não dizia o que media.
+      triggerClassName={placement === "corner" ? CORNER_TRIGGER : undefined}
+      trigger={
+        placement === "corner" ? (
+          <>
+            <ContextRing session={session} active={active} />
+            <span className="hidden whitespace-nowrap text-[12px] tabular-nums md:inline">{contextRingLabel(session)}</span>
+          </>
+        ) : (
+          <ContextRing session={session} active={active} />
+        )
+      }
     >
       {(close) => (
         <>

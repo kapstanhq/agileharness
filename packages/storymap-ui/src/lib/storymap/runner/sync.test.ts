@@ -17,7 +17,6 @@ const TRIGGER_POLICY: Record<TriggerId, { code: boolean; autonomy: boolean }> = 
   "harness-grill": { code: false, autonomy: false }, // writes questions; human-in-the-loop, no Bash advance
   "harness-interview": { code: false, autonomy: true }, // advances via `bun packages/storymap-ui/scripts/advance-card.ts` (Bash)
   "harness-tasks": { code: false, autonomy: false },
-  "harness-prioritize": { code: false, autonomy: false },
   "harness-plan": { code: false, autonomy: false },
   "harness-ux": { code: false, autonomy: true }, // advances via `bun packages/storymap-ui/scripts/advance-card.ts` (Bash)
   "harness-ui": { code: false, autonomy: true }, // advances via `bun packages/storymap-ui/scripts/advance-card.ts` (Bash)

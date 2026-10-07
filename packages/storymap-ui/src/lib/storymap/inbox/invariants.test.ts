@@ -34,12 +34,20 @@ const VARIANTS: Array<{ name: string; item: CockpitItem; card: Card }> = [
   { name: "question/técnica", item: { ...FIXTURES.question.item, category: "technical" } as CockpitItem, card: FIXTURES.question.card },
   { name: "stuck/não há trabalho", item: { ...FIXTURES.stuck.item, outcome: "no-op", reason: "no-op" } as CockpitItem, card: FIXTURES.stuck.card },
   { name: "conflict/gate", item: { ...FIXTURES.conflict.item, conflictKind: "merge-gate-failed" } as CockpitItem, card: FIXTURES.conflict.card },
+  // fase 3 — o card conduzido que ninguém assumiu e o pedido de publicação que ainda espera (não bloqueado)
+  { name: "stalled/conduzido", item: { ...FIXTURES.stalled.item, conducted: true } as CockpitItem, card: { ...FIXTURES.stalled.card, routing: { skips: [], decidedBy: "rules", decidedAt: "2026-09-28", driver: "conductor" } } as Card },
+  { name: "publish-held/esperando", item: { ...FIXTURES["publish-held"].item, blocked: false } as CockpitItem, card: FIXTURES["publish-held"].card },
 ];
 
 /** Os pontos de parada ESTRUTURAIS — o dono decide por eles sem classe nomeada (decision-class.ts, o invariante do WP1):
  *  a captura dele, a pergunta que o autor/o procurador/o [humano] pôs com ele, a tela que ele pediu, a trava do núcleo. */
 // `locked-exec`: um comando que a trava proíbe a agentes só roda com o clique do dono — estrutural, em qualquer modo.
-const STRUCTURAL: ReadonlySet<CockpitItemKind> = new Set(["proposal", "question", "design", "approval", "locked-exec"]);
+// fase 3 — as alavancas do OPERADOR (as actions recusam qualquer outro chamador): publicar por cima da guarda ou cancelar,
+// publicar o que espera num board manual. Parar o condutor de um card que ninguém assumiu também é do operador — mas
+// SÓ o card conduzido: o kind `stalled` inteiro NÃO é estrutural (um parado comum em Decidir sem classe é regressão).
+const STRUCTURAL: ReadonlySet<CockpitItemKind> = new Set(["proposal", "question", "design", "approval", "locked-exec", "publish-held", "stage-idle"]);
+/** O ponto estrutural por ITEM: os kinds acima, ou o parado CONDUZIDO (a alavanca do operador sobre o condutor). */
+const structural = (item: CockpitItem): boolean => STRUCTURAL.has(item.kind) || (item.kind === "stalled" && Boolean((item as { conducted?: boolean }).conducted));
 
 describe("P1 — Decidir ⇒ ao menos uma opção que MUDA o desfecho (conversa, leitura e passo a passo não contam)", () => {
   it.each(MODES)("modo %s", (_m, config) => {
@@ -57,7 +65,7 @@ describe("P2 — só-negócio: Decidir ⇒ uma classe do dono nomeada ou um pont
       const d = decideItem(v.item, ctx(config, v.card));
       if (d.bucket !== "decidir") continue;
       expect(d.verdict.decider, v.name).toBe("owner");
-      expect(Boolean(d.verdict.ownerClass) || STRUCTURAL.has(v.item.kind), `${v.name}: ${d.verdict.reason}`).toBe(true);
+      expect(Boolean(d.verdict.ownerClass) || structural(v.item), `${v.name}: ${d.verdict.reason}`).toBe(true);
     }
   });
 });
@@ -359,7 +367,7 @@ describe("P8 — o contrato é exaustivo: todo kind declara a causa e quando ela
   });
 });
 
-describe("o texto que o dono lê — uma linha, sem hash, CLS, commit, worktree, tmux, etapa ou condutor", () => {
+describe("o texto que o dono lê — uma linha, sem hash, CLS, commit, worktree, tmux ou etapa", () => {
   it.each(MODES)("modo %s", (_m, config) => {
     for (const v of VARIANTS) {
       const d = decideItem(v.item, ctx(config, v.card));

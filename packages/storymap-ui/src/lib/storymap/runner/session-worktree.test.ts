@@ -33,6 +33,8 @@ import {
   openSessionWorktree,
   reconcileFleet,
   refreshSessionWorktree,
+  reportSessionProgress,
+  sessionCardIds,
   sessionWorkSettled,
   submitSessionWork,
   updateSession,
@@ -364,6 +366,81 @@ describe("WS-6 — frota sobre o MESMO registro durável (não um 2º store)", (
     // Ausência de um handle de processo NÃO é evidência de morte — chutar aqui ceifaria trabalho vivo.
     expect(res.died).toEqual([]);
     expect(res.alive).toEqual([]);
+  });
+
+  // ── fase 7: o LOTE do condutor — a vida e a posse valem para todo card da sessão (`sessionCardIds`) ──
+  const batchSession = (over: Partial<AgentSession> = {}): AgentSession => ({
+    sessionId: "lote-1",
+    agentId: "lote-1",
+    role: "implement",
+    task: "conduzir o lote",
+    board: "acme",
+    cardId: "story-ex9101",
+    driver: "conductor",
+    tmuxSession: "cond-lote",
+    openedAt: new Date(0).toISOString(),
+    heartbeatAt: new Date(0).toISOString(),
+    batch: {
+      id: "lote-a",
+      featureKey: "func-a",
+      cardIds: ["story-ex9102", "story-ex9103", "story-ex9104"],
+      dropped: [{ cardId: "story-ex9104", reason: "falhou no teste", at: new Date(0).toISOString() }],
+    },
+    ...over,
+  });
+
+  it("fase 7 — sessionCardIds: o líder primeiro, os itens do lote, sem os que saíram", () => {
+    expect(sessionCardIds(batchSession())).toEqual(["story-ex9101", "story-ex9102", "story-ex9103"]);
+    expect(sessionCardIds({ cardId: "story-ex9101" })).toEqual(["story-ex9101"]);
+    expect(sessionCardIds({})).toEqual([]);
+  });
+
+  it("fase 7 — o tick renova o claim de TODOS os cards do lote vivo (não só o do líder), e nunca o do item que saiu", async () => {
+    const store = memSessionStore();
+    await store.persist([batchSession()]);
+    const renewed: string[] = [];
+    await reconcileFleet(
+      {
+        ...deps(store, { now: () => 9_000_000 }),
+        renewClaim: async (board, cardId, actor) => {
+          renewed.push(`${board}/${cardId}@${actor}`);
+        },
+      },
+      ["cond-lote"],
+    );
+    const actor = sessionClaimActor("lote-1");
+    expect(renewed.sort()).toEqual([`acme/story-ex9101@${actor}`, `acme/story-ex9102@${actor}`, `acme/story-ex9103@${actor}`]);
+  });
+
+  it("fase 7 — a sessão de lote que MORRE solta os claims do ator numa varredura e não devolve item nenhum à fila", async () => {
+    const store = memSessionStore();
+    await store.persist([batchSession()]);
+    const swept: string[][] = [];
+    const res = await reconcileFleet(
+      {
+        ...deps(store),
+        sweepDeadActors: async (dead) => {
+          swept.push([...dead]);
+          return ["story-ex9101", "story-ex9102", "story-ex9103"].map((cardId) => ({ board: "acme", cardId, actor: sessionClaimActor("lote-1") }));
+        },
+      },
+      [],
+    );
+    expect(swept).toEqual([[sessionClaimActor("lote-1")]]);
+    expect(res.died).toEqual([expect.objectContaining({ sessionId: "lote-1", claimsReleased: 3 })]);
+    // a linha guarda o lote: os itens seguem do operador (o vigia de card parado os nomeia no aviso do líder)
+    expect(store.read()[0].batch?.cardIds).toEqual(["story-ex9102", "story-ex9103", "story-ex9104"]);
+  });
+
+  it("fase 7 — o relato de progresso de um ITEM do lote vale para a sessão do lote", async () => {
+    const store = memSessionStore();
+    await store.persist([batchSession()]);
+    const res = await reportSessionProgress(deps(store, { now: () => 5_000 }), { board: "acme", cardId: "story-ex9103", phase: "construir", note: "item 2" });
+    expect(res.ok).toBe(true);
+    expect(store.read()[0].progress).toMatchObject({ phase: "construir", note: "item 2" });
+    // o item que SAIU do lote não é mais desta sessão
+    const out = await reportSessionProgress(deps(store), { board: "acme", cardId: "story-ex9104", phase: "construir" });
+    expect(out.ok).toBe(false);
   });
 });
 

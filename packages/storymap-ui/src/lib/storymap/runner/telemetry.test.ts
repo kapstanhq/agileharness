@@ -248,6 +248,19 @@ describe("TelemetryStore", () => {
     expect(b).toMatchObject({ cardId: "card-b", totalRuns: 1, avgTurns: null, lastRunAt: 200 });
   });
 
+  it("boardSummary soma os tokens, o tempo de agente e os turnos — null quando nenhum run os relatou", async () => {
+    const { store } = makeMemStore();
+    const t = new TelemetryStore(store);
+    await t.recordRun(rec({ id: "a1", cardId: "card-a", inputTokens: 1000, outputTokens: 200, durationMs: 60_000, turns: 2 }));
+    await t.recordRun(rec({ id: "a2", cardId: "card-a", inputTokens: 500, outputTokens: null, durationMs: null, turns: 5 }));
+    await t.recordRun(rec({ id: "b1", cardId: "card-b", inputTokens: null, outputTokens: null, durationMs: null, turns: null }));
+    const sum = await t.boardSummary("storymap");
+    const a = sum.cards.find((c) => c.cardId === "card-a")!;
+    expect(a).toMatchObject({ totalTokens: 1700, totalDurationMs: 60_000, totalTurns: 7 });
+    const b = sum.cards.find((c) => c.cardId === "card-b")!;
+    expect(b).toMatchObject({ totalTokens: null, totalDurationMs: null, totalTurns: null });
+  });
+
   it("treats null costs as zero in aggregation", async () => {
     const { store } = makeMemStore();
     const t = new TelemetryStore(store);

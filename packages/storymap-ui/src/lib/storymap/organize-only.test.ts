@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ORGANIZE_ONLY_WHY, isOrganizeOnly, organizeOnlyNow, organizeOnlyOf } from "./organize-only";
 import { configOnlyGate, resolveBoardGate } from "./runner/board-pace";
 import { boardGateNow, paceAllowsBackground } from "./runner/board-pace-store";
-import { paceChipValue, paceStatusLine, ORGANIZE_ONLY_SEAL } from "./board-pace-words";
+import { paceRunningFace, paceStatusLine, ORGANIZE_ONLY_SEAL } from "./board-pace-words";
 import { deriveBoardConfigForPersist, readBaseTemplateConfig, readBoardConfig } from "./repo";
 import { findRepoRoot, resetRepoRootCache } from "./paths";
 import { decideRecovery, RECOVERY_ORGANIZE_ONLY_DROP_REASON } from "./runner/recovery";
@@ -38,7 +38,8 @@ describe("o predicado e o portão", () => {
   });
 
   it("as palavras do selo e do painel", () => {
-    expect(paceChipValue({ level: "paused", source: "organize-only", scope: null })).toBe("Só organização");
+    // a pílula de ritmo do Kanban (era o chip do cabeçalho, que saiu na fase 1) diz o selo, não «Pausado»
+    expect(paceRunningFace({ level: "paused", source: "organize-only" }, false)).toBe("Só organização");
     const line = paceStatusLine({ level: "paused", label: "Pausado", source: "organize-only", why: ORGANIZE_ONLY_WHY, by: null, since: null, until: null }, NOW);
     expect(line.startsWith(ORGANIZE_ONLY_SEAL)).toBe(true);
     expect(ORGANIZE_ONLY_SEAL).toBe("Só organização — nada roda sozinho");
@@ -247,7 +248,6 @@ describe("catraca: nenhum ator automático ignora o modo", () => {
     "lib/storymap/health/health-collect.ts": "só mede; quem cria o card de saúde (health-deps.ts) pergunta ao modo",
     "lib/storymap/health/health-tool.ts": "tool de leitura",
     "lib/notifications/server/channels/trigger-runner-channel.ts": "chama a reconciliação de deploy, que pergunta ao modo dentro dela",
-    "lib/storymap/runner/delivery-deps.ts": "a página de Entrega (leitura)",
     "lib/storymap/runner/deploy-blocks.ts": "só lê o deploy declarado de cada board para saber qual publica cada pacote (onde mora a linha do livro); quem age é a varredura, que pergunta ao modo na reconciliação de deploy",
   };
   const files = (dir: string): string[] =>

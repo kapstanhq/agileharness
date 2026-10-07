@@ -243,15 +243,34 @@ what the human (and only the human) can give, before specification. So:
    "vazamento de terminal" soterra a decisão real. Bom `text`: *"Quem entra como sócio no meio do mês
    paga a fatia proporcional aos dias que restam ou só começa a pagar no mês seguinte?"* — uma pergunta, nenhum ID.
 
+   **O formato do Inbox — linguagem simples (vale para toda pergunta).** O Inbox mostra cada pergunta a uma
+   pessoa em três partes, e cada campo é uma delas: `context:` = **o que aconteceu** (1–2 frases simples: quem
+   fez o quê e o que está em jogo; ≤ 400 caracteres), `text:` = **o que você precisa da pessoa** (UMA pergunta;
+   ≤ 240 caracteres), `options:` = **as respostas possíveis** (2–4; cada `label` é uma AÇÃO CURTA que vira um
+   botão de um clique, ≤ 60 caracteres — o porquê vai em `pros`/`cons`), `recommendation:` = a sua sugestão
+   (vira o botão «Usar a sugestão»). Sem jargão nessas partes: nada de arquivo, sha, branch, run, gate, merge,
+   deploy, worktree, finding — diga em palavras («a busca», «a publicação», «o aviso da revisão»). Pela tool
+   `ask_question`, pergunta vazia ou fora desses tamanhos é recusada. Exemplo (inventado, da livraria):
+
+   ```yaml
+   context: "A busca do catálogo já acha livros pelo título. Para achar pelo autor, ela pode ignorar acentos ou exigir a grafia exata."
+   text: "A busca por autor deve ignorar acentos?"
+   options:
+     - { id: o1, label: "Ignorar acentos (Jose acha José)", pros: ["acha mais livros"], recommended: true }
+     - { id: o2, label: "Exigir a grafia exata", cons: ["quem digita sem acento não acha nada"] }
+   ```
+
    **SEMPRE preencha `context:`** — o PORQUÊ da pergunta: as stakes, o que muda no design/escopo
    conforme a resposta (1-2 linhas). É isso que deixa o Inbox decidir num toque sem reabrir o card.
 
-   **SEMPRE preencha `category:`** — o TIPO da decisão, que é o que a chave de autonomia do board lê
-   (`autonomy` no `board.yaml`; a exceção por story é `autonomyMode`). Numa story em modo **ultra**, uma
-   pergunta `interview` é respondida por um PROXY (contexto limpo, guiado pelo PRD, pelas personas e pelas
-   decisões passadas do dono, registrando premissas e confiança); as demais esperam o dono. Uma pergunta
-   **sem** `category` nunca vai ao proxy — ela TRAVA a story ultra no dono em silêncio, que é exatamente o
-   que esta linha existe para impedir:
+   **SEMPRE preencha `category:`** — o TIPO da decisão, que é o que o PERFIL de autonomia do board lê
+   (`board_autonomy({board})` devolve as caixas; a exceção por story é `autonomyMode`). Com a caixa `spec`
+   ligada, uma pergunta `interview`/`technical` é respondida por um PROXY CEGO (contexto limpo, guiado pelo
+   PRD, pelas personas e pelas decisões passadas do dono, registrando premissas e confiança — ele não vê a
+   sua recomendação, os prós/contras nem a ordem das opções: ponha os FATOS no `context`); com ela desligada,
+   o dono responde. Uma pergunta **sem** `category` nunca vai ao proxy — ela TRAVA a story no dono em
+   silêncio, que é exatamente o que esta linha existe para impedir. Mudar/apagar um teste existente é
+   `guardrail` (um revisor de diff decide, nunca o proxy — até ele existir, o dono; nenhum agente a responde):
    - `interview` — decisão de produto/usuário/escopo/design que uma resposta informada pelo PRD e pelas
      personas resolve (quem é o usuário, o JTBD, in/out de escopo, o trade-off "fatia igual para
      todos × fatia escolhida por cada sócio"). É a categoria de quase toda pergunta do grill.
@@ -263,7 +282,7 @@ what the human (and only the human) can give, before specification. So:
    Na dúvida entre `interview` e `money`, é `money`: um falso "do dono" custa uma resposta; um falso
    "do proxy" deixaria um agente decidir o que só o dono decide.
 
-   **Quando a pergunta tem opções discretas**, SUGIRA-as como `options:` (2–5, ids `o1`, `o2`, …)
+   **Quando a pergunta tem opções discretas**, SUGIRA-as como `options:` (2–4, ids `o1`, `o2`, …)
    com `mode: single|multi`, e para CADA opção dê `pros:`/`cons:` curtos (1–3 bullets cada) e marque
    a melhor com `recommended: true` — **no máximo UMA** opção recomendada em toda a pergunta. São
    plausible PATHS que o operador escolhe num tap, NOT fabricated facts; o free-text answer está
@@ -292,7 +311,7 @@ what the human (and only the human) can give, before specification. So:
    its existing path `storymap/boards/<board>/cards/<id>.md`. Bump the existing
    `updated:` field in-place to today (`YYYY-MM-DD`); keep one field per line. Do
    NOT change `status`, do NOT call `bun "${AGILEHARNESS_TOOL_ROOT:-packages/storymap-ui}/scripts/advance-card.ts"`, do NOT touch
-   `narrative`/`acceptance`/`tasks`/`rice` (those belong to later steps). The only
+   `narrative`/`acceptance`/`tasks` (those belong to later steps). The only
    body write is the `## Investigação` section.
 
 7. **Report.** State that you grilled the card, SUMMARIZE the investigation findings

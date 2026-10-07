@@ -79,9 +79,11 @@ describe("buildProposalPrompt — WS-9: capture never mints an idea", () => {
     expect(prompt).toMatch(/# PASSO 1[\s\S]*DEFEITO[\s\S]*TRABALHO NOVO/);
   });
 
-  it("steers raw pain WITHOUT a deliverable to the bench (a summary note), not a card", () => {
+  // a bancada de Ideias saiu (fase 2): a nota oferece registrar a dor na TRIAGEM, e nenhuma tela morta é citada
+  it("steers raw pain WITHOUT a deliverable to a summary note that offers the Triagem, not a card", () => {
     expect(prompt).toMatch(/DOR CRUA/);
-    expect(prompt).toMatch(/bancada de Ideias/i);
+    expect(prompt).toMatch(/registre na Triagem/i);
+    expect(prompt).not.toMatch(/bancada/i);
     expect(prompt).toMatch(/NÃO emita item|NÃO invente um item|NENHUM item/i);
   });
 
@@ -102,13 +104,13 @@ describe("buildProposalPrompt — WS-9: capture never mints an idea", () => {
       idea: { statement: "Voluntário não acha a escala que salvou", status: "open" },
     } as unknown as Card;
     const withOpp = buildProposalPrompt({ config: config(), cards: [idea], strategy: "", text: "algo" });
-    expect(withOpp).toMatch(/Ideias abertas na bancada/i);
+    expect(withOpp).toMatch(/Ideias abertas no board/i);
     expect(withOpp).toMatch(/idea-dor-x — "Voluntário não acha a escala que salvou"/);
     expect(withOpp).toMatch(/addresses/);
   });
 
-  it("shows a 'nenhuma ideia aberta' placeholder when the bench is empty", () => {
-    expect(prompt).toMatch(/nenhuma ideia aberta na bancada/i);
+  it("shows a 'nenhuma ideia aberta' placeholder when there is none", () => {
+    expect(prompt).toMatch(/nenhuma ideia aberta no board/i);
   });
 });
 

@@ -1,46 +1,40 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
-  SKILL_NAME_RE,
-  skillMdPath,
   assistantPromptPath,
+  assistedEditRunOptions,
+  SINCRONIZAR_ALLOWED_TOOLS,
+  SINCRONIZAR_DENIED_TOOLS,
   buildAssistedEditPrompt,
-  buildStyleGuideAssistPrompt,
   stripAgentPreamble,
 } from "./assisted-edit";
 
 /** A voz que um board declararia no Guia de Estilo dele (`brandVoiceNote`). */
 const VOZ = 'Voz de marca do board: NUNCA use "jargão".';
 
-describe("skillMdPath — guard de path", () => {
-  it("resolve um SKILL.md válido dentro de .claude/skills/", () => {
-    const p = skillMdPath("harness-enrich");
-    expect(p).not.toBeNull();
-    // Normaliza separadores para a asserção ser cross-platform.
-    const norm = p!.split(path.sep).join("/");
-    expect(norm.endsWith(".claude/skills/harness-enrich/SKILL.md")).toBe(true);
+// quick-fix skill-writes: o gravador de SKILL.md (e o guard de path dele, `skillMdPath`) saiu junto com a tela que o
+// usava — a garantia que sobra é a AUSÊNCIA: nada da bancada grava em disco, e o `sincronizar` roda só leitura.
+describe("bancada — nada grava skill/prompt; sincronizar é só leitura", () => {
+  it("as server actions da bancada não escrevem arquivo nenhum (o checkout de runtime é compartilhado)", () => {
+    const src = readFileSync(path.join(__dirname, "../../app/assisted-edit-actions.ts"), "utf8");
+    expect(src).not.toMatch(/\b(writeFile|appendFile|mkdir|rename|rm|unlink)\s*\(/);
+    expect(src).not.toMatch(/dangerouslySkipPermissions/);
+    expect(src).not.toMatch(/export async function (write|read)(Skill|AssistantPrompt)Action/);
   });
 
-  it("aceita os nomes canônicos de skill", () => {
-    for (const s of ["harness-do", "harness-plan", "harness-sync-card", "harness-qa"]) {
-      expect(skillMdPath(s)).not.toBeNull();
-      expect(SKILL_NAME_RE.test(s)).toBe(true);
-    }
-  });
-
-  it("rejeita traversal e nomes fora do padrão (retorna null)", () => {
-    for (const bad of [
-      "../../etc/passwd",
-      "harness-../../../secret",
-      "harness-do/../../../../etc/passwd",
-      "USM-ENRICH", // maiúsculas
-      "enrich", // sem prefixo harness-
-      "harness-", // vazio depois do prefixo
-      "harness-do; rm -rf /", // injeção
-      "",
-    ]) {
-      expect(skillMdPath(bad)).toBeNull();
-    }
+  it("sincronizar: sem skip-permissions, com as tools de escrita NEGADAS; os outros modos sem opção extra", () => {
+    const sync = assistedEditRunOptions("sincronizar");
+    expect(sync).not.toHaveProperty("dangerouslySkipPermissions");
+    expect(sync.disallowedTools).toEqual(SINCRONIZAR_DENIED_TOOLS);
+    // modo default explícito (não plan: em -p o plan devolve um plano, não o valor) + só leitura pré-aprovada
+    expect(sync.permissionMode).toBe("default");
+    expect(sync.allowedTools).toEqual(["Read", "Grep", "Glob"]);
+    expect(SINCRONIZAR_ALLOWED_TOOLS).toEqual(["Read", "Grep", "Glob"]);
+    for (const t of ["Edit", "Write", "NotebookEdit", "Bash"]) expect(SINCRONIZAR_DENIED_TOOLS).toContain(t);
+    for (const t of ["Read", "Grep", "Glob"]) expect(SINCRONIZAR_DENIED_TOOLS).not.toContain(t);
+    expect(assistedEditRunOptions("editar")).toEqual({});
+    expect(assistedEditRunOptions("aprender")).toEqual({});
   });
 });
 
@@ -85,8 +79,8 @@ describe("buildAssistedEditPrompt — persona (systemPrompt) + modo", () => {
     expect(prompt).toContain("APENAS o novo conteúdo");
   });
 
-  it("omite a nota de marca em kinds não-marketing (skill)", () => {
-    const prompt = buildAssistedEditPrompt({ ...base, kind: "skill", mode: "editar", label: "harness-x / SKILL.md", brandVoice: VOZ });
+  it("omite a nota de marca em kinds não-marketing (system)", () => {
+    const prompt = buildAssistedEditPrompt({ ...base, kind: "system", mode: "editar", label: "Sistema · API", brandVoice: VOZ });
     expect(prompt).not.toContain(VOZ);
   });
 
@@ -98,8 +92,8 @@ describe("buildAssistedEditPrompt — persona (systemPrompt) + modo", () => {
     }
   });
 
-  it("NÃO injeta o guia de estilo no editor de skill (SKILL.md tem contrato estrutural próprio)", () => {
-    const prompt = buildAssistedEditPrompt({ ...base, kind: "skill", mode: "editar", label: "harness-x / SKILL.md" });
+  it("NÃO injeta o guia de estilo fora dos kinds de painel (generic)", () => {
+    const prompt = buildAssistedEditPrompt({ ...base, kind: "generic", mode: "editar", label: "Texto solto" });
     expect(prompt).not.toContain("Boas práticas de escrita (estilo coeso de todo o board)");
   });
 
@@ -172,57 +166,6 @@ describe("stripAgentPreamble — devolve só o valor final (rede de segurança d
 
   it("apara espaços nas bordas", () => {
     expect(stripAgentPreamble("  \n Valor real \n ")).toBe("Valor real");
-  });
-});
-
-describe("buildStyleGuideAssistPrompt — modos estruturados (editar/sincronizar) do assistente de estilo", () => {
-  const sections = [
-    { key: "color", label: "Cor", hint: "papéis semânticos com par de contraste" },
-    { key: "voice", label: "Voz", hint: "léxico de UI" },
-  ];
-
-  it("editar: injeta persona, catálogo de seções, guia atual, pedido e contrato JSON — sem instrução de investigar código", () => {
-    const prompt = buildStyleGuideAssistPrompt({
-      systemPrompt: "VOCÊ É O DIRETOR DE DESIGN.",
-      mode: "editar",
-      current: "Guia v3...",
-      sections,
-      instruction: "escurece o muted",
-    });
-    expect(prompt).toContain("VOCÊ É O DIRETOR DE DESIGN.");
-    expect(prompt).toContain("`color` (Cor): papéis semânticos com par de contraste");
-    expect(prompt).toContain("`voice` (Voz): léxico de UI");
-    expect(prompt).toContain("Guia v3...");
-    expect(prompt).toContain("escurece o muted");
-    expect(prompt).toContain("UM único objeto JSON");
-    expect(prompt).not.toContain("INVESTIGAR o código");
-  });
-
-  it("sincronizar: manda investigar o código real, preservar seções não reveladas, e não modificar arquivos", () => {
-    const prompt = buildStyleGuideAssistPrompt({
-      systemPrompt: "VOCÊ É O DIRETOR DE DESIGN.",
-      mode: "sincronizar",
-      current: "",
-      sections,
-      instruction: "",
-      context: "Pacote do produto: packages/acme.",
-    });
-    expect(prompt).toContain("SINCRONIZAR");
-    expect(prompt).toContain("Use suas ferramentas de");
-    expect(prompt).toContain("NÃO MODIFIQUE");
-    expect(prompt).toContain("Pacote do produto: packages/acme.");
-    expect(prompt).toContain("nenhum guia publicado ainda");
-  });
-
-  it("exige TODAS as seções na resposta — uma seção omitida vira vazia, não preservada", () => {
-    const prompt = buildStyleGuideAssistPrompt({
-      systemPrompt: "p",
-      mode: "editar",
-      current: "guia",
-      sections,
-      instruction: "x",
-    });
-    expect(prompt).toContain("reenvie TODAS as seções");
   });
 });
 

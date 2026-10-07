@@ -37,6 +37,7 @@ describe("coerceProposalDoc — fidelidade total (F4)", () => {
           candidateSolutions: ["skeleton", "optimistic render"],
           keyAssumption: "a lentidão vem do layout",
           successSignal: "tempo até a lista personalizada",
+          // nota de valor de um sidecar ANTIGO (a priorização saiu na fase 5): não é reidratada
           valueSize: { reach: 100, impact: 2 },
         },
         {
@@ -57,7 +58,7 @@ describe("coerceProposalDoc — fidelidade total (F4)", () => {
     expect(idea.candidateSolutions).toEqual(["skeleton", "optimistic render"]);
     expect(idea.keyAssumption).toBe("a lentidão vem do layout");
     expect(idea.successSignal).toBe("tempo até a lista personalizada");
-    expect(idea.valueSize).toEqual({ reach: 100, impact: 2 });
+    expect(idea).not.toHaveProperty("valueSize");
     const story = doc.items[1];
     expect(story.addresses).toBe("i1");
     expect(story.body).toBe("contexto e decisões");
@@ -72,7 +73,6 @@ describe("coerceProposalDoc — fidelidade total (F4)", () => {
     expect(it.body).toBeUndefined();
     expect(it.narrative).toBeUndefined();
     expect(it.candidateSolutions).toBeUndefined();
-    expect(it.valueSize).toBeUndefined();
   });
 
   it("1.6 — preserva tasks pré-semeadas no round-trip do sidecar (WS7 card agrupador; espelha parse.ts)", () => {

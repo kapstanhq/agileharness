@@ -22,7 +22,7 @@ import type { BoardConfig, Card, CardQuestion, Finding, LaneDef } from "./types"
 const NOW = Date.parse("2026-07-14T09:10:00Z");
 
 const OLD_MAP: LaneDef[] = [
-  { id: "chegada", label: "Chegada", statuses: ["capturando", "triage", "grill", "priorizar", "descontinuar"] },
+  { id: "chegada", label: "Chegada", statuses: ["capturando", "triage", "grill", "descontinuar"] },
   { id: "risco", label: "Risco", statuses: ["enriquecer", "interview", "design-ux", "design-ui", "com-design", "refinar", "corrigir"] },
   { id: "dono", label: "Com o dono", statuses: ["pronta", "stage", "deploy"], demand: true },
   { id: "mesa", label: "Mesa", statuses: ["ready", "plano-tecnico", "desenvolver", "revisar-codigo", "qa-automatizado", "revisao", "merge", "release", "concluida"] },
@@ -30,7 +30,7 @@ const OLD_MAP: LaneDef[] = [
 const NEW_MAP: LaneDef[] = [
   { id: "fila", label: "Fila", statuses: ["capturando", "triage", "grill", "descontinuar"] },
   { id: "dono", label: "Com o dono", statuses: [], demand: true },
-  { id: "forma", label: "Forma", statuses: ["priorizar", "pronta", "enriquecer", "interview", "design-ux", "design-ui", "com-design", "refinar"] },
+  { id: "forma", label: "Forma", statuses: ["pronta", "enriquecer", "interview", "design-ux", "design-ui", "com-design", "refinar"] },
   { id: "bancada", label: "Bancada", statuses: ["ready", "plano-tecnico", "desenvolver", "corrigir"] },
   { id: "prova", label: "Prova", statuses: ["revisar-codigo", "qa-automatizado", "revisao", "merge"] },
   { id: "envio", label: "Envio", statuses: ["stage", "deploy", "release", "concluida"] },

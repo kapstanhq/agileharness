@@ -88,7 +88,10 @@ describe("MCP containment is STRUCTURAL — no spawn site may inherit the host's
     "proxy-spawn.ts", // lanes-ultra — o proxy do modo ultra (zero MCP: mcpContainmentFlags sem mounts)
     "security-review-spawn.ts", // política só-negócio — o revisor de segurança independente da prova de deploy (zero MCP)
     "resolution-judge-spawn.ts",
-    "orchestrator-spawn.ts",
+    // fase 6 — a Sentinela substituiu o tique antigo (orchestrator-spawn.ts): `--strict-mcp-config` e só o MCP declarado
+    "sentinel.ts",
+    // fase 7 — a Âncora: `--strict-mcp-config` e só o MCP do handle anchor:<board>, nenhuma tool nativa
+    "anchor-spawn.ts",
   ];
 
   // F0: módulos que EMITEM flag de permissão sem SPAWNAR nada. A distinção importa: a checagem acima
@@ -102,7 +105,7 @@ describe("MCP containment is STRUCTURAL — no spawn site may inherit the host's
 
   it.each(SPAWN_MODULES)("%s declares its MCP surface instead of inheriting one", (file) => {
     const src = stripComments(readFileSync(path.join(runnerDir, file), "utf8"));
-    // Either it routes through the shared helpers, or (orchestrator-spawn) it emits the flag inline.
+    // Either it routes through the shared helpers, or (sentinel) it emits the flag inline.
     const contained =
       /mcpContainmentFlags\s*\(/.test(src) || /toolkitFlags\s*\(/.test(src) || /"--strict-mcp-config"/.test(src);
     expect(contained, `${file} spawns the CLI but never constrains its MCP surface`).toBe(true);

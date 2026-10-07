@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AUTONOMO_ACTIONABLE_KINDS, boardCockpitItems, CARD_STALLED_FINDING_ID, cardCockpitItems, cardDemands, conflictItemsFromSnapshot, COPILOT_ACTIONABLE_KINDS, copilotActionableKinds, dedupeCaptureLanes, DEPLOY_FAILURE_FINDING_ID, DEPLOY_UNPROVEN_FINDING_ID, ENTRY_EFFECT_FAILED_FINDING_ID, exitStepAttempt, foldLastDeploy, hasProducedWork, foldRunDiagnostics, isCopilotActionable, mergeFailedItemsFromSnapshot, recoveryRetryLimit, staleDeliveryStampSweep, stuckItemsFromFailures, supersedeDeliveryFindingsOnReentry } from "./demands";
+import { AUTONOMO_ACTIONABLE_KINDS, boardCockpitItems, capacityLatchItem, hostHealthItem, sentinelCockpitItems, publishHeldItems, pushOffItem, stageIdleItem, CARD_STALLED_FINDING_ID, cardCockpitItems, cardDemands, conflictItemsFromSnapshot, COPILOT_ACTIONABLE_KINDS, copilotActionableKinds, dedupeCaptureLanes, DEPLOY_FAILURE_FINDING_ID, DEPLOY_UNPROVEN_FINDING_ID, ENTRY_EFFECT_FAILED_FINDING_ID, exitStepAttempt, foldLastDeploy, hasProducedWork, foldRunDiagnostics, isCopilotActionable, mergeFailedItemsFromSnapshot, recoveryRetryLimit, staleDeliveryStampSweep, stuckItemsFromFailures, supersedeDeliveryFindingsOnReentry } from "./demands";
 import type { CockpitItem, CockpitItemKind, ProposalCockpitItem } from "./demands";
 import { coerceCard } from "./repo";
 import type { BoardConfig, Card } from "./types";
@@ -377,7 +377,7 @@ describe("cardDemands — deploy-unsettled (WS1.1): the 'No ar' mentiroso watchd
 });
 
 describe("hasProducedWork — the cockpit entry axis (already-ran vs freshly-planned)", () => {
-  it("false for a freshly planned card — only narrative/RICE, no design/code/qa/merge artifact", () => {
+  it("false for a freshly planned card — only narrative/acceptance, no design/code/qa/merge artifact", () => {
     expect(hasProducedWork(card({ status: "pronta" }))).toBe(false);
     expect(hasProducedWork(card({ status: "triage" }))).toBe(false);
   });
@@ -1278,5 +1278,139 @@ describe("isWorkingSession — só sessão viva conta como trabalho no card", ()
     expect(isWorkingSession({ heartbeatAt: "2026-03-02T11:59:00Z" }, now, isSessionAlive)).toBe(true);
     expect(isWorkingSession({ heartbeatAt: "2026-03-02T11:59:00Z", endedAt: "2026-03-02T11:59:30Z" }, now, isSessionAlive)).toBe(false);
     expect(isWorkingSession({ heartbeatAt: "2026-03-01T00:00:00Z" }, now, isSessionAlive)).toBe(false);
+  });
+});
+
+// ── Fase 3 — os itens novos: as alavancas da Esteira e os avisos do host (projeções PURAS) ──────────────────────
+describe("fase 3 — publishHeldItems / stageIdleItem / capacityLatchItem / hostHealthItem / pushOffItem", () => {
+  const NOW3 = Date.parse("2026-09-28T20:00:00Z");
+  it("o pedido segurado DESTE board vira item (o que só espera, sem `heldSince`, não); `blocked` é a régua passada", () => {
+    const rows = [
+      { id: "pub-ex9001", board: "loja", status: "waiting", heldSince: "2026-09-28T18:00:00Z", heldCount: 12, reason: "outra sessão" },
+      { id: "pub-ex9002", board: "loja", status: "waiting" },
+      { id: "pub-ex9003", board: "outro", status: "waiting", heldSince: "2026-09-28T18:00:00Z" },
+      { id: "pub-ex9004", board: "loja", status: "published", heldSince: "2026-09-28T18:00:00Z" },
+    ];
+    const items = publishHeldItems(rows, "loja", (r) => r.id === "pub-ex9001");
+    expect(items.map((i) => [i.id, i.blocked, i.cardId, i.reason])).toEqual([["pub:pub-ex9001", true, "", "outra sessão"]]);
+  });
+  it("entregas paradas: só num board manual, sem pedido aberto, com a mais antiga além do teto", () => {
+    const frontier = { releaseMode: "manual", canPublish: true, stagedTotal: 3, staged: [{ at: "2026-09-28T19:00:00Z" }, { at: "2026-09-27T10:00:00Z" }] };
+    expect(stageIdleItem(frontier, { boardId: "loja", now: NOW3, openRequest: false })).toMatchObject({ id: "stage:loja", pending: 3, hours: 34 });
+    expect(stageIdleItem(frontier, { boardId: "loja", now: NOW3, openRequest: true })).toBeNull();
+    expect(stageIdleItem({ ...frontier, releaseMode: "auto" }, { boardId: "loja", now: NOW3, openRequest: false })).toBeNull();
+    expect(stageIdleItem({ ...frontier, staged: [{ at: "2026-09-28T10:00:00Z" }] }, { boardId: "loja", now: NOW3, openRequest: false })).toBeNull();
+    expect(stageIdleItem({ ...frontier, organizeOnly: true }, { boardId: "loja", now: NOW3, openRequest: false })).toBeNull();
+  });
+  it("a trava, a saúde vermelha e o aviso desligado: um item por episódio, null quando não há", () => {
+    expect(capacityLatchItem({ level: "soft", reason: "7 dias em 93%", trippedBy: "auto:week", at: NOW3, source: "file" }, "loja")).toMatchObject({ id: `host:latch:${NOW3}`, halt: false });
+    expect(capacityLatchItem(null, "loja")).toBeNull();
+    const rec = { at: "2026-09-28T19:55:00Z", signals: { S1: { level: "red", detail: "4 parados" }, S2: { level: "ok" } } };
+    expect(hostHealthItem(rec, "loja", (id) => `sinal ${id}`)).toMatchObject({ id: "host:health:S1", signals: [{ id: "S1", label: "sinal S1", detail: "4 parados" }] });
+    expect(hostHealthItem({ ...rec, signals: { S2: { level: "amber" } } }, "loja", (id) => id)).toBeNull();
+    // quick-fix health-red: o item carrega o que o tick FEZ por cada sinal (o card, ou por que não abriu)
+    const ticked = {
+      at: rec.at,
+      signals: { S6: { level: "red" }, S7: { level: "red" }, S5: { level: "red" } },
+      cards: { S6: { outcome: "skipped", reason: "board só de organização" }, S7: { outcome: "created", cardId: "story-ex9201" } },
+    };
+    expect(hostHealthItem(ticked, "loja", (id) => id)?.signals).toEqual([
+      { id: "S6", label: "S6", detail: "", noCard: "board só de organização" },
+      { id: "S7", label: "S7", detail: "", card: "story-ex9201" },
+      { id: "S5", label: "S5", detail: "" },
+    ]);
+    expect(pushOffItem({ configured: true, subscriptions: 0 }, "loja")).toMatchObject({ id: "host:push-off" });
+    expect(pushOffItem({ configured: true, subscriptions: 1 }, "loja")).toBeNull();
+    expect(pushOffItem({ configured: false, subscriptions: 0 }, "loja")).toBeNull();
+    // «Agora não»: o dono que dispensou a oferta não é lembrado de novo
+    expect(pushOffItem({ configured: true, subscriptions: 0, dismissed: true }, "loja")).toBeNull();
+  });
+  it("o card CONDUZIDO parado leva a marca `conducted` (o Inbox oferece as saídas do operador)", () => {
+    const config = { id: "loja", name: "Loja", statuses: [{ id: "desenvolver", name: "Desenvolver", trigger: "harness-do" }, { id: "feito", name: "Feito", terminal: true }] } as unknown as BoardConfig;
+    const stalled = card({
+      type: "story", title: "Busca por autor", status: "desenvolver", routing: { skips: [], decidedBy: "rules", decidedAt: "2026-09-28", driver: "conductor" },
+      findings: [{ id: CARD_STALLED_FINDING_ID, lens: "general", severity: "high", status: "open", title: "O condutor deste card encerrou e ninguém assumiu" }],
+    });
+    const item = cardCockpitItems(stalled, config, "loja", { now: NOW3 }).find((i) => i.kind === "stalled");
+    expect(item).toMatchObject({ kind: "stalled", conducted: true });
+  });
+});
+
+describe("fase 6 — o diagnóstico da Sentinela no Inbox", () => {
+  it("um item por causa: o 1º card ancora (título do card), causa de host fica sem âncora; nenhum tier acorda por ele", () => {
+    const rows = [
+      { id: "sentinel:a", causeKey: "a", causeId: "stalled-run-1", title: "Execução parada ou morta", diagnosis: "d", cardIds: ["story-ex9001", "story-ex9002"], at: "2026-10-07T10:00:00Z", did: "diagnosed" },
+      { id: "sentinel:h", causeKey: "h", causeId: "health-red-2", title: "Saúde da ferramenta no vermelho", diagnosis: "S6", cardIds: [], at: "2026-10-07T10:00:00Z", did: "repaired" },
+    ];
+    const [a, h] = sentinelCockpitItems(rows, "livraria", (id) => (id === "story-ex9001" ? "Catálogo de livros" : undefined));
+    expect(a).toMatchObject({ kind: "sentinel", boardId: "livraria", cardId: "story-ex9001", cardTitle: "Catálogo de livros", tried: false, lane: "travado" });
+    expect(h).toMatchObject({ cardId: "", cardTitle: "Saúde da ferramenta no vermelho", tried: true });
+    expect(AUTONOMO_ACTIONABLE_KINDS.has("sentinel")).toBe(false);
+    expect(COPILOT_ACTIONABLE_KINDS.has("sentinel")).toBe(false);
+  });
+});
+
+// ── fase 7 — o LOTE do condutor: uma parada por lote (entrega, publicação, sessão morta) ─────────────────────────
+describe("groupBatchStops — os itens de um lote parados juntos viram UM item do Inbox", () => {
+  const withDelivery: BoardConfig = { ...config, statuses: config.statuses.map((s) => (s.id === "revisao" ? { ...s, gate: "hasQaPassed" } : s)) };
+  const batch = (lead: string) => ({ id: "lote-ex1", lead, sessionId: "s-ex1", at: "2026-10-07" });
+  const item = (id: string, over: Partial<Card> = {}): Card =>
+    ({ ...card({ status: "revisao", qaPassed: true }), id, title: `Correção ${id}`, batch: batch("story-ex9001"), body: `## Prova da entrega\n- **O que mudou:** ${id} corrigido`, ...over }) as Card;
+
+  it("a aprovação da entrega dos itens do mesmo lote no mesmo passo: UM item, o do líder, com a prova de cada um", () => {
+    const cards = [item("story-ex9002"), item("story-ex9001"), item("story-ex9003")];
+    const gates = boardCockpitItems(cards, withDelivery, "b").filter((i) => i.kind === "gate");
+    expect(gates).toHaveLength(1);
+    const g = gates[0];
+    if (g.kind !== "gate") throw new Error("gate");
+    expect(g).toMatchObject({ cardId: "story-ex9001", batchId: "lote-ex1", deliveryApproval: true, proof: expect.stringContaining("story-ex9001 corrigido") });
+    expect(g.alsoCards?.map((c) => c.cardId)).toEqual(["story-ex9002", "story-ex9003"]);
+    expect(g.alsoCards?.[0].proof).toContain("story-ex9002 corrigido");
+  });
+
+  it("um item do lote em OUTRO passo segue separado; card sem lote não muda", () => {
+    const cards = [item("story-ex9001"), item("story-ex9002", { status: "release" }), { ...card({ status: "revisao", qaPassed: true }), id: "story-ex9009" } as Card];
+    const gates = boardCockpitItems(cards, withDelivery, "b").filter((i) => i.kind === "gate");
+    expect(gates.map((g) => g.cardId).sort()).toEqual(["story-ex9001", "story-ex9002", "story-ex9009"]);
+    expect(gates.every((g) => g.kind === "gate" && !g.alsoCards)).toBe(true);
+    expect(gates.find((g) => g.cardId === "story-ex9009")).not.toHaveProperty("batchId");
+  });
+
+  it("a sessão do lote que morreu: UM aviso que nomeia todos os itens (eles esperam o operador, como o líder)", () => {
+    const stalledFinding = { id: CARD_STALLED_FINDING_ID, lens: "general", severity: "high", status: "open", title: "O condutor deste card encerrou e ninguém assumiu" };
+    const driver = { skips: [], decidedBy: "rules", decidedAt: "2026-10-07", driver: "conductor" };
+    const dead = (id: string) => item(id, { status: "grill", qaPassed: false, findings: [stalledFinding], routing: driver } as unknown as Partial<Card>);
+    const stalled = boardCockpitItems([dead("story-ex9003"), dead("story-ex9001"), dead("story-ex9002")], config, "b").filter((i) => i.kind === "stalled");
+    expect(stalled).toHaveLength(1);
+    const s = stalled[0];
+    if (s.kind !== "stalled") throw new Error("stalled");
+    expect(s).toMatchObject({ cardId: "story-ex9001", conducted: true, batchId: "lote-ex1" });
+    expect(s.alsoCards?.map((c) => c.cardId).sort()).toEqual(["story-ex9002", "story-ex9003"]);
+    expect(s.findingTitle).toMatch(/e mais 2 itens do mesmo lote$/);
+  });
+
+  it("marca velha (o líder já não carrega o lote) não junta entregas: cada card segue com o seu item", () => {
+    const lead = { ...card({ status: "concluida" }), id: "story-ex9001" } as Card; // o líder sem a marca
+    const cards = [lead, item("story-ex9002"), item("story-ex9003")];
+    const gates = boardCockpitItems(cards, withDelivery, "b").filter((i) => i.kind === "gate");
+    expect(gates.map((g) => g.cardId).sort()).toEqual(["story-ex9002", "story-ex9003"]);
+    expect(gates.every((g) => g.kind === "gate" && !g.alsoCards && !g.batchId)).toBe(true);
+  });
+
+  it("um lote de um item só não dobra nada (sem `alsoCards`)", () => {
+    const g = boardCockpitItems([item("story-ex9001")], withDelivery, "b").find((i) => i.kind === "gate");
+    expect(g && "alsoCards" in g).toBe(false);
+  });
+});
+
+describe("batchStopCards / batchApprovalWords", () => {
+  it("lista o card do item e os do lote, com a prova; um item sem lote ⇒ []", async () => {
+    const { batchStopCards, batchApprovalWords } = await import("./demands");
+    const head = { id: "x", kind: "gate", boardId: "b", cardId: "story-ex9001", cardTitle: "A", status: "revisao", lane: "aprovar", severity: "medium", gateLabel: "Aprovar entrega", batchId: "lote-ex1", proof: "p1", alsoCards: [{ cardId: "story-ex9002", cardTitle: "B", proof: "p2" }] } as CockpitItem;
+    expect(batchStopCards(head).map((c) => [c.cardId, c.proof])).toEqual([["story-ex9001", "p1"], ["story-ex9002", "p2"]]);
+    expect(batchStopCards({ ...head, alsoCards: [] } as CockpitItem)).toEqual([]);
+    const words = batchApprovalWords({ id: "advance", label: "Aprovar e publicar", consequence: "Segue até o ar." }, 3);
+    expect(words).toMatchObject({ id: "advance", label: "Aprovar e publicar (3 itens)" });
+    expect(words.consequence).toMatch(/^Vale para os 3 itens do lote/);
   });
 });

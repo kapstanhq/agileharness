@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { callerAttribution, callerTag, callerWords, isCopilotCaller, parseCallerTag, toWhomWords } from "./caller";
+import { callerAttribution, callerTag, callerWords, credentialBoundCaller, demoteUnprovenServiceCaller, docChatCaller, isCopilotCaller, isDocChatOf, parseCallerTag, toWhomWords } from "./caller";
 import { approvalRequesterText } from "@/lib/storymap/approval-requester";
 import { buildOrchestratorMcpConfig } from "@/lib/storymap/runner/orchestrator-spawn";
 import { MCP_CALLER_HEADER } from "./caller";
@@ -10,6 +10,7 @@ describe("quem chama uma tool — o rótulo que o agente declara de si", () => {
       { kind: "session", id: "0f3a-9c" },
       { kind: "copilot-tick", id: "acme" },
       { kind: "copilot-chat", id: "acme" },
+      { kind: "doc-chat", id: "acme.produto" },
       { kind: "external", id: "orquestrador.v2" },
     ] as const) {
       expect(parseCallerTag(callerTag(c))).toEqual(c);
@@ -25,6 +26,8 @@ describe("quem chama uma tool — o rótulo que o agente declara de si", () => {
     expect(callerAttribution({ kind: "copilot-tick", id: "acme" })).toBe("copilot:acme");
     expect(callerAttribution({ kind: "copilot-chat", id: "acme" })).toBe("copilot:acme");
     expect(callerAttribution({ kind: "external", id: "orq" })).toBe("external:orq");
+    // a conversa de uma página de documento é o Jido do board: a página não muda quem fala
+    expect(callerAttribution(docChatCaller("acme", "produto"))).toBe("copilot:acme");
     expect(callerAttribution({ kind: "session", id: "s1" }, { driver: "conductor", cardId: "story-x", name: "agent-conductor-story-x" })).toBe("conductor:story-x");
     expect(callerAttribution({ kind: "session", id: "s1" }, { name: "agent-fix" })).toBe("session:agent-fix");
     expect(callerAttribution({ kind: "session", id: "s1" }, null)).toBe("session:s1"); // saiu do registro
@@ -58,5 +61,42 @@ describe("quem chama uma tool — o rótulo que o agente declara de si", () => {
     const named = JSON.parse(buildOrchestratorMcpConfig("tok", 3008, { kind: "session", id: "s1" }));
     expect(named.mcpServers.storymap).toMatchObject({ type: "http", headers: { [MCP_CALLER_HEADER]: "session:s1" } });
     expect(JSON.parse(buildOrchestratorMcpConfig("tok", 3008)).mcpServers.storymap.headers).toBeUndefined();
+  });
+});
+
+describe("a conversa da PÁGINA de um documento — o rótulo que o write_doc do PRD aceita", () => {
+  it("é da página e do board certos; outra página, outro board ou outro tipo de chamador não é", () => {
+    const c = docChatCaller("acme", "produto");
+    expect(isDocChatOf(c, "acme", "produto")).toBe(true);
+    expect(isDocChatOf(c, "acme", "negocio")).toBe(false);
+    expect(isDocChatOf(c, "outro", "produto")).toBe(false);
+    expect(isDocChatOf({ kind: "copilot-chat", id: "acme.produto" }, "acme", "produto")).toBe(false);
+    expect(isDocChatOf(undefined, "acme", "produto")).toBe(false);
+    expect(isCopilotCaller(c)).toBe(true);
+  });
+});
+
+// Fase 6 — os papéis do SERVIÇO escolhem o balde do limite por hora e a voz da trilha: só valem PROVADOS.
+describe("papéis do serviço: a credencial prova, o rótulo não", () => {
+  it("o handle da Sentinela (rótulo `sentinel:<board>`) é a Sentinela, com o cabeçalho ou sem", () => {
+    expect(credentialBoundCaller("sentinel:livraria")).toEqual({ kind: "sentinel", id: "livraria" });
+    expect(credentialBoundCaller("sentinel:host")).toEqual({ kind: "sentinel", id: "host" });
+    expect(credentialBoundCaller("conector do chat web")).toBeNull();
+    expect(credentialBoundCaller(undefined)).toBeNull();
+  });
+
+  it("Sentinela, procurador, crítico ou tique DECLARADOS sem prova viram agente de fora (não pegam o balde nem a voz)", () => {
+    for (const kind of ["sentinel", "proxy", "critic", "copilot-tick"] as const) {
+      const c = demoteUnprovenServiceCaller({ kind, id: "livraria" }, "orch");
+      expect(c, kind).toEqual({ kind: "external", id: `${kind}-sem-prova` });
+      expect(callerAttribution(c)).toBe(`external:${kind}-sem-prova`);
+    }
+    expect(demoteUnprovenServiceCaller({ kind: "session", id: "s1" }, "orch")).toEqual({ kind: "session", id: "s1" });
+  });
+
+  it("o rótulo do chat numa credencial que o chat nunca usa (escopada) também não vale", () => {
+    expect(demoteUnprovenServiceCaller({ kind: "copilot-chat", id: "livraria" }, "orch").kind).toBe("external");
+    expect(demoteUnprovenServiceCaller({ kind: "copilot-chat", id: "livraria" }, "full").kind).toBe("copilot-chat");
+    expect(demoteUnprovenServiceCaller({ kind: "doc-chat", id: "livraria.prd" }, "ro").kind).toBe("doc-chat");
   });
 });

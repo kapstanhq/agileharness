@@ -3,7 +3,7 @@ id: story-busca-por-autor
 type: story
 title: Buscar pelo autor
 storyType: user
-status: priorizar
+status: pronta
 parent: step-buscar
 release: r2
 personas:

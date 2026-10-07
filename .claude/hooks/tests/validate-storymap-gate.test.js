@@ -76,10 +76,10 @@ test("Edit flipping status into desenvolver PASSES when tasks already exist on d
   assert.strictEqual(out, null); // final content has tasks → hasTasks satisfied
 });
 
-test("Edit flipping status into priorizar PASSES when narrative+acceptance exist on disk", () => {
+test("Edit flipping status into pronta PASSES when narrative+acceptance exist on disk", () => {
   const fm = READY_CARD.replace("status: quebrar-tasks", "status: enriquecer");
   const file = writeCard(fm);
-  const out = check.test(editInput(file, "status: enriquecer", "status: priorizar"));
+  const out = check.test(editInput(file, "status: enriquecer", "status: pronta"));
   assert.strictEqual(out, null); // hasRefinement reads the WHOLE file, not the slice
 });
 
@@ -101,22 +101,22 @@ test("Edit flipping status into desenvolver BLOCKS when no tasks anywhere", () =
   assert.match(out.message, /hasTasks/);
 });
 
-test("Write of a fresh card into priorizar BLOCKS without a narrative", () => {
+test("Write of a fresh card into pronta BLOCKS without a narrative", () => {
   // No prior file on disk → treated as an entry transition → gate checked.
   const file = path.join(cardsDir, "brand-new.md");
-  const content = `---\nid: brand-new\ntype: story\nstatus: priorizar\nacceptance: []\n---\n\nx\n`;
+  const content = `---\nid: brand-new\ntype: story\nstatus: pronta\nacceptance: []\n---\n\nx\n`;
   const out = check.test(writeInput(file, content));
   assert.ok(out, "expected a violation");
   assert.match(out.message, /hasRefinement/);
 });
 
-test("Write of a fresh card into priorizar PASSES with narrative + acceptance", () => {
+test("Write of a fresh card into pronta PASSES with narrative + acceptance", () => {
   const file = path.join(cardsDir, "brand-new-2.md");
   const content =
     "---\n" +
     "id: brand-new-2\n" +
     "type: story\n" +
-    "status: priorizar\n" +
+    "status: pronta\n" +
     "narrative:\n" +
     "  role: Como leitor\n" +
     "  want: quero algo\n" +
@@ -147,12 +147,12 @@ test("replace_all Edit reconstructs the final file and gates it", () => {
   const fm = READY_CARD.replace("status: quebrar-tasks", "status: enriquecer");
   const file = writeCard(fm);
   // "enriquecer" appears only in the status line → replace_all is safe here.
-  const out = check.test(editInput(file, "enriquecer", "priorizar", true));
+  const out = check.test(editInput(file, "enriquecer", "pronta", true));
   assert.strictEqual(out, null);
 });
 
 test("non-card paths are ignored", () => {
-  const out = check.test(writeInput(path.join(base, "notes.md"), "status: priorizar\n"));
+  const out = check.test(writeInput(path.join(base, "notes.md"), "status: pronta\n"));
   assert.strictEqual(out, null);
 });
 
@@ -171,8 +171,7 @@ test("a non-gated target status passes (e.g. moving back to triage)", () => {
 // B4 — the hook now parses the card (js-yaml) and delegates to the SAME predicates the app
 // runs (gate-core.js), reading the board's REAL gate map. That lifts the old regex limitation
 // that forced the hook to SKIP gates it couldn't parse leniently (findings[], nested briefs).
-// These cases prove the newly-enforced gates + the type-aware prioritization running through
-// the parse. (board = uma fixture; os cards resolvem o board.yaml dela na árvore real.)
+// These cases prove the newly-enforced gates running through the parse. (board = uma fixture; os cards resolvem o board.yaml dela na árvore real.)
 // ----------------------------------------------------------------------------
 
 test("hasNoBlockers: entering qa-automatizado with an OPEN blocker finding is BLOCKED", () => {
@@ -210,17 +209,28 @@ test("hasRefineBrief: entering refinar WITH a refinement.brief PASSES", () => {
   assert.strictEqual(check.test(writeInput(file, content)), null);
 });
 
-test("hasPrioritization is TYPE-AWARE through the parse: a bug into pronta needs severity + frequency", () => {
+// A priorização saiu: «A fazer» (pronta) pede só narrativa + aceite (hasRefinement), e uma nota antiga (rice/priorityCall)
+// num card legado não satisfaz nem atrapalha o gate — ela é ignorada.
+test("pronta is gated by hasRefinement (no priority score): a bug with severity but no narrative is BLOCKED", () => {
   const blocked = path.join(cardsDir, "pr-1.md");
-  const blkContent = "---\nid: pr-1\ntype: story\nstoryType: bug\nstatus: pronta\nseverity: high\n---\n\nx\n";
+  const blkContent =
+    "---\nid: pr-1\ntype: story\nstoryType: bug\nstatus: pronta\nseverity: high\nfrequency: often\npriorityCall:\n  rank: 3\n  rationale: r\n---\n\nx\n";
   const out = check.test(writeInput(blocked, blkContent));
-  assert.ok(out, "expected a violation (no frequency)");
-  assert.match(out.message, /hasPrioritization/);
+  assert.ok(out, "expected a violation (no narrative/acceptance — a legacy priorityCall does not satisfy it)");
+  assert.match(out.message, /hasRefinement/);
 
   const ok = path.join(cardsDir, "pr-2.md");
   const okContent =
-    "---\nid: pr-2\ntype: story\nstoryType: bug\nstatus: pronta\nseverity: high\nfrequency: often\n---\n\nx\n";
+    "---\nid: pr-2\ntype: story\nstoryType: bug\nstatus: pronta\nseverity: high\n" +
+    "narrative:\n  role: Como leitor\n  want: quero algo\n  soThat: para um benefício\n" +
+    "acceptance:\n  - Dado A Quando B Então C\n---\n\nx\n";
   assert.strictEqual(check.test(writeInput(ok, okContent)), null);
+});
+
+test("priorizar no longer exists in the base pipeline: a card written there hits no gate (unknown status)", () => {
+  const file = path.join(cardsDir, "pr-3.md");
+  const content = "---\nid: pr-3\ntype: story\nstatus: priorizar\n---\n\nx\n";
+  assert.strictEqual(check.test(writeInput(file, content)), null);
 });
 
 // ----------------------------------------------------------------------------

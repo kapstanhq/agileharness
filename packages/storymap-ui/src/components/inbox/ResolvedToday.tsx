@@ -1,17 +1,13 @@
 "use client";
 
-// «RESOLVIDO HOJE» (onda 2, passo 5) — o desfecho de tudo que saiu do Inbox nas últimas 24 horas: o que VOCÊ decidiu
-// (com «Desfazer» quando a ação volta atrás), o que o SISTEMA decidiu por você (com o «Desfazer» dele) e o que um PRAZO
-// decidiu. Um item que sumiu sempre tem um desfecho à vista. Fechado, contado em voz baixa, como Acompanhar.
+// O DESFECHO do que saiu do Inbox — uma lista de linhas (o que VOCÊ decidiu, com «Desfazer» quando a ação volta atrás;
+// o que um AGENTE decidiu por você, com o «Desfazer» dele; o que um PRAZO decidiu). Mora dentro de «Os agentes estão
+// cuidando» (AgentsCaring): «Resolvido hoje» e o registro dos dias anteriores usam a mesma linha.
 
-import { useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
-import { ChevronRight } from "lucide-react";
-import { cn } from "@/lib/cn";
-import { findInboxItem } from "@/lib/storymap/deep-links";
+import { useMemo } from "react";
 import { formatDecisionText, localTimeFormatter, relativeWithClock } from "@/lib/storymap/inbox/copy";
 import type { ResolvedEntry } from "@/lib/storymap/inbox/receipts";
-import { BoardChip } from "./InboxItemCard";
+import { BoardChip } from "./InboxItem";
 import { UndoControl } from "./UndoControl";
 import { useOwnerTimeZone } from "@/components/OwnerTimeZone";
 
@@ -21,7 +17,7 @@ function ResolvedRow({ entry, now, showBoard }: { entry: ResolvedEntry; now: num
   const text = (t: string) => formatDecisionText(t, fmt);
   const when = now ? relativeWithClock(entry.at, now, tz) : null;
   return (
-    <li className="space-y-1.5 px-4 py-3" data-resolved={entry.who}>
+    <li className="space-y-1.5 px-4 py-3" data-resolved={entry.who} data-inbox-item={entry.itemId}>
       <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12px] leading-snug text-fg-subtle">
         {showBoard && <BoardChip name={entry.boardName} />}
         {showBoard && <span aria-hidden>·</span>}
@@ -47,33 +43,12 @@ function ResolvedRow({ entry, now, showBoard }: { entry: ResolvedEntry; now: num
   );
 }
 
-export function ResolvedToday({ entries, now, showBoard }: { entries: ResolvedEntry[]; now: number; showBoard: boolean }) {
-  // o link de um item que já saiu do Inbox (`?item=`) abre esta seção — é aqui que está o desfecho dele
-  const wanted = useSearchParams().get("item");
-  const [open, setOpen] = useState(() => Boolean(wanted && findInboxItem(entries.filter((e) => e.itemId).map((e) => ({ id: e.itemId! })), wanted)));
+export function ResolvedList({ entries, now, showBoard }: { entries: ResolvedEntry[]; now: number; showBoard: boolean }) {
   return (
-    <section aria-labelledby="inbox-resolvido" className="space-y-2">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        className="flex min-h-12 w-full items-center gap-2 rounded-xl border border-line bg-inset/60 px-4 text-left transition hover:bg-surface-hover"
-      >
-        <ChevronRight className={cn("h-4 w-4 shrink-0 text-fg-subtle transition", open && "rotate-90")} aria-hidden />
-        <span id="inbox-resolvido" className="flex-1 text-[14px] font-semibold text-fg">
-          Resolvido hoje <span className="font-normal text-fg-muted">({entries.length})</span>
-        </span>
-      </button>
-      {open &&
-        (entries.length > 0 ? (
-          <ul className="divide-y divide-line-muted overflow-hidden rounded-xl border border-line bg-surface">
-            {entries.map((e) => (
-              <ResolvedRow key={e.key} entry={e} now={now} showBoard={showBoard} />
-            ))}
-          </ul>
-        ) : (
-          <p className="px-1 text-[13.5px] text-fg-muted">Nada saiu do Inbox nas últimas 24 horas.</p>
-        ))}
-    </section>
+    <ul className="divide-y divide-line-muted overflow-hidden rounded-xl border border-line bg-surface">
+      {entries.map((e) => (
+        <ResolvedRow key={e.key} entry={e} now={now} showBoard={showBoard} />
+      ))}
+    </ul>
   );
 }

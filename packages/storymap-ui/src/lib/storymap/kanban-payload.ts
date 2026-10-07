@@ -34,8 +34,8 @@ export function kanbanCard(card: Card, terminal: boolean): Card {
 /**
  * O card no FIM do fluxo (a raia «No ar»), reduzido ao que a face dele mostra. Num board maduro eles são a maioria dos
  * cards e quase todo o peso da página — e a face de um card terminal só lê título, tipo, etapa, o porquê (soThat), o selo
- * de bloqueio aberto, a severidade do bug e o resumo do diff. Os critérios, as tarefas, o custo, as provas e o
- * raciocínio da prioridade (que a face não mostra num card terminal) ficam no disco: abrir o card lê o card inteiro.
+ * de bloqueio aberto, a severidade do bug e o resumo do diff. Os critérios, as tarefas, o custo e as provas (que a
+ * face não mostra num card terminal) ficam no disco: abrir o card lê o card inteiro.
  * O quadro nunca devolve o objeto card ao servidor (as actions recebem ids), então nada daqui se perde por escrita.
  */
 function terminalFace(card: Card): Card {
@@ -46,10 +46,17 @@ function terminalFace(card: Card): Card {
   }
   if (card.narrative) face.narrative = { role: null, want: null, soThat: card.narrative.soThat ?? null };
   if (card.bugReport) face.bugReport = { ...card.bugReport, brief: "", expected: null, actual: null, steps: [] };
-  if (card.priorityCall) face.priorityCall = { ...card.priorityCall, rationale: "", riskiestAssumption: null };
   return face;
 }
 
+
+/**
+ * As funcionalidades do PRD como o quadro as lê: só o id e o nome (a chave e o título do card). A descrição de cada
+ * uma fica no servidor — quem a mostra é a página da funcionalidade.
+ */
+export function kanbanFeatures(features: readonly { id: string; name: string }[]): { id: string; name: string }[] {
+  return features.map((f) => ({ id: f.id, name: f.name }));
+}
 
 /** O board enxuto para o Kanban (os cards, só). A config segue inteira — é pequena e o quadro a usa toda. */
 export function kanbanBoard(board: Board): Board {

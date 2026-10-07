@@ -6,8 +6,8 @@ import { acceptTriageRefusal, dataDeletionRefusal, moveRefusal, republishRefusal
 import { cardCockpitItems, DEPLOY_FAILURE_FINDING_ID } from "../demands";
 import { evaluateGate } from "../gates";
 import type { OptionInvokeKind } from "./decision";
-import { decideItem, DEPLOY_WATCH_MINUTES, leadsToPublish, primaryOption, promote, type ItemDecision } from "./decision";
-import { bannedTermsIn, formatDecisionText, itemTermsIn, localTimeFormatter } from "./copy";
+import { decideItem, DEPLOY_WATCH_MINUTES, HAPPENED_MAX, leadsToPublish, OPTION_LABEL_MAX, primaryOption, promote, REFINE_DEFAULT_NOTE, type ItemDecision } from "./decision";
+import { ASK_FORMAT, bannedTermsIn, formatDecisionText, itemTermsIn, localTimeFormatter } from "./copy";
 import { foldByCard, INBOX_PRECEDENCE, inboxSections, inboxSummary, itemEntries, summaryLine, type InboxEntry } from "./entries";
 import { followUpInWindow, systemDecisionEntry } from "./system-entries";
 import { emptyFacts, isDiscard, type InboxFacts } from "./contract";
@@ -97,15 +97,18 @@ describe("o modelo de item — exaustivo e bem formado", () => {
 });
 
 describe("quem decide — Decidir é só do dono; o técnico vai para Acompanhar", () => {
-  it("modo humano: toda decisão real é do dono (Decidir), menos amostra, aviso, aviso do host e o card parado sem dono", () => {
+  it("modo humano: toda decisão real é do dono (Decidir), menos amostra, aviso, os avisos do host e o card parado sem dono", () => {
     const acompanhar = KINDS.filter((k) => decide(k, HUMAN).bucket === "acompanhar").sort();
-    expect(acompanhar).toEqual(["delivery-audit", "finding", "meter-stalled", "proxy-audit", "stalled"]);
+    // fase 6 — o diagnóstico da Sentinela é um aviso do sistema: a saída dele é conversar («Resolver no chat»), não um
+    // desfecho de um clique, então mora em Acompanhar como a saúde do host
+    expect(acompanhar).toEqual(["capacity-latch", "delivery-audit", "finding", "host-health", "meter-stalled", "proxy-audit", "push-off", "sentinel", "stalled"]);
   });
 
   it("só-negócio: PRD, dados de pessoas, a captura do dono, o comando travado e o pedido de autorização do plano ficam em Decidir; o técnico sai", () => {
     const decidir = KINDS.filter((k) => decide(k, ULTRA).bucket === "decidir").sort();
     // a pergunta do fixture não tem categoria: fica com o dono até ser classificada (fail-closed, questionVerdict)
-    expect(decidir).toEqual(["data-deletion", "governance", "locked-exec", "proposal", "publish-approval", "question"]);
+    // fase 3: as alavancas do operador (o pedido segurado e bloqueado, as entregas paradas num board manual) também
+    expect(decidir).toEqual(["data-deletion", "governance", "locked-exec", "proposal", "publish-approval", "publish-held", "question", "stage-idle"]);
     const technical = decideItem({ ...FIXTURES.question.item, category: "technical" } as CockpitItem, ctx(ULTRA, FIXTURES.question.card));
     expect(technical.bucket).toBe("acompanhar");
   });
@@ -139,12 +142,32 @@ describe("quem decide — Decidir é só do dono; o técnico vai para Acompanhar
     expect(gaveUp.bucket).toBe("decidir");
   });
 
-  it("a amostra do dono (antes/depois + link) é «revisar quando puder», nunca Decidir", () => {
+  it("board humano com o Jido ligado: a pergunta que o perfil deixa com o dono NÃO vai ao Jido — fica em Decidir", () => {
+    // Mínima nas caixas de story: o `answer_question` de um agente seria recusado (autonomy.ts agentAnswerRefusal); se o
+    // Inbox a desse ao Jido, ela sumia do dono para quem não pode respondê-la.
+    for (const category of ["technical", "interview", "guardrail"] as const) {
+      const item = { ...FIXTURES.question.item, category } as CockpitItem;
+      expect(decideItem(item, ctx(HUMAN_JIDO, FIXTURES.question.card)).bucket, category).toBe("decidir");
+    }
+    // com a caixa da categoria ligada (a exceção do card, aqui), o Jido a pega como antes
+    const ultraCard = { ...FIXTURES.question.card, autonomyMode: "ultra" as const };
+    const picked = decideItem({ ...FIXTURES.question.item, category: "technical" } as CockpitItem, ctx(HUMAN_JIDO, ultraCard));
+    expect(picked.next.who === "jido" || picked.bucket === "acompanhar").toBe(true);
+  });
+
+  // decisão do dono (06/10): o dono não revisa amostras — um revisor independente (IA) revisa. Esse revisor ainda não
+  // roda: a amostra NÃO some (sumir era ninguém revisar, calado); fica em Acompanhar, dita «ninguém está revisando».
+  it("as amostras de auditoria nunca são Decidir: ficam em «Os agentes estão cuidando», marcadas sem revisor", () => {
     for (const [, config] of MODES) {
-      const d = decide("delivery-audit", config);
-      expect(d.bucket).toBe("acompanhar");
-      expect(d.ask).toMatch(/revisar quando puder/);
-      expect(d.happened).toMatch(/Antes: sem convite/);
+      for (const kind of ["delivery-audit", "proxy-audit"] as const) {
+        const d = decide(kind, config);
+        expect(d.bucket, kind).toBe("acompanhar");
+        expect(d.next, kind).toMatchObject({ who: "ninguem", stalled: true });
+        expect(d.next.label, kind).toMatch(/Ninguém está revisando/);
+        const entries = itemEntries([FIXTURES[kind].item], { boardId: "b1", boardName: "Board", config, cardsById: new Map([["c1", FIXTURES[kind].card]]), now: NOW });
+        expect(entries.map((e) => e.decision.bucket), kind).toEqual(["acompanhar"]);
+      }
+      expect(decide("delivery-audit", config).happened).toMatch(/Antes: sem convite/);
     }
   });
 
@@ -196,21 +219,21 @@ describe("o card parado sem ninguém cuidando (`stalled`) — Acompanhar, contad
     expect(d.ifIgnored).toMatch(/até alguém agir/);
   });
 
-  it("passo com ação automática: «tentar de novo» é o MESMO do efeito que não rodou (no lugar, com confirmação) + o Jido", () => {
+  it("passo com ação automática: «tentar de novo» é o MESMO do efeito que não rodou (no lugar, um clique) + o Jido", () => {
     const d = decide("stalled");
     expect(d.options.map((o) => o.id)).toEqual(["retry-effect", "jido-look"]);
     const retry = d.options[0];
     const twin = decide("effect-failed").options[0];
     expect(retry.invoke).toEqual({ kind: "republish", boardId: "b1", cardId: "c1" });
-    expect(retry).toMatchObject({ label: twin.label, tone: twin.tone, auditCls: twin.auditCls, confirm: twin.confirm, done: twin.done });
+    expect(retry).toMatchObject({ label: twin.label, tone: twin.tone, auditCls: twin.auditCls, done: twin.done });
     expect(retry.disabled).toBeUndefined();
     expect(d.options[1].invoke).toMatchObject({ kind: "escalate", ref: { templateId: "hitl-card-instructions", cardId: "c1" } });
   });
 
-  it("promoção do código (sem publicar): «Tentar de novo» sem a confirmação de produção", () => {
+  it("promoção do código (sem publicar): «Tentar de novo», sem dizer produção", () => {
     const d = decideItem({ ...stalledItem, status: "stage", stepName: "Homologar", effect: "promote-stage" } as CockpitItem, ctx(HUMAN, mkCard({ status: "stage" })));
     expect(d.options[0]).toMatchObject({ id: "retry-effect", label: "Tentar de novo", tone: "primary", auditCls: "merge-resolve" });
-    expect(d.options[0].confirm).toBeUndefined();
+    expect(d.options[0].label).not.toMatch(/produção/);
   });
 
   it("«tentar de novo» fora de um passo com ação automática: bloqueado com a frase de republishRefusal", () => {
@@ -219,14 +242,17 @@ describe("o card parado sem ninguém cuidando (`stalled`) — Acompanhar, contad
     expect(d.options[0].disabled?.reason).toBe(republishRefusal(card, HUMAN));
   });
 
-  it("card conduzido num passo sem ação automática: só o Jido — nada a refazer no lugar, e o condutor não é dito como quem cuida", () => {
+  // fase 3 (decisão do dono): o card CONDUZIDO que ninguém assumiu é Decidir, com as duas saídas do operador
+  it("card conduzido que ninguém assumiu: Decidir em todo modo, com «Devolver ao fluxo» (principal) e «Parar condutor»", () => {
     const card = mkCard({ status: "desenvolver", routing: { driver: "conductor" } } as Partial<Card>);
     for (const [mode, config] of MODES) {
       const d = decideItem(noEffect, ctx(config, card));
-      expect(d.options.map((o) => o.invoke.kind), mode).toEqual(["escalate"]);
-      expect(d.options[0].disabled, mode).toBeUndefined();
-      expect(d.bucket, mode).toBe("acompanhar");
-      expect(d.next, mode).toMatchObject({ who: "ninguem", stalled: true });
+      expect(d.bucket, mode).toBe("decidir");
+      expect(d.options.map((o) => [o.label, o.invoke.kind, o.tone]), mode).toEqual([
+        ["Devolver ao fluxo", "return-to-flow", "primary"],
+        ["Parar condutor", "stop-conductor", "neutral"],
+      ]);
+      expect(d.verdict.decider, mode).toBe("owner");
     }
   });
 
@@ -306,7 +332,8 @@ describe("as opções — pré-validadas pela MESMA régua do servidor (precondi
     expect(d.ask).toBe("Publicar «Lista de desejos compartilhada» em produção?");
     expect(d.options.map((o) => o.label)).toEqual(["Publicar em produção", "Devolver para «Homologar»"]);
     expect(d.options[0].tone).toBe("danger");
-    expect(d.options[0].confirm).toBeDefined();
+    // um clique (fase 3): o rótulo diz produção — nenhum diálogo antes
+    expect(d.options[0].label).toMatch(/produção/);
     // publicar não se desfaz; devolver sim
     expect(d.options[0].undo).toBeUndefined();
     expect(d.options[1].undo).toMatchObject({ kind: "move-back", from: "stage", to: "release" });
@@ -334,7 +361,7 @@ describe("as opções — pré-validadas pela MESMA régua do servidor (precondi
 
   it("ação que o celular não faz vira «No computador: como fazer» ou «Pedir ao Jido» (conflito de integração)", () => {
     const d = decide("conflict");
-    expect(d.options.map((o) => o.label)).toEqual(["Pedir ao Jido para integrar", "No computador: como integrar à mão", "Descartar este trabalho"]);
+    expect(d.options.map((o) => o.label)).toEqual(["Pedir ao Jido para integrar", "No computador: como integrar à mão", "Descartar este trabalho — não tem volta"]);
     expect(d.options[1].invoke.kind).toBe("howto");
     expect(d.options.some((o) => /Marcar integrado/.test(o.label))).toBe(false);
   });
@@ -370,7 +397,7 @@ describe("as opções — pré-validadas pela MESMA régua do servidor (precondi
   it("a exclusão de dados aprova a EXCLUSÃO (nunca move o card)", () => {
     const d = decide("data-deletion");
     expect(d.options.map((o) => o.invoke.kind)).toEqual(["approve-data-deletion"]);
-    expect(d.options[0].confirm?.title).toMatch(/Não tem volta/);
+    expect(d.options[0].label).toMatch(/não tem volta/);
   });
 });
 
@@ -500,8 +527,10 @@ describe("as decisões do sistema em Acompanhar — o quê, quem, por quê e o �
     for (const text of parts1to4(e.decision)) expect(bannedTermsIn(text)).toEqual([]);
   });
 
-  it("reabrir uma entrega pede o motivo antes; sem handle, não há botão", () => {
-    expect(systemDecisionEntry(sd({ undo: { kind: "reopen-card", cardId: "c1", deliveredIn: "concluida" } }), { boardId: "b1", boardName: "B", config: HUMAN, card: mkCard({ status: "concluida" }) }).decision.options[0].requires).toBe("note");
+  it("reabrir uma entrega roda num clique com o motivo padrão; sem handle, não há botão", () => {
+    const o = systemDecisionEntry(sd({ undo: { kind: "reopen-card", cardId: "c1", deliveredIn: "concluida" } }), { boardId: "b1", boardName: "B", config: HUMAN, card: mkCard({ status: "concluida" }) }).decision.options[0];
+    expect(o.requires).toBeUndefined();
+    expect((o.invoke as { note?: string }).note).toBeTruthy();
     expect(systemDecisionEntry(sd({ undo: undefined, undoable: false }), { boardId: "b1", boardName: "B", config: HUMAN }).decision.options).toEqual([]);
   });
 
@@ -576,14 +605,14 @@ describe("F6 — toda opção com pré-condição avaliável no cliente aparece 
     "discard-branch": { serverStateOnly: "depende do ramo no git do serviço (o item só oferece a forma que a guarda aceita)" },
     "requeue-merge": { serverStateOnly: "depende da entrada e do ramo no serviço" },
     "delete-card": { serverStateOnly: "o card do item existe por construção; a lixeira é do serviço" },
-    "answer-question": { serverStateOnly: "a única recusa é a resposta vazia — a opção espera o texto (requires: answer) antes de habilitar" },
+    "answer-question": { serverStateOnly: "a única recusa é a resposta vazia — a alternativa/sugestão vem no invoke; a resposta livre envia o texto (requires: answer)" },
     "reject-governance": { serverStateOnly: "recusa só a proposta que já foi decidida (estado do disco)" },
     "grant-request": { serverStateOnly: "o pedido vencido sai do Inbox no coletor; sem os argumentos, a opção vem bloqueada (às cegas)" },
     "deny-request": { serverStateOnly: "recusa só o pedido já decidido ou vencido (estado do disco)" },
     "resolve-proxy-audit": { serverStateOnly: "recusa só a amostra já resolvida (estado do disco)" },
-    "resolve-delivery-audit": { serverStateOnly: "reabrir exige o motivo — a opção espera o texto (requires: note)" },
-    "accept-proposal": { serverStateOnly: "recusa a seleção vazia — a opção espera a seleção (requires: selection)" },
-    "refine-proposal": { serverStateOnly: "recusa o comentário vazio — a opção espera o texto (requires: note)" },
+    "resolve-delivery-audit": { serverStateOnly: "reabrir exige o motivo — o invoke traz o motivo padrão (um clique)" },
+    "accept-proposal": { serverStateOnly: "recusa a seleção vazia — o invoke traz todos os itens propostos (um clique)" },
+    "refine-proposal": { serverStateOnly: "recusa o comentário vazio — o invoke traz o ajuste padrão (um clique)" },
     "request-redesign": { serverStateOnly: "sem pedido de mudança aberto a opção vem bloqueada, com o que a libera" },
     "renew-meter": { serverStateOnly: "o desfecho do governador volta como recibo (renovado) ou recusa (segue parado)" },
     "undo-system-decision": { serverStateOnly: "a pré-condição de cada desfazer lê o card FRESCO sob o lock (system-decisions undoRefusal)" },
@@ -592,8 +621,17 @@ describe("F6 — toda opção com pré-condição avaliável no cliente aparece 
     "authorize-publish": { serverStateOnly: "o pedido de autorização mora no livro de causas do servidor; a opção só existe enquanto o plano o pede" },
     "approve-locked-exec": { serverStateOnly: "a recusa é do serviço: pedido já decidido, hash que mudou, ou chamador que não é o dono na sessão dele" },
     "reject-locked-exec": { serverStateOnly: "recusa só o pedido já decidido (estado do serviço)" },
+    "explain-locked-exec": { serverStateOnly: "só explica um pedido JÁ recusado, e recusa o motivo vazio (estado do serviço)" },
     "undo-locked-exec": { serverStateOnly: "o desfazer só é oferecido para o comando que deu certo e tem desfazer; o resto é estado do serviço" },
     "keep-locked-exec": { serverStateOnly: "só é oferecido para o comando que deu certo (estado do serviço)" },
+    "publish-staged": { serverStateOnly: "a máquina de publicação desligada vem no item (canPublish); o resto (board só de organização, sha) é do servidor" },
+    "cancel-publish": { serverStateOnly: "recusa só o pedido que já se resolveu (estado da fila)" },
+    "rerequest-publish": { serverStateOnly: "só a sessão do operador refaz; a medição é do serviço" },
+    "clear-latch": { serverStateOnly: "a trava do arquivo HALT vem bloqueada no item; o resto (quem chama) é do servidor" },
+    "enable-push": { serverStateOnly: "gesto do navegador — a permissão é pedida na tela" },
+    "dismiss-push-offer": { serverStateOnly: "só grava a dispensa da oferta — não há o que recusar" },
+    "stop-conductor": { serverStateOnly: "só a sessão do operador para o condutor; a sessão viva é do serviço" },
+    "return-to-flow": { serverStateOnly: "só a sessão do operador devolve o card; a sessão viva é do serviço" },
     "ack-locked-exec": { serverStateOnly: "só é oferecido para um desfecho final (estado do serviço)" },
     howto: { serverStateOnly: "passo a passo na tela — não chama ação de servidor" },
     link: { serverStateOnly: "navegação — não chama ação de servidor" },
@@ -663,13 +701,14 @@ describe("risco 7 e B1 — o que nunca pode aparecer", () => {
       }
     }
   });
-  it("a exclusão de dados confirma nomeando O QUE é apagado, o alvo e que não tem volta", () => {
+  it("a exclusão de dados diz, no botão e na consequência, O QUE é apagado, o alvo e que não tem volta (um clique)", () => {
     const d = decideItem({ ...FIXTURES["data-deletion"].item, target: "/perfil/salvos", scope: ["dados"] } as CockpitItem, ctx(HUMAN, FIXTURES["data-deletion"].card));
     const o = d.options[0];
     expect(o).toMatchObject({ tone: "danger", auditCls: "destructive" });
-    expect(o.confirm?.body).toContain("Lista de desejos compartilhada");
-    expect(o.confirm?.body).toContain("/perfil/salvos");
-    expect(`${o.confirm?.title} ${o.confirm?.body}`).toMatch(/Não tem volta|não voltam/);
+    expect(o.consequence).toContain("Lista de desejos compartilhada");
+    expect(o.consequence).toContain("/perfil/salvos");
+    expect(o.label).toMatch(/não tem volta/);
+    expect(o.consequence).toMatch(/não voltam/);
   });
 });
 
@@ -761,11 +800,11 @@ describe("o aviso da revisão num card do DONO: corrigir ou aceitar o risco — 
     expect(d.ask).toBe("Corrigir o que a revisão achou em «Lista de desejos compartilhada», ou aceitar o risco?");
     expect(d.options.map((o) => [o.id, o.label, o.tone])).toEqual([
       ["finding:fix", "Mandar corrigir", "primary"],
-      ["finding:acknowledged", "Aceitar o risco", "neutral"],
+      ["finding:acknowledged", "Aceitar o risco, sem consertar", "neutral"],
     ]);
     expect(d.options[0].invoke).toEqual({ kind: "fix-finding", boardId: item.boardId, cardId: item.cardId, findingId: "f2" });
     expect(d.options[1].invoke).toMatchObject({ kind: "update-finding", status: "acknowledged" });
-    expect(d.options[1].confirm?.title).toBe("Aceitar o risco?");
+    expect(d.options[1].consequence).toMatch(/fica sem conserto/);
   });
 
   it("não pede ao dono um fato técnico nem um arquivamento: sem «Já foi resolvido», sem «Registrar como conhecido»", () => {
@@ -806,10 +845,12 @@ describe("a publicação parada por código do DONO: «Autorizar publicar» quan
     expect(d.bucket).toBe("decidir");
     expect(d.options).toHaveLength(1);
     expect(d.options[0]).toMatchObject({ id: "authorize-publish", label: "Autorizar publicar", tone: "primary", auditCls: "deploy", invoke: { kind: "authorize-publish", boardId: item.boardId, causeKey: own.causeKey } });
-    expect(d.options[0].confirm?.body).toMatch(/3 arquivos/);
+    expect(d.happened).toMatch(/3 arquivos/);
     expect(d.ask).toMatch(/^Autorizar a publicação do código de «.+»/);
     expect(d.ask).toMatch(/afeta 2 cards$/);
-    expect(d.details.find((x) => x.label === "O que você autoriza")?.value).toBe("3 arquivos em api, functions");
+    expect(d.details.find((x) => x.label === "O que você autoriza")?.value).toBe("3 arquivos");
+    // o nome técnico das partes publicadas só em Detalhes (07/10: «face:<app>» chegava à pergunta)
+    expect(d.details.find((x) => x.label === "Onde publica (nome técnico)")?.value).toBe("api, functions");
     expect(d.details.find((x) => x.label === "Arquivos")?.value).toBe("pay/a.ts, pay/b.ts, fn/c.ts");
   });
 
@@ -893,16 +934,17 @@ describe("o Inbox da causa no board que publica — cards de outros boards e o p
     expect(decideItem(itemOf(local, "vitrine"), { ...ctx(VITRINE, local, NOW + 31 * 60_000), facts: late }).options[0]?.id).toBe("authorize-publish");
   });
 
-  it("o pedido que o sistema JÁ SABE velho e não pôde refazer sozinho: sem «Autorizar», o caminho para a Esteira — no MESMO item", () => {
+  it("o pedido que o sistema JÁ SABE velho e não pôde refazer sozinho: sem «Autorizar», «Refazer o pedido agora» — no MESMO item", () => {
     const stale = row({ staleApprovals: [request.subject.hash] });
     const facts = inboxFactsOf({ boardId: "vitrine", config: VITRINE, cards: [local, moved], ledger: [stale], boardNames: names, now: NOW });
     expect(facts.deployApprovals.has(own.causeKey)).toBe(false);
     const item = itemOf(local, "vitrine");
     const d = decideItem(item, { ...ctx(VITRINE, local), facts });
-    expect(d.bucket).toBe("acompanhar");
+    // fase 3: a Esteira saiu — a alavanca dela é a opção do próprio item, e ele é Decidir
+    expect(d.bucket).toBe("decidir");
     expect(d.options.some((o) => o.invoke.kind === "authorize-publish")).toBe(false);
-    expect(d.ask).toMatch(/^O pedido de publicação envelheceu/);
-    expect(d.more.find((o) => o.id === "more:open-esteira")?.invoke).toEqual({ kind: "link", href: "/board/vitrine/entrega" });
+    expect(d.ask).toMatch(/^Refazer o pedido de publicação/);
+    expect(d.options.map((o) => o.invoke)).toEqual([{ kind: "rerequest-publish", boardId: "vitrine" }]);
     // o pedido novo chega na mesma linha (o plano relido apaga a marca): o MESMO item volta a «Autorizar»
     const fresh = row({ approvals: [{ ...request, subject: { ...request.subject, hash: `sha256:${"b".repeat(64)}` } }] });
     const again = decideItem(item, { ...ctx(VITRINE, local), facts: inboxFactsOf({ boardId: "vitrine", config: VITRINE, cards: [local, moved], ledger: [fresh], boardNames: names, now: NOW }) });
@@ -950,7 +992,7 @@ describe("triagem — descartar um card com o que depende dele", () => {
 
   it("sem dependentes: o descarte de um card só, como sempre", () => {
     const o = discardOf([]);
-    expect(o).toMatchObject({ label: "Descartar", invoke: { kind: "delete-card", boardId: item.boardId, cardId: item.cardId }, undo: { kind: "restore-card" } });
+    expect(o).toMatchObject({ label: "Descartar (vai para a lixeira)", invoke: { kind: "delete-card", boardId: item.boardId, cardId: item.cardId }, undo: { kind: "restore-card" } });
     expect((o.invoke as { withDependents?: boolean }).withDependents).toBeUndefined();
     expect((o.undo as { group?: boolean }).group).toBeUndefined();
     expect(o.disabled).toBeUndefined();
@@ -961,7 +1003,6 @@ describe("triagem — descartar um card com o que depende dele", () => {
     expect(o.label).toBe("Descartar com os 2 cards que dependem dele");
     expect(o.consequence).toContain("«Agendador de posts», «Tela do agendador»");
     expect(o.consequence).toContain("dá para restaurar todos por 7 dias");
-    expect(o.confirm?.title).toBe("Descartar este item e os 2 cards que dependem dele?");
     expect(o.invoke).toMatchObject({ kind: "delete-card", withDependents: true });
     expect(o.undo).toMatchObject({ kind: "restore-card", group: true });
     expect(o.done).toContain("foram para a lixeira (dá para restaurar todos por 7 dias)");
@@ -971,7 +1012,7 @@ describe("triagem — descartar um card com o que depende dele", () => {
 
   it("um dependente que já produziu trabalho: a opção vem DESABILITADA, com o motivo e o card que segura a um clique", () => {
     const o = discardOf([mkCard({ id: "d1", title: "Agendador de posts", serves: card.id, status: "enriquecer", qaPassed: true })]);
-    expect(o.label).toBe("Descartar");
+    expect(o.label).toBe("Descartar (vai para a lixeira)");
     expect(o.disabled?.reason).toBe("Não dá para descartar junto: «Agendador de posts», que depende deste card, já passou pela verificação. Abra esse card e decida o que fazer com ele; depois descarte este.");
     expect(o.disabled?.unblock).toMatchObject({ label: "Abrir o card que segura" });
     expect(o.disabled?.unblock?.href).toContain("d1");
@@ -979,6 +1020,192 @@ describe("triagem — descartar um card com o que depende dele", () => {
 
   it("sem os fatos do board (o sinal de um card sozinho) o descarte é o de um card — o servidor recusa se houver dependente", () => {
     const d = decideItem(item, ctx(HUMAN, card));
-    expect(d.options.find((o) => o.id === "discard")).toMatchObject({ label: "Descartar", invoke: { kind: "delete-card" } });
+    expect(d.options.find((o) => o.id === "discard")).toMatchObject({ label: "Descartar (vai para a lixeira)", invoke: { kind: "delete-card" } });
+  });
+});
+
+// ── Fase 3 — o Inbox refeito: linguagem simples, um clique, as alavancas da Esteira e os avisos do host ──────────
+
+describe("fase 3 — o texto de TODO kind: o que aconteceu, o que precisa, as opções — curtos e sem termo proibido", () => {
+  const LIMITS = { ask: 140, happened: 420, label: OPTION_LABEL_MAX } as const;
+  it.each(MODES)("modo %s", (_m, config) => {
+    for (const kind of KINDS) {
+      const d = decide(kind, config);
+      expect(formatDecisionText(d.ask, fmt).length, `${kind}: «${d.ask}»`).toBeLessThanOrEqual(LIMITS.ask);
+      expect(formatDecisionText(d.happened, fmt).length, `${kind}: «${d.happened}»`).toBeLessThanOrEqual(LIMITS.happened);
+      for (const o of d.options) expect(o.label.length, `${kind}/${o.id}: «${o.label}»`).toBeLessThanOrEqual(LIMITS.label);
+      for (const text of [d.ask, d.happened, ...d.options.map((o) => o.label)]) {
+        expect(itemTermsIn(formatDecisionText(text, fmt)).map((t) => t.id), `${kind}: «${text}»`).toEqual([]);
+      }
+    }
+  });
+});
+
+describe("fase 3 — UM clique: nenhuma opção pede diálogo nem formulário antes do botão", () => {
+  const all = (config: BoardConfig) => KINDS.flatMap((k) => decide(k, config).options.map((o) => ({ k, o })));
+  it.each(MODES)("modo %s: sem confirmação, e só a resposta livre/escolha múltipla leem o corpo do item", (_m, config) => {
+    for (const { k, o } of all(config)) {
+      expect(o, `${k}/${o.id}`).not.toHaveProperty("confirm");
+      if (o.requires) expect(o.invoke.kind, `${k}/${o.id}`).toBe("answer-question");
+    }
+  });
+  it("o que pedia um texto roda com o texto PADRÃO, e o recibo oferece «Adicionar um motivo» quando o servidor aceita um depois", () => {
+    const refine = decide("proposal").options.find((o) => o.id === "refine-proposal")!;
+    expect(refine.invoke).toMatchObject({ kind: "refine-proposal", note: REFINE_DEFAULT_NOTE });
+    expect(refine.addNote).toMatchObject({ label: "Adicionar um motivo", invoke: { kind: "refine-proposal" } });
+    expect((refine.addNote!.invoke as { note?: string }).note).toBeUndefined();
+    const reject = decide("locked-exec").options.find((o) => o.id === "reject")!;
+    expect((reject.invoke as { note?: string }).note?.trim()).toBeTruthy();
+    // «Não rodar» também: o motivo da pessoa vai DEPOIS, e explica a recusa sem mudar a decisão
+    expect(reject.addNote).toMatchObject({ label: "Adicionar um motivo", invoke: { kind: "explain-locked-exec" } });
+  });
+  it("aceitar a proposta cria TODOS os itens no clique (a seleção do corpo, quando houver, vem no payload)", () => {
+    const accept = decide("proposal").options.find((o) => o.id === "accept-proposal")!;
+    expect(accept.requires).toBeUndefined();
+    expect((accept.invoke as { items?: unknown[] }).items).toEqual((FIXTURES.proposal.item as { items: unknown[] }).items);
+    expect(accept.label).toBe("Criar o card");
+  });
+  it("o que não tem volta diz isso no RÓTULO; o reversível traz o desfazer", () => {
+    expect(decide("data-deletion").options[0].label).toBe("Apagar os dados — não tem volta");
+    expect(decide("merge-failed").options.find((o) => o.id === "discard-work")!.label).toMatch(/não tem volta/);
+    const discard = decide("review").options.find((o) => o.id === "discard")!;
+    expect(discard.label).toMatch(/lixeira/);
+    expect(discard.undo).toMatchObject({ kind: "restore-card" });
+  });
+});
+
+describe("fase 3 — a pergunta do agente: cada alternativa é um botão", () => {
+  const q = FIXTURES.question.item as Extract<CockpitItem, { kind: "question" }>;
+  const ask = (over: Partial<typeof q>) => decideItem({ ...q, ...over } as CockpitItem, ctx(HUMAN, FIXTURES.question.card));
+  it("escolha única: um botão por alternativa (a recomendada é a principal) e a resposta livre à mão", () => {
+    const d = ask({ options: [{ id: "o1", label: "Ignorar acentos", recommended: true, pros: ["acha mais livros"] }, { id: "o2", label: "Exigir a grafia exata" }], mode: "single" });
+    expect(d.options.map((o) => [o.label, o.tone, o.requires ?? null])).toEqual([
+      ["Ignorar acentos", "primary", null],
+      ["Exigir a grafia exata", "neutral", null],
+      ["Responder com as suas palavras", "neutral", "answer"],
+    ]);
+    expect(d.options[0].invoke).toEqual({ kind: "answer-question", boardId: "b1", cardId: "c1", questionId: "q1", selectedOptionIds: ["o1"] });
+    expect(d.options[0].consequence).toMatch(/A favor: acha mais livros/);
+  });
+  it("aberta com sugestão: «Usar a sugestão» responde com ela num clique", () => {
+    const d = ask({ options: [], recommendation: "Mostrar os mais vendidos primeiro" });
+    expect(d.options[0]).toMatchObject({ label: "Usar a sugestão: Mostrar os mais vendidos primeiro", tone: "primary", invoke: { kind: "answer-question", answer: "Mostrar os mais vendidos primeiro" } });
+    expect(d.options[1]).toMatchObject({ label: "Responder", requires: "answer", tone: "neutral" });
+  });
+  // revisão da fase 3: o ask_question aceitava rótulos de 80 e o botão cortava em 60 — um rótulo válido chegava cortado
+  it("o teto do rótulo que o ask_question aceita É o do botão; a sugestão longa não é cortada no meio", () => {
+    expect(ASK_FORMAT.optionLabelMax).toBe(OPTION_LABEL_MAX);
+    const label = "Mostrar os mais vendidos e depois os lançamentos da semana".slice(0, OPTION_LABEL_MAX);
+    expect(ask({ options: [{ id: "o1", label, recommended: true }, { id: "o2", label: "Não" }], mode: "single" }).options[0].label).toBe(label);
+    const rec = "Mostrar primeiro os mais vendidos da semana, depois os lançamentos e por último os clássicos da casa";
+    const d = ask({ options: [], recommendation: rec });
+    expect(d.options[0].label).toBe("Usar a sugestão");
+    expect(d.options[0].consequence).toContain(rec);
+  });
+  it("sem alternativa recomendada, nenhuma alternativa do agente é a principal (a resposta livre é)", () => {
+    const d = ask({ options: [{ id: "o1", label: "Ignorar acentos" }, { id: "o2", label: "Exigir a grafia exata" }], mode: "single" });
+    const main = primaryOption(d);
+    expect(main?.invoke.kind === "answer-question" && main.invoke.selectedOptionIds).toBeFalsy();
+    expect(main?.requires).toBe("answer");
+  });
+  it("múltipla escolha: marca no corpo e envia", () => {
+    const d = ask({ options: [{ id: "o1", label: "Capa" }, { id: "o2", label: "Sinopse" }], mode: "multi" });
+    expect(d.options[0]).toMatchObject({ requires: "selection", tone: "primary" });
+  });
+  it("o contexto do agente é o «o que aconteceu»; o inteiro vai para Detalhes quando passa do teto", () => {
+    expect(ask({ context: "A busca do catálogo já acha livros pelo título." }).happened).toBe("A busca do catálogo já acha livros pelo título.");
+    const long = "A busca do catálogo já acha livros pelo título e pelo autor. ".repeat(8);
+    const d = ask({ context: long });
+    expect(d.happened.length).toBeLessThanOrEqual(HAPPENED_MAX);
+    expect(d.details.find((x) => x.label === "Contexto inteiro")?.value).toBe(long);
+  });
+});
+
+describe("fase 3 — as alavancas da Esteira no Inbox", () => {
+  it("pedido segurado e BLOQUEADO: Decidir, «Publicar mesmo assim» (por cima da guarda) e «Cancelar o pedido», com o motivo em Detalhes", () => {
+    for (const [mode, config] of MODES) {
+      const d = decide("publish-held", config);
+      expect(d.bucket, mode).toBe("decidir");
+      expect(d.options.map((o) => [o.label, o.invoke])).toEqual([
+        ["Publicar mesmo assim", { kind: "publish-staged", boardId: "b1", override: true }],
+        ["Cancelar o pedido", { kind: "cancel-publish", boardId: "b1", requestId: "pub-ex9001" }],
+      ]);
+      expect(d.details.find((x) => x.label === "Motivo")?.value).toMatch(/trabalho vivo nos mesmos arquivos/);
+    }
+  });
+  it("pedido segurado que ainda espera (sem bloqueio): Acompanhar — o sistema tenta de novo —, com as alavancas à mão", () => {
+    const d = decideItem({ ...FIXTURES["publish-held"].item, blocked: false } as CockpitItem, ctx(HUMAN, FIXTURES["publish-held"].card));
+    expect(d.bucket).toBe("acompanhar");
+    expect(d.next.who).toBe("sistema");
+    expect(d.options).toHaveLength(2);
+  });
+  it("entregas paradas num board manual: «Publicar as N entregas»; com a publicação desligada, o botão diz por quê", () => {
+    const d = decide("stage-idle");
+    expect(d.bucket).toBe("decidir");
+    expect(d.ask).toBe("Publicar as 3 entregas que esperam há 30 horas?");
+    expect(d.options[0]).toMatchObject({ label: "Publicar as 3 entregas", invoke: { kind: "publish-staged", boardId: "b1" } });
+    const off = decideItem({ ...FIXTURES["stage-idle"].item, canPublish: false } as CockpitItem, ctx(HUMAN, FIXTURES["stage-idle"].card));
+    expect(off.options[0].disabled?.reason).toMatch(/desligada/);
+  });
+  it("o pedido de autorização envelhecido: «Refazer o pedido agora», daqui — nenhum link para a Esteira", () => {
+    const d = decideItem({ ...FIXTURES["publish-approval"].item, approvals: [], stale: true } as CockpitItem, ctx(HUMAN, FIXTURES["publish-approval"].card));
+    expect(d.bucket).toBe("decidir");
+    expect(d.options.map((o) => [o.label, o.invoke])).toEqual([["Refazer o pedido agora", { kind: "rerequest-publish", boardId: "b1" }]]);
+    for (const kind of KINDS) for (const o of [...decide(kind).options, ...decide(kind).more]) expect(JSON.stringify(o.invoke), kind).not.toMatch(/\/entrega/);
+  });
+});
+
+describe("fase 3 — os avisos do host: uma faixa, com a ação que destrava", () => {
+  it("a trava da cota: faixa com «Soltar a trava»; a do arquivo HALT vem bloqueada com o porquê", () => {
+    const d = decide("capacity-latch");
+    expect(d.banner).toBe(true);
+    expect(d.options[0]).toMatchObject({ label: "Soltar a trava", invoke: { kind: "clear-latch" } });
+    const halt = decideItem({ ...FIXTURES["capacity-latch"].item, halt: true } as CockpitItem, ctx(HUMAN, FIXTURES["capacity-latch"].card));
+    expect(halt.options[0].disabled?.reason).toMatch(/arquivo no servidor/);
+  });
+  it("a saúde vermelha: faixa que nomeia os sinais; o aviso no celular: faixa com «Ativar o aviso no celular»", () => {
+    expect(decide("host-health")).toMatchObject({ banner: true, ask: "A ferramenta não está bem: Cards parados" });
+    // quick-fix health-red: a faixa só diz o que aconteceu — nunca «abri um card de conserto» sem card
+    const base = FIXTURES["host-health"];
+    const happened = (signals: unknown[]) => decideItem({ ...base.item, signals } as CockpitItem, ctx(HUMAN, base.card)).happened;
+    const sig = { id: "S6", label: "Vazão até o ar", detail: "3 cards" };
+    expect(decide("host-health").happened).not.toMatch(/virou um card|está no card/);
+    expect(decide("host-health").happened).toMatch(/Ainda não foi aberto card de conserto/);
+    const skipped = happened([{ ...sig, noCard: "board só de organização — nada roda sozinho" }]);
+    expect(skipped).toMatch(/Nenhum card de conserto foi aberto: board só de organização/);
+    expect(skipped).not.toMatch(/está no card|virou um card/);
+    expect(happened([{ ...sig, card: "story-ex9202" }])).toMatch(/O conserto está no card story-ex9202/);
+    expect(decide("push-off").options[0]).toMatchObject({ label: "Ativar o aviso no celular", invoke: { kind: "enable-push" } });
+    expect(decide("push-off").banner).toBe(true);
+    // a faixa não é lembrete eterno: «Agora não» grava a dispensa (um clique)
+    expect(decide("push-off").options[1]).toMatchObject({ label: "Agora não", invoke: { kind: "dismiss-push-offer" } });
+  });
+  it("as faixas do host não contam no Decidir (o número da barra)", () => {
+    const entries = itemEntries(
+      (["capacity-latch", "host-health", "push-off"] as const).map((k) => FIXTURES[k].item),
+      { boardId: "b1", boardName: "Board", config: HUMAN, cardsById: new Map(), now: NOW },
+    );
+    expect(inboxSections(entries).banners).toHaveLength(3);
+    expect(inboxSummary(entries).decidir).toBe(0);
+  });
+});
+
+describe("07/10 — o que o dono lê, sem nome técnico", () => {
+  it("a autorização de publicação não diz o nome técnico da parte publicada; ele fica em Detalhes", () => {
+    const d = decide("publish-approval");
+    expect(d.ask).not.toMatch(/face:/);
+    expect(d.happened).not.toMatch(/face:/);
+    expect(d.details.map((x) => x.label)).not.toContain("Pacote");
+    expect(d.details.find((x) => x.label === "Onde publica (nome técnico)")?.value).toBe("face:loja");
+  });
+  it("a faixa da Sentinela diz a causa de configuração em palavras, mesmo com o diagnóstico técnico já gravado", () => {
+    const base = FIXTURES.sentinel.item as Extract<CockpitItem, { kind: "sentinel" }>;
+    const item = { ...base, causeKey: "stale-conductor-skill:__host__:config", diagnosis: "A skill harness-conductor do alvo é a versão monolítica antiga (sem a pasta ref/)." };
+    const d = decideItem(item, ctx(HUMAN, FIXTURES.sentinel.card));
+    expect(d.ask).toMatch(/^A Sentinela não resolveu: as instruções do condutor/);
+    expect(itemTermsIn(d.ask)).toEqual([]);
+    expect(d.details.find((x) => x.label === "Diagnóstico")?.value).toMatch(/harness-conductor/);
+    // outra causa: o diagnóstico da sessão, como antes
+    expect(decide("sentinel").ask).toMatch(/A execução do card parou/);
   });
 });

@@ -4,13 +4,13 @@
 // cruza os SKILL.md, nunca as descrições nem as refs dos cards). Rodam contra o board storymap REAL.
 
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import yaml from "js-yaml";
 import { describe, expect, it } from "vitest";
 import { DEPLOY_STEP_ID, deployStepAutorun, releaseModeOf } from "./release-policy";
 import { listBoards, readBoardConfig, readCards, coerceOrchestrator } from "./repo";
-import { findRepoRoot } from "./paths";
+import { cardsDir, findRepoRoot } from "./paths";
 import { lintToolkit } from "./toolkit";
 import { lintRiskMatrix } from "./runner/orchestrator-policy";
 import { servesTarget, isDeliveryStory, isPlacementDebt } from "./unplaced";
@@ -18,7 +18,6 @@ import { terminalStatusIds, stagingStatusIds } from "./views";
 import { REOPEN_KINDS } from "./reopen";
 import { GATE_IDS } from "./types";
 import { validateBoardLinks } from "./link-graph";
-import { wsjfRatio, wsjfTier } from "./wsjf";
 import { navItemForView, type BoardView } from "@/components/nav/nav-groups";
 import { subjectBoards } from "./board-fixture";
 
@@ -114,31 +113,33 @@ describe("board integrity — refs dos cards apontam para ids existentes", () =>
   });
 });
 
-describe("board integrity — a prioridade em disco é internamente coerente", () => {
-  // `priorityCall.rank` é DERIVADO dos ordinais WSJF mas GRAVADO, porque gate-core.js (isomórfico,
-  // lê YAML cru) e suggest-work.ts o consomem sem poder calcular uma razão. Cache derivado que
-  // diverge da fonte é o pior dos dois mundos — a UI mostra um tier e o gate/autorun lê outro.
-  // Esta lint roda contra TODOS os boards reais.
-  it("todo rank gravado é exatamente o tier derivado dos ordinais WSJF", async () => {
-    const boards = await listBoards();
-    const drift: string[] = [];
-    for (const b of boards) {
-      for (const c of await readCards(b.id)) {
-        const pc = c.priorityCall;
-        if (!pc?.wsjf) continue; // call legado (só rank) é válido e não tem o que conferir
-        const esperado = wsjfTier(wsjfRatio(pc.wsjf));
-        if (esperado !== pc.rank) {
-          drift.push(`${b.id}/${c.id}: rank=${pc.rank} mas os ordinais dão ${esperado}`);
-        }
+describe("board integrity — a ordem do trabalho é a posição na coluna, não uma nota", () => {
+  // A priorização (RICE/KANO/funil/WSJF, o passo Estimar e o `priorityCall`) saiu da ferramenta: quem diz o que vem
+  // antes é a posição do card na coluna («Fazer antes» / «Pode esperar» gravam `order`). Card antigo com essas chaves
+  // continua LEGÍVEL (frontmatter desconhecido é tolerado), mas os boards que viajam com a ferramenta não podem ensinar
+  // o modelo velho — nem parar um card num passo que não existe mais.
+  it("nenhum card dos boards canônicos grava priorização nem está no passo Estimar", async () => {
+    const PRIORITY_KEYS = /^(priorityCall|rice|kano|funnelStage|wsjf|valueSize):/m;
+    const bad: string[] = [];
+    for (const BOARD of BOARDS) {
+      const dir = cardsDir(BOARD);
+      if (!existsSync(dir)) continue;
+      for (const f of (await readdir(dir)).filter((n) => n.endsWith(".md"))) {
+        const raw = await readFile(path.join(dir, f), "utf8");
+        const fm = raw.split(/^---$/m)[1] ?? "";
+        if (PRIORITY_KEYS.test(fm)) bad.push(`${BOARD}/${f}: grava uma chave de priorização`);
+        if (/^status:\s*priorizar\s*$/m.test(fm)) bad.push(`${BOARD}/${f}: parado no passo Estimar (priorizar), que não existe mais`);
       }
     }
-    expect(drift, `rank divergente dos ordinais:\n${drift.join("\n")}`).toEqual([]);
+    expect(bad).toEqual([]);
   });
+});
 
+describe("board integrity — passos", () => {
   it("todo status `delivered` também é `terminal` (subconjunto ESTRITO)", async () => {
     // Entregue é um jeito de TERMINAR. Um step marcado delivered sem terminal significaria "está no
     // ar e ainda anda no pipeline" — e faria o card aparecer ao mesmo tempo como capacidade viva e
-    // como trabalho a priorizar.
+    // como trabalho a fazer.
     const boards = await listBoards();
     const ruins: string[] = [];
     for (const b of boards) {
@@ -223,7 +224,7 @@ describe("board integrity — config do board.yaml é internamente consistente",
   // Mais forte que o lint acima (que só exige que o rótulo EXISTA): a descrição de um step que navega
   // "para <Step>" deve apontar para o PRÓXIMO step do pipeline (statuses[i+1], o happy-path da user
   // story). Pega o drift de ORDEM que o lint de existência não vê — ex.: enriquecer dizia "move para
-  // Estimar" sendo que o próximo é Entrevista (um step interposto entre eles). Só valida refs que SÃO
+  // Plano" sendo que o próximo é Entrevista (um step interposto entre eles). Só valida refs que SÃO
   // nome de step (refs de stage/coluna ficam com o lint de existência). Refs "para X (..." não são
   // capturados pela NAV (o "(" corta), então a frase board-aware do interview/design-ui não é cobrada.
   it("as descrições navegam para o PRÓXIMO step real (pega drift de ORDEM, não só de nome)", async () => {
@@ -264,7 +265,6 @@ describe("board integrity — config do board.yaml é internamente consistente",
       hasCriteriaSpecs:
         "composto — hasBuildEvidence (C2/ex0107) o delega e guarda revisar-codigo; predicado mantido como peça própria (parity/tests) e para steps futuros",
       hasAcceptance: "legado — superado por hasRefinement (narrativa + aceite); predicado mantido, sem step",
-      hasRice: "legado — superado por hasPrioritization (type-aware); predicado mantido, sem step",
       hasStaged:
         "Fase 4b — reservado p/ o step stage/Homologar; não cabeado pois `!!stagedAt` (sem variante vacuous-ok) travaria um card board-only",
       hasReleased:
@@ -519,11 +519,13 @@ describe("board integrity — porta da coluna para a ferramenta (columns[].tool)
     expect(offenders).toEqual([]);
   });
 
-  it("a pipeline canônica declara ao menos UMA porta (o campo tem produtor, não só schema)", async () => {
+  it("a pipeline canônica NÃO declara porta nenhuma (fase 2: o cabeçalho da raia não leva mais a uma ferramenta)", async () => {
+    // As duas portas eram a bancada de Ideias (Triagem) e a Esteira (Entrega). A bancada foi apagada e a Esteira
+    // saiu da navegação; o Kanban da fase 1 já não desenha a porta. Uma porta que voltasse ao _base apontaria
+    // para uma tela que não está mais no menu — e o primeiro teste acima a recusaria só se ela sumisse do
+    // registro, não se só saísse da navegação.
     const cfg = await readBoardConfig(BOARDS[0]);
-    const withTool = (cfg?.columns ?? []).filter((c) => c.tool);
-    // Sem esta asserção, apagar o `tool:` do _base deixaria o campo vivo no tipo, no Zod e no coerce —
-    // e nenhum teste notaria que a porta sumiu da tela.
-    expect(withTool.length).toBeGreaterThan(0);
+    const withTool = (cfg?.columns ?? []).filter((c) => c.tool).map((c) => `${c.id} → ${c.tool}`);
+    expect(withTool).toEqual([]);
   });
 });

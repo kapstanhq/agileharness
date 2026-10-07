@@ -38,6 +38,8 @@ import { OptionChips } from "@/components/hitl/OptionChips";
 import { AskChoices } from "@/components/hitl/AskChoices";
 import { SlashMenu } from "@/components/hitl/SlashMenu";
 import { Markdown } from "@/components/Markdown";
+import { useCardLinks } from "@/components/chat/card-links";
+import { groupSegments, stepsLabel, stepsStatus } from "@/components/chat/step-groups";
 import {
   BTN_GHOST,
   BTN_ICON,
@@ -67,6 +69,16 @@ import type {
 
 /** req 4 — a que distância do fim (px) ainda contamos o operador como "ancorado no fim" (segue o streaming). */
 const NEAR_BOTTOM_PX = 80;
+
+// A FORMA `jido` (a conversa do compositor do Jido, desenho da fase 1): a bolha da pessoa, a prosa do agente e os
+// botões de resposta rápida, com as medidas do desenho.
+const JIDO_HUMAN_BUBBLE =
+  "inline-block max-w-[78%] whitespace-pre-wrap rounded-[14px_14px_4px_14px] bg-surface-hover px-3.5 py-2.5 text-[14px] leading-[1.5] text-fg-strong";
+const JIDO_PROSE =
+  "[&_p]:text-[14px] [&_p]:leading-[1.6] [&_ul]:text-[14px] [&_ol]:text-[14px] [&_li]:leading-[1.6]";
+// (no celular o botão ganha os 40px de alvo de toque; o desenho de 30px é o do computador)
+const JIDO_ACTION_BTN =
+  "inline-flex h-10 max-w-full items-center rounded-lg border border-line bg-surface px-3 text-[13px] font-semibold text-fg transition hover:bg-surface-soft disabled:cursor-not-allowed disabled:opacity-50 md:h-[30px]";
 
 /** Rótulo curto de uma tool p/ o chip: mcp__storymap__get_card → "get_card", Bash → "bash". Pura. */
 function toolLabel(tool: string): string {
@@ -176,6 +188,45 @@ function CopilotToolStep({ seg }: { seg: Extract<HitlSegment, { type: "tool" }> 
 }
 
 /**
+ * Os passos técnicos SEGUIDOS de uma resposta do Jido, recolhidos numa linha discreta (chat/step-groups.ts). Abre a
+ * lista de sempre (cada passo expansível com entrada/saída). Um passo que abre terminal continua a um toque, dentro.
+ */
+function CollapsedSteps({ steps }: { steps: Extract<HitlSegment, { type: "tool" }>[] }) {
+  const [open, setOpen] = useState(false);
+  const status = stepsStatus(steps);
+  const icon =
+    status === "running" ? (
+      <Loader2 className={cn(ICON.inline, "animate-spin text-accent")} aria-hidden />
+    ) : status === "error" ? (
+      <X className={cn(ICON.inline, "text-rose-500")} aria-hidden />
+    ) : (
+      <Check className={cn(ICON.inline, "text-emerald-500")} aria-hidden />
+    );
+  return (
+    <div className="w-full max-w-[92%]">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className={cn(CHIP, "max-w-full transition hover:bg-fg/[0.09] hover:text-fg")}
+        title={open ? "Esconder os passos técnicos" : "Ver os passos técnicos desta resposta"}
+      >
+        {icon}
+        <span className="truncate">{stepsLabel(steps)}</span>
+        <ChevronRight className={cn(ICON.inline, "transition", open && "rotate-90")} aria-hidden />
+      </button>
+      {open && (
+        <div className="mt-1.5 flex flex-col items-start gap-1.5 border-l border-line pl-2.5">
+          {steps.map((s) => (
+            <CopilotToolStep key={s.segId} seg={s} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * O CORPO de uma resposta do agente — os segmentos INLINE na ordem exata (texto e tools intercalados).
  *
  * `flow` decide a FORMA do texto: largura cheia sem bolha (o painel do Jido — ver FLOW_PROSE) ou a bolha
@@ -194,21 +245,39 @@ function CopilotToolStep({ seg }: { seg: Extract<HitlSegment, { type: "tool" }> 
 function AgentSegments({
   segments,
   flow,
+  jido = false,
   cursor,
 }: {
   segments: HitlSegment[];
   flow: boolean;
+  /** a forma da conversa do compositor do Jido (ver `look`). */
+  jido?: boolean;
   /** presente ⇒ o turno está VIVO: o mascote entra abaixo do texto (se o texto for a última coisa). */
   cursor?: ReactNode;
 }) {
   const last = segments[segments.length - 1];
+  // A conversa do Jido (fase 6) RECOLHE o técnico: os passos seguidos viram uma linha «ver detalhes · N passos».
+  if (jido) {
+    return (
+      <div className="flex w-full flex-col items-start gap-1.5">
+        {groupSegments(segments).map((it) =>
+          it.kind === "steps" ? (
+            <CollapsedSteps key={it.key} steps={it.steps} />
+          ) : (
+            <AgentProse key={it.seg.segId} text={it.seg.text} flow={flow} jido />
+          ),
+        )}
+        {cursor && last?.type === "text" && cursor}
+      </div>
+    );
+  }
   return (
     <div className="flex w-full flex-col items-start gap-1.5">
       {segments.map((s) =>
         s.type === "tool" ? (
           <CopilotToolStep key={s.segId} seg={s} />
         ) : s.text.trim() ? (
-          <AgentProse key={s.segId} text={s.text} flow={flow} />
+          <AgentProse key={s.segId} text={s.text} flow={flow} jido={jido} />
         ) : null,
       )}
       {cursor && last?.type === "text" && cursor}
@@ -217,11 +286,13 @@ function AgentSegments({
 }
 
 /** UM bloco de prosa do agente — a única definição de "como o texto do agente é pintado". */
-function AgentProse({ text, flow }: { text: string; flow: boolean }) {
+function AgentProse({ text, flow, jido = false }: { text: string; flow: boolean; jido?: boolean }) {
   // Bolha de chat = superfície DENSA: variante `compact` (a `doc`, default, é a escala de leitura do
   // documento — 15.5px e headings de 26px não cabem num painel de 492px).
-  const md = <Markdown variant="compact">{text}</Markdown>;
-  if (flow) return <div className={FLOW_PROSE}>{md}</div>;
+  // os ids de card que o agente escreve viram o título do card (link), só na tela — chat/card-links
+  const linkify = useCardLinks();
+  const md = <Markdown variant="compact">{linkify ? linkify(text) : text}</Markdown>;
+  if (flow) return <div className={cn(FLOW_PROSE, jido && JIDO_PROSE)}>{md}</div>;
   return (
     <span className={cn(BUBBLE, "rounded-bl-md bg-inset")}>
       <div
@@ -349,6 +420,7 @@ export function HitlConversation({
   systemWorking,
   queueWhileBusy = false,
   scrollKey,
+  look = "default",
 }: {
   turns: HitlTurn[];
   status: "idle" | "typing" | "error";
@@ -426,6 +498,12 @@ export function HitlConversation({
    *  Jido) cresce no fim do transcript sem passar por `turns` — sem isto, a bolha recém-enfileirada nascia logo
    *  abaixo da dobra. Este componente não sabe (nem precisa saber) o que o token significa. */
   scrollKey?: string | number;
+  /**
+   * A FORMA das falas. `jido` = a conversa do compositor do Jido (fase 1): a bolha da pessoa no cinza do desenho
+   * (raio 14 14 4 14, 14px/1.5, até 78%), a prosa do agente em 14px/1.6 e as respostas rápidas como botões de borda
+   * de 30px. Default `default` — os outros consumidores não mudam.
+   */
+  look?: "default" | "jido";
 }) {
   const [text, setText] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set());
@@ -481,6 +559,7 @@ export function HitlConversation({
   /** o composer está BLOQUEADO? Com fila, um turno em voo não bloqueia mais nada — só enfileira. */
   const composerLocked = busy && !queueWhileBusy;
   const full = layout === "full";
+  const jido = look === "jido";
 
   // A ESCOLHA VIVA é a do ÚLTIMO turno do agente — e só dele. Uma pergunta de três turnos atrás já foi
   // respondida (ou abandonada); deixá-la clicável seria oferecer um botão que responde a outra conversa.
@@ -695,6 +774,9 @@ export function HitlConversation({
         onSubmit={submit}
         disabled={composerLocked}
         className="pt-0.5"
+        suggestionClassName={jido ? JIDO_ACTION_BTN : undefined}
+        // as AÇÕES do Jido (o menu do greeting, "Ver o erro") também são botões de borda em linha, como no desenho
+        inlineOptionClassName={jido ? JIDO_ACTION_BTN : undefined}
       />
     ) : null;
 
@@ -717,11 +799,10 @@ export function HitlConversation({
           onScroll={handleScroll}
           className={cn(
             "min-h-0 flex-1 overflow-y-auto",
-            // `chat-scroll` (e não `board-scroll`) SÓ no painel: mesma barra de rolagem, sem a reserva de
-            // nav inferior que as áreas de rolagem da PÁGINA têm no celular (ver globals.css) — aqui
-            // embaixo do transcript não há nav nenhuma, há o composer. O `compact` (os popovers HITL)
-            // segue no `board-scroll` de sempre: o layout dele é preservado byte-a-byte de propósito, e
-            // trocar a classe lá mudaria um respiro que ninguém pediu para mudar.
+            // `chat-scroll` (e não `board-scroll`) SÓ no painel: a mesma barra de rolagem, com o nome do
+            // painel de conversa (embaixo do transcript há o composer). O `compact` (os popovers HITL)
+            // segue no `board-scroll` de sempre. (A reserva de nav inferior que o `board-scroll` tinha no
+            // celular saiu com a nav, na fase 1 — ver globals.css.)
             full ? "chat-scroll" : "board-scroll",
             // `flex flex-col` só para o `mt-auto` do miolo poder empurrar (ver o wrapper abaixo). O
             // espaçamento entre turnos saiu daqui para o wrapper — `space-y` só vale para filhos diretos.
@@ -767,12 +848,7 @@ export function HitlConversation({
                     </span>
                   )}
                   {(t.text || !t.images?.length) && (
-                    <span
-                      className={cn(
-                        BUBBLE,
-                        "rounded-br-md bg-accent/10",
-                      )}
-                    >
+                    <span className={jido ? JIDO_HUMAN_BUBBLE : cn(BUBBLE, "rounded-br-md bg-accent/10")}>
                       {t.text || "(imagem)"}
                     </span>
                   )}
@@ -794,13 +870,13 @@ export function HitlConversation({
             return (
               <div key={i} className={cn("flex flex-col items-start gap-1.5", live && "jido-stream")}>
                 {view.segments ? (
-                  <AgentSegments segments={view.segments} flow={full} cursor={live ? streamCursor : undefined} />
+                  <AgentSegments segments={view.segments} flow={full} jido={jido} cursor={live ? streamCursor : undefined} />
                 ) : (
                   <>
                     {t.activity && t.activity.length > 0 && <ActivityChips activity={t.activity} />}
                     {view.message.trim().length > 0 && (
                       // 2.4 — turnos do AGENTE renderizam markdown. Sem rehype-raw → 0 XSS.
-                      <AgentProse text={view.message} flow={full} />
+                      <AgentProse text={view.message} flow={full} jido={jido} />
                     )}
                     {live && streamCursor}
                   </>

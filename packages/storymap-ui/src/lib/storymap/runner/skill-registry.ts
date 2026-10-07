@@ -20,7 +20,7 @@ export interface AgentDef {
    * Quando true, o engine trata uma saída LIMPA (exit 0) que NÃO avançou o card como um "sucesso-
    * fantasma" (no-op): a skill alegou sucesso sem fazer nada → o card encalha (sem falha visível +
    * o dedupe do autorun bloqueia o re-disparo). É o espelho do guard falha-fantasma. Só true para as
-   * skills de dados que avançam INCONDICIONALMENTE no sucesso (enrich/prioritize/plan/tasks);
+   * skills de dados que avançam INCONDICIONALMENTE no sucesso (enrich/plan/tasks);
    * false para HITL (grill), código com avanço condicional (do/review/qa — encalham legítimo em
    * blocker/red) e skills cujo avanço depende do board/estado (ux/ui/interview/refine/fix/retire/sync).
    */
@@ -100,11 +100,10 @@ export const BOARD_DATA_SKILL_INVARIANTS =
  */
 export const AGENTS: Record<TriggerId, AgentDef> = {
   "harness-capture": { isCode: false, fullAutonomy: true, advancesOnSuccess: false }, // HITL: gera a proposta no sidecar proposals/<id>.json e PARA em capturando (lane oculta) — o humano aceita no Inbox (NÃO avança)
-  "harness-enrich": { isCode: false, fullAutonomy: true, advancesOnSuccess: true }, // fast, renomeia o card .md via Bash; sempre → priorizar
+  "harness-enrich": { isCode: false, fullAutonomy: true, advancesOnSuccess: true }, // fast, renomeia o card .md via Bash; avança ao próximo passo do pipeline (Entrevista, ou A fazer)
   "harness-grill": { isCode: false, fullAutonomy: false, advancesOnSuccess: false }, // só escreve perguntas, human-in-the-loop (NÃO avança)
   "harness-interview": { isCode: false, fullAutonomy: true, advancesOnSuccess: false }, // avança via advance-card, mas HITL/multi-turno → não força
   "harness-tasks": { isCode: false, fullAutonomy: false, advancesOnSuccess: true }, // só boards de produto (2-step pré-Fase-5); na pipeline canônica o harness-plan decompõe → quebrar-tasks removido
-  "harness-prioritize": { isCode: false, fullAutonomy: false, advancesOnSuccess: true }, // sempre → pronta
   "harness-plan": { isCode: false, fullAutonomy: false, advancesOnSuccess: true }, // plano (+ tasks na canônica); board-aware → desenvolver | quebrar-tasks
   "harness-ux": { isCode: false, fullAutonomy: true, advancesOnSuccess: false }, // avança só em coluna autorun; escreve wireframes mesmo sem avançar
   "harness-ui": { isCode: false, fullAutonomy: true, advancesOnSuccess: false }, // idem ux
@@ -256,17 +255,30 @@ export const SPAWN_SURFACES: Record<string, SpawnSurfaceDef> = {
     module: "lib/storymap/copilot/protocol.ts",
     tier: "full",
     declaration: "explicit",
-    // story-ex0091 — a declaração desconfortável, e é ela que tem valor: o chat NEGA Write/Edit/NotebookEdit
-    // (CHAT_DENIED_TOOLS) mas MANTÉM Bash por decisão do Operador (poder de diagnóstico). Com shell na mão o
-    // tier é `full` — a garantia do estado Chat é sobre o BOARD (token MCP `ro`), não sobre o repositório,
-    // porque `sed`/`git commit` seguem alcançáveis. Rotular isto `write` seria a etiqueta mentindo.
-    note: "chat do Jido: skip-permissions com Write/Edit negadas, mas Bash presente ⇒ o tier é o topo (o deny-list não é fronteira de tier)",
+    // Fase 6 (decisão do dono) — o chat do board é a CENTRAL DE COMANDO: MCP inteiro + Bash/Edit/Write em QUALQUER modo
+    // do board, por uma LISTA DO PERMITIDO (`--tools`, copilot/chat-powers.ts). O tier é o topo, sem eufemismo; o que o
+    // contém é a trava dura do host (o hook casa com Bash — nenhuma outra tool de shell entra na lista), o registro de
+    // cada ação (copilot/chat-audit.ts) e a régua de confirmação da persona. As conversas de TELA seguem só leitura.
+    note: "chat do Jido: lista branca de tools nativas com Bash/Edit/Write e MCP total, sob a trava dura do host e com registro ⇒ o tier é o topo",
   },
-  copilotTick: {
-    module: "lib/storymap/runner/orchestrator-spawn.ts",
+  // FASE 6 — a SENTINELA (substitui o tique como agente que age sozinho). Modo de permissão `default` com lista BRANCA de
+  // tools nativas: Mínima só lê (Read/Grep/Glob, MCP só `ro` ou nenhum); Máxima ganha Bash pré-aprovado — e é aí que o
+  // rótulo precisa ser lido com cuidado: com shell, o repositório fica alcançável, contido pela TRAVA DURA do host (o
+  // hook `hard-deny` carrega como em qualquer sessão) e pelo registro de cada comando, não por este tier.
+  sentinel: {
+    module: "lib/storymap/runner/sentinel.ts",
     tier: "orch",
     declaration: "explicit",
-    note: "o tick age por tool MCP: sem shell/editor nativo (Bash/Write/Edit negadas, allowedTools só mcp__storymap)",
+    note: "Sentinela: modo `default` + `--tools` em lista branca; Mínima só leitura, Máxima + Bash sob a trava dura do host (cada comando registrado)",
+  },
+  // FASE 7 — a ÂNCORA: liga cards às funcionalidades do PRD. Sessão headless enxuta (Sonnet) sem NENHUMA tool nativa
+  // (`--tools ""`), MCP só pelo handle `anchor:<board>` cunhado por execução e revogado no fim — e o servidor cerca esse
+  // handle: `update_card` só com `{ feature }`, mais `ask_question`/`propose_change` (mcp/handle-scope.ts).
+  anchor: {
+    module: "lib/storymap/runner/anchor-spawn.ts",
+    tier: "orch",
+    declaration: "explicit",
+    note: "Âncora: modo `default`, nenhuma tool nativa, MCP só pelo handle anchor:<board> — que o servidor deixa escrever só `feature`",
   },
   deployAgent: {
     module: "lib/storymap/runner/deploy-agent-spawn.ts",

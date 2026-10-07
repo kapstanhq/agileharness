@@ -27,22 +27,14 @@ statuses:
     trigger: harness-enrich
     maxTurns: 20
     costGuard: true
-    description: 🤖 Escreve a narrativa e os critérios de aceite, e move para Priorizar.
-  - id: priorizar
-    name: Priorizar
-    autorun: true
-    color: '#ec4899'
-    trigger: harness-prioritize
-    maxTurns: 15
-    costGuard: true
-    gate: hasRefinement
-    description: 🤖 Pontua pela régua WSJF contra as âncoras do board e move para Pronta p/ build.
+    description: 🤖 Escreve a narrativa e os critérios de aceite, e move para Pronta p/ build.
   - id: pronta
     name: Pronta p/ build
     autorun: false
     color: '#f59e0b'
-    gate: hasPrioritization
-    description: Priorizada — parada go/no-go. Avance manualmente para Design UI/UX ao aprovar.
+    gate: hasRefinement
+    description: >-
+      Parada go/no-go, na ordem da coluna (o topo vai primeiro). Avance manualmente para Design UI/UX ao aprovar.
   - id: design-ux
     name: Design UI/UX
     autorun: false

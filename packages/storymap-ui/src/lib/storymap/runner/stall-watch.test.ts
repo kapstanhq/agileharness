@@ -10,7 +10,9 @@ import type { BoardConfig, Card, Finding } from "@/lib/storymap/types";
 import { classifyStall, isStallCandidate, stalledFinding, sweepStalledCards, type StallFacts, type StallRow, type StallWatchDeps } from "./stall-watch";
 import { DEFAULT_PARK_SETTINGS, ladderGraceMs } from "./conductor-pause";
 import { resolveBoardGate, type BoardPaceRow } from "./board-pace";
-import { scopeHeldCards } from "./stall-watch-deps";
+import { batchHandoffPending, batchItemFoldsIntoLead, batchItemsWaiting, conductorHold, conductorSessionFor, queuedForConductor, scopeHeldCards, withBatchItems } from "./stall-watch-deps";
+import type { AgentSession } from "./session-worktree";
+import { decideCascade } from "@/lib/notifications/server/channels/cascade-decision";
 
 const MIN = 60_000;
 const AFTER = 15 * MIN;
@@ -368,6 +370,54 @@ describe("sweepStalledCards — refaz uma vez, depois avisa", () => {
   });
 });
 
+// O PIPELINE HÍBRIDO: num board com condutor, os passos `autorunOnlyInColumns` não rodam skill — a cascata só os
+// atravessa. Um card NÃO conduzido parado ali (o gate do próximo passo falhou, a entrada se perdeu, ou o card já estava
+// ali quando o board passou ao condutor) é do sistema: antes o vigia o lia como «fila da skill» e ele ficava ali para
+// sempre, sem aviso. Os dois caminhos reais: a story sem aceite na Entrevista, e o refino visual que atravessa Jornada
+// e Telas mudas e para no gate do desenho.
+describe("pipeline híbrido — passo do meio sem skill neste board é PASSAGEM", () => {
+  const interview = { id: "interview", name: "Entrevista", trigger: "harness-interview", autorun: true, autorunOnlyInColumns: true };
+  const telas = [
+    { id: "design-ui", name: "Telas", trigger: "harness-ui", autorun: true, autorunOnlyInColumns: true },
+    { id: "com-design", name: "Aprovar design", gate: "hasWireframe" },
+  ];
+  // a Entrevista a caminho de «A fazer» (o caso da story sem aceite); Telas a caminho do gate do desenho (o refino)
+  const hybrid = (pipeline?: "columns", design = false) =>
+    ({
+      ...configOf(),
+      ...(pipeline ? { pipeline } : {}),
+      conductor: { enabled: true, fromStatus: ["pronta"] },
+      statuses: [
+        ...(design ? telas : [interview]),
+        { id: "pronta", name: "A fazer", gate: "hasRefinement" },
+        { id: "concluida", name: "No ar", terminal: true },
+      ],
+    }) as unknown as BoardConfig;
+
+  it("story sem aceite parada na Entrevista: a cascata para no gate, e o vigia a vê (passagem, refazer = reavaliar)", () => {
+    const stuck = cardIn("interview", { storyType: "user" });
+    expect(decideCascade(stuck, hybrid())).toMatchObject({ action: "stop" });
+    expect(isStallCandidate(stuck, hybrid())).toBe(true);
+    expect(classifyStall(stuck, hybrid(), FREE, AFTER)).toEqual({ subject: { kind: "passage", stepId: "interview", stepName: "Entrevista" }, autoRetry: true });
+    // modo por colunas: a skill do passo roda — é fila de skill, não travamento
+    expect(isStallCandidate(stuck, hybrid("columns"))).toBe(false);
+    expect(classifyStall(stuck, hybrid("columns"), FREE, AFTER)).toBeNull();
+  });
+
+  it("refino visual parado em Telas no gate do desenho: o vigia o vê; com a reabertura pendente, é fila da skill de refino", () => {
+    const refine = cardIn("design-ui", { storyType: "user", mode: "refine", narrative: { role: "leitor", want: "achar", soThat: "comprar" }, acceptance: ["a"] });
+    expect(decideCascade(refine, hybrid(undefined, true))).toMatchObject({ action: "stop" });
+    expect(classifyStall(refine, hybrid(undefined, true), FREE, AFTER)).toMatchObject({ subject: { kind: "passage", stepId: "design-ui" } });
+    const pending = cardIn("design-ui", { storyType: "user", mode: "refine", reopenPending: true });
+    expect(decideCascade(pending, hybrid(undefined, true))).toEqual({ action: "run", trigger: "harness-refine" });
+    expect(classifyStall(pending, hybrid(undefined, true), FREE, AFTER)).toBeNull();
+  });
+
+  it("um card conduzido no passo do meio continua com a régua do condutor", () => {
+    expect(classifyStall(cardIn("interview", { routing: { driver: "conductor" } }), hybrid(), conductorFacts({ live: false }), AFTER)).toMatchObject({ subject: { kind: "conductor-dead" } });
+  });
+});
+
 // WP5-F2 — caso real: vários cards em status de condutor (interview/enriquecer/refinar) sem driver, sem fila e sem
 // ninguém; o vigia não os via (não eram passo do sistema). E o condutor quieto que a escada do estacionar está tratando
 // não vira aviso enquanto ela tem prazo.
@@ -498,5 +548,132 @@ describe("escopo de tipos — parado DE PROPÓSITO não é travamento", () => {
   it("o card JÁ conduzido (começou antes de o escopo estreitar) continua sob vigia: condutor morto é aviso de verdade", () => {
     const c = feature({ routing: { driver: "conductor" } });
     expect(classifyStall(c, withConductor, conductorFacts({ live: false, queued: false }), AFTER)).toMatchObject({ subject: { kind: "conductor-dead" } });
+  });
+});
+
+// ── fase 7: o LOTE do condutor — nenhum «condutor encerrou» falso para um item, e um aviso só quando o lote acaba ──
+describe("fase 7 — lote do condutor no vigia de card parado", () => {
+  const BATCH = { id: "lote-a", lead: "story-ex9101", sessionId: "lote-1", at: "2026-03-05T04:00:00Z" };
+  const batchCard = (id: string, title: string, extra: Partial<Card> = {}): Card => ({
+    ...coerceCard(id, { type: "story", storyType: "bug", title, status: "desenvolver", routing: { driver: "conductor" } }, ""),
+    batch: BATCH,
+    ...extra,
+  });
+  const lead = batchCard("story-ex9101", "Corrigir o filtro de datas");
+  const itemA = batchCard("story-ex9102", "Ajustar o rótulo do filtro");
+  const itemB = batchCard("story-ex9103", "Manter o filtro ao voltar");
+  const cards = [lead, itemA, itemB];
+  const board = { id: "b", cards, config: configOf() };
+  const session: AgentSession = {
+    sessionId: "lote-1",
+    agentId: "lote-1",
+    role: "implement",
+    task: "conduzir o lote",
+    board: "b",
+    cardId: lead.id,
+    driver: "conductor",
+    tmuxSession: "cond-lote",
+    openedAt: "2026-03-05T04:00:00Z",
+    heartbeatAt: "2026-03-05T04:00:00Z",
+    batch: { id: "lote-a", featureKey: "func-a", cardIds: [itemA.id, itemB.id], dropped: [] },
+  };
+  const alive = () => true;
+  const dead = () => false;
+
+  it("um ITEM de um lote vivo acha a sessão do lote: nada de «condutor encerrou» falso", () => {
+    const hold = conductorHold(itemA, board, [session], [], alive);
+    expect(hold).toMatchObject({ session: { sessionId: "lote-1" }, queued: false, foldedIntoLead: false });
+    // os fatos do vigia para o item: vivo ⇒ nenhum veredito
+    expect(classifyStall(itemA, configOf(), conductorFacts({ live: !!hold.session, queued: hold.queued }), AFTER)).toBeNull();
+  });
+
+  it("o item que SAIU do lote não é mais da sessão", () => {
+    const dropped = { ...session, batch: { ...session.batch!, dropped: [{ cardId: itemB.id, reason: "falhou", at: "2026-03-05T04:10:00Z" }] } };
+    expect(conductorSessionFor([dropped], "b", itemB.id, alive)).toBeUndefined();
+    expect(conductorSessionFor([dropped], "b", itemA.id, alive)?.sessionId).toBe("lote-1");
+  });
+
+  it("o item levado pela entrada do líder na fila (retomada do train) tem lugar na fila", () => {
+    const queue = [{ board: "b", cardId: lead.id, handoff: { runId: "lote-1", status: "done", batchCardIds: [itemA.id] } }];
+    expect(queuedForConductor(queue, "b", itemA.id)).toBe(true);
+    expect(queuedForConductor(queue, "b", itemB.id)).toBe(false);
+    expect(conductorHold(itemA, board, [], queue, dead)).toMatchObject({ queued: true, foldedIntoLead: false });
+  });
+
+  it("a entrega do lote ainda no train (passagem sem veredito) conta como alguém no item", () => {
+    const pending = [{ board: "b", cardId: lead.id, runId: "lote-1" }];
+    expect(batchHandoffPending(pending, "b", itemA)).toBe(true);
+    expect(batchHandoffPending([{ ...pending[0], verdict: { status: "done" } }], "b", itemA)).toBe(false);
+    expect(batchHandoffPending(pending, "b", { batch: undefined })).toBe(false);
+    expect(batchHandoffPending(pending, "other", itemA)).toBe(false);
+  });
+
+  it("sessão do lote MORTA: o líder é «condutor encerrou» e cada item entra no aviso dele (sem veredito próprio)", () => {
+    expect(conductorHold(lead, board, [session], [], dead)).toMatchObject({ session: undefined, queued: false, foldedIntoLead: false });
+    for (const item of [itemA, itemB]) expect(conductorHold(item, board, [session], [], dead)).toMatchObject({ foldedIntoLead: true });
+  });
+
+  it("o item NÃO entra no aviso do líder quando o líder tem dono, saiu do lote, foi devolvido ao fluxo ou terminou", () => {
+    const other: AgentSession = { ...session, sessionId: "novo", agentId: "novo", batch: undefined };
+    expect(conductorHold(itemA, board, [other], [], alive).foldedIntoLead).toBe(false); // condutor novo só no líder
+    expect(conductorHold(itemA, board, [], [{ board: "b", cardId: lead.id }], dead).foldedIntoLead).toBe(false);
+    const variants: Card[] = [
+      { ...lead, batch: undefined },
+      { ...lead, routing: undefined },
+      { ...lead, status: "concluida" },
+    ];
+    for (const l of variants) expect(batchItemFoldsIntoLead(itemA, [l, itemA], configOf(), () => false)).toBe(false);
+    expect(batchItemFoldsIntoLead(lead, cards, configOf(), () => false)).toBe(false); // o líder carrega o aviso
+  });
+
+  it("o aviso do líder NOMEIA os itens que esperam junto; sem lote, o aviso fica como está", () => {
+    const base = stalledFinding({ kind: "conductor-dead", stepId: "desenvolver", stepName: "Desenvolver" }, { since: "04h20", retried: false, autoRetry: false, fixCardId: null });
+    const items = batchItemsWaiting(lead, cards);
+    expect(items.map((i) => i.id)).toEqual([itemA.id, itemB.id]);
+    const f = withBatchItems(base, items);
+    expect(f.detail).toContain(base.detail);
+    expect(f.detail).toContain("«Ajustar o rótulo do filtro» (story-ex9102) e «Manter o filtro ao voltar» (story-ex9103)");
+    expect(f.detail).toContain("esperam junto com ele");
+    expect(batchItemsWaiting(itemA, cards)).toEqual([]); // só o líder nomeia
+    expect(withBatchItems(base, [])).toBe(base);
+    expect(withBatchItems(base, [items[0]]).detail).toContain("o item «Ajustar o rótulo do filtro» (story-ex9102) depende");
+  });
+
+  it("de ponta a ponta: a sessão do lote morre ⇒ UM aviso no Inbox, no líder, nomeando os dois itens; os itens não ganham aviso", async () => {
+    const state = { cards: [...cards], rows: [] as StallRow[], now: Date.parse("2026-03-05T04:35:00Z"), stamped: [] as Array<{ cardId: string; f: Finding }> };
+    const deps: StallWatchDeps = {
+      ledger: { load: async () => state.rows, persist: async (rows) => void (state.rows = rows) },
+      masterEnabled: () => true,
+      settings: () => ({ afterMinutes: 15, retries: 1 }),
+      admission: () => null,
+      boards: async () => [{ id: "b", config: configOf(), cards: state.cards }],
+      // os fatos do conduzido, montados pela MESMA régua do vigia de produção (conductorHold), com a sessão do lote morta
+      facts: async (b, card) => {
+        const hold = conductorHold(card, b, [session], [], dead);
+        return hold.foldedIntoLead ? FREE : conductorFacts({ live: !!hold.session, queued: hold.queued });
+      },
+      retry: async () => ({ ok: true }),
+      reevaluate: async () => ({ ok: true }),
+      openFixCard: async () => null,
+      // o `stamp` de produção: o aviso do líder ganha os itens do lote
+      stamp: async (_b, cardId, f) => {
+        const stamped = withBatchItems(f, batchItemsWaiting(state.cards.find((c) => c.id === cardId), state.cards));
+        state.stamped.push({ cardId, f: stamped });
+      },
+      clear: async () => {},
+      record: async () => {},
+      clock: () => "04h35",
+      now: () => state.now,
+      log: () => {},
+    };
+    await sweepStalledCards(deps);
+    state.now += AFTER;
+    const out = await sweepStalledCards(deps);
+    expect(out.filter((r) => r.action === "escalated").map((r) => r.cardId)).toEqual([lead.id]);
+    expect(state.stamped).toHaveLength(1);
+    expect(state.stamped[0].cardId).toBe(lead.id);
+    expect(state.stamped[0].f.title).toBe("O condutor deste card encerrou e ninguém assumiu");
+    expect(state.stamped[0].f.detail).toContain(itemA.id);
+    expect(state.stamped[0].f.detail).toContain(itemB.id);
   });
 });

@@ -4,16 +4,16 @@ import { coerceCard } from "./repo";
 import type { BoardConfig, Card } from "./types";
 
 // A small linear pipeline with gates mid-way, mirroring a real board: a fresh card
-// can reach triage/enriquecer freely, but priorizar is gated (hasRefinement) and
-// pronta is gated (hasPrioritization).
+// can reach triage/enriquecer freely, but pronta («A fazer») is gated (hasRefinement) and
+// desenvolver is gated (hasTasks).
 const board: BoardConfig = {
   id: "b",
   name: "B",
   statuses: [
     { id: "triage", name: "Triagem", staging: true },
     { id: "enriquecer", name: "Enriquecer", trigger: "harness-enrich" },
-    { id: "priorizar", name: "Priorizar", gate: "hasRefinement" },
-    { id: "pronta", name: "Pronta", gate: "hasPrioritization" },
+    { id: "pronta", name: "A fazer", gate: "hasRefinement" },
+    { id: "desenvolver", name: "Desenvolver", gate: "hasTasks" },
     { id: "concluida", name: "Concluída", terminal: true },
   ],
   releases: [],
@@ -31,27 +31,27 @@ describe("moveTargets", () => {
     const c = card({ status: "enriquecer" }); // no narrative/acceptance yet
     const ids = moveTargets(c, board).map((t) => t.status.id);
     expect(ids).not.toContain("enriquecer"); // current — excluded
-    expect(ids).not.toContain("priorizar"); // hasRefinement fails → not eligible
-    expect(ids).not.toContain("pronta"); // hasPrioritization fails → not eligible
+    expect(ids).not.toContain("pronta"); // hasRefinement fails → not eligible
+    expect(ids).not.toContain("desenvolver"); // hasTasks fails → not eligible
     // ungated columns remain reachable (incl. backward to triage, terminal concluida has no gate)
     expect(ids).toEqual(expect.arrayContaining(["triage", "concluida"]));
   });
 
   it("recommends the nearest FORWARD gate-passing status, listed first", () => {
-    // A refined card in enriquecer: priorizar's gate (hasRefinement) now passes.
+    // A refined card in enriquecer: pronta's gate (hasRefinement) now passes.
     const c = card({ status: "enriquecer", narrative: FULL_NARRATIVE, acceptance: ["ac"] });
     const targets = moveTargets(c, board);
-    expect(targets[0].status.id).toBe("priorizar"); // nearest forward eligible → first
+    expect(targets[0].status.id).toBe("pronta"); // nearest forward eligible → first
     expect(targets[0].recommended).toBe(true);
     expect(targets.filter((t) => t.recommended)).toHaveLength(1); // exactly one recommended
   });
 
   it("flags no recommendation when no forward status is eligible", () => {
-    // In priorizar but not prioritized → pronta (next) is gated out; only backward moves remain.
-    const c = card({ status: "priorizar", narrative: FULL_NARRATIVE, acceptance: ["ac"] });
+    // In pronta but with no tasks → desenvolver (next) is gated out; only backward moves remain.
+    const c = card({ status: "pronta", narrative: FULL_NARRATIVE, acceptance: ["ac"] });
     const targets = moveTargets(c, board);
     expect(targets.every((t) => !t.recommended)).toBe(true);
-    expect(targets.map((t) => t.status.id)).not.toContain("pronta");
+    expect(targets.map((t) => t.status.id)).not.toContain("desenvolver");
   });
 
   it("for an unstatused card recommends the first eligible status", () => {
@@ -85,9 +85,9 @@ describe("moveTargets", () => {
   });
 
   it("does NOT skip a failing MANDATORY gate to reach a terminal", () => {
-    // pronta (hasPrioritization) is a mandatory readiness gate, NOT a branch lane — when it
+    // desenvolver (hasTasks) is a mandatory readiness gate, NOT a branch lane — when it
     // fails the walk stops, so we never recommend skipping straight to the terminal.
-    const c = card({ status: "priorizar", narrative: FULL_NARRATIVE, acceptance: ["ac"] });
+    const c = card({ status: "pronta", narrative: FULL_NARRATIVE, acceptance: ["ac"] });
     const targets = moveTargets(c, board);
     expect(targets.every((t) => !t.recommended)).toBe(true);
   });
@@ -100,7 +100,7 @@ describe("moveTargets", () => {
   it("movableStatusIds mirrors moveTargets as a Set", () => {
     const c = card({ status: "enriquecer", narrative: FULL_NARRATIVE, acceptance: ["ac"] });
     const ids = movableStatusIds(c, board);
-    expect(ids.has("priorizar")).toBe(true);
+    expect(ids.has("pronta")).toBe(true);
     expect(ids.has("enriquecer")).toBe(false);
   });
 });

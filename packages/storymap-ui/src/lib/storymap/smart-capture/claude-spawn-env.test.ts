@@ -23,6 +23,7 @@ vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
 
 import { spawn } from "node:child_process";
 import { runClaudeJson } from "./claude";
+import { assistedEditRunOptions } from "../assisted-edit";
 import { tokenizeCommandLine } from "../runner/autonomy-sandbox";
 import { DEFAULT_CREDENTIAL_DENY_RULES } from "../runner/credential-deny";
 
@@ -171,6 +172,45 @@ describe("runClaudeJson — não-regressão: a superfície que o dono usa contin
     armFakeClaude();
     await runClaudeJson("texto livre");
     expect(childCommand()).not.toContain("--dangerously-skip-permissions");
+  });
+
+  // quick-fix skill-writes: o `sincronizar` da bancada (assistedEditRunOptions) roda em modo plan E nega as tools de
+  // escrita — a negação chega à linha de comando, e um nome que não é de tool nunca vira texto de shell.
+  it("disallowedTools: modo plan + --disallowedTools com as tools pedidas; lixo de shell é descartado", async () => {
+    armFakeClaude();
+    await runClaudeJson("texto livre", { disallowedTools: ["Edit", "Write", "Bash", "x; rm -rf /"] });
+    const argv = tokenizeCommandLine(childCommand());
+    expect(argv).toContain("--permission-mode");
+    expect(argv).not.toContain("--dangerously-skip-permissions");
+    expect(argv[argv.indexOf("--disallowedTools") + 1]).toBe("Edit,Write,Bash");
+    expect(childCommand()).not.toContain("rm -rf");
+  });
+
+  it("o argv do Sincronizar: --permission-mode default + escrita negada + só leitura permitida (nunca plan)", async () => {
+    armFakeClaude();
+    await runClaudeJson("texto livre", assistedEditRunOptions("sincronizar"));
+    const argv = tokenizeCommandLine(childCommand());
+    expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("default");
+    expect(argv.filter((t) => t === "--permission-mode")).toHaveLength(1);
+    expect(argv).not.toContain("plan");
+    expect(argv).not.toContain("--dangerously-skip-permissions");
+    expect(argv[argv.indexOf("--disallowedTools") + 1]).toBe("Edit,Write,MultiEdit,NotebookEdit,Bash");
+    expect(argv[argv.indexOf("--allowedTools") + 1]).toBe("Read,Grep,Glob");
+    expect(argv).toContain("--strict-mcp-config");
+  });
+
+  it("sem pedir modo, segue plan e sem --allowedTools", async () => {
+    armFakeClaude();
+    await runClaudeJson("texto livre");
+    const argv = tokenizeCommandLine(childCommand());
+    expect(argv[argv.indexOf("--permission-mode") + 1]).toBe("plan");
+    expect(argv).not.toContain("--allowedTools");
+  });
+
+  it("sem disallowedTools, nenhuma negação extra", async () => {
+    armFakeClaude();
+    await runClaudeJson("texto livre");
+    expect(childCommand()).not.toContain("--disallowedTools");
   });
 });
 

@@ -10,7 +10,7 @@
 //   • a SKILL manda fazer isso, com as regras de honestidade de cada flag, e diz que approve_qa é do operador.
 
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { MERGE_BACK_PIPELINE_FIELDS, mergeCardThreeWay } from "./card-merge";
 import { checkGate } from "./gates";
@@ -72,7 +72,13 @@ describe("o mecanismo: o carimbo no worktree chega à main pelo train", () => {
 });
 
 describe("a skill: o condutor carimba no worktree, com honestidade, e nunca chama approve_qa", () => {
-  const skill = readFileSync(path.join(findRepoRoot(), ".claude", "skills", "harness-conductor", "SKILL.md"), "utf8");
+  // A skill é NÚCLEO + ref/ (o detalhe de cada bloco mora no ref/ que o núcleo manda ler): a árvore inteira é a skill.
+  const dir = path.join(findRepoRoot(), ".claude", "skills", "harness-conductor");
+  const refDir = path.join(dir, "ref");
+  const skill = [
+    readFileSync(path.join(dir, "SKILL.md"), "utf8"),
+    ...(existsSync(refDir) ? readdirSync(refDir).filter((f) => f.endsWith(".md")).sort().map((f) => readFileSync(path.join(refDir, f), "utf8")) : []),
+  ].join("\n");
 
   it("nenhuma instrução chama approve_qa (a tool aparece só como a saída do OPERADOR)", () => {
     expect(skill).not.toMatch(/approve_qa\(\{/);
@@ -81,7 +87,9 @@ describe("a skill: o condutor carimba no worktree, com honestidade, e nunca cham
   });
 
   it("o PUBLICAR grava os quatro campos no card do worktree, com a regra de cada flag", () => {
-    const publicar = skill.slice(skill.indexOf("## 4 · PUBLICAR"), skill.indexOf("## Pauses"));
+    // o PUBLICAR por inteiro mora em ref/publicar.md (o núcleo tem só o checklist do bloco)
+    const publicar = readFileSync(path.join(refDir, "publicar.md"), "utf8");
+    expect(publicar).toContain("## 4 · PUBLICAR");
     for (const f of STAMP_FIELDS) expect(publicar, f).toContain(`\`${f}`);
     expect(publicar).toMatch(/`suite: true` ONLY if YOU ran the package suite[\s\S]*IN YOUR WORKTREE[\s\S]*count of tests executed \(> 0\)/);
     expect(publicar).toMatch(/`visual: true` ONLY if the clean-context verifier swept/);

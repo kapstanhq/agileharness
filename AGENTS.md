@@ -54,7 +54,7 @@ repository — the repository it runs in. Each app has a *board*. Cards have thr
 and a **trigger** (a skill that runs on its own when a card enters, if the board is armed).
 
 **The idea that explains the rest:** the harness is not a form. A card that enters an armed column is
-processed by a headless agent that enriches, breaks down, prioritizes, plans, builds, reviews and
+processed by a headless agent that enriches, breaks down, plans, builds, reviews and
 publishes it — and stops it at every gate it fails.
 
 ---
@@ -153,38 +153,45 @@ One rule on resuming: **an agent only lifts a brake an agent set.** What the own
 owner resumes. Read `board_pace` before queuing work, and prefer `slow` when it reports the weekly
 quota is ahead of pace.
 
-## Before the backlog: the PRD
+## Before the backlog: the PRD (and its two companions)
 
-A board with cards and no PRD is a task list. The PRD is the board's highest document, at
-`storymap/boards/<board>/docs/prd.md`, and everything below it descends from it — the Lean Canvas
-is its compression, the story backbone comes out of its journeys, the personas out of its audience.
-Every agent step inherits a digest of it. Write it **before** you capture a backlog; drafting the
-map first means compressing a page out of nothing.
+A board with cards and no PRD is a task list. Each board keeps three documents under
+`storymap/boards/<board>/docs/`:
+
+| docType | file | whose | what |
+|---|---|---|---|
+| `prd` | `prd.md` | the **owner** | the product, in business language: `problema`, `personas` (one `###` per persona), `propostaValor`, `funcionalidades`, `fluxoUso`, `metricasSucesso`, `foraEscopo`. No technology in it. |
+| `business-model-canvas` | `business-model-canvas.md` | the **owner** | the business: the nine Business Model Canvas blocks. |
+| `contexto` | `contexto.md` | **you** (the agents) | what the agents need and the owner does not: `decisoes`, `prontoQuando`, `requisitos`, `restricoes`, `riscos`, `modeloNegocio`, `lancamento`, `glossario`, `outros`. No page; the engine and every skill read it. |
+
+The story backbone comes out of the PRD's usage flow and features, and every agent step inherits
+a digest of it. Write it **before** you capture a backlog; drafting the map first means
+compressing a page out of nothing.
 
 ```
 read_doc({ board: "store", docType: "prd" })          # get the section KEYS first
-write_doc({ board: "store", docType: "prd",
-            section: "resumo", prose: "..." })         # one section at a time, by KEY
+write_doc({ board: "store", docType: "contexto",
+            section: "decisoes", items: [{ text: "..." }] })   # one section at a time, by KEY
 ```
 
-`section` is the key (`resumo`, `problema`, `publico`, `posicionamento`, `objetivos`, `escopo`, …),
-**not** the visible label — the labels are locked and a write that renames one is refused. Section
-content is either `prose` or `items`, whichever the section declares; `read_doc` tells you which.
-Six sections are required, ten more are optional and can stay skeletal.
+`section` is the key, **not** the visible label — the labels are locked and a write that renames
+one is refused. Section content is either `prose` or `items`, whichever the section declares;
+`read_doc` tells you which.
 
-Three of them are written for **you**, not for the human reader, and skipping them costs you later:
+Two context sections are worth keeping alive, because skipping them costs you later:
 
 | section | why you want it |
 |---|---|
 | `decisoes` | decisions already taken. Without it you will re-decide them, plausibly and wrongly. |
-| `jornadas` | what `usm_capture` turns into a backbone instead of a flat list of orphans. |
 | `prontoQuando` | verification criteria for the product. "It works" is not one. |
 
-**The PRD is human-owned, and editing the file directly is blocked.** A `Write` or `Edit` against
-`storymap/boards/<board>/docs/prd.md` is refused by the ownership guard, and the refusal names the
-way through: `propose_change({ board, artifact: "prd", field: "<sectionKey>", after: … })`, which
-opens a draft with a diff for a human to approve. The same holds for the Lean Canvas
-(`artifact: "canvas"`), personas and releases — what belongs to the human, you propose.
+**The PRD and the canvas are human-owned, and editing those files directly is blocked.** A `Write`
+or `Edit` against `docs/prd.md` or `docs/business-model-canvas.md` is refused by the ownership
+guard, and the refusal names the way through: `propose_change({ board, artifact: "prd", field:
+"<sectionKey>", after: … })` (the personas are the `personas` section) or `artifact: "canvas"`
+with a block key, which opens a draft with a diff for a human to approve. Releases too — what
+belongs to the human, you propose. The context (`contexto`) is yours: write it with `write_doc`; a
+change that touches money, the brand or people's data is a question to the owner, not a write.
 
 If you are running unattended, propose rather than write, even where a tool would let you through:
 the approval is the point, not the obstacle.

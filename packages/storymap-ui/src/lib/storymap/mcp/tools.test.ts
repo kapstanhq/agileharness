@@ -1,8 +1,11 @@
 import { promises as fs } from "node:fs";
-import { afterEach, beforeEach, describe, it, expect } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { projectCardForGet, registerStorymapTools, slim } from "./tools";
+
+// as server actions revalidam a página do board — fora de um request do Next não há o que revalidar.
+vi.mock("next/cache", () => ({ revalidatePath: vi.fn(), revalidateTag: vi.fn() }));
 import { cardsDir } from "../paths";
 import { FIXTURE_BOARD } from "../board-fixture";
 import type { Card, Finding, Task } from "../types";
@@ -30,9 +33,6 @@ function card(overrides: Partial<Card> = {}): Card {
     narrative: { role: null, want: null, soThat: null },
     acceptance: [],
     tasks: [],
-    rice: { reach: null, impact: null, confidence: null, effort: null },
-    kano: null,
-    funnelStage: null,
     findings: [],
     order: 0,
     created: null,
@@ -82,17 +82,11 @@ describe("slim — lean card projection", () => {
     expect(s.blockers).toBe(1); // só f1 (open + blocker)
   });
 
-  it("preserva rice/kano/funnelStage", () => {
-    const s = slim(
-      card({
-        rice: { reach: 5, impact: 3, confidence: 80, effort: 2 },
-        kano: "must-be",
-        funnelStage: "retention",
-      }),
-    );
-    expect(s.rice).toEqual({ reach: 5, impact: 3, confidence: 80, effort: 2 });
-    expect(s.kano).toBe("must-be");
-    expect(s.funnelStage).toBe("retention");
+  it("não projeta mais a priorização (rice/kano/funnelStage saíram do modelo)", () => {
+    const s = slim(card({}));
+    expect(s).not.toHaveProperty("rice");
+    expect(s).not.toHaveProperty("kano");
+    expect(s).not.toHaveProperty("funnelStage");
   });
 });
 
@@ -287,7 +281,9 @@ describe("runner_status — live snapshot + telemetry history", () => {
     // `mainRed: null` = a main está VERDE. O campo é sempre projetado (P-8): a saúde da main deixou de
     // ser algo que só o gate sabia e ninguém reportava — e um campo que só aparece quando há problema
     // ensina o leitor a não procurá-lo.
-    expect(out).toEqual({ running: [], failures: [], mergeQueue: [], mainRed: null });
+    // `pushHold: null` / `pushScanNote: null` = nada retido e a varredura pré-push completa — sempre projetados, pela
+    // mesma razão do `mainRed`.
+    expect(out).toEqual({ running: [], failures: [], mergeQueue: [], mainRed: null, pushHold: null, pushScanNote: null });
     expect(out.history).toBeUndefined();
     expect(telemetryCall).toBeNull(); // telemetria nem é consultada sem cardId
   });
@@ -453,5 +449,182 @@ describe("update_card — recusa status, aponta move_card", () => {
 describe("mark_tasks_done — APOSENTADO (M4): nenhuma superfície o expõe", () => {
   it("não é mais uma tool registrada (removido, não só rebaixado)", () => {
     expect(captureHandlers().has("mark_tasks_done")).toBe(false);
+  });
+});
+
+// --- fase 7: a FUNCIONALIDADE do PRD nos cards (update_card/create_card/list_cards/get_vocabulary) ------------------
+// Board de verdade numa raiz temporária (o `_base` copiado): o PRD tem dois `###` em «Funcionalidades» e um balde de
+// escopo da ferramenta, que não é funcionalidade. O handle da ÂNCORA (credencial `anchor:<board>`) só liga card a
+// funcionalidade — decidido pela credencial que autenticou, não pelo nome que o agente declara.
+describe("fase 7 — `feature` nos cards pelo MCP", () => {
+  const BOARD = "horta";
+  let root = "";
+  let state = "";
+  let prevTarget: string | undefined;
+  let prevState: string | undefined;
+  const savedEngine = engineStore[ENGINE_KEY];
+
+  const card = (id: string, fm: string[], body = "Dado sintético.") => ["---", `id: ${id}`, ...fm, "---", "", body, ""].join("\n");
+
+  beforeEach(async () => {
+    const { cpSync, mkdirSync, mkdtempSync, writeFileSync } = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const { findRepoRoot, resetRepoRootCache } = await import("../paths");
+    const base = path.join(findRepoRoot(), "storymap", "boards", "_base");
+    root = mkdtempSync(path.join(os.tmpdir(), "ah-feature-mcp-"));
+    state = mkdtempSync(path.join(os.tmpdir(), "ah-feature-mcp-state-"));
+    writeFileSync(path.join(root, "turbo.json"), "{}\n");
+    cpSync(base, path.join(root, "storymap", "boards", "_base"), { recursive: true });
+    const dir = path.join(root, "storymap", "boards", BOARD);
+    mkdirSync(path.join(dir, "cards"), { recursive: true });
+    mkdirSync(path.join(dir, "docs"), { recursive: true });
+    // a matriz do board deixa a escrita de card automática: o teste mede a cerca do HANDLE, não a aprovação da matriz.
+    writeFileSync(path.join(dir, "board.yaml"), `id: ${BOARD}\nname: Horta\norchestrator:\n  mode: autonomous\n  riskMatrix:\n    write-board: auto\n`);
+    writeFileSync(
+      path.join(dir, "docs", "prd.md"),
+      ["---", "doc: prd", "format: 2", "---", "", "# PRD", "", "## Funcionalidades", "", "### Nesta versão", "", "- tudo", "",
+        "### Regar junto", "", "Escala de rega da semana.", "", "### Trocar mudas", "", "Anuncia a muda que sobrou.", ""].join("\n"),
+    );
+    writeFileSync(path.join(dir, "cards", "step-ex1.md"), card("step-ex1", ["type: step", "title: Cuidar do canteiro", "status: null", "parent: null"]));
+    writeFileSync(
+      path.join(dir, "cards", "story-ex9301.md"),
+      card("story-ex9301", ["type: story", "title: Lembrete de rega", "storyType: user", "status: triage", "parent: step-ex1"]),
+    );
+    writeFileSync(
+      path.join(dir, "cards", "story-ex9302.md"),
+      card("story-ex9302", ["type: story", "title: Muda reservada", "storyType: user", "status: triage", "parent: step-ex1", "feature: trocar-mudas"]),
+    );
+    prevTarget = process.env.AGILEHARNESS_TARGET;
+    prevState = process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+    process.env.AGILEHARNESS_TARGET = root;
+    process.env.AGILEHARNESS_RUNNER_STATE_DIR = state;
+    resetRepoRootCache();
+    engineStore[ENGINE_KEY] = { isInFlight: () => false };
+  });
+
+  afterEach(async () => {
+    const { rmSync } = await import("node:fs");
+    const { resetRepoRootCache } = await import("../paths");
+    if (prevTarget === undefined) delete process.env.AGILEHARNESS_TARGET;
+    else process.env.AGILEHARNESS_TARGET = prevTarget;
+    if (prevState === undefined) delete process.env.AGILEHARNESS_RUNNER_STATE_DIR;
+    else process.env.AGILEHARNESS_RUNNER_STATE_DIR = prevState;
+    resetRepoRootCache();
+    if (savedEngine === undefined) delete engineStore[ENGINE_KEY];
+    else engineStore[ENGINE_KEY] = savedEngine;
+    rmSync(root, { recursive: true, force: true });
+    rmSync(state, { recursive: true, force: true });
+  });
+
+  const text = (r: CallToolResult) => (r.content[0] as { text: string }).text;
+  const onDisk = async (id: string) => (await import("../repo")).readCard(BOARD, id);
+  const asAnchor = async <T,>(fn: () => Promise<T>) => {
+    const { runWithMcpActor } = await import("./actor");
+    const { anchorHandleLabel } = await import("./handle-scope");
+    return runWithMcpActor({ level: "orch", tokenEnv: "AGILEHARNESS_TEST_ANCHOR", credentialLabel: anchorHandleLabel(BOARD) }, fn);
+  };
+
+  it("get_vocabulary devolve as funcionalidades do PRD (sem o balde de escopo) e o modo", async () => {
+    const out = parseResult(await captureHandlers().get("get_vocabulary")!({ board: BOARD })) as Record<string, unknown>;
+    expect(out.features).toEqual([
+      { id: "regar-junto", name: "Regar junto" },
+      { id: "trocar-mudas", name: "Trocar mudas" },
+    ]);
+    expect(out.featureMode).toBe("prd");
+  });
+
+  it("board sem funcionalidades no PRD ⇒ featureMode map, features []", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const path = await import("node:path");
+    writeFileSync(path.join(root, "storymap", "boards", BOARD, "docs", "prd.md"), "---\ndoc: prd\nformat: 2\n---\n\n# PRD\n\n## Problema\n\nRegar esquecido.\n");
+    const out = parseResult(await captureHandlers().get("get_vocabulary")!({ board: BOARD })) as Record<string, unknown>;
+    expect(out.features).toEqual([]);
+    expect(out.featureMode).toBe("map");
+  });
+
+  it("update_card: feature válida grava; desconhecida recusa com a lista; null limpa", async () => {
+    const h = captureHandlers().get("update_card")!;
+    const ok = await h({ board: BOARD, cardId: "story-ex9301", feature: "regar-junto" });
+    expect(ok.isError, text(ok)).toBeFalsy();
+    expect((await onDisk("story-ex9301"))?.feature).toBe("regar-junto");
+    expect((parseResult(ok) as { card: { feature?: string } }).card.feature).toBe("regar-junto");
+
+    const bad = await h({ board: BOARD, cardId: "story-ex9301", feature: "inventada" });
+    expect(bad.isError).toBe(true);
+    expect(text(bad)).toMatch(/regar-junto/);
+    expect(text(bad)).toMatch(/trocar-mudas/);
+    expect((await onDisk("story-ex9301"))?.feature, "a recusa não grava").toBe("regar-junto");
+
+    const cleared = await h({ board: BOARD, cardId: "story-ex9301", feature: null });
+    expect(cleared.isError, text(cleared)).toBeFalsy();
+    expect((await onDisk("story-ex9301"))?.feature).toBeUndefined();
+  });
+
+  it("update_card recusa `batch` (campo do pipeline)", async () => {
+    const r = await captureHandlers().get("update_card")!({ board: BOARD, cardId: "story-ex9301", batch: { id: "x", lead: "y", sessionId: "z", at: "w" } });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/batch/);
+  });
+
+  it("handle da âncora: `feature` passa; qualquer outro campo recusa", async () => {
+    const h = captureHandlers().get("update_card")!;
+    const refused = await asAnchor(() => Promise.resolve(h({ board: BOARD, cardId: "story-ex9301", feature: "regar-junto", title: "Outro título" })));
+    expect(refused.isError, text(refused)).toBe(true);
+    expect(text(refused)).toMatch(/title/);
+    expect((await onDisk("story-ex9301"))?.title).toBe("Lembrete de rega");
+
+    const ok = await asAnchor(() => Promise.resolve(h({ board: BOARD, cardId: "story-ex9301", feature: "regar-junto" })));
+    expect(ok.isError, text(ok)).toBeFalsy();
+    expect((await onDisk("story-ex9301"))?.feature).toBe("regar-junto");
+  });
+
+  it("handle da âncora vale só para o board dele", async () => {
+    const h = captureHandlers().get("update_card")!;
+    const other = await asAnchor(() => Promise.resolve(h({ board: "outro-board-ex", cardId: "story-ex9301", feature: "regar-junto" })));
+    expect(other.isError, text(other)).toBe(true);
+    expect(text(other)).toMatch(new RegExp(`só vale para o board ${BOARD}`));
+    const { featureOnlyToolRefusal, anchorHandleLabel } = await import("./handle-scope");
+    const actor = { credentialLabel: anchorHandleLabel(BOARD) };
+    expect(featureOnlyToolRefusal("list_cards", "read", actor, "outro-board-ex")).toMatch(/só vale para o board/);
+    expect(featureOnlyToolRefusal("list_cards", "read", actor, BOARD)).toBeNull();
+    expect(featureOnlyToolRefusal("ask_question", "write-board", actor, BOARD)).toBeNull();
+    expect(featureOnlyToolRefusal("list_cards", "read", { credentialLabel: "outra-coisa" }, "outro-board-ex")).toBeNull();
+  });
+
+  it("handle da âncora: create_card e move_card recusam", async () => {
+    const handlers = captureHandlers();
+    const c = await asAnchor(() => Promise.resolve(handlers.get("create_card")!({ board: BOARD, title: "Item novo", parent: "step-ex1" })));
+    expect(c.isError, text(c)).toBe(true);
+    expect(text(c)).toMatch(/só liga cards às funcionalidades/);
+    const m = await asAnchor(() => Promise.resolve(handlers.get("move_card")!({ board: BOARD, cardId: "story-ex9301", status: "enriquecer" })));
+    expect(m.isError).toBe(true);
+    expect(text(m)).toMatch(/só liga cards às funcionalidades/);
+  });
+
+  it("create_card: funcionalidade inventada recusa ANTES de criar", async () => {
+    const { readdirSync } = await import("node:fs");
+    const { cardsDir } = await import("../paths");
+    const before = readdirSync(cardsDir(BOARD)).length;
+    const r = await captureHandlers().get("create_card")!({ board: BOARD, title: "Avisar quando chover", parent: "step-ex1", feature: "inventada" });
+    expect(r.isError).toBe(true);
+    expect(text(r)).toMatch(/regar-junto/);
+    expect(readdirSync(cardsDir(BOARD)).length).toBe(before);
+  });
+
+  it("create_card: a funcionalidade válida nasce no card", async () => {
+    const r = await captureHandlers().get("create_card")!({ board: BOARD, title: "Avisar quando chover", parent: "step-ex1", feature: "regar-junto" });
+    expect(r.isError, text(r)).toBeFalsy();
+    const created = (parseResult(r) as { created: { id: string; feature?: string }[] }).created;
+    expect(created).toHaveLength(1);
+    expect(created[0].feature).toBe("regar-junto");
+    expect((await onDisk(created[0].id))?.feature).toBe("regar-junto");
+  });
+
+  it("list_cards filtra pela funcionalidade (a chave do Kanban)", async () => {
+    const h = captureHandlers().get("list_cards")!;
+    const out = parseResult(await h({ board: BOARD, feature: "trocar-mudas" })) as { cards: { id: string; feature?: string }[] };
+    expect(out.cards.map((c) => c.id)).toEqual(["story-ex9302"]);
+    expect(out.cards[0].feature).toBe("trocar-mudas");
   });
 });

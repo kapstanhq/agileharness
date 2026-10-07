@@ -20,7 +20,6 @@ import { sinceWords } from "@/lib/storymap/card-live-status";
 import { STATE_PULSE } from "@/lib/storymap/presence-tone";
 import { cardHref } from "@/lib/storymap/deep-links";
 import { terminalRows, type TerminalSessionLike } from "@/lib/terminal/attention";
-import { onTerminalRenamed } from "@/components/terminal/rename-bus";
 import { useAgentPresence, useTerminalAttention } from "@/components/RunnerStatusProvider";
 import { NavChip, NavPopover, NavPopoverDivider, NavPopoverEmpty, NavPopoverFooter, NavPopoverTitle, useHoverPopover } from "./NavShell";
 
@@ -53,7 +52,8 @@ export function NavAgentsChip() {
   const [sessions, setSessions] = useState<TerminalSession[]>([]);
 
   // As sessões de terminal: o título do card de cada agente e os terminais do DONO. Poll de 60s (a rota é cara: tmux,
-  // ps e os cards de todos os boards) — o mesmo ritmo do chip de Terminal que este substitui; o rename chega na hora.
+  // ps e os cards de todos os boards) — o mesmo ritmo do chip de Terminal que este substitui. (O aviso de rename que
+  // relia na hora saiu com o bloco de terminais da home, o único que renomeava — fase 1.)
   useEffect(() => {
     let alive = true;
     const load = () =>
@@ -67,12 +67,10 @@ export function NavAgentsChip() {
     // com o cursor em cima, e o chip já conta os agentes pela presença do RunnerStatusProvider)
     const first = setTimeout(load, 3_000);
     const poll = setInterval(load, 60_000);
-    const off = onTerminalRenamed(() => void load());
     return () => {
       alive = false;
       clearTimeout(first);
       clearInterval(poll);
-      off();
     };
   }, []);
 

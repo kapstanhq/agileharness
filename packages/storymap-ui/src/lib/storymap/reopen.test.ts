@@ -30,9 +30,6 @@ const base: Card = {
   narrative: { role: null, want: null, soThat: null },
   acceptance: [],
   tasks: [],
-  rice: { reach: null, impact: null, confidence: null, effort: null },
-  kano: null,
-  funnelStage: null,
   findings: [],
   order: 0,
   created: null,
@@ -77,6 +74,13 @@ describe("applyReopen — stamps mode + sets the block + NULLs the other reopen 
     expect(out.id).toBe("c1");
     expect(out.title).toBe("Salvar na lista de desejos");
     expect(out.status).toBe(base.status); // applyReopen does NOT touch status
+  });
+
+  it("fase 7: a reabertura apaga a marca de LOTE do condutor (o plano, o teto e o gasto do lote antigo não valem mais)", () => {
+    const stale: Card = { ...base, batch: { id: "lote-ex1", lead: "c0", sessionId: "sess-ex1", at: "2026-06-10T00:00:00Z", planHash: "0123456789abcdef.a1b2c3d4.c0:00000000" } };
+    for (const out of [applyReopen(stale, { mode: "fix", bugReport }), applyReopen(stale, { mode: "refine", refinement }), applyReopen(stale, { mode: "retire", retirement })]) {
+      expect(out.batch).toBeUndefined();
+    }
   });
 
   it("WS4: clears the whole stale routing — profile + model/effort caps too, not only skips", () => {

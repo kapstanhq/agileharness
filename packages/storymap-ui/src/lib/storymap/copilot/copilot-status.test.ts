@@ -51,6 +51,16 @@ describe("copilotStatus", () => {
     expect(s.inert).toBe(false);
   });
 
+  it("fase 6 — board PAUSADO: o selo não promete «agindo» nem conta tick; nunca diz «de ponta a ponta»", () => {
+    const s = copilotStatus({ ...base, mode: "autonomous", deploy: "auto", paused: "o board está pausado" });
+    expect(s.level).toBe("auto-paused");
+    expect(s.inert).toBe(true);
+    expect(s.label).toBe("pausado");
+    expect(copilotStatus({ ...base, mode: "autonomous", deploy: "auto" }).detail).not.toMatch(/ponta a ponta/);
+    // pausado não esconde o modo desligado/pareado (aí não há promessa a desmentir)
+    expect(copilotStatus({ ...base, mode: "off", paused: "x" }).level).toBe("off");
+  });
+
   it("autônomo, armado, com token e write-board:auto ⇒ agindo de verdade", () => {
     const s = copilotStatus({ ...base, mode: "autonomous" });
     expect(s.level).toBe("auto-active");

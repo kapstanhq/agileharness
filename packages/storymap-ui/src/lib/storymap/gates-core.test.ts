@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { checkGate, hasNarrative } from "./gates";
-import { GATES, placementViolation } from "./gate-core";
-import { coerceCard } from "./repo";
+import { GATES, evaluateGate, placementViolation, resolveBoardStatuses } from "./gate-core";
+import { coerceCard, coerceStatuses } from "./repo";
 import type { BoardConfig, Card, GateId, StoryNarrative } from "./types";
 
 // The 5 CORE pipeline gates (refinada/com-tasks/pronta) — the guard rails the
@@ -14,8 +14,7 @@ const board: BoardConfig = {
     { id: "so-aceite", name: "Só aceite", gate: "hasAcceptance" },
     { id: "refinada", name: "Refinada", gate: "hasRefinement" },
     { id: "com-tasks", name: "Com tasks", gate: "hasTasks" },
-    { id: "so-rice", name: "Só RICE", gate: "hasRice" },
-    { id: "pronta", name: "Pronta", gate: "hasPrioritization" },
+    { id: "pronta", name: "A fazer", gate: "hasRefinement" },
     { id: "so-staged", name: "Só staged", gate: "hasStaged" }, // Fase 4b
     { id: "so-released", name: "Só released", gate: "hasReleased" }, // Fase 4b
     { id: "sem-gate", name: "Sem gate" }, // no gate field
@@ -73,20 +72,18 @@ describe("checkGate — core pipeline gates", () => {
     expect(checkGate(card({ tasks: [{ id: "t1", title: "fazer", done: false }] }), "com-tasks", board)).toBeNull();
   });
 
-  it("hasRice: needs a derivable RICE score", () => {
-    expect(checkGate(card({}), "so-rice", board)).toMatch(/RICE/i);
-    const scored = card({ rice: { reach: 100, impact: 2, confidence: 0.8, effort: 4 } });
-    expect(checkGate(scored, "so-rice", board)).toBeNull();
+  // A priorização saiu: «A fazer» (pronta) pede só narrativa + aceite. Uma nota antiga (rice/kano/funil/priorityCall) num
+  // card legado não abre nem fecha o gate — ela nem é lida.
+  it("pronta (A fazer) é hasRefinement: sem nota de prioridade, e a nota legada não satisfaz nada", () => {
+    const legacy = { rice: { reach: 100, impact: 2, confidence: 0.8, effort: 4 }, kano: "performance", funnelStage: "activation", priorityCall: { rank: 3, rationale: "r", source: "agent", assessedAt: "2026-06-20" } };
+    expect(checkGate(card(legacy), "pronta", board)).toMatch(/narrativa|aceite/i);
+    expect(checkGate(card({ narrative: FULL_NARRATIVE, acceptance: ["Dado A Quando B Então C"] }), "pronta", board)).toBeNull();
+    expect(checkGate(card({ storyType: "bug", severity: "blocker", narrative: FULL_NARRATIVE, acceptance: ["Dado A Quando B Então C"] }), "pronta", board)).toBeNull();
   });
 
-  it("hasPrioritization: RICE score AND kano AND funnelStage (each independently blocks)", () => {
-    const fullRice = { reach: 100, impact: 2, confidence: 0.8, effort: 4 };
-    expect(checkGate(card({ rice: fullRice, kano: "performance" }), "pronta", board)).toMatch(/funil|KANO|RICE/i); // funnel null → blocked
-    expect(checkGate(card({ rice: fullRice, funnelStage: "activation" }), "pronta", board)).toMatch(/funil|KANO|RICE/i); // kano null → blocked
-    expect(checkGate(card({ kano: "performance", funnelStage: "activation" }), "pronta", board)).toMatch(/funil|KANO|RICE/i); // rice null → blocked
-    expect(
-      checkGate(card({ rice: fullRice, kano: "performance", funnelStage: "activation" }), "pronta", board),
-    ).toBeNull();
+  it("os gates de priorização não existem mais (hasRice/hasPrioritization)", () => {
+    expect("hasRice" in GATES).toBe(false);
+    expect("hasPrioritization" in GATES).toBe(false);
   });
 });
 
@@ -194,16 +191,14 @@ describe("hierarquia — placementViolation é a regra única de ancoragem", () 
 // add a settable field there, add it here. Fields update_card CANNOT set (pipeline-owned or absent from
 // the schema): tasks, techPlanReady, wireframeChosen, severity, frequency.
 const SETTABLE_VIA_UPDATE_CARD = new Set([
-  "title", "storyType", "narrative", "acceptance", "personas", "systems", "rice", "kano", "funnelStage", "body", "status",
+  "title", "storyType", "narrative", "acceptance", "personas", "systems", "body", "status",
 ]);
-// The authoring field(s) each AUTHORING gate requires. hasPrioritization is type-dependent (feature:
-// rice/kano/funnelStage settable; bug: severity/frequency NOT) → asserted separately. Pipeline gates
-// (hasNoBlockers/hasQaPassed/hasStaged/…) require no authoring field → omitted.
+// The authoring field(s) each AUTHORING gate requires. Pipeline gates (hasNoBlockers/hasQaPassed/hasStaged/…)
+// require no authoring field → omitted.
 const GATE_REQUIRED_FIELDS: Partial<Record<GateId, string[]>> = {
   hasAcceptance: ["acceptance"],
   hasRefinement: ["narrative", "acceptance"],
   hasTasks: ["tasks"],
-  hasRice: ["rice"],
   hasTechPlan: ["techPlanReady"],
   hasWireframe: ["wireframeChosen"],
 };
@@ -217,8 +212,8 @@ describe("checkGate — unblock advice only names update_card for a field it can
       // A IMPLICAÇÃO NO LUGAR DO `if` — e a troca não é estilo.
       //
       // Com `if (recommendsUpdateCard(s))`, o `expect` só existia para os gates cuja mensagem CITA
-      // `update_card`. MEDIDO: para 4 dos 6 gates deste laço ele nunca era alcançado — e são
-      // justamente `hasTasks`/`hasRice`/`hasTechPlan`/`hasWireframe`, os de campo NÃO settable, que é
+      // `update_card`. MEDIDO: para 3 dos 5 gates deste laço ele nunca era alcançado — e são
+      // justamente `hasTasks`/`hasTechPlan`/`hasWireframe`, os de campo NÃO settable, que é
       // onde este invariante importa. O teste ficava verde nos casos que ele existe para guardar.
       //
       // Agora o laço é sobre um literal de dois elementos (nunca vazio) e a asserção é a implicação
@@ -239,13 +234,6 @@ describe("checkGate — unblock advice only names update_card for a field it can
     expect(recommendsUpdateCard(GATES.hasTechPlan.fix)).toBe(false); // techPlanReady not settable there
     expect(GATES.hasWireframe.fix).toMatch(/choose_wireframe/); // the REAL MCP unblock
     expect(recommendsUpdateCard(GATES.hasWireframe.fix)).toBe(false); // wireframeChosen not settable there
-  });
-
-  it("hasPrioritization scopes update_card to feature fields and routes bug severity/frequency to /harness-prioritize", () => {
-    const both = `${GATES.hasPrioritization.message} ${GATES.hasPrioritization.fix}`;
-    expect(both).toMatch(/update_card/); // feature path (rice/kano/funnelStage) is settable
-    expect(both).toMatch(/harness-prioritize/);
-    expect(both).toMatch(/severity|frequency/i); // explicitly names the non-settable bug axes
   });
 
   it("the author gates that DO name update_card require only settable fields (control: hasAcceptance/hasRefinement)", () => {
@@ -297,36 +285,35 @@ describe("checkGate — Fase 4b staged-release gates (hasStaged / hasReleased)",
   });
 });
 
-// Type-aware prioritization (Fase 2): hasPrioritization requires the inputs of the
-// card's priorityKind — feature → RICE+KANO+funil; bug → severity+frequency; melhoria
-// → impact+effort. `pronta` carries hasPrioritization in the synthetic board above.
-describe("checkGate — hasPrioritization is type-aware", () => {
-  const fullRice = { reach: 100, impact: 2, confidence: 0.8, effort: 4 };
+// Um alvo que ainda não migrou: o `_base` dele declara o passo de prioridade e `pronta.gate: hasPrioritization`. O id
+// aposentado é LIDO como o sucessor (hasRefinement) — pelo app (repo.ts) e pelo hook (gate-core, sobre o YAML cru) —,
+// e nunca descartado: descartá-lo deixava «A fazer» sem gate, e stories entravam ali sem narrativa nem aceite.
+describe("board.yaml antigo — gate aposentado lido como o sucessor", () => {
+  const oldBase = {
+    statuses: [
+      { id: "enriquecer", name: "Especificar", trigger: "harness-enrich", autorun: true },
+      { id: "priorizar", name: "Estimar", trigger: "harness-prioritize", autorun: true, gate: "hasRefinement" },
+      { id: "pronta", name: "A fazer", gate: "hasPrioritization" },
+      { id: "estimada", name: "Estimada", gate: "hasRice" },
+      { id: "concluida", name: "No ar", terminal: true },
+    ],
+  };
+  const bare = coerceCard("story-ex9301", { type: "story", storyType: "user", status: "priorizar" }, "");
+  const ready = coerceCard("story-ex9302", { type: "story", storyType: "user", status: "priorizar", narrative: { role: "leitor", want: "achar um livro", soThat: "comprar" }, acceptance: ["a"] }, "");
 
-  it("bug: needs severity + frequency (not RICE/KANO/funil)", () => {
-    expect(checkGate(card({ storyType: "bug", severity: "blocker" }), "pronta", board)).toMatch(/frequ|severidade|bug/i); // no frequency → blocked
-    expect(checkGate(card({ storyType: "bug", severity: "blocker", frequency: "always" }), "pronta", board)).toBeNull();
+  it("o app lê `pronta` com hasRefinement (não SEM gate) e o passo velho vira passagem sem skill", () => {
+    const statuses = coerceStatuses(oldBase.statuses);
+    expect(statuses.find((x) => x.id === "pronta")?.gate).toBe("hasRefinement");
+    expect(statuses.find((x) => x.id === "estimada")?.gate).toBe("hasRefinement");
+    expect(statuses.find((x) => x.id === "priorizar")?.trigger).toBeUndefined();
+    const config = { statuses } as unknown as BoardConfig;
+    expect(checkGate(bare, "pronta", config)).toMatch(/narrativa/);
+    expect(checkGate(ready, "pronta", config)).toBeNull();
   });
 
-  it("melhoria: needs impact + effort", () => {
-    expect(checkGate(card({ mode: "refine", rice: { reach: null, impact: 2, confidence: null, effort: null } }), "pronta", board)).toMatch(/impact|esforço|effort|melhoria/i); // no effort → blocked
-    expect(checkGate(card({ mode: "refine", rice: { reach: null, impact: 2, confidence: null, effort: 2 } }), "pronta", board)).toBeNull();
-  });
-
-  it("feature: still needs RICE + KANO + funnel (and a reopened bug WITH rice scores as feature)", () => {
-    expect(checkGate(card({ rice: fullRice, kano: "performance", funnelStage: "activation" }), "pronta", board)).toBeNull();
-    // a fix-mode card that already carries a full feature prioritization passes via the feature branch
-    expect(
-      checkGate(card({ storyType: "bug", mode: "fix", rice: fullRice, kano: "must-be", funnelStage: "retention" }), "pronta", board),
-    ).toBeNull();
-  });
-
-  it("prioridade ARGUMENTADA (priorityCall) satisfaz o gate sem RICE/severidade — reasoning-first", () => {
-    const argued = { rank: 2 as const, rationale: "estratégico", source: "agent" as const, assessedAt: "2026-06-20" };
-    // sem nenhum input numérico → bloqueado; com um tier argumentado → passa (ninguém inventa alcance)
-    expect(checkGate(card({ storyType: "user" }), "pronta", board)).not.toBeNull();
-    expect(checkGate(card({ storyType: "user", priorityCall: argued }), "pronta", board)).toBeNull();
-    // vale também para o gate legado hasRice
-    expect(checkGate(card({ storyType: "user", priorityCall: argued }), "so-rice", board)).toBeNull();
+  it("o hook (gate-core sobre o YAML cru) segura a mesma entrada", () => {
+    const raw = { statuses: resolveBoardStatuses(oldBase, {}) } as unknown as BoardConfig;
+    expect(evaluateGate(bare, "pronta", raw)).toMatchObject({ gate: "hasRefinement" });
+    expect(evaluateGate(ready, "pronta", raw)).toBeNull();
   });
 });

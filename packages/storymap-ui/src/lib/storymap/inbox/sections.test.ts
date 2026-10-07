@@ -58,8 +58,9 @@ describe("o número conta SÓ Decidir", () => {
     expect(decidir.map((e) => e.kind).sort()).toEqual(["deploy-failed", "review", "stuck"]);
     // o gate do mesmo card virou faceta da publicação falha — e não conta
     expect(decidir.find((e) => e.kind === "deploy-failed")!.facets.map((f) => f.kind)).toEqual(["gate"]);
-    // Acompanhar: a amostra (o aviso que não trava nada é dívida do card, não entrada) e o aceite da triagem de uma
-    // história de usuário de 2 dias atrás (o que o dono combinou rever, com o «Desfazer» que ainda funciona)
+    // Acompanhar: o aceite da triagem de uma história de usuário de 2 dias atrás (o que o dono combinou rever, com o
+    // «Desfazer» que ainda funciona) e a amostra de entrega — que é dos revisores independentes (decisão do dono), mas
+    // fica à vista, marcada «ninguém está revisando», enquanto o revisor não roda. O aviso que não trava nada é dívida do card.
     expect(acompanhar.map((e) => e.kind).sort()).toEqual(["delivery-audit", "system-decision"]);
     expect(banners).toHaveLength(1);
     expect(s.acompanhar).toBe(acompanhar.length);

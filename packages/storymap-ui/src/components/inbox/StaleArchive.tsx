@@ -1,13 +1,13 @@
 "use client";
 
-// «ARQUIVAR OS ANTIGOS» (onda 2, passo 6) — a linha sob Decidir quando há itens parados há mais de 30 dias. Confirma
-// antes, diz o que acontece (vão para o arquivo como adiados; nada é apagado) e, depois, o recibo com «Desfazer tudo».
+// «ARQUIVAR OS ANTIGOS» (onda 2, passo 6) — a linha sob a lista quando há itens parados há mais de 30 dias. UM clique
+// (fase 3: nenhum diálogo — nada é apagado, os itens vão para o arquivo como adiados), e depois o recibo no lugar, com
+// «Desfazer tudo».
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Archive } from "lucide-react";
 import { archiveStaleItemsAction, undoInboxReceiptAction } from "@/app/actions";
-import { ConfirmDialog } from "@/components/ConfirmDialog";
 import type { InboxEntry } from "@/lib/storymap/inbox/entries";
 import { staleArchiveCopy } from "@/lib/storymap/inbox/stale-archive";
 
@@ -15,7 +15,6 @@ type Done = { text: string; receipts: Array<{ boardId: string; receiptId: string
 
 export function StaleArchive({ entries }: { entries: InboxEntry[] }) {
   const router = useRouter();
-  const [confirming, setConfirming] = useState(false);
   const [pending, setPending] = useState(false);
   const [done, setDone] = useState<Done | null>(null);
   const [undone, setUndone] = useState<string | null>(null);
@@ -23,7 +22,6 @@ export function StaleArchive({ entries }: { entries: InboxEntry[] }) {
   const copy = staleArchiveCopy(entries.length);
 
   const archive = async () => {
-    setConfirming(false);
     setPending(true);
     setError(null);
     const res = await archiveStaleItemsAction({ items: entries.map((e) => ({ boardId: e.boardId, cardId: e.cardId })) });
@@ -85,12 +83,15 @@ export function StaleArchive({ entries }: { entries: InboxEntry[] }) {
   }
 
   if (entries.length === 0) return null;
+  // a frase tem piso de largura: no celular o botão quebra para baixo em vez de espremer a frase ao lado dele
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-dashed border-line px-4 py-2" data-stale-archive>
-      <span className="flex-1 text-[13.5px] text-fg-muted">{copy.line}</span>
+      <span className="min-w-[min(100%,18rem)] flex-1 text-[13.5px] text-fg-muted">
+        {copy.line}. <span className="text-fg-subtle">Nada é apagado, e dá para desfazer logo depois.</span>
+      </span>
       <button
         type="button"
-        onClick={() => setConfirming(true)}
+        onClick={() => void archive()}
         disabled={pending}
         className="inline-flex min-h-11 items-center gap-1.5 rounded-[10px] px-2 text-[13.5px] font-semibold text-accent-ink hover:underline disabled:opacity-45"
       >
@@ -101,15 +102,6 @@ export function StaleArchive({ entries }: { entries: InboxEntry[] }) {
         <p role="alert" className="w-full text-[12.5px] font-medium text-danger">
           Não deu certo: {error}
         </p>
-      )}
-      {confirming && (
-        <ConfirmDialog
-          title={copy.title}
-          description={copy.body}
-          confirmLabel={copy.button}
-          onConfirm={() => void archive()}
-          onCancel={() => setConfirming(false)}
-        />
       )}
     </div>
   );

@@ -1,16 +1,9 @@
-// vocab-doc invariants: no-op on prompt-backed rows; lazy migration persists the composed body
-// EXACTLY ONCE for legacy rows; title ↔ name; body ↔ prompt.
+// vocab-doc invariant: a row still on the LEGACY structured fields composes a draft body from them — the body the
+// agent's write path (`vocab-actions.ts`) starts from before it appends, so nothing the row already said is lost.
 
 import { describe, expect, it } from "vitest";
 import type { Persona } from "../types";
-import { commitVocabDoc, composeVocabBody, projectVocabDoc } from "./vocab-doc";
-
-const promptPersona = (): Persona => ({
-  id: "leitor",
-  name: "Leitor Assíduo",
-  color: "#c0562b",
-  prompt: "Compra três livros por mês e relê os favoritos.\n\n## Jobs\n\n- Achar a edição certa sem vasculhar sebos",
-});
+import { composeVocabBody } from "./vocab-doc";
 
 const legacyPersona = (): Persona => ({
   id: "legado",
@@ -22,37 +15,11 @@ const legacyPersona = (): Persona => ({
 });
 
 describe("vocab-doc", () => {
-  it("no-op: prompt-backed row commits with zero changes", () => {
-    const p = promptPersona();
-    const { changed, patch } = commitVocabDoc(projectVocabDoc(p, "persona"), p, "persona");
-    expect(changed).toBe(false);
-    expect(patch).toEqual({});
-  });
-
-  it("legacy row projects the composed body and the FIRST save migrates it into prompt", () => {
-    const p = legacyPersona();
-    const model = projectVocabDoc(p, "persona");
-    expect(model.blocks.some((b) => b.kind === "heading" && b.text === "Jobs")).toBe(true);
-
-    const { changed, patch } = commitVocabDoc(model, p, "persona");
-    expect(changed).toBe(true);
-    expect(patch.prompt).toContain("Leitor de ficção");
-    expect(patch.prompt).toContain("## Jobs");
-
-    // second save (now prompt-backed) is a no-op
-    const migrated: Persona = { ...p, prompt: patch.prompt };
-    const again = commitVocabDoc(projectVocabDoc(migrated, "persona"), migrated, "persona");
-    expect(again.changed).toBe(false);
-  });
-
-  it("title edit maps to name; body edit maps to prompt", () => {
-    const p = promptPersona();
-    const model = projectVocabDoc(p, "persona");
-    model.title = "Leitor Assíduo Sebista";
-    model.blocks.push({ kind: "paragraph", id: "x", text: "Nota nova." });
-    const { patch } = commitVocabDoc(model, p, "persona");
-    expect(patch.name).toBe("Leitor Assíduo Sebista");
-    expect(patch.prompt).toContain("Nota nova.");
+  it("a persona legada vira um corpo com o papel, a descrição e os jobs", () => {
+    const body = composeVocabBody(legacyPersona(), "persona");
+    expect(body).toContain("Leitor de ficção");
+    expect(body).toContain("Monta a estante por autor");
+    expect(body).toContain("## Jobs\n\n- Achar edições esgotadas");
   });
 
   it("composeVocabBody mirrors the legacy fields for systems too", () => {
@@ -62,5 +29,9 @@ describe("vocab-doc", () => {
     );
     expect(body).toContain("Por onde o leitor vê o catálogo.");
     expect(body).toContain("## Limites & gotchas");
+  });
+
+  it("uma linha sem nada declarado compõe um corpo vazio (nada inventado)", () => {
+    expect(composeVocabBody({ id: "x", name: "X", color: "#888" }, "persona")).toBe("");
   });
 });

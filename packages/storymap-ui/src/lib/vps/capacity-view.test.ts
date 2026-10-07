@@ -133,17 +133,17 @@ describe("unifiedQuota — o mesmo número no chip e no painel", () => {
     expect(capacityView(s, NOW)!.rows.find((r) => r.key === "week")?.pct).toBe(42.3);
   });
 
-  it("a barra de topo usa o número unificado no chip, nas barras e no painel (uma fonte, não duas)", () => {
-    const pill = readFileSync(path.join(__dirname, "..", "..", "components", "HealthPill.tsx"), "utf8");
+  it("a barra de topo usa o número unificado no anel, no ritmo e no aviso (uma fonte, não duas)", () => {
+    // Era o HealthPill; desde a fase 1 é o anel da barra do topo (shell/QuotaRing). O painel da frota saiu junto com
+    // a página de Métricas (fase 2): o anel é o ÚNICO lugar do número.
+    const pill = readFileSync(path.join(__dirname, "..", "..", "components", "shell", "QuotaRing.tsx"), "utf8");
     expect(pill).toMatch(/const quota = unifiedQuota\(metrics\.usage, metrics\.governor\)/);
-    expect(pill).toMatch(/<CapacityPanel snapshot=\{metrics\.governor\} quota=\{quota\}/);
     expect(pill).toMatch(/latchSealWords\(metrics\.governor, quota\?\.weekPct/);
-    expect(pill).toMatch(/bucket=\{quotaBucket\(usage\.week, quota\?\.week, Date\.now\(\)\)\}/);
+    // o reset que dá a régua do «esperado hoje» é o da fonte vencedora
+    expect(pill).toMatch(/quotaBucket\(metrics\.usage\?\.week, quota\.week, now\)/);
     // a defasagem do aviso é a da fonte vencedora, com o texto dela
     expect(pill).toMatch(/\{quota\?\.week\?\.stale && \(/);
     expect(pill).not.toMatch(/\{usage\.stale && \(/);
-    // a página de Métricas: o painel unifica sozinho com a leitura viva quando quem desenha não passa o número
-    expect(readFileSync(path.join(__dirname, "..", "..", "components", "CapacityPanel.tsx"), "utf8")).toMatch(/quota !== undefined \? quota : unifiedQuota\(live\?\.usage, current\)/);
   });
 });
 

@@ -22,9 +22,6 @@ idea:
     - Devolução em 1 clique com coleta em casa
     - Trecho/amostra antes de comprar
     - Garantia de troca por outro título
-  valueSize:
-    reach: 800
-    impact: 4
 order: 20
 created: '2026-08-01'
 updated: '2026-08-01'

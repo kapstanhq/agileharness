@@ -37,5 +37,7 @@ export function scopeHealthInputs(inputs: HealthInputs, board: string): HealthIn
     stall: inputs.stall.filter((r) => r.key.startsWith(`${board}/`)),
     toolFailures: mine(inputs.toolFailures),
     openTechnicalQuestions: mine(inputs.openTechnicalQuestions),
+    pausedBoards: (inputs.pausedBoards ?? []).filter((b) => b === board),
+    resumedAt: inputs.resumedAt?.[board] != null ? { [board]: inputs.resumedAt[board] } : {},
   };
 }

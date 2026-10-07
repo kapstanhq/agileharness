@@ -21,7 +21,7 @@
 //    card na mão. Serviço morto ⇒ edição manual livre.
 // 2. SÓ `storymap/boards/**` daquele checkout. Código, docs, .artifacts — nada disso é board-data.
 // 3. NUNCA um run sancionado do engine (G3 — o furo mais perigoso do plano). A lane light INTEIRA
-//    (`isCode:false`: harness-capture/style/enrich/grill/interview/tasks/prioritize/plan/ux/ui — a
+//    (`isCode:false`: harness-capture/style/enrich/grill/interview/tasks/plan/ux/ui — a
 //    maioria dos runs) roda SEM worktree e edita o checkout runtime POR DESIGN (o settle commita via
 //    `commitBoardDataScoped`, worktree.ts:372-399). Um hook que bloqueasse todo processo
 //    não-serviço QUEBRARIA o autorun light inteiro. O marcador de isenção é

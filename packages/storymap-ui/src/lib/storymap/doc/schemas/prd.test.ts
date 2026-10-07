@@ -1,4 +1,4 @@
-// 📋 O PRD — o schema e a ponte da escada estratégica antiga.
+// 📋 O PRD (formato 2) — o schema, o contexto dos agentes e a ponte da escada estratégica antiga.
 //
 // Dois momentos perigosos, e cada `describe` guarda um:
 //
@@ -11,14 +11,17 @@
 import { describe, expect, it } from "vitest";
 import type { BoardConfig } from "../../types";
 import { blockingViolations, validateSchema } from "../doc-schema";
-import { parseSchemaBody, sectionItems, serializeSchemaDoc } from "../schema-codec";
-import { PRD_DOC_TYPE, PRD_SCHEMA } from "./prd";
+import { emptySchemaDoc, parseSchemaBody, sectionItems, serializeSchemaDoc } from "../schema-codec";
+import { BMC_SCHEMA } from "./business-model-canvas";
+import { CONTEXTO_SCHEMA } from "./contexto";
+import { PRD_DOC_TYPE, PRD_FORMAT, PRD_SCHEMA } from "./prd";
 import { hasLegacyStrategy, projectLegacyPrd } from "./prd-legacy";
+import { PRD_V1_SCHEMA } from "./prd-v1";
 
 const config = (over: Partial<BoardConfig> = {}): BoardConfig =>
   ({ id: "b", name: "Board", ...over }) as unknown as BoardConfig;
 
-/** O board real do `demo`, palavra por palavra — a forma que a projeção vai encontrar em produção. */
+/** A escada da livraria de demonstração — a forma que a projeção vai encontrar num board antigo. */
 const DEMO = config({
   positioning:
     "Para leitores que compram por indicação e não por catálogo, a Aurora é a livraria que conhece o seu " +
@@ -28,46 +31,40 @@ const DEMO = config({
     "Dobrar a fração de pedidos que nascem de uma recomendação da casa (hoje 11%) até o fim do r2.",
 });
 
-describe("PRD_SCHEMA — a integridade do próprio contrato", () => {
-  it("não tem chave duplicada, rótulo ambíguo nem filha órfã", () => {
-    expect(validateSchema(PRD_SCHEMA)).toEqual([]);
-  });
+const SETE = ["problema", "personas", "propostaValor", "funcionalidades", "fluxoUso", "metricasSucesso", "foraEscopo"];
 
-  it("as três seções que a escada estratégica alimenta existem, e são filhas do lugar certo", () => {
-    const byKey = (k: string) => PRD_SCHEMA.sections.find((s) => s.key === k);
-
-    expect(byKey("posicionamento")?.content, "posicionamento é uma FRASE, não uma lista").toBe("prose");
-    expect(byKey("metricaNegocio")?.parent).toBe("objetivos");
-    expect(byKey("resultadoAlvo")?.parent).toBe("objetivos");
-  });
-
-  it("as três seções escritas para o AGENTE existem — são elas que separam este PRD de um PRD humano", () => {
-    // Decisões já tomadas, jornadas e critérios de verificação. Um agente sem a primeira re-decide
-    // plausivelmente; sem a segunda a captura propõe uma lista plana em vez de um backbone; sem a
-    // terceira "funciona" vira o critério, e "funciona" não é verificável por ninguém de fora.
-    for (const key of ["decisoes", "jornadas", "prontoQuando"]) {
-      expect(PRD_SCHEMA.sections.some((s) => s.key === key), `seção \`${key}\``).toBe(true);
+describe("PRD_SCHEMA (formato 2) — a integridade do próprio contrato", () => {
+  it("os três schemas novos (e o antigo, fonte da migração) não têm chave duplicada, rótulo ambíguo nem filha órfã", () => {
+    for (const schema of [PRD_SCHEMA, CONTEXTO_SCHEMA, BMC_SCHEMA, PRD_V1_SCHEMA]) {
+      expect(validateSchema(schema), schema.docType).toEqual([]);
     }
   });
 
-  it("todo rótulo é travado e toda seção diz o que se escreve nela", () => {
-    // O `hint` é o empty-state em QUALQUER view: uma seção sem ele abre em branco, sem instrução.
-    // E um PRD de dezesseis seções em branco é exatamente o documento que ninguém preenche.
-    const mudas = PRD_SCHEMA.sections.filter((s) => !s.hint.trim() || !s.locked);
-    expect(mudas.map((s) => s.key)).toEqual([]);
-    expect(PRD_SCHEMA.sections.length, "não-vacuidade: o schema tem seções").toBeGreaterThan(10);
+  it("são SETE seções de topo, nesta ordem, todas travadas e com instrução", () => {
+    expect(PRD_SCHEMA.sections.map((s) => s.key)).toEqual(SETE);
+    expect(PRD_SCHEMA.sections.every((s) => s.level === 2 && s.locked && s.hint.trim())).toBe(true);
+    expect(PRD_SCHEMA.allowFreeTail).toBe(false);
   });
 
-  it("o esqueleto obrigatório é PEQUENO — um documento nasce curto e cresce", () => {
-    const obrigatorias = PRD_SCHEMA.sections.filter((s) => s.required).map((s) => s.key);
-    expect(obrigatorias).toEqual([
-      "resumo",
-      "problema",
-      "publico",
-      "posicionamento",
-      "objetivos",
-      "escopo",
-    ]);
+  it("é um documento de NEGÓCIO: as seções técnicas foram para o contexto dos agentes", () => {
+    for (const key of ["decisoes", "prontoQuando", "requisitos", "restricoes", "riscos", "glossario"]) {
+      expect(PRD_SCHEMA.sections.some((s) => s.key === key), `\`${key}\` não pode estar no PRD`).toBe(false);
+      expect(CONTEXTO_SCHEMA.sections.some((s) => s.key === key), `\`${key}\` precisa estar no contexto`).toBe(true);
+    }
+    // O hint diz ao autor (e ao agente) que tecnologia não entra.
+    expect(PRD_SCHEMA.sections.find((s) => s.key === "funcionalidades")?.hint).toMatch(/nada de tecnologia/);
+  });
+
+  it("o contexto é todo OPCIONAL (um board novo tem contexto vazio) e tem a seção de sobra «outros»", () => {
+    expect(CONTEXTO_SCHEMA.sections.filter((s) => s.required)).toEqual([]);
+    expect(CONTEXTO_SCHEMA.sections.at(-1)?.key).toBe("outros");
+  });
+
+  it("um PRD novo nasce com as sete seções e salva VAZIO — esqueleto válido, nada obrigatório de conteúdo", () => {
+    const doc = emptySchemaDoc(PRD_SCHEMA);
+    expect(doc.sections.map((s) => s.key)).toEqual(SETE);
+    const md = serializeSchemaDoc(doc, PRD_SCHEMA);
+    expect(blockingViolations(parseSchemaBody(md, PRD_SCHEMA, {}).violations)).toEqual([]);
   });
 });
 
@@ -83,70 +80,67 @@ describe("PRD — o round-trip pelo markdown", () => {
 
   it("renomear um rótulo travado é RECUSADO — o esqueleto é o que toda view lê", () => {
     const md = serializeSchemaDoc(projectLegacyPrd(DEMO), PRD_SCHEMA);
-    const adulterado = md.replace("## Posicionamento", "## Posicionamento estratégico");
+    const adulterado = md.replace("## Proposta de valor", "## Nossa proposta");
     const { violations } = parseSchemaBody(stripFrontmatter(adulterado), PRD_SCHEMA, {});
 
     expect(blockingViolations(violations).length, "o rótulo travado passou").toBeGreaterThan(0);
   });
+
+  it("o fluxo de uso aceita uma jornada (itens soltos) ou várias (um `###` por jornada) sem aviso de forma", () => {
+    const body = [
+      "# PRD",
+      "",
+      "## Fluxo de uso",
+      "",
+      "### Comprar",
+      "",
+      "- abre a vitrine",
+      "- compra",
+      "",
+      "### Devolver",
+      "",
+      "- devolve em um clique",
+      "",
+    ].join("\n");
+    const { violations } = parseSchemaBody(body, PRD_SCHEMA, {});
+    expect(violations.filter((v) => v.sectionKey === "fluxoUso")).toEqual([]);
+  });
 });
 
 describe("projectLegacyPrd — a leitura de um board que ainda não migrou", () => {
-  it("o posicionamento continua uma FRASE (prosa), com o dobramento do YAML desfeito", () => {
+  it("o posicionamento vira a PROPOSTA DE VALOR, e continua uma frase (prosa)", () => {
     const doc = projectLegacyPrd(DEMO);
     const md = serializeSchemaDoc(doc, PRD_SCHEMA);
-
-    // A frase chega do YAML dobrada em várias linhas; cortá-la em itens inventaria uma estrutura
-    // que ninguém escreveu.
-    expect(md).toContain("Para leitores que compram por indicação e não por catálogo, a Aurora é a livraria");
-    expect(sectionItems(doc, "posicionamento"), "posicionamento não é lista").toEqual([]);
+    expect(md).toContain("## Proposta de valor\n\nPara leitores que compram por indicação e não por catálogo, a Aurora é a livraria");
+    expect(sectionItems(doc, "propostaValor"), "proposta de valor não é lista").toEqual([]);
   });
 
-  it("métrica e resultado-alvo viram ITENS, pelo mesmo corte conservador do canvas", () => {
-    expect(sectionItems(projectLegacyPrd(DEMO), "metricaNegocio").map((i) => i.text)).toEqual([
-      "Valor de vida do cliente (CLV) em 24 meses",
-    ]);
-    expect(sectionItems(projectLegacyPrd(DEMO), "resultadoAlvo").map((i) => i.text)).toEqual([
-      "Dobrar a fração de pedidos que nascem de uma recomendação da casa (hoje 11%) até o fim do r2.",
+  it("resultado-alvo e métrica viram ITENS de «Métricas de sucesso», com o degrau de origem como prefixo", () => {
+    expect(sectionItems(projectLegacyPrd(DEMO), "metricasSucesso").map((i) => i.text)).toEqual([
+      "Resultado-alvo: Dobrar a fração de pedidos que nascem de uma recomendação da casa (hoje 11%) até o fim do r2.",
+      "Métrica de negócio: Valor de vida do cliente (CLV) em 24 meses",
     ]);
   });
 
   it("prosa achatada em vários resultados-alvo vira vários itens, não um parágrafo só", () => {
     const doc = projectLegacyPrd(config({ desiredOutcome: "1. Dobrar X.\n\n2. Reduzir Y.\n\n3. Manter Z." }));
-    expect(sectionItems(doc, "resultadoAlvo").map((i) => i.text)).toEqual([
-      "Dobrar X.",
-      "Reduzir Y.",
-      "Manter Z.",
+    expect(sectionItems(doc, "metricasSucesso").map((i) => i.text)).toEqual([
+      "Resultado-alvo: Dobrar X.",
+      "Resultado-alvo: Reduzir Y.",
+      "Resultado-alvo: Manter Z.",
     ]);
   });
 
-  it("um board SEM escada nenhuma projeta o esqueleto obrigatório — válido e vazio, nunca quebrado", () => {
+  it("um board SEM escada nenhuma projeta o esqueleto — válido e vazio, nunca quebrado", () => {
     const doc = projectLegacyPrd(config());
-    expect(doc.sections.map((s) => s.key)).toEqual([
-      "resumo",
-      "problema",
-      "publico",
-      "posicionamento",
-      "objetivos",
-      "escopo",
-    ]);
-    const { violations } = parseSchemaBody(
-      stripFrontmatter(serializeSchemaDoc(doc, PRD_SCHEMA)),
-      PRD_SCHEMA,
-      doc.frontmatter,
-    );
+    expect(doc.sections.map((s) => s.key)).toEqual(SETE);
+    expect(doc.sections.every((s) => s.blocks.length === 0)).toBe(true);
+    const { violations } = parseSchemaBody(stripFrontmatter(serializeSchemaDoc(doc, PRD_SCHEMA)), PRD_SCHEMA, doc.frontmatter);
     expect(blockingViolations(violations)).toEqual([]);
   });
 
-  it("as seções que a escada NÃO alimenta nascem ausentes, não vazias-e-obrigatórias", () => {
-    // Dito de outro jeito: a projeção não inventa conteúdo. As treze seções que a escada nunca teve
-    // são exatamente o que faltava — e elas aparecem como esqueleto na tela, não como texto falso.
-    const doc = projectLegacyPrd(DEMO);
-    expect(doc.sections.some((s) => s.key === "decisoes")).toBe(false);
-    expect(doc.sections.some((s) => s.key === "jornadas")).toBe(false);
-  });
-
-  it("o frontmatter declara o tipo do documento", () => {
-    expect(projectLegacyPrd(DEMO).frontmatter).toEqual({ doc: PRD_DOC_TYPE });
+  it("o frontmatter declara o tipo E o formato (é o carimbo que impede a migração de reprocessar)", () => {
+    expect(projectLegacyPrd(DEMO).frontmatter).toEqual({ doc: PRD_DOC_TYPE, format: PRD_FORMAT });
   });
 
   it("hasLegacyStrategy distingue «nunca declarou norte» de «declarou»", () => {

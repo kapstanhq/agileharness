@@ -17,7 +17,7 @@ import { STORY_TYPE_IDS } from "@/lib/storymap/frameworks";
 //   2. a `storyType` outside the canonical set (typo → unhandled);
 //   3. a card whose mode/shape says "bug" but whose `storyType` disagrees: `mode: fix`
 //      or a `bugReport` block ⇒ it MUST be `storyType: bug` (mirrors the bug rule in
-//      priority.ts:34 and triage/parse.ts:152) so a fix can't masquerade as a user story.
+//      triage/parse.ts) so a fix can't masquerade as a user story.
 //
 // Parses RAW frontmatter (NOT coerceCard) on purpose: coercion hides the "missing
 // storyType" case by defaulting to "user", which is exactly the leak we want to catch.

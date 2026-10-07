@@ -90,7 +90,7 @@ export function isLoadBearing(statusId: string): boolean {
 /**
  * WS4 — is `status` DISPENSABLE for per-instance routing (a card's `routing.skips` may bypass it)? The
  * declarative generalisation of {@link isDispensableForRefine}: a step is dispensable when it explicitly
- * declares `dispensable:true` (the WS4 facet, marked on interview/design/ready/priorizar in `_base`), with
+ * declares `dispensable:true` (the WS4 facet, marked on interview/design/ready in `_base`), with
  * the LEGACY heuristic (the design block + the discovery interview) kept as the fallback so a board WITHOUT
  * the facet (orbit opt-out, or any board before the migration lands) behaves byte-identically. A
  * LOAD-BEARING step ({@link isLoadBearing}) is NEVER dispensable — this guard wins over an accidental

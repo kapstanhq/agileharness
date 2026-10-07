@@ -33,6 +33,8 @@ export interface InboxFacet {
   /** o card da faceta — numa causa de vários cards, a tela lista os cards afetados pelo nome. */
   cardId?: string;
   cardTitle?: string;
+  /** o que distingue a faceta das irmãs (o problema da revisão, a pergunta) — várias facetas de uma causa dividem o `ask`. */
+  title?: string;
 }
 
 /** Uma linha do Inbox — um item vivo ou uma decisão do sistema. */
@@ -65,6 +67,8 @@ export interface InboxEntry {
 export const INBOX_PRECEDENCE: readonly CockpitItemKind[] = [
   "deploy-failed",
   "publish-approval",
+  "publish-held",
+  "stage-idle",
   "effect-failed",
   "stalled",
   "deploy-unsettled",
@@ -86,6 +90,10 @@ export const INBOX_PRECEDENCE: readonly CockpitItemKind[] = [
   "approval",
   "governance",
   "meter-stalled",
+  "capacity-latch",
+  "host-health",
+  "sentinel",
+  "push-off",
 ];
 
 /** «Arquivar os antigos» alcança o item parado cujo card é uma história esperando o dono decidir se ainda a quer. */
@@ -106,6 +114,13 @@ const rank = (k: InboxEntry["kind"]) => (k === "system-decision" ? INBOX_PRECEDE
 
 /** O card que uma causa nomeia (`card:<id>`) — a âncora: as entradas DELE lideram a dobra. */
 const anchorOf = (causeKey: string): string | null => (causeKey.startsWith("card:") ? causeKey.slice(5) : null);
+
+/** A entrada dobrada vira faceta da que lidera a causa — com o título que a distingue das irmãs. PURA. */
+function facetOf(e: InboxEntry): InboxFacet {
+  const it = e.item as { title?: unknown; prompt?: unknown } | undefined;
+  const title = typeof it?.title === "string" ? it.title : typeof it?.prompt === "string" ? it.prompt : "";
+  return { itemId: e.itemId, kind: e.kind as CockpitItemKind, ask: e.decision.ask, ...(e.cardId ? { cardId: e.cardId, cardTitle: e.cardTitle } : {}), ...(title.trim() ? { title: title.trim() } : {}) };
+}
 
 /**
  * Dobra por CAUSA, dentro de cada seção: fica a entrada do card âncora da causa (quando a causa nomeia um card) e, entre
@@ -128,7 +143,7 @@ export function foldByCause(entries: readonly InboxEntry[]): InboxEntry[] {
       out.push({ ...e, facets: [...e.facets] });
       continue;
     }
-    const facet: InboxFacet = { itemId: e.itemId, kind: e.kind as CockpitItemKind, ask: e.decision.ask, ...(e.cardId ? { cardId: e.cardId, cardTitle: e.cardTitle } : {}) };
+    const facet = facetOf(e);
     out[at] = { ...out[at], facets: [...out[at].facets, facet, ...e.facets] };
   }
   // ENTRE seções: a aprovação de um card em Decidir e, em Acompanhar, a publicação parada que espera exatamente essa
@@ -144,7 +159,7 @@ export function foldByCause(entries: readonly InboxEntry[]): InboxEntry[] {
     if (e.kind !== "deploy-failed" || e.decision.bucket !== "acompanhar") return;
     const at = decideLead.get(`${e.boardId}|${e.causeKey}`);
     if (at === undefined) return;
-    const facet: InboxFacet = { itemId: e.itemId, kind: e.kind as CockpitItemKind, ask: e.decision.ask, ...(e.cardId ? { cardId: e.cardId, cardTitle: e.cardTitle } : {}) };
+    const facet = facetOf(e);
     out[at] = { ...out[at], facets: [...out[at].facets, facet, ...e.facets] };
     absorbed.add(i);
   });

@@ -26,22 +26,26 @@ describe("planDisambiguation", () => {
     expect(planDisambiguation(idea, {}).kind).toBe("invalid");
   });
 
-  // WS-9 (D15): a captura NUNCA cunha ideia. Um veredito type:"idea" (= dor crua) roteia para a
-  // BANCADA — nunca carimba/reescreve o item de captura para ◆ (o commit-guard também barraria).
-  it("DOR CRUA (type idea) → bancada, NÃO carimba um ◆ (com título/racional do done)", () => {
+  // WS-9 (D15): a captura NUNCA cunha ideia. Um veredito type:"idea" (= dor crua) vira um item da
+  // TRIAGEM — uma story de usuário — porque a bancada de Ideias saiu (fase 2): antes o item ficava parado com
+  // um aviso apontando uma tela que não existe mais. Nunca carimba/reescreve o item para ◆.
+  it("DOR CRUA (type idea) → reescreve como story de USUÁRIO para a Triagem, NUNCA um ◆ (título/racional do done)", () => {
     const plan = planDisambiguation(idea, { type: "idea", title: "Novo título", rationale: "Novo racional" });
-    expect(plan.kind).toBe("bancada");
-    if (plan.kind !== "bancada") throw new Error("esperava bancada");
+    expect(plan.kind).toBe("recast");
+    if (plan.kind !== "recast") throw new Error("esperava recast");
+    expect(plan.toType).toBe("story");
+    expect(plan.toStoryType).toBe("user");
     expect(plan.title).toBe("Novo título");
     expect(plan.rationale).toBe("Novo racional");
   });
 
-  it("roteia para a bancada mesmo quando o done omite título/racional", () => {
-    const plan = planDisambiguation(idea, { type: "idea" });
-    expect(plan.kind).toBe("bancada");
-    if (plan.kind !== "bancada") throw new Error("esperava bancada");
-    expect(plan.title).toBeUndefined();
-    expect(plan.rationale).toBeUndefined();
+  it("uma story de usuário julgada dor crua só é carimbada (já é o item da Triagem), sem ◆", () => {
+    const userStory: ProposedItem = { ...idea, type: "story", storyType: "user", candidateSolutions: undefined };
+    const plan = planDisambiguation(userStory, { type: "idea" });
+    expect(plan.kind).toBe("stamp");
+    if (plan.kind !== "stamp") throw new Error("esperava stamp");
+    expect(plan.item.type).toBe("story");
+    expect(plan.item.storyType).toBe("user");
   });
 
   it("CARIMBA (stamp) uma STORY quando o tipo/subtipo não muda — refina título/racional e limpa ⚠", () => {

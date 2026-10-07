@@ -16,7 +16,8 @@ import { proxyAnswerEntries } from "@/lib/storymap/system-decisions";
 import { appendSystemDecision, newSystemDecisionId } from "./decision-log";
 import { decideAdvance } from "@/lib/storymap/advance";
 import { isConducted } from "@/lib/storymap/driver";
-import { boardDocPath, runnerStateDir } from "@/lib/storymap/paths";
+import { runnerStateDir } from "@/lib/storymap/paths";
+import { boardPersonas, readPrdWithContext } from "@/lib/storymap/board-strategy";
 import { openQuestions } from "@/lib/storymap/questions";
 import { listBoards, readBoardConfig, readCards } from "@/lib/storymap/repo";
 import { readStyleGuide, readWireframe } from "@/lib/storymap/sidecars";
@@ -63,10 +64,27 @@ export function diskProxyLedger(file: string = proxyLedgerPath()): ProxyLedgerSt
   };
 }
 
-/** The OWNER's past answers on this board, most recent first — what the proxy imitates. The proxy's own answers
- *  never count (a proxy learning from itself would drift away from the owner). */
-export function ownerDecisions(cards: readonly Card[]): OwnerDecision[] {
-  const out: Array<OwnerDecision & { at: string }> = [];
+/** As palavras que contam para a relevância (minúsculas, sem acento, 4+ letras). PURA. */
+function relevanceWords(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length >= 4),
+  );
+}
+
+/**
+ * The OWNER's past answers on this board — what the proxy imitates. The proxy's own answers never count (a proxy
+ * learning from itself would drift away from the owner). Fase 6 — a ORDEM: primeiro as CORREÇÕES do dono (perguntas em
+ * que ele reabriu a resposta do procurador e respondeu ele mesmo), depois as mais PARECIDAS com `query` (as palavras em
+ * comum com a pergunta de agora), e só então as mais recentes. Sem `query`, correções e depois recência. PURA.
+ */
+export function ownerDecisions(cards: readonly Card[], query?: string): OwnerDecision[] {
+  const out: Array<OwnerDecision & { at: string; score: number }> = [];
+  const wanted = query ? relevanceWords(query) : null;
   for (const c of cards) {
     for (const q of c.questions ?? []) {
       if (q.status !== "answered" || (q.answeredBy && q.answeredBy !== "human")) continue;
@@ -74,18 +92,30 @@ export function ownerDecisions(cards: readonly Card[]): OwnerDecision[] {
       const picked = (q.selectedOptionIds ?? []).map((id) => q.options?.find((o) => o.id === id)?.label).filter(Boolean);
       const answer = [picked.join(" + "), q.answer].filter(Boolean).join(" — ");
       if (!answer) continue;
-      out.push({ cardTitle: c.title, question: q.text, answer, at: q.answeredAt ?? "" });
+      let score = 0;
+      if (wanted) for (const w of relevanceWords(`${c.title} ${q.text}`)) if (wanted.has(w)) score++;
+      const correction = q.proxy?.auditOutcome === "reopened";
+      out.push({ cardTitle: c.title, question: q.text, answer, at: q.answeredAt ?? "", score, ...(correction ? { correction: true as const } : {}) });
     }
   }
-  return out.sort((a, b) => b.at.localeCompare(a.at)).map(({ at: _at, ...d }) => d);
+  return out
+    .sort((a, b) => Number(!!b.correction) - Number(!!a.correction) || b.score - a.score || b.at.localeCompare(a.at))
+    .map(({ at: _at, score: _score, ...d }) => d);
 }
 
 async function buildRequest(board: string, card: Card, config: BoardConfig, questions: CardQuestion[]): Promise<ProxyRequest> {
-  const [prd, guide, cards, wireframes] = await Promise.all([
-    fsp.readFile(boardDocPath(board, "prd"), "utf8").catch(() => null),
+  const [prd, personas, guide, cards, wireframes, pack] = await Promise.all([
+    // o PRD + o contexto dos agentes (decisões já tomadas, restrições…) — a trava das decisões do dono lê os dois
+    readPrdWithContext(board).catch(() => null),
+    // as personas da seção «Personas» do PRD, com o `board.yaml` como piso legado
+    boardPersonas(board, config).catch(() => config.personas),
     readStyleGuide(board).catch(() => null),
     readCards(board).catch(() => [] as Card[]),
     questions.some((q) => effectiveQuestionCategory(q) === "ui-choice") ? readWireframe(board, card.id).catch(() => null) : Promise.resolve(null),
+    // fase 6 — o PACOTE DE CONTEXTO do card (context-pack.ts, sem IA): o PRD POR SEÇÃO, sempre com o «Fora do escopo»,
+    // as classes do dono e as correções dele no topo — no lugar do PRD inteiro cortado em 12 mil caracteres, que chegava
+    // sem as seções do fim (restrições, riscos, «pronto quando»)
+    import("@/lib/storymap/context-pack").then((m) => m.loadContextPack(board, card.id)).catch(() => null),
   ]);
   return {
     board,
@@ -99,9 +129,10 @@ async function buildRequest(board: string, card: Card, config: BoardConfig, ques
     body: card.body,
     ...(card.techPreference ? { techPreference: card.techPreference } : {}),
     prd,
-    personas: config.personas.map((p) => ({ id: p.id, name: p.name, ...(p.role ? { role: p.role } : {}), ...(p.prompt ? { prompt: p.prompt } : {}) })),
+    personas: personas.map((p) => ({ id: p.id, name: p.name, ...(p.role ? { role: p.role } : {}), ...(p.prompt ? { prompt: p.prompt } : {}) })),
     styleGuide: guide ? styleGuideToPrompt(guide) : null,
-    history: ownerDecisions(cards),
+    history: ownerDecisions(cards, [card.title, ...questions.map((q) => q.text)].join(" ")),
+    ...(pack?.text ? { contextPack: pack.text } : {}),
     // as classes do dono DESTE board: o proxy que recusa por ser decisão dele diz qual (o Inbox mostra a classe)
     ownerClasses: ownerClassesOf(config).map((c) => ({ id: c.id, label: c.label, ...(c.description ? { description: c.description } : {}) })),
     questions: questions.map(blindQuestion).filter((q): q is NonNullable<typeof q> => q !== null),

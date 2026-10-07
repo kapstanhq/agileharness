@@ -7,7 +7,7 @@
  *
  * Config (any of):
  *   window.__AH_FEEDBACK_CONFIG__ = { endpoint, destinationsEndpoint, link:{ kind, board, cardId, sessionId },
- *     producer, icon, label, cardUrlTemplate,
+ *     producer, icon, label, cardUrlTemplate, launcher,
  *     destinations:{ <kind>:{ label, verb, hint } },   // per mode copy — HOST POLICY, not core
  *     theme:{ accent, accentSoft, surface, surfaceHover, inset, line, fg, fgMuted, fgSubtle, danger, font, mono, radius } }
  *   or query params ?ah-board=<board>&ah-card=<id>&ah-session=<tmux>
@@ -20,6 +20,9 @@
  * button glyph (`icon`, trusted host SVG markup) and the card link (`cardUrlTemplate`, with "{board}"/
  * "{id}" placeholders) are all injected by the host; a standalone consumer gets neutral defaults.
  * Routing itself stays link.kind-only — the picker never adds a second routing signal to the batch.
+ * `launcher` (optional): "button" (default) keeps the floating corner button as the way in; "host" means the HOST
+ * offers its own entry point (a menu item) — the corner button then only appears while marking is under way (as the
+ * "Parar" control + pin count), and the host starts/stops the mode by dispatching `ah-feedback:toggle` on window.
  */
 (function () {
   "use strict";
@@ -34,6 +37,12 @@
   if (qs.get("ah-card")) { link.kind = "card"; link.cardId = qs.get("ah-card"); }
   else if (qs.get("ah-session")) { link.kind = "session"; link.sessionId = qs.get("ah-session"); }
   var producer = cfg.producer || "agileharness-overlay";
+  // WHO OPENS the mode. A floating button over somebody else's app is the only door a drop-in snippet can guarantee,
+  // so it stays the default. A host with chrome of its own can claim the door (cfg.launcher "host"): on a short
+  // laptop screen the pill in the corner sat on top of the board's first column. The host's door is an event, not an
+  // API object, so it works before AND after this async script loads (an event nobody hears is simply a no-op).
+  var hostLauncher = cfg.launcher === "host";
+  var TOGGLE_EVENT = "ah-feedback:toggle";
   var cardUrlTemplate = typeof cfg.cardUrlTemplate === "string" ? cfg.cardUrlTemplate : "";
   var destinationsEndpoint = typeof cfg.destinationsEndpoint === "string" ? cfg.destinationsEndpoint : "";
   // IMAGE capture — HOST POLICY, like every other capability here. `shotEndpoint` receives the PNG;
@@ -391,6 +400,9 @@
     // e quem não declara nada continua com os 16px de sempre. `env(safe-area-inset-bottom)` cobre o
     // queixo dos aparelhos sem entalhe declarado.
     ".ah-bar{position:fixed;left:16px;bottom:calc(16px + var(--ah-bottom-reserve, 0px) + env(safe-area-inset-bottom, 0px));z-index:2147483646}",
+    // Host-launched (cfg.launcher "host"): at rest there is no corner button at all — the host's own entry point is
+    // the way in. While marking it comes back, because "Parar" and the pin count must stay one click away.
+    ".ah-bar.ah-idle{display:none}",
     // O BOTÃO CEDE A VEZ a um diálogo modal. Ele mora no canto inferior esquerdo com o maior z-index que
     // existe — de propósito, para ser alcançável em qualquer app. Só que um painel que assume a tela
     // (`aria-modal`) põe as PRÓPRIAS ações nesse mesmo canto: no celular, o botão cobria o anexo, o
@@ -407,7 +419,10 @@
     // qualquer tema e em qualquer app — é o mesmo par do botão de enviar. O acento continua marcando o
     // estado pela borda, onde a cor não precisa carregar texto.
     ".ah-btn.on{background:var(--ah-fg);color:var(--ah-surface);border-color:var(--ah-accent)}",
-    ".ah-panel{position:fixed;left:16px;bottom:60px;z-index:2147483646;width:320px;max-height:64vh;overflow:auto;background:var(--ah-surface);border:1px solid var(--ah-line);border-radius:var(--ah-radius);padding:12px;color:var(--ah-fg);font:13px/1.45 var(--ah-font);box-shadow:0 12px 32px rgba(15,15,15,.16)}",
+    // The panel, the minimized chip and the notice stack ABOVE the button, which itself sits above the host's footer
+    // (`--ah-bottom-reserve`). At a fixed 60px they landed on top of the button — the "Parar" it turns into while
+    // marking was unreachable under the panel — and on top of the host's footer.
+    ".ah-panel{position:fixed;left:16px;bottom:calc(60px + var(--ah-bottom-reserve, 0px) + env(safe-area-inset-bottom, 0px));z-index:2147483646;width:320px;max-height:64vh;overflow:auto;background:var(--ah-surface);border:1px solid var(--ah-line);border-radius:var(--ah-radius);padding:12px;color:var(--ah-fg);font:13px/1.45 var(--ah-font);box-shadow:0 12px 32px rgba(15,15,15,.16)}",
     ".ah-pin{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--ah-line);border-radius:8px;padding:8px 9px;margin:7px 0;background:var(--ah-surface)}",
     ".ah-pin-b{flex:1;min-width:0}",
     ".ah-num{flex:none;min-width:17px;text-align:center;margin-top:1px;border:1px solid var(--ah-line);border-radius:4px;color:var(--ah-fg-subtle);font:700 10px/1.6 var(--ah-mono)}",
@@ -456,7 +471,7 @@
     ".ah-dest{border:1px solid var(--ah-line);border-radius:8px;padding:7px 9px;margin:2px 0 8px;background:var(--ah-inset)}",
     ".ah-dest .dl{font:600 12px var(--ah-font);color:var(--ah-fg)}",
     ".ah-dest .hint{font-size:11px;color:var(--ah-fg-muted);margin-top:2px;line-height:1.35}",
-    ".ah-notice{position:fixed;left:16px;bottom:60px;z-index:2147483647;max-width:320px;box-sizing:border-box;background:var(--ah-surface);color:var(--ah-fg);border:1px solid var(--ah-line);border-radius:var(--ah-radius);padding:10px 12px;font:13px/1.45 var(--ah-font);box-shadow:0 12px 32px rgba(15,15,15,.18)}",
+    ".ah-notice{position:fixed;left:16px;bottom:calc(60px + var(--ah-bottom-reserve, 0px) + env(safe-area-inset-bottom, 0px));z-index:2147483647;max-width:320px;box-sizing:border-box;background:var(--ah-surface);color:var(--ah-fg);border:1px solid var(--ah-line);border-radius:var(--ah-radius);padding:10px 12px;font:13px/1.45 var(--ah-font);box-shadow:0 12px 32px rgba(15,15,15,.18)}",
     ".ah-notice a{color:var(--ah-accent);text-decoration:none;font-weight:600}",
     ".ah-notice a:hover{text-decoration:underline}",
     ".ah-notice .close{float:right;cursor:pointer;color:var(--ah-fg-subtle);margin-left:10px}",
@@ -510,7 +525,7 @@
     ".ah-hacts{display:flex;gap:2px}",
     ".ah-hbtn{width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;border:0;background:transparent;color:var(--ah-fg-subtle);border-radius:6px;cursor:pointer;font:600 16px var(--ah-font);line-height:1}",
     ".ah-hbtn:hover{background:var(--ah-surface-hover);color:var(--ah-fg)}",
-    ".ah-min{position:fixed;left:16px;bottom:60px;z-index:2147483646;background:var(--ah-surface);color:var(--ah-fg-muted);border:1px solid var(--ah-line);border-radius:999px;padding:6px 12px;cursor:pointer;font:600 12px var(--ah-font);box-shadow:0 2px 10px rgba(15,15,15,.10)}",
+    ".ah-min{position:fixed;left:16px;bottom:calc(60px + var(--ah-bottom-reserve, 0px) + env(safe-area-inset-bottom, 0px));z-index:2147483646;background:var(--ah-surface);color:var(--ah-fg-muted);border:1px solid var(--ah-line);border-radius:999px;padding:6px 12px;cursor:pointer;font:600 12px var(--ah-font);box-shadow:0 2px 10px rgba(15,15,15,.10)}",
     ".ah-min:hover{background:var(--ah-surface-hover);color:var(--ah-fg)}",
     ".ah-danger{background:var(--ah-danger);color:#fff}.ah-danger:hover{opacity:.9}",
     ".ah-shot{display:flex;align-items:center;gap:8px;margin-top:11px;padding:8px 10px;border:1px solid var(--ah-line);border-radius:9px;background:var(--ah-inset);font:600 12px var(--ah-font);color:var(--ah-fg);cursor:pointer;user-select:none}",
@@ -1193,6 +1208,7 @@
   }
 
   function paintButton() {
+    bar.classList.toggle("ah-idle", hostLauncher && !picking && !pins.length);
     toggle.textContent = "";
     var ic = document.createElement("span");
     ic.className = "ah-ic"; ic.setAttribute("aria-hidden", "true");
@@ -1538,6 +1554,12 @@
   }
 
   toggle.onclick = function () { setPicking(!picking); };
+  // The host's door (cfg.launcher "host" — e.g. a "Marcar ajuste" menu item). Same semantics as the corner button:
+  // it toggles marking; a minimized capture with pins is reopened instead of being switched off underneath the chip.
+  window.addEventListener(TOGGLE_EVENT, function () {
+    if (minimized && pins.length) { minimized = false; render(); return; }
+    setPicking(!picking);
+  });
   document.addEventListener("mousemove", onMove, true);
   document.addEventListener("mousedown", onMouseDown, true);
   document.addEventListener("mouseup", onMouseUp, true);

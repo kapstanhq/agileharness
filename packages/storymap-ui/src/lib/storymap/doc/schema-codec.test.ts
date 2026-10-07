@@ -22,6 +22,7 @@ import {
   updateSectionItem,
 } from "./schema-codec";
 import { LEAN_CANVAS_SCHEMA } from "./schemas/lean-canvas";
+import { BMC_SCHEMA } from "./schemas/business-model-canvas";
 import { availableViews } from "./view-contracts";
 import { boardLayoutFor } from "@/components/doc/views/board-layouts";
 
@@ -426,9 +427,9 @@ describe("view-contracts — as views se adaptam ao schema, não o contrário", 
     expect(availableViews(S).some((v) => v.id === "quadro")).toBe(true);
   });
 
-  it("o layout do Lean Canvas cobre exatamente as seções de nível 2, e nenhuma inventada", () => {
-    const layout = boardLayoutFor("lean-canvas")!;
-    const topKeys = S.sections.filter((s) => s.level === 2).map((s) => s.key).sort();
+  it("o layout do Business Model Canvas cobre exatamente os nove blocos, e nenhum inventado", () => {
+    const layout = boardLayoutFor(BMC_SCHEMA.docType)!;
+    const topKeys = BMC_SCHEMA.sections.filter((s) => s.level === 2).map((s) => s.key).sort();
     expect(Object.keys(layout.cells).sort()).toEqual(topKeys);
   });
 });

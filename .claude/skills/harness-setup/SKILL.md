@@ -13,8 +13,8 @@ description: >-
   It re-measures the whole checklist on every run, so a second run reports what is already
   true instead of redoing it, and it PROVES the install end to end instead of assuming it.
   Two entry paths: an EXISTING repository (register the board, inherit the pipeline, map
-  what already ships) or a NEW IDEA (an interview that fills the Lean Canvas in Ash
-  Maurya's order, then a backbone and the first stories). Use when the user says "set up
+  what already ships) or a NEW IDEA (an interview that fills the PRD and then the
+  Business Model Canvas, then a backbone and the first stories). Use when the user says "set up
   AgileHarness", "help me install this", "get started", "onboard me", "it is not running",
   or has just cloned the repository and does not know what to do next. Human-in-the-loop:
   it never arms an agent or opens a network surface without an explicit answer.
@@ -254,37 +254,43 @@ Open with one prompt: *"Tell me about the idea in your own words — who it is f
 broken for them today, and what you would build. A paragraph is plenty; I will draft the rest
 and only ask about the parts I should not invent."*
 
-**Write the PRD first.** It is the board's highest document — `storymap/boards/<board>/docs/prd.md`
-— and everything else descends from it: the Lean Canvas is its one-page distillation, the story
-backbone comes out of its journeys, the personas out of its audience. Drafting the canvas first
-would mean compressing a page out of nothing.
+**Write the PRD first.** It is the board's product document — `storymap/boards/<board>/docs/prd.md`
+— a BUSINESS document in seven sections, in this order: problem (`problema`), personas
+(`personas`, one `###` per persona), value proposition (`propostaValor`), features
+(`funcionalidades`), usage flow (`fluxoUso`), success metrics (`metricasSucesso`) and out of scope
+(`foraEscopo`). No technology, architecture or library in it. The story backbone comes out of its
+usage flow and features, the personas live in it. Drafting the canvas first would mean compressing
+a page out of nothing.
 
-Draft the six required sections from what the person just told you — executive summary, problem,
-audience, positioning, objectives and metrics, scope — and leave the other ten as the skeleton they
-are. Write through the document's own surface (`write_doc`, docType `prd`, one section at a time,
-by the section KEY rather than its label; run `read_doc` first to get the keys). Three sections
-deserve a sentence of explanation when you show the draft, because they are the ones written for
-the agents rather than for the reader: **decisions already made** (an agent that does not know a
-decision was taken will take its own), **journeys** (this is what the capture turns into a backbone
-instead of a flat list) and **done when** (verification criteria — "it works" is not one).
+Draft all seven from what the person just told you. Write through the document's own surface
+(`write_doc`, docType `prd`, one section at a time, by the section KEY rather than its label; run
+`read_doc` first to get the keys) — here the human is in the conversation, which is what makes it
+fine to write the owner's document directly; a headless run would PROPOSE instead. **Out of scope**
+deserves a sentence when you show the draft: saying what will not be built cuts as much work as
+saying what will.
 
-Then draft the whole Lean Canvas in the canonical fill order — customer segments, problem,
-unique value proposition, solution, channels, revenue, costs, key metrics, unfair advantage —
-deriving it FROM the PRD you just wrote, and ask exactly **three** questions, each with drafted
-options rather than a blank box:
+What the agents need and the owner does not — **decisions already made** (an agent that does not
+know a decision was taken will take its own), **done when** (verification criteria — "it works" is
+not one), requirements, constraints, risks, glossary — goes in the companion document
+`docs/contexto.md` (`write_doc`, docType `contexto`). It has no page; the engine and every skill read it.
+
+Then draft the whole Business Model Canvas (docType `business-model-canvas`) in its fill order —
+customer segments, value propositions, channels, customer relationships, revenue streams, key
+resources, key activities, key partners, cost structure — deriving it FROM the PRD you just wrote,
+and ask exactly **three** questions, each with drafted options rather than a blank box:
 
 - **Who feels this most acutely today?** It is first in the fill order for a reason: every
   block downstream is conditioned on it, and a wrong segment quietly poisons all of them.
-- **Of these three pains, which is number one?** The ranking decides what the backbone builds
-  first, and a ranking is a judgment, not an inference.
+- **What is the one thing they gain by choosing this?** The value proposition is the hinge of the
+  canvas; a list of features is not an answer.
 - **How does this make money, or not yet?** The one block where a plausible invention is
   actively harmful. "Free for now, deciding later" is a legitimate answer.
 
-Show the complete canvas and get one approval before writing anything. Where there is no
-unfair advantage, write that there is none yet — that is the honest entry.
+Show the complete canvas and get one approval before writing anything. A block that is honestly
+empty today (no partners yet) stays empty — that is the honest entry.
 
-Then derive a plain-language narrative from the PRD's journeys and scope — not from the canvas,
-which is the compression rather than the source — and run it through the capture tool in propose
+Then derive a plain-language narrative from the PRD's usage flow and features — not from the
+canvas, which is the business view rather than the product — and run it through the capture tool in propose
 mode, show the resulting tree, and apply it only after approval. Do **not**
 loop card creation one at a time: that leaves parentless stubs with no hierarchy, and
 resolving the hierarchy in one batch is the entire point of the capture path.

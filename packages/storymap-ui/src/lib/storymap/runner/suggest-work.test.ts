@@ -24,55 +24,33 @@ describe("rankWorkCandidates — ordem", () => {
     expect(out.map((s) => s.cardId)).toEqual(["quase-la", "meio", "novo"]);
   });
 
-  it("empatada a coluna, decide a prioridade (3 Crítica → 0 Baixa)", () => {
+  it("empatada a coluna, decide a POSIÇÃO na coluna (mais acima primeiro)", () => {
     const out = rankWorkCandidates([
-      c({ cardId: "baixa", rank: 0 }),
-      c({ cardId: "critica", rank: 3 }),
-      c({ cardId: "media", rank: 1 }),
+      c({ cardId: "embaixo", order: 30 }),
+      c({ cardId: "no-topo", order: -10 }),
+      c({ cardId: "meio", order: 10 }),
     ]);
-    expect(out.map((s) => s.cardId)).toEqual(["critica", "media", "baixa"]);
+    expect(out.map((s) => s.cardId)).toEqual(["no-topo", "meio", "embaixo"]);
   });
 
-  it("card NÃO AVALIADO vai para o FIM — não empata com um avaliado como Baixa", () => {
-    // Era o `?? 0`: um card sem prioridade nenhuma empatava com um julgado Baixa. Pior, num board onde
-    // ninguém tinha nota TODOS empatavam em 0 e a ordem caía inteira no cardId — ordem alfabética de id
-    // servida como ranking. Mesma regra de honestidade da tela: sem avaliação não se finge posição.
-    const out = rankWorkCandidates([
-      c({ cardId: "sem-nota" }),
-      c({ cardId: "baixa", rank: 0 }),
-      c({ cardId: "media", rank: 1 }),
-    ]);
-    expect(out.map((s) => s.cardId)).toEqual(["media", "baixa", "sem-nota"]);
+  it("não há nota: um card sem `order` vale 0 e empata pela posição, nunca por um score", () => {
+    const out = rankWorkCandidates([c({ cardId: "depois", order: 20 }), c({ cardId: "sem-ordem" }), c({ cardId: "antes", order: -5 })]);
+    expect(out.map((s) => s.cardId)).toEqual(["antes", "sem-ordem", "depois"]);
   });
 
-  it("dentro do MESMO tier, o WSJF desempata (dois 'Alta' não são igualmente urgentes)", () => {
+  it("WIP-first continua VENCENDO a posição (terminar antes de começar)", () => {
     const out = rankWorkCandidates([
-      c({ cardId: "alta-fraca", rank: 2, wsjf: 4.2 }),
-      c({ cardId: "alta-forte", rank: 2, wsjf: 7.5 }),
-      c({ cardId: "critica", rank: 3, wsjf: 0.5 }),
+      c({ cardId: "topo-novo", status: "enriquecer", columnIndex: 1, trigger: "harness-enrich", order: -100 }),
+      c({ cardId: "fundo-em-qa", status: "qa-automatizado", columnIndex: 9, trigger: "harness-qa", order: 900 }),
     ]);
-    // o tier continua mandando sobre a razão — quem é Crítica vem primeiro mesmo com WSJF menor
-    expect(out.map((s) => s.cardId)).toEqual(["critica", "alta-forte", "alta-fraca"]);
-  });
-
-  it("WIP-first continua VENCENDO a prioridade (terminar antes de começar)", () => {
-    const out = rankWorkCandidates([
-      c({ cardId: "critica-nova", status: "enriquecer", columnIndex: 1, trigger: "harness-enrich", rank: 3, wsjf: 12 }),
-      c({ cardId: "baixa-em-qa", status: "qa-automatizado", columnIndex: 9, trigger: "harness-qa", rank: 0, wsjf: 0.4 }),
-    ]);
-    expect(out.map((s) => s.cardId)).toEqual(["baixa-em-qa", "critica-nova"]);
-  });
-
-  it("diz explicitamente quando um card não tem prioridade avaliada", () => {
-    const [top] = rankWorkCandidates([c({ cardId: "x" })]);
-    expect(top.why).toContain("sem prioridade avaliada");
+    expect(out.map((s) => s.cardId)).toEqual(["fundo-em-qa", "topo-novo"]);
   });
 
   it("AC4 — duas chamadas concorrentes recebem o MESMO ranking (ordem TOTAL, sem moeda ao ar)", () => {
-    // Mesma coluna, mesma prioridade: sem o desempate por cardId a ordem dependeria da ordem de entrada,
+    // Mesma coluna, mesma posição: sem o desempate por cardId a ordem dependeria da ordem de entrada,
     // e dois agentes perguntando ao mesmo tempo poderiam receber listas diferentes — a base do modelo de
     // contenção (o 2º pega "o próximo") deixaria de valer.
-    const set = [c({ cardId: "b", rank: 2 }), c({ cardId: "a", rank: 2 }), c({ cardId: "c", rank: 2 })];
+    const set = [c({ cardId: "b", order: 10 }), c({ cardId: "a", order: 10 }), c({ cardId: "c", order: 10 })];
     const first = rankWorkCandidates(set, { count: 3 });
     const second = rankWorkCandidates([...set].reverse(), { count: 3 });
     expect(first.map((s) => s.cardId)).toEqual(["a", "b", "c"]);
@@ -80,9 +58,10 @@ describe("rankWorkCandidates — ordem", () => {
   });
 
   it("explica POR QUE cada sugestão está onde está (ranking auditável, não vibe)", () => {
-    const [top] = rankWorkCandidates([c({ cardId: "x", rank: 3, status: "revisar-codigo", columnIndex: 7 })]);
+    const [top] = rankWorkCandidates([c({ cardId: "x", order: 30, status: "revisar-codigo", columnIndex: 7 })]);
     expect(top.why).toContain("revisar-codigo");
-    expect(top.why).toContain("3/3");
+    expect(top.why).toContain("ordem 30");
+    expect(top.order).toBe(30);
     expect(top.why).toContain("sem claim vivo");
   });
 });
@@ -138,7 +117,7 @@ describe("collectWorkCandidates — o meio-IO", () => {
   const deps = {
     readCards: async () =>
       [
-        { id: "s1", title: "um", status: "desenvolver", priorityCall: { rank: 2 } },
+        { id: "s1", title: "um", status: "desenvolver", order: 20 },
         { id: "s2", title: "dois", status: "concluida" },
         { id: "s3", title: "três", status: "desenvolver", findings: [{ severity: "blocker", status: "open" }] },
         { id: "s4", title: "fantasma", status: "coluna-que-nao-existe-mais" },
@@ -156,7 +135,7 @@ describe("collectWorkCandidates — o meio-IO", () => {
 
   it("resolve status→coluna/trigger, marca claim vivo e blocker, e ignora status órfão", async () => {
     const out = await collectWorkCandidates("acme", deps);
-    expect(out.find((x) => x.cardId === "s1")).toMatchObject({ columnIndex: 1, trigger: "harness-do", rank: 2, claimedBy: "agent-9" });
+    expect(out.find((x) => x.cardId === "s1")).toMatchObject({ columnIndex: 1, trigger: "harness-do", order: 20, claimedBy: "agent-9" });
     expect(out.find((x) => x.cardId === "s2")).toMatchObject({ terminal: true });
     expect(out.find((x) => x.cardId === "s3")).toMatchObject({ blocked: true });
     // s4 está num status que o board não declara mais — não é sugerível (nem quebra a coleta).

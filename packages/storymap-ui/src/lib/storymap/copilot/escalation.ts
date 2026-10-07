@@ -25,7 +25,9 @@ export type EscalationTemplateId =
   | "question-pending" | "approval-pending" | "proposal-capture" | "review-triage"
   | "gate-manual-approve" | "design-wireframe" | "governance-draft"
   | "release-aging" | "preserved-branch-recovery" | "orphan-process-kill"
-  | "move-gate-blocked" | "unplaced-card" | "hitl-card-instructions";
+  | "move-gate-blocked" | "unplaced-card" | "hitl-card-instructions"
+  /** fase 6 — o «Resolver no chat» de um diagnóstico da Sentinela (Mínima): a causa vai ao chat, que tem os poderes. */
+  | "sentinel-cause";
 
 /** Fields common to every ref. `taskId` is RESERVED (D16) — the v1 code path never populates it. */
 interface EscalationRefBase {
@@ -51,6 +53,8 @@ export type EscalationRef = EscalationRefBase &
     | { kind: "approval"; boardId: string; approvalId: string }
     | { kind: "governance"; boardId: string; draftId: string }
     | { kind: "move-blocked"; boardId: string; cardId: string; target: string }
+    /** fase 6 — uma causa da Sentinela; `causeId` é o hash curto da chave (runner/sentinel.ts `sentinelCauseId`). */
+    | { kind: "sentinel"; boardId: string; causeId: string }
   );
 
 // ── Wire encoding (isomorphic, UTF-8 safe) ───────────────────────────────────────────────────────
@@ -59,7 +63,7 @@ export type EscalationRef = EscalationRefBase &
 // runs client-side (QuickActionButton) and in tests. Never throws (parse fails silent to null).
 
 const KINDS = new Set([
-  "card", "question", "finding", "merge", "run", "deploy", "branch", "process", "approval", "governance", "move-blocked",
+  "card", "question", "finding", "merge", "run", "deploy", "branch", "process", "approval", "governance", "move-blocked", "sentinel",
 ]);
 const TEMPLATE_IDS = new Set<string>([
   "merge-conflict", "merge-gate-failed", "merge-failed-terminal", "deploy-failed", "deploy-unsettled",
@@ -67,6 +71,7 @@ const TEMPLATE_IDS = new Set<string>([
   "blocker-secret-scan", "qa-red", "question-pending", "approval-pending", "proposal-capture",
   "review-triage", "gate-manual-approve", "design-wireframe", "governance-draft", "release-aging",
   "preserved-branch-recovery", "orphan-process-kill", "move-gate-blocked", "unplaced-card", "hitl-card-instructions",
+  "sentinel-cause",
 ]);
 /** ids that ride a ref must be inocuous (no path traversal, no secret) — invariant 6. */
 const ID_RE = /^[A-Za-z0-9/._-]{1,120}$/;
@@ -167,6 +172,9 @@ export function parseEscalationRef(raw: string | null | undefined): EscalationRe
     case "move-blocked":
       if (!idOk(o.cardId) || !idOk(o.target)) return null;
       return { ...base, kind: "move-blocked", boardId, cardId: o.cardId, target: o.target };
+    case "sentinel":
+      if (!idOk(o.causeId)) return null;
+      return { ...base, kind: "sentinel", boardId, causeId: o.causeId };
     default:
       return null;
   }
@@ -434,6 +442,20 @@ export const ESCALATION_TEMPLATES: Record<EscalationTemplateId, EscalationTempla
     // The free-HITL template (scenario 25): MINIMAL — only points the agent at the card; the human types the rest.
     (p) => `Investigue o card \`${p.cardId}\` antes de responder.`,
   ),
+  // fase 6 — o diagnóstico da Sentinela em Mínima: ela só leu; o chat (poderes amplos, sob a trava dura) confere e
+  // conserta. O diagnóstico em si é EVIDÊNCIA e viaja no <contexto> (item-context.ts), nunca aqui (invariante 7).
+  "sentinel-cause": tpl(
+    "sentinel-cause",
+    "run",
+    (p) => {
+      const card = p.cardId ?? p.extra?.cardId;
+      return (
+        `A Sentinela achou um problema na máquina (causa \`${p.extra?.causeId ?? "?"}\`${card ? `, card \`${card}\`` : ""}). ` +
+        `Leia o diagnóstico no contexto, confirme a causa olhando o estado real e conserte pelo caminho mínimo e reversível.`
+      );
+    },
+    "NÃO rode comando que mude estado (reiniciar, reenfileirar, apagar, mexer em branch) sem me confirmar neste chat antes.",
+  ),
 };
 
 // ── ref → instruction bridge (added for WS-1; ADDITIVE to the frozen WS-0 contract) ───────────────
@@ -482,6 +504,9 @@ export function paramsFromRef(ref: EscalationRef, extra?: Record<string, string>
     case "move-blocked":
       p.cardId = ref.cardId;
       p.targetStatus = ref.target;
+      break;
+    case "sentinel":
+      p.extra = { causeId: ref.causeId };
       break;
   }
   if (extra) p.extra = { ...(p.extra ?? {}), ...extra };

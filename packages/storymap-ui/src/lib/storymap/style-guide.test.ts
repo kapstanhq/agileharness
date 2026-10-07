@@ -14,6 +14,7 @@ import {
   type ColorToken,
   type StyleGuideDoc,
   brandVoiceNote,
+  agentStyleSectionWrite,
 } from "./style-guide";
 import { STYLE_SECTION_KEYS } from "./style-guide-blocks";
 
@@ -390,5 +391,78 @@ describe("brandVoiceNote — a voz de marca é do BOARD, não da ferramenta", ()
     const note = brandVoiceNote(voice({ preferred }));
     expect(note).toContain('"u5" a "a5"');
     expect(note).not.toContain('"u6"');
+  });
+});
+
+// Fase 2 — a seção COMPONENTES (a regra de uso de cada componente de UI). Opcional e vazia por padrão.
+describe("components — a seção nova do guia", () => {
+  it("um guia antigo, sem a seção, coerce para vazio (nada quebra, nada é inventado)", () => {
+    const doc = coerceStyleGuideDoc({ meta: { version: 1 } });
+    expect(doc.components).toEqual({ items: [], prose: "" });
+    expect(isEmptyStyleGuideDoc(doc)).toBe(true);
+  });
+
+  it("coerce guarda nome+regra, descarta item vazio e lixo; o guia deixa de ser vazio", () => {
+    const doc = coerceStyleGuideDoc({
+      components: {
+        items: [{ name: "Botão primário", rule: "um por tela — a ação que fecha a tarefa" }, {}, "lixo", { name: "Aviso" }],
+        prose: "Componente novo só quando dois casos reais pedirem.",
+      },
+    });
+    expect(doc.components.items).toEqual([
+      { name: "Botão primário", rule: "um por tela — a ação que fecha a tarefa" },
+      { name: "Aviso", rule: "" },
+    ]);
+    expect(isEmptyStyleGuideDoc(doc)).toBe(false);
+  });
+
+  it("compila no .md, sobrevive ao round-trip e chega ao prompt dos agentes", () => {
+    const doc = coerceStyleGuideDoc({
+      meta: { version: 2, updatedAt: "2026-10-06T00:00:00.000Z" },
+      components: { items: [{ name: "Cartão de livro", rule: "capa à esquerda, preço sempre visível" }], prose: "" },
+    });
+    const md = compileStyleGuideMd(doc);
+    expect(md).toContain("Cartão de livro — capa à esquerda, preço sempre visível");
+    expect(parseStyleGuideMd(md)?.components).toEqual(doc.components);
+    const prompt = styleGuideToPrompt(doc);
+    expect(prompt).toContain("[key: components]");
+    expect(prompt).toContain("Cartão de livro");
+  });
+});
+
+// Decisão do dono (06/10): o tom é dele; cores, tipografia, estética e componentes os agentes mantêm, com o
+// contraste conferido. O kernel puro é a régua — a action e a tool `write_styleguide` só o embrulham.
+describe("agentStyleSectionWrite — a escrita de um agente numa seção do guia", () => {
+  it("troca SÓ a seção pedida e mantém o resto do guia intacto", () => {
+    const prev = fullDoc();
+    const r = agentStyleSectionWrite(prev, "components", { items: [{ name: "Botão de reservar", rule: "um por tela" }], prose: "" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.doc.components.items).toEqual([{ name: "Botão de reservar", rule: "um por tela" }]);
+    expect({ ...r.doc, components: prev.components }).toEqual(prev);
+  });
+
+  it("recusa o tom de voz: é do dono (o agente propõe na conversa)", () => {
+    const r = agentStyleSectionWrite(fullDoc(), "voice", { lexicon: { preferred: [], forbidden: ["livro"], exceptions: [] }, prose: "" });
+    expect(r).toMatchObject({ ok: false });
+    if (!r.ok) expect(r.error).toMatch(/do dono/);
+  });
+
+  it("recusa seção desconhecida e valor fora do formato da seção", () => {
+    expect(agentStyleSectionWrite(fullDoc(), "layout", {}).ok).toBe(false);
+    const r = agentStyleSectionWrite(fullDoc(), "color", { paleta: "azul" });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/formato/);
+  });
+
+  it("recusa a escrita que faz um par de cor reprovar o AA; um par que já reprovava não trava", () => {
+    const prev = fullDoc();
+    const worse = { ...prev.color, tokens: [...prev.color.tokens, { role: "estante", value: "#DDDDDD", on: "#FFFFFF", usage: "texto da etiqueta" }] };
+    const r = agentStyleSectionWrite(prev, "color", worse);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/AA.*estante/);
+    const alreadyFailing = coerceStyleGuideDoc({ ...prev, color: worse });
+    const again = agentStyleSectionWrite(alreadyFailing, "color", { ...worse, prose: "Paleta curta, revista." });
+    expect(again.ok).toBe(true);
   });
 });

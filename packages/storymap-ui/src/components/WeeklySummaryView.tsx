@@ -88,6 +88,17 @@ export function WeeklySummaryView({ summary, current, previous, next }: { summar
         <p className="-mt-3 mb-6 text-[12.5px] text-fg-subtle">O porquê de cada uma, e o «Desfazer», estão em «Acompanhar», no Inbox de cada board.</p>
       )}
 
+      {summary.expiredAudits.length > 0 && (
+        <Section title="Entregas que ninguém revisou" count={summary.expiredAudits.length} empty="">
+          {summary.expiredAudits.map((i) => (
+            <ItemRow key={`${i.boardId}/${i.cardId}`} item={i} />
+          ))}
+        </Section>
+      )}
+      {summary.expiredAudits.length > 0 && (
+        <p className="-mt-3 mb-6 text-[12.5px] text-fg-subtle">Estavam na amostra para você revisar e passaram do prazo de 7 dias: ficaram valendo como entregues. Se alguma não deveria, use «Refinar» no card.</p>
+      )}
+
       {summary.rollout && (
         <section className="mb-6">
           <h2 className="mb-2 text-[13px] font-medium uppercase tracking-wide text-fg-subtle">Só-negócio em outros boards</h2>

@@ -74,25 +74,34 @@ describe("o Inbox de todos os boards", () => {
 
 describe("a chegada e a aposentadoria", () => {
   const src = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
-  it("`/` chega no Inbox de todos os boards; /perguntas redireciona para ele", () => {
-    expect(src("../../../app/page.tsx")).toMatch(/redirect\("\/inbox"\)/);
+  it("`/` chega no Kanban do 1º board (a casa, desde que o Início saiu); /perguntas redireciona para o Inbox", () => {
+    // fase 1: a porta do app é a casa do board; o Inbox de todos os boards fica a um toque (o ícone da barra)
+    expect(src("../../../app/page.tsx")).toMatch(/redirect\(boardHomeHref\(boards\[0\]\.id\)\)/);
+    expect(src("../../../components/nav/TopBar.tsx")).toMatch(/<InboxIconLink href="\/inbox"/);
     expect(src("../../../app/perguntas/page.tsx")).toMatch(/redirect\("\/inbox"\)/);
     expect(existsSync(fileURLToPath(new URL("../../../components/QuestionsQueue.tsx", import.meta.url)))).toBe(false);
   });
-  it("o Inbox (a rota própria e a do board) é a MESMA tela, com o selo do board e o filtro", () => {
-    expect(src("../../../app/inbox/page.tsx")).toMatch(/<InboxHome snapshot=\{snapshot\}/);
-    expect(src("../../../components/CockpitView.tsx")).toMatch(/<InboxHome snapshot=\{snapshot\}/);
+  it("o Inbox (a rota própria e a do board) é a MESMA tela; o de todos leva o selo do board e o filtro", () => {
+    expect(src("../../../app/inbox/page.tsx")).toMatch(/<InboxHome snapshot=\{snapshot\} scope="all"/);
+    // fase 3: o Inbox do board mostra só este board, com o link para o de todos
+    expect(src("../../../components/CockpitView.tsx")).toMatch(/<InboxHome snapshot=\{snapshot\} scope=\{\{ board: config\.id \}\}/);
     const home = src("../../../components/inbox/InboxHome.tsx");
-    expect(home).toMatch(/showBoard=\{!filter\}/);
+    expect(home).toMatch(/const showBoard = !filter/);
     expect(home).toMatch(/aria-label="Filtrar por board"/);
   });
   it("o push, a pílula do Kanban e o «Resolver» leem o modelo do Inbox, não mais o legado", () => {
     expect(src("../../notifications/server/watcher.ts")).toMatch(/cardInboxSignal\(/);
-    // a pílula do Kanban mora na LINHA DE ESTADO do card (CardLiveStatus.tsx), que o KanbanCard usa
+    // a pílula do Kanban mora na LINHA DE ESTADO do card (CardLiveStatus.tsx), que o card do Kanban (kanban/FeatureCard,
+    // desde a fase 1) e o quadro (o estado de cada caixinha, useBoardLiveStatuses) usam
     expect(src("../../../components/CardLiveStatus.tsx")).toMatch(/cardInboxSignal\(/);
-    expect(src("../../../components/KanbanCard.tsx")).toMatch(/useCardLiveStatus\(/);
+    expect(src("../../../components/kanban/FeatureCard.tsx")).toMatch(/useCardLiveStatus\(/);
+    expect(src("../../../components/KanbanBoard.tsx")).toMatch(/useBoardLiveStatuses\(/);
+    // O «Resolver» do menu do card ANTIGO (RunnerStatusProvider) saiu com o card antigo na fase 1: o «precisa de você»
+    // do card novo é o bloco de ação, que roda a decisão do Inbox (useOwnerDecisionFor). Prova-se a ausência do botão
+    // velho e que nenhuma superfície volta ao legado.
     const provider = src("../../../components/RunnerStatusProvider.tsx");
-    expect(provider).toMatch(/cardInboxSignal\(card, config, boardId/);
-    for (const rel of ["../../notifications/server/watcher.ts", "../../../components/KanbanCard.tsx", "../../../components/CardLiveStatus.tsx"]) expect(src(rel)).not.toMatch(/dominantDemand\(cardDemands/);
+    expect(provider).not.toMatch(/export function KanbanCardNextAction|export function KanbanCardActionsMenu/);
+    expect(src("../../../components/kanban/FeatureCard.tsx")).toMatch(/useOwnerDecisionFor\(card\.id\)/);
+    for (const rel of ["../../notifications/server/watcher.ts", "../../../components/kanban/FeatureCard.tsx", "../../../components/KanbanBoard.tsx", "../../../components/CardLiveStatus.tsx", "../../../components/RunnerStatusProvider.tsx"]) expect(src(rel)).not.toMatch(/dominantDemand\(cardDemands/);
   });
 });

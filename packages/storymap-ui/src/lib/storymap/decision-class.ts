@@ -12,6 +12,12 @@
 //   personal-data  dados de pessoas — apagar, coletar um dado pessoal novo, mudar o que é público.
 // Tudo o mais é TÉCNICO: o sistema decide, com prova, registro e "Desfazer" quando reversível.
 //
+// O PERFIL (fase 4 — autonomy-profile.ts). O `ultra` virou caixas: `whoDecides` lê, ponto a ponto, a caixa que o
+// governa — a pergunta de entrevista/técnica pela `spec`, a escolha de tela pela `design`, «Aprovar entrega» pela
+// `delivery` (a exceção do card sobrepõe as três). O resto da régua — as classes do dono, o código de cobrança, a trava
+// do núcleo, a governança, os dados de pessoas, o comando travado — NÃO lê o perfil: fica igual com tudo ligado
+// (autonomy-profile.test.ts fixa isso caixa por caixa).
+//
 // O MODO. Só-negócio é o `ultra` — não um modo novo. O dono definiu o que o ultra quer dizer; um segundo
 // modo "ultra, mas que ainda pergunta o técnico" seria um botão que um dono leigo não sabe julgar. `human` segue
 // byte-idêntico: todo ponto de parada é do dono (`whoDecides` devolve `owner` para qualquer ponto).
@@ -28,9 +34,11 @@
 // QUALQUER modo, uma falha cuja origem é a FERRAMENTA (runner/failure-origin.ts) ou o mesmo no-op de novo nunca é do
 // dono: nenhuma resposta dele muda o desfecho.
 
-import { effectiveAutonomy, effectiveQuestionCategory, isOwnerOnlyQuestion } from "./autonomy";
+import { effectiveAutonomy, effectiveQuestionCategory, isOwnerOnlyQuestion, ownerFloorClass } from "./autonomy";
+import { AUTONOMY_BOXES, decisionKeyOfCategory, storyDecides, type StoryDecisionKey } from "./autonomy-profile";
 import { MONEY_CLASS, ownerClassLabel, ownerClassesOf } from "./owner-classes";
 import { failureOrigin, runDeathRepeats, type FailureOrigin } from "./runner/failure-origin";
+import { nextQuestionId } from "./questions";
 import type { BoardConfig, Card, CardQuestion, DeployCause, RiskClass } from "./types";
 
 // As classes em si (a lista, o default, o rótulo) moram em owner-classes.ts — um módulo sem dependência que
@@ -82,8 +90,22 @@ export type DecisionPoint =
   | { kind: "deploy-hold"; cause: Pick<DeployCause, "ownerClass" | "decider" | "rules" | "units"> | null }
   /** a proposta da captura inteligente — o texto do próprio dono virando cards */
   | { kind: "capture-proposal" }
-  /** a amostra do que o sistema decidiu em nome do dono — a revisão dele, nada espera por ela */
-  | { kind: "audit" };
+  /** a amostra do que o sistema decidiu em nome do dono — é para um revisor independente, não para o dono (ainda sem revisor: fica à vista em «Os agentes estão cuidando») */
+  | { kind: "audit" }
+  /**
+   * Fase 3 — uma ALAVANCA DO OPERADOR que nenhum ator do sistema tem: publicar por cima da guarda de concorrência, soltar a
+   * trava da cota, parar o condutor de um card que ninguém assumiu. As server actions recusam qualquer outro chamador, então
+   * o ponto é do dono em qualquer modo. `why` é o porquê em palavras de dono.
+   */
+  | { kind: "operator"; why: string }
+  /**
+   * uma MUDANÇA DE CÓDIGO prestes a seguir (o diff de uma entrega): `billing` = toca o código de cobrança ou pagamento
+   * (sempre do dono, em qualquer modo); `existingTests` = altera ou apaga um teste que já existia (vai a um revisor de
+   * diff independente — a categoria `guardrail` —, nunca ao procurador; até esse revisor existir, ao dono). Os
+   * detectores puros estão abaixo ({@link codeChangePoint}); o merge train os aplica ao diff de cada card
+   * ({@link withCodeChangeMarks}).
+   */
+  | { kind: "code-change"; billing?: boolean; existingTests?: boolean; agentConfig?: boolean };
 
 export type DecisionPointKind = DecisionPoint["kind"];
 
@@ -107,6 +129,28 @@ export function cardOwnerClass(card: Pick<Card, "businessClasses"> | null | unde
 
 /** O porquê de uma escolha de tela que o dono pediu para ver. */
 const UI_ASKED = "você pediu para ver as opções de tela deste card";
+
+/**
+ * O porquê de uma mudança em teste existente. A regra do dono: vai a um revisor de diff independente, nunca ao
+ * procurador nem a quem perguntou. O revisor existe desde a fase 6 (runner/critics.ts `reviewGuardrailQuestion`): o
+ * SERVIÇO o lança sobre a pergunta aberta e, aprovando, responde por ele. O PONTO segue marcado como do dono — é o
+ * desfecho seguro enquanto o revisor não respondeu e o que vale quando ele reprova (ou em modo humano).
+ */
+const GUARDRAIL_REASON =
+  "mudar um teste existente: em só-negócio o revisor de diff independente lê o diff primeiro; se ele reprovar (ou em modo humano), é seu — nunca do procurador nem de quem perguntou";
+
+/** O porquê da configuração dos agentes: as regras que os PRÓXIMOS agentes leem e o que eles podem chamar. */
+const AGENT_CONFIG_REASON =
+  "muda as regras ou os poderes dos agentes (skills, instruções, agentes, comandos, hooks, MCP, permissões, a configuração do serviço, as receitas e as classes de deploy) — um agente não reescreve a regra que o próximo vai obedecer; é sempre seu, sem revisor no meio";
+
+/** O porquê do código de cobrança: dinheiro, em qualquer modo. */
+const BILLING_REASON = "mexe no código de cobrança ou de pagamento — sempre seu, em qualquer modo";
+
+/** O porquê de uma caixa do perfil desligada: o dono deixou esta decisão com ele. */
+function boxOffReason(key: StoryDecisionKey): string {
+  const box = AUTONOMY_BOXES.find((b) => b.key === key)?.label ?? key;
+  return `a autonomia do board deixa com você: «${box}»`;
+}
 
 /** O marcador que o condutor põe numa pergunta sempre-humana (o mesmo que autonomy.ts lê). */
 const OWNER_MARKER = /^\s*\[humano\]/i;
@@ -136,6 +180,9 @@ export function questionVerdict(
   }
   // o que sobra do piso (autonomy.ts isOwnerOnlyQuestion) são as palavras de dinheiro no texto/contexto
   if (isOwnerOnlyQuestion(question)) return owner(MONEY_CLASS, "fala de gasto, fornecedor ou preço — sempre sua");
+  // o piso da MARCA (autonomy.ts ownerFloorClass), quando o board declara a classe — vale mesmo com categoria declarada
+  const floor = ownerFloorClass(question, config);
+  if (floor) return owner(floor, `fala em nome da marca fora do produto («${ownerClassLabel(floor, config)}») — sempre sua`);
   // a categoria EFETIVA: a de quem perguntou, senão o veredito do classificador
   switch (effectiveQuestionCategory(question)) {
     case "owner": {
@@ -155,6 +202,8 @@ export function questionVerdict(
       return system("escolha de tela: o sistema escolhe pelo guia de estilo e registra as alternativas");
     case "delivery":
       return system("aprovação de entrega: o verificador decide pela prova, e uma amostra volta para você");
+    case "guardrail":
+      return owner(null, GUARDRAIL_REASON);
     default:
       return owner(null, "pergunta ainda sem classe — fica com você até ser classificada");
   }
@@ -188,31 +237,61 @@ export function whoDecides(
   if (point.kind === "recovery" && point.failure?.repeatedNoOp) {
     return system("o run deste passo concluiu «não há trabalho» de novo, seguidas vezes: tentar de novo do mesmo jeito não muda o desfecho");
   }
+  // O código de cobrança é DINHEIRO em qualquer modo e com qualquer caixa ligada: antes do modo, de propósito. A
+  // mudança em teste existente também (o revisor de diff que a julgaria ainda não existe — GUARDRAIL_REASON).
+  if (point.kind === "code-change" && point.billing) return owner(MONEY_CLASS, BILLING_REASON);
+  if (point.kind === "code-change" && point.existingTests) return owner(null, GUARDRAIL_REASON);
+  if (point.kind === "code-change" && point.agentConfig) return owner(null, AGENT_CONFIG_REASON);
   if (!isBusinessOnly(card, config)) return owner(null, "board em modo humano — você decide cada passo");
+  // As caixas NÃO vazam: «só-negócio» é derivado de QUALQUER caixa de story ligada, mas cada ponto é julgado pela caixa
+  // que o governa. O que nenhuma caixa nomeia (a triagem, a aprovação técnica, o dilema, o travamento, a publicação
+  // parada por lacuna, o passo técnico e o «vai» do plano) é do «técnico» — a caixa `spec` (o crítico aprova o plano).
+  // Desligada, esses pontos voltam ao veredito humano: um board só com «escolher a tela» não deixa agente nenhum passar
+  // pela parada do plano.
+  const technicalOff = !storyDecides(card, config, "spec");
   const touched = cardOwnerClass(card);
   const touchedReason = touched ? `o card toca «${ownerClassLabel(touched, config)}»${card?.businessClasses?.reason ? `: ${card.businessClasses.reason}` : ""}` : "";
   // «Quero ver as opções de tela» (card-opt-ins.ts): a escolha de tela deste card é do dono — pedida por ele.
   const uiAsked = card?.ownerReviewsUi === true;
   switch (point.kind) {
-    case "question":
-      if (uiAsked && effectiveQuestionCategory(point.question) === "ui-choice") return owner(null, UI_ASKED);
-      return questionVerdict(point.question, config);
+    case "question": {
+      const category = effectiveQuestionCategory(point.question);
+      if (uiAsked && category === "ui-choice") return owner(null, UI_ASKED);
+      const verdict = questionVerdict(point.question, config);
+      if (verdict.decider === "owner") return verdict;
+      // O card TOCA uma classe do dono: o procurador não decide nele (autonomy.ts proxyRefusal) — a mesma régua aqui,
+      // senão a pergunta ficaria «do sistema» sem ninguém do sistema para respondê-la.
+      if (touched && category !== "guardrail") return owner(touched, touchedReason);
+      // O ESCOPO do perfil: a caixa que governa a categoria desligada ⇒ do dono.
+      const key = decisionKeyOfCategory(category);
+      if (key && !storyDecides(card, config, key)) return owner(null, boxOffReason(key));
+      return verdict;
+    }
     case "triage-review":
-      return touched ? owner(touched, touchedReason) : system("o juiz da triagem aceita, descarta ou junta pelo PRD");
+      if (touched) return owner(touched, touchedReason);
+      if (technicalOff) return owner(null, boxOffReason("spec"));
+      return system("o juiz da triagem aceita, descarta ou junta pelo PRD");
     case "gate":
       if (touched) return owner(touched, touchedReason);
       // Ponto ESTRUTURAL: em só-negócio o condutor atravessa «Aprovar entrega» sozinho, com a prova. Um card PARADO
       // ali, com trabalho pronto, é uma entrega que nenhum ator do sistema vai mover — deixá-la em «o sistema decide»
       // a esconderia do dono para sempre. Fica com o dono: aprovar ou devolver.
-      if (point.deliveryApproval) return owner(null, DELIVERY_PARKED);
+      // Com a caixa «aprovar a entrega» desligada, ninguém do sistema atravessa (travado em código: owner-waiting.ts).
+      if (point.deliveryApproval) return owner(null, storyDecides(card, config, "delivery") ? DELIVERY_PARKED : boxOffReason("delivery"));
+      // o «vai» do plano e todo passo técnico: a caixa `spec` (o crítico aprova o plano × você aprova o plano)
+      if (technicalOff) return owner(null, boxOffReason("spec"));
       return system("passo técnico: o pipeline, o verificador e o condutor avançam com prova");
     case "ui-choice":
-      return uiAsked ? owner(null, UI_ASKED) : system("escolha de tela: o especialista de UX ou o orquestrador escolhe e registra as alternativas");
+      if (uiAsked) return owner(null, UI_ASKED);
+      if (!storyDecides(card, config, "design")) return owner(null, boxOffReason("design"));
+      return system("escolha de tela: o especialista de UX ou o orquestrador escolhe e registra as alternativas");
     case "approval":
       if (point.riskClass && KERNEL_HUMAN_RISK.has(point.riskClass)) {
         return owner(null, "shell livre ou ação irreversível — trava do núcleo, humana em qualquer modo");
       }
-      return touched ? owner(touched, touchedReason) : system("ação técnica: um revisor independente aprova, com registro");
+      if (touched) return owner(touched, touchedReason);
+      if (technicalOff) return owner(null, boxOffReason("spec"));
+      return system("ação técnica: um revisor independente aprova, com registro");
     case "governance":
       return owner("prd", "mudar o PRD, as metas ou a estratégia do board é decisão sua");
     case "data-deletion":
@@ -220,18 +299,166 @@ export function whoDecides(
     case "locked-exec":
       return owner(null, "um comando que a trava do servidor proíbe a agentes — só roda com o seu clique, em qualquer modo");
     case "dilemma":
-      return point.ownerClass
-        ? owner(point.ownerClass, `o dilema toca «${ownerClassLabel(point.ownerClass, config)}»`)
-        : system("dilema técnico: o responsável decide pela meta principal do PRD e registra como desfazer");
+      if (point.ownerClass) return owner(point.ownerClass, `o dilema toca «${ownerClassLabel(point.ownerClass, config)}»`);
+      if (technicalOff) return owner(null, boxOffReason("spec"));
+      return system("dilema técnico: o responsável decide pela meta principal do PRD e registra como desfazer");
     case "recovery":
+      if (technicalOff) return owner(null, boxOffReason("spec"));
       return system("travamento técnico: o Jido tenta de novo com limite e, se repetir, abre um card de conserto");
-    case "deploy-hold":
-      return deployHoldVerdict(point.cause, config);
+    case "deploy-hold": {
+      const verdict = deployHoldVerdict(point.cause, config);
+      return verdict.decider === "system" && technicalOff ? owner(null, boxOffReason("spec")) : verdict;
+    }
     case "capture-proposal":
       return owner(null, "a captura é o seu texto — você confirma o que ele vira");
     case "audit":
-      return owner(null, "amostra do que o sistema decidiu em seu nome — a sua revisão; nada espera por ela");
+      // decisão do dono (06/10): a amostra é para revisores independentes (IA), nunca para o dono. Esse revisor ainda não
+      // roda — o texto não o promete (a amostra fica à vista no Inbox, marcada «ninguém está revisando»).
+      return system("amostra do que o sistema decidiu em seu nome: é para um revisor independente, não para você — e ele ainda não roda");
+    case "operator":
+      return owner(null, point.why);
+    case "code-change":
+      if (touched) return owner(touched, touchedReason);
+      if (technicalOff) return owner(null, boxOffReason("spec"));
+      return system("mudança de código: o revisor e a suíte decidem, com prova");
   }
+}
+
+// ── os detectores da mudança de código (puros — o chamador passa a lista de arquivos do diff) ─────────────────────
+
+/** Caminhos de código de cobrança/pagamento — genéricos, sem fornecedor nem produto (o alvo é de quem o usa). */
+const BILLING_PATH =
+  /(^|[/._-])(billing|payments?|pagamentos?|cobrancas?|cobranças?|checkout|invoices?|faturas?|faturamento|subscriptions?|assinaturas?|pricing|precos?|preços?)([/._-]|$)/i;
+
+/** Um arquivo de teste (vitest/jest/playwright/pytest/go…). */
+const TEST_PATH = /(^|\/)(tests?|__tests__|e2e|spec)\/|\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)test_[^/]+\.py$|_test\.(go|py)$/i;
+
+/**
+ * A configuração dos AGENTES no repositório-alvo: as skills (as regras do condutor moram em
+ * `.claude/skills/harness-conductor/ref/`, lidas do worktree), as definições de agente e de comando, os hooks, o MCP do
+ * projeto e as permissões — e as REGRAS que eles leem a cada sessão: todo `CLAUDE.md` (o da raiz e os de pacote) e as
+ * regras importadas de `.claude/rules/`. Mais o que o SERVIÇO executa ou obedece em nome deles: `storymap/settings.yaml`
+ * (os comandos das fontes de sinal, a matriz de risco do escopo repo, os níveis dos tokens), as receitas do `justfile`
+ * que a trava do host deixa passar, as classes de deploy e os hooks de git. Um diff que mexe aqui reescreve o que os
+ * próximos agentes obedecem — e o worktree deles é cortado de `stage`, onde o código já aterrissou.
+ */
+const AGENT_CONFIG_PATH =
+  /(^|\/)\.claude\/(skills|agents|commands|hooks|rules)\/|(^|\/)\.claude\/settings[^/]*\.json$|(^|\/)\.mcp\.json$|(^|\/)CLAUDE\.md$|(^|\/)AGENTS\.md$|^storymap\/settings\.ya?ml$|(^|\/)[Jj]ustfile$|(^|\/)\.justfile$|^scripts\/deploy\/classes\/|^scripts\/git-hooks\/|(^|\/)\.githooks\//;
+
+/** Uma linha do diff: o caminho e o status do git (A adicionado, M alterado, D apagado, R renomeado). */
+export interface DiffFile {
+  path: string;
+  status: "A" | "M" | "D" | "R" | string;
+}
+
+/** O diff toca o código de cobrança ou pagamento? PURA. */
+export function touchesBillingCode(files: ReadonlyArray<Pick<DiffFile, "path">>): boolean {
+  return files.some((f) => BILLING_PATH.test(f.path));
+}
+
+/** O diff ALTERA, APAGA ou RENOMEIA um teste que já existia (adicionar teste novo não conta)? PURA. */
+export function changesExistingTests(files: ReadonlyArray<DiffFile>): boolean {
+  return files.some((f) => f.status !== "A" && TEST_PATH.test(f.path));
+}
+
+/** O diff cria, altera ou apaga a configuração dos agentes (skills, agentes, comandos, hooks, MCP, permissões)? PURA. */
+export function changesAgentConfig(files: ReadonlyArray<Pick<DiffFile, "path">>): boolean {
+  return files.some((f) => AGENT_CONFIG_PATH.test(f.path));
+}
+
+/** O ponto de decisão de um diff. PURA. */
+export function codeChangePoint(files: ReadonlyArray<DiffFile>): Extract<DecisionPoint, { kind: "code-change" }> {
+  return {
+    kind: "code-change",
+    billing: touchesBillingCode(files),
+    existingTests: changesExistingTests(files),
+    agentConfig: changesAgentConfig(files),
+  };
+}
+
+/** O `git diff --name-status --no-renames` em linhas do diff (status de uma letra, caminho). PURA. */
+export function parseNameStatus(stdout: string): DiffFile[] {
+  return stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      const [status, ...rest] = line.split("\t");
+      const p = rest[rest.length - 1]?.trim();
+      return status && p ? [{ path: p, status: status.trim().charAt(0) }] : [];
+    });
+}
+
+/** Quem marca o card a partir do diff (o merge train) — a autoria da marca e da pergunta. */
+const CODE_CHANGE_MARKER = "merge-train";
+
+/**
+ * O card com as marcas que o DIFF do código dele pede (o ponto `code-change`), ou null quando já está marcado ou o
+ * diff não pede nada. PURA — o merge train a chama depois de o código aterrissar em `stage`:
+ *   • toca cobrança/pagamento ⇒ o card passa a tocar a classe «dinheiro» (`businessClasses`): toda parada dele vira do
+ *     dono, e a publicação espera o dono (owner-waiting.ts ownerPublishHold);
+ *   • altera/apaga um teste que já existia ⇒ uma pergunta ABERTA `guardrail` ao dono (até existir o revisor de diff),
+ *     uma por run (idempotente pelo contexto);
+ *   • mexe na configuração dos agentes (skills, agentes, comandos, hooks, MCP, permissões) ⇒ outra pergunta `guardrail`,
+ *     também uma por run.
+ */
+export function withCodeChangeMarks<T extends Pick<Card, "businessClasses" | "questions">>(card: T, files: ReadonlyArray<DiffFile>, runId: string, at: string): T | null {
+  const point = codeChangePoint(files);
+  let next: T = card;
+  const list = (paths: string[]) => `${paths.slice(0, 3).join(", ")}${paths.length > 3 ? ` e mais ${paths.length - 3}` : ""}`;
+  if (point.billing && !card.businessClasses?.ids.includes(MONEY_CLASS)) {
+    const reason = `o código deste card mexe em cobrança ou pagamento (${list(files.filter((f) => BILLING_PATH.test(f.path)).map((f) => f.path))})`;
+    next = {
+      ...next,
+      businessClasses: {
+        ids: [...(card.businessClasses?.ids ?? []), MONEY_CLASS],
+        reason: card.businessClasses?.reason ? `${card.businessClasses.reason}; ${reason}` : reason,
+        by: CODE_CHANGE_MARKER,
+        at,
+      },
+    };
+  }
+  const tag = `(run ${runId})`;
+  if (point.existingTests && !(card.questions ?? []).some((q) => q.category === "guardrail" && q.context?.includes(tag))) {
+    const tests = files.filter((f) => f.status !== "A" && TEST_PATH.test(f.path)).map((f) => f.path);
+    const questions = card.questions ?? [];
+    next = {
+      ...next,
+      questions: [
+        ...questions,
+        {
+          id: nextQuestionId(questions),
+          text: "Este card mudou testes que já existiam. Aprova a mudança?",
+          status: "open" as const,
+          askedBy: CODE_CHANGE_MARKER,
+          askedAt: at.slice(0, 10),
+          category: "guardrail" as const,
+          context: `Testes alterados ou apagados: ${list(tests)} ${tag}. Em só-negócio o revisor de diff independente lê o diff primeiro; reprovado (ou em modo humano), é seu.`,
+        },
+      ],
+    };
+  }
+  const agentTag = `(run ${runId} · agentes)`;
+  if (point.agentConfig && !(next.questions ?? []).some((q) => q.category === "guardrail" && q.context?.includes(agentTag))) {
+    const paths = files.filter((f) => AGENT_CONFIG_PATH.test(f.path)).map((f) => f.path);
+    const questions = next.questions ?? [];
+    next = {
+      ...next,
+      questions: [
+        ...questions,
+        {
+          id: nextQuestionId(questions),
+          text: "Este card mudou a configuração dos agentes (skills, agentes, comandos, hooks, MCP ou permissões). Aprova a mudança?",
+          status: "open" as const,
+          askedBy: CODE_CHANGE_MARKER,
+          askedAt: at.slice(0, 10),
+          category: "guardrail" as const,
+          context: `Arquivos: ${list(paths)} ${agentTag}. Um agente não reescreve a regra que o próximo agente vai obedecer: é sempre seu — nenhum revisor responde por você aqui.`,
+        },
+      ],
+    };
+  }
+  return next === card ? null : next;
 }
 
 /**
@@ -319,11 +546,20 @@ const KIND_POINT: Record<CockpitItemKind, (item: CockpitItem, card: Card | undef
   "deploy-unsettled": () => ({ kind: "recovery" }),
   "release-aging": () => ({ kind: "recovery" }),
   "effect-failed": () => ({ kind: "recovery" }),
-  stalled: () => ({ kind: "recovery" }),
+  // o card CONDUZIDO parado (o condutor encerrou e ninguém assumiu): parar o condutor ou devolver o card às colunas é do
+  // operador — nenhum ator do sistema reabre em laço quem morreu (runner/conductor.ts)
+  stalled: (item, card) =>
+    item.kind === "stalled" && (item.conducted || card?.routing?.driver === "conductor") ? { kind: "operator", why: "o condutor deste card encerrou e ninguém assumiu: parar ou devolver às colunas é do operador" } : { kind: "recovery" },
   "meter-stalled": () => ({ kind: "recovery" }),
   proposal: () => ({ kind: "capture-proposal" }),
   "proxy-audit": () => ({ kind: "audit" }),
   "delivery-audit": () => ({ kind: "audit" }),
+  "publish-held": () => ({ kind: "operator", why: "publicar por cima da guarda de trabalho concorrente, ou cancelar o pedido, é decisão do operador" }),
+  "stage-idle": () => ({ kind: "operator", why: "este board só publica quando alguém pede" }),
+  "capacity-latch": () => ({ kind: "operator", why: "só o operador solta a trava da cota" }),
+  "host-health": () => ({ kind: "recovery" }),
+  sentinel: () => ({ kind: "recovery" }),
+  "push-off": () => ({ kind: "operator", why: "só você liga o aviso no seu celular" }),
 };
 
 /**

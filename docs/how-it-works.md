@@ -26,10 +26,10 @@ because the list *is* the argument — more than any feature table.
 > your lap.
 
 > **"I wanted an agent that knows the whole application, not just the file I opened."** That's
-> **Jido**, the board's own agent. It is Claude Code underneath, but it starts with the map, the
-> personas, the canvas, the pipeline state, the risk matrix and your rules already loaded — and it
-> can read the code, run the checks, spawn a working session and, if you let it, deploy. Same
-> engine, different starting context.
+> **Jido**, the board's own agent, in the composer at the bottom of every page. It is Claude Code
+> underneath, but it starts with the PRD, the canvas, the style guide, the pipeline state, the
+> board's autonomy and your rules already loaded — and it can read the code, run the checks, spawn a
+> working session and, if you let it, deploy. Same engine, different starting context.
 
 > **"I wanted to steer development from my phone."** The board is an MCP server, so the Claude app
 > is a front end for it. Talk an idea through by voice on the way somewhere, let it become a
@@ -38,10 +38,10 @@ because the list *is* the argument — more than any feature table.
 > gets you for free.
 
 > **"I wanted the domain attached to the work, not living in someone's head."** Every card carries
-> the personas it serves, the systems it touches, its place on the journey map, and the link to the
-> pain it addresses. Above all of them sits the **PRD** — the board's highest document, with the
-> positioning, the business metric and the outcome being chased now as sections of it — and every
-> agent reads a digest of it before it writes anything.
+> the personas it serves, the systems it touches, the feature it belongs to, and the link to the
+> pain it addresses. Above all of them sits the **PRD** — the product in the owner's words: the
+> problem, the personas, the value proposition and the metrics of success — and every agent reads a
+> digest of it, plus the decisions already taken, before it writes anything.
 
 > **"I wanted the boring guarantees to happen without me asking."** Acceptance criteria bound to
 > the tests that prove them; a code review pass with a security lens; a QA step that has to record
@@ -50,8 +50,8 @@ because the list *is* the argument — more than any feature table.
 
 > **"I wanted the doubts raised at the start, not discovered at the end."** Before a story is
 > specified, a step interrogates it: what's ambiguous, does this actually serve the personas we
-> declared, what would make this the wrong thing to build. The questions land on the card with
-> suggested answers, and the column waits.
+> declared, what would make this the wrong thing to build. The questions land in the Inbox in plain
+> words, each suggested answer a button, and the card waits.
 
 > **"I wanted to see the screen before agreeing to it."** The design step proposes UI as a canvas
 > of artifacts you react to one by one — approve this, change that — and the one you pick becomes
@@ -60,32 +60,61 @@ because the list *is* the argument — more than any feature table.
 > **"I wanted every task to respect the style guide I wrote."** The guide is a document on the
 > board, and the build step is pointed at it. Not a convention someone might follow.
 
-> **"I wanted to fix what I see, where I see it."** An overlay sits on the running interface: click
-> an element or drag a region, say what's wrong, and it lands as a card, as a refinement on an
-> existing card, or pasted straight into a live agent session. It works over your own app too.
+> **"I wanted to fix what I see, where I see it."** «Marcar ajuste», in the gear, lays an overlay on
+> the running interface: click an element or drag a region, say what's wrong, and it lands in the
+> Triagem as an item to triage. It works over your own app too.
 
 ### It is opinionated, and the dial is the point
 
 This is not a neutral platform. It has a pipeline, it has gates, it has opinions about what a story
 needs before it becomes code. If you want a place to park tasks, this will annoy you.
 
-What it does not have an opinion about is **how much you drive**. The same board runs at either end:
+What it does not have an opinion about is **how much you drive**. That is one control per board,
+**Autonomia**, reached from the pill in the top bar and from the gear — one panel, two doors, and no
+other screen configures it. It has two ready modes:
 
-| | you drive | it drives |
+| | **Mínima** | **Máxima** |
 |---|---|---|
-| **Terminals** | open sessions, work in your own worktrees, submit when ready — the train integrates | sessions are spawned for you, work claimed automatically |
-| **The pipeline** | move each card by hand; run a column's skill when you want it | armed columns fire on entry and cascade to the next gate |
-| **Jido** | `off` — it answers, and does nothing you didn't ask | `autonomous` — it picks up work, resolves what it can, escalates what it can't |
-| **Shipping** | you press Publish | the board's release policy pulls it through to production |
+| **The plan** | you approve it before any code | the agents give the go; a proxy answers the technical questions of the spec |
+| **The screen** | you pick among the drawn variants | an agent picks |
+| **The delivery** | you approve it, with the proof written on the card | an agent approves it, with the same proof |
+| **Publishing and deploy** | you press the button | the agents publish and deploy |
+| **Spending past a card's ceiling** | you decide | the agents may, within the quota's pace |
+| **Jido** | it talks and proposes; it does not touch the board | it acts on the board — pulls work, unblocks cards |
 
-Between those, a risk matrix decides *per class of action* whether Jido acts, asks, or never does —
-and a few classes can never be automatic, whatever the config says. You can start fully manual and
-move the dial one notch at a time, per board.
+Between the two, each row is a checkbox, so autonomy is granular («Personalizada»); a box that depends
+on another says so (deploy needs publishing, publishing needs an approved delivery). Changing a mode or
+a box saves at once, with a receipt and *Undo*, and only the operator can do it: no agent changes
+autonomy, and the MCP surface only reads it (`board_autonomy`). The panel also has a box for the
+**Sentinel**, which looks after the machine (runs, conductors, the merge train, the deploy, the tool's
+health): in Mínima it only diagnoses and the Inbox shows what it found, with «Resolver no chat»; in Máxima
+it repairs on its own, under the host's hard lock, with every command recorded. Independent reviewers judge
+what the agents cannot judge about themselves: a **plan critic** gives the «go» to build when the spec box is
+on (in Mínima you answer «Pode construir?»), and a **reviewer of changes to existing tests** decides them on a
+business-only board (otherwise they come to you).
+
+**Funcionalidades and batches.** The Kanban groups the work by the PRD's funcionalidades; an item that fits
+none shows in «Outros (fora do PRD)». An anchor job links existing cards to the funcionalidades and asks you,
+in one grouped question, only about the unclear ones; three or more similar items in «Outros» become one
+proposal of a new funcionalidade. The conductor carries a new story alone, but fixes and chores of the same
+funcionalidade may go in one batch — one plan stop, one delivery stop, US$ 10 per item and US$ 30 at most —
+and an item that fails leaves the batch with its reason. Two conductors never work on one funcionalidade at
+the same time.
+
+Two things stay **outside every box**. The host's **hard lock** refuses the catastrophic and
+irreversible to every agent, whatever the mode. And the **decisions only the owner takes** — money
+and pricing (including any change to billing code), speaking for the brand outside the product, the
+PRD and its goals, people's data — stay the owner's in Máxima exactly as in Mínima. The panel lists
+them under «Sempre seus, em qualquer modo», with no checkbox to untick.
+
+Your own **terminals** sit beside all of this: open sessions, work in your own worktrees, submit when
+ready — the train integrates. The column cascade, the pace (normal, slow, paused) and the scope are a
+separate brake, on the Kanban's second bar; they say how much moves, not who decides.
 
 ### The thing that actually changed the work
 
-Both altitudes, in one place. The map tells you what the product is and where this story sits in
-someone's journey; the same card carries the diff that implemented it, the findings the review
+Both altitudes, in one place. The PRD tells you what the product is and the feature tells you where
+this story sits; the same card carries the diff that implemented it, the findings the review
 raised and the commit QA validated. **You get the high-level view and the low-level view of the
 same object**, and moving between them is scrolling, not context-switching between four tools that
 disagree.
@@ -99,9 +128,9 @@ change shows up in a diff, gets reviewed in a PR, and reverts like anything else
 agent reads your board, it reads files it already has checked out.
 
 **2 · Columns are executable.** A column can declare a `trigger` — a skill that runs
-headless when a card enters. Fourteen skills come wired to columns: capture, grill, interview,
-enrich, prioritize, UX, UI, plan, develop, review, QA, refine, fix and retire. A card dropped in
-an armed column is enriched, broken into tasks, prioritized, designed, planned, built,
+headless when a card enters. Thirteen skills come wired to columns: capture, grill, interview,
+enrich, UX, UI, plan, develop, review, QA, refine, fix and retire. A card dropped in
+an armed column is enriched, broken into tasks, designed, planned, built,
 reviewed and published without a human touching it — stopping at the first gate it fails,
 with the reason written on the card.
 
@@ -119,38 +148,88 @@ spec-driven tooling stops at "the code was generated"; here that is the middle o
 
 ## The techniques
 
-### The PRD is the highest document, and three of its sections are written for the agent
+### The PRD is for the owner, the context is for the agents
 
-Every board has one, at `storymap/boards/<board>/docs/prd.md`. Sixteen sections, six of them
-required, and it is where positioning, the business metric and the outcome being chased now live
-— not as three loose strings in a config file, but as sections of the document that explains them.
+Every board keeps two documents where it used to keep one. `storymap/boards/<board>/docs/prd.md`
+is the product in business language — problem, personas, value proposition, features, usage flow,
+success metrics, out of scope; seven sections and no technology. `docs/contexto.md` is what the
+agents need and the owner doesn't have to read to decide the product. A third,
+`docs/business-model-canvas.md`, is the business on one page (the nine Business Model Canvas
+blocks).
 
-A PRD written for people can stop at *what we're building and why*. A PRD that feeds agents has to
-carry three more things, and they are the ones that change the output:
+A PRD written for people can stop at *what we're building and why*. Agents need more, and it lives
+in the context, where it changes the output:
 
-| section | what happens without it |
+| context section | what happens without it |
 |---|---|
 | **Decisions already made** | an agent that doesn't know a decision was taken takes its own — plausibly, and in the wrong direction. This is the section that stops the fourth reinvention of something settled in week one. |
-| **Journeys** | the capture has nothing to build a backbone from, so free text becomes a flat list of cards with no map underneath. |
 | **Done when** | "it works" is not a verification criterion. The gates measure the card; this measures the product. |
 
-**What reaches a prompt is a digest, not the document.** Five sections — summary, positioning,
-target outcome, business metric, scope — capped per section. The whole PRD in every prompt would
-drown the actual question, and an agent that needs the rest calls `read_doc`. The prioritization
-step argues against that digest instead of inventing reach numbers; the capture step uses it to
-know what the product is before it proposes a backbone; the build step inherits it through the
-card.
+**What reaches a prompt is a digest, not the document.** Six sections of the PRD — value
+proposition, problem, personas, success metrics, features, out of scope — capped per section. The
+whole PRD in every prompt would drown the actual question, and an agent that needs the rest calls
+`read_doc`. The capture step uses the digest to know what the product is before it proposes a
+backbone; the build step inherits it through the card; the judges that route and admit work read
+the PRD and the context in full.
 
-**Everything else descends from it, in one declared direction.** The Lean Canvas is its one-page
-compression, the story backbone comes out of its journeys, the personas out of its audience.
-*Generate map* on the PRD seeds the capture with journeys, scope and solution — not with all
-sixteen sections, because *Business model* and *Glossary* describe the product rather than the
-work, and a capture fed with them mints cards for both.
+**The backbone and the personas come out of the PRD.** A capture seeded from the PRD is fed the
+usage flow and the features — not all seven sections, because personas and metrics describe
+the product rather than the work, and a capture fed with them mints cards for both. The personas
+every agent writes for are the PRD's «Personas» section.
 
-**The file is human-owned.** A `Write` or `Edit` against `docs/prd.md` is refused by the ownership
-guard, and the refusal names `propose_change` — which opens a draft, with a diff, for someone to
-approve. The chat *on the screen* writes the document immediately, because there a human is already
-in the loop reading every word. Same document, two doors, and the asymmetry is the point.
+**The PRD and the canvas are human-owned; the context is not.** A `Write` or `Edit` against
+`docs/prd.md` or `docs/business-model-canvas.md` is refused by the ownership guard, and the refusal
+names `propose_change` — which opens a draft, with a diff, for someone to approve. The chat *on the
+screen* writes the document immediately, because there a human is already in the loop reading
+every word. The agents keep the context themselves.
+
+### Four pages, four files
+
+The navigation is four groups, and each one is a single page over a single Markdown file of the
+board:
+
+| group | page | file |
+|---|---|---|
+| **Negócio** (business) | Business Model Canvas, nine blocks | `docs/business-model-canvas.md` |
+| **Produto** (product) | the PRD | `docs/prd.md` |
+| **Design** | the style guide | `design/style-guide.md` |
+| **Software** | the Kanban | the cards, `cards/*.md` |
+
+A document page has one view and one Edit/Save button — no view switcher — and the composer at the
+bottom talks to that document's assistant. Everything that used to be a screen of its own and did not
+help steer the work either moved or left: the questions queue and the delivery screen became items in
+the Inbox, the story map became the *feature* that groups cards on the Kanban, ideas became items in
+the Triagem, personas became a section of the PRD, and metrics became the cost on each card and in the
+quota ring. The prioritization screen left with the prioritization itself: there is no priority score,
+the order of the work is the card's position in its Kanban column («Fazer antes» / «Pode esperar» move it
+to the top or the bottom), and the conductor takes cards in that order. The old links of the screens
+that left redirect — the prioritization one to the Kanban. The whole account, screen by screen, is in
+[`scamper-decisions.md`](./scamper-decisions.md) (in Portuguese).
+
+### The Inbox: what happened, what I need, the options
+
+Everything that needs a person arrives in one place, and every item has the same anatomy:
+
+```
+[board] · Question · 12 min ago
+What happened: <one or two sentences — who did what, no jargon>
+What I need from you: <one question>
+[ Option 1 ] [ Option 2 ] [ Option 3 ]       ← one click each
+More details ▾                                ← ids, technical text, the card, ask the chat
+```
+
+**One click means one click.** No confirmation dialog and no form before the button: an option that
+used to ask for a note runs with a plain default note, and the receipt offers to add a reason; a
+destructive option says its consequence on the button itself. After the click the item turns into a
+receipt — what changed, and *Undo* when the action can be undone. The server still refuses what it
+must, and the refusal appears where the receipt would.
+
+An agent that needs a decision writes it in that shape: `ask_question` takes the context (what
+happened), the question, two to four answers and a recommendation. Health signals, a quota lock, a
+publication held back, a delivery to approve, a design to choose, a locked command to approve — each
+arrives with the action that unblocks it. What the agents are handling on their own is one collapsed
+line at the end, "the agents are taking care of (N)", with the system's decisions and their *Undo*.
+The phone rings only for what is critical.
 
 ### The card is the spec, and it is one file
 
@@ -162,7 +241,7 @@ readability** — the board itself ships in Portuguese, as does the interface
 ```yaml
 ---
 id: story-audio-sample
-type: story                     # activity → step → story: the map's three levels
+type: story                     # activity → step → story: the three levels under a feature
 title: Hear a sample of the audiobook
 storyType: user                 # user | technical | bug | chore | spike
 status: stage                   # where it is in the pipeline, right now
@@ -190,7 +269,6 @@ is a checkbox someone ticks:
 | stamp | written by | what it proves |
 |---|---|---|
 | `questions[]` | the interview skill | what the agent didn't know, and what a human answered |
-| `rice` · `kano` · `funnelStage` · `priorityCall` | prioritization | how much it's worth, and the call that was made |
 | `wireframeChosen` | design | which artifact of the canvas is the screen |
 | `techPlanReady` | planning | the technical plan sidecar exists |
 | `tasks[]` | decomposition | the work, item by item |
@@ -222,12 +300,12 @@ not part of checking.
 
 ### Cards form a typed graph, not a tree
 
-The parent link places a story on the map. Nine **typed edges** carry everything the map can't:
+The parent link places a story under its feature. Nine **typed edges** carry everything the feature tree can't:
 
 | edge | reads as |
 |---|---|
 | `addresses` | this story addresses that **idea** — a pain in the opportunity space |
-| `serves` | this technical/bug/chore work **serves** that map node — infrastructure never floats free of the user value it enables |
+| `serves` | this technical/bug/chore work **serves** that feature or story — infrastructure never floats free of the user value it enables |
 | `depends-on` · `blocks` | ordering, in both directions |
 | `duplicates` · `relates-to` · `references` | the rest |
 
@@ -256,7 +334,7 @@ always keeps the step — it is their decision. Entering a Triagem by a move cle
 (it stays in the trail) so that board's judge judges it fresh; in human mode it also asks for human
 review. Anchors and links are per board: a valid
 `anchor` in the destination is used; without one the card enters the destination's **Triagem** (the only
-place a card without a map position is representable) with a finding asking for an anchor, and links to
+place a card without a feature is representable) with a finding asking for an anchor, and links to
 cards left behind are recorded in the body instead of dangling. The card keeps a `transfers` trail
 (from, to, who, when, why, the anchor it left behind), and the move shows up in the follow-up of **both**
 boards.
@@ -349,10 +427,11 @@ questions:
 Three things follow from that shape. **The column that raises questions does not auto-advance** —
 it is the one deliberately manual step in the cascade, so nothing downstream gets built on a guess;
 the card waits there until a human moves it on. The answer then becomes **context for the next
-skill**, which reads it instead of re-deriving the same thing. And the questions collect in one
-queue across all cards, so a human answers a batch of decisions rather than babysitting a run. The
-board's own agent can answer the ones that are *facts* — something it can look up in the code or
-the data — and hands you the ones that are *product*, which are the only ones that needed you.
+skill**, which reads it instead of re-deriving the same thing. And the questions collect in the
+Inbox across all cards, each one with its answers as buttons, so a human answers a batch of
+decisions rather than babysitting a run. The board's own agent can answer the ones that are
+*facts* — something it can look up in the code or the data — and hands you the ones that are
+*product*, which are the only ones that needed you.
 
 <sub>To be precise about the mechanism, because it's the kind of thing that's easy to overstate: no
 gate inspects <code>questions</code>. What holds the card is the column's own <code>autorun: false</code>,
@@ -630,7 +709,7 @@ ends. A stale request stops being an «Autorizar» (authorize) button: the Inbox
 service re-measures through the board's `deploy.planCommand`, which only reads. Without a declared plan, it runs the
 board's deploy without a card only while another owner request that is still valid remains for that package (the deploy
 stops there and publishes nothing) and the board's pace does not hold it; otherwise the request is marked stale and the
-Inbox points to «Refazer os pedidos de publicação» on the board's delivery screen. A paused board still re-measures
+Inbox offers «Refazer o pedido agora» on the publication item. A paused board still re-measures
 through its plan (measuring is not new work and publishes nothing); an organize-only board is never touched. Each request
 is redone automatically at most once: if the target measures the same change again, it is still valid for the target.
 
@@ -641,7 +720,7 @@ board has no blocked publication at all — at most once an hour — and opens a
 for an approval the ledger does not show yet (nor the owner already gave). The row has no card: the Inbox shows it as
 «Autorizar publicação» on the publishing board, with the same «Autorizar publicar» button, and it closes when the plan
 stops listing it. A plan entry that carries an owner approval request is the owner's even when its rule is outside the
-board's `autonomy.deployRuleClasses`. An organize-only board is never read. The delivery screen counts only the rows
+board's `autonomy.deployRuleClasses`. An organize-only board is never read. The Inbox counts only the rows
 that ask the owner something now; a row that only waits on another package says what it waits for.
 
 The environment can only add to the three lists (`AGILEHARNESS_DEPLOY_LAUNCHERS`, `_RECIPE_RUNNERS`,
@@ -771,7 +850,7 @@ starting.
 **What the scope stops is the *start* of construction, and nothing else.** It stops a conductor from
 being dispatched or adopted, the conductor queue, and the columns from technical plan through
 development (`plano-tecnico`, `quebrar-tasks`, `desenvolver`; the list is named and tested against
-the base board). Capture, triage, questions, the interview, specification and prioritisation keep
+the base board). Capture, triage, questions, the interview and specification keep
 running on purpose: a bug captured an hour ago is born with the default type, and it can only be
 recognised as a bug if those columns still run. On a board with a conductor the exception is the
 conductor's own entry points: the interview and the refine door of a *new feature* wait together
@@ -958,7 +1037,7 @@ model, driven from a settings file the engine composes per run.
 
 Quite a lot, and this is worth knowing before you decide:
 
-- **the board** — reading, writing, moving cards, the map, the canvas, the whole interface;
+- **the board** — reading, writing, moving cards, the four documents, the Inbox, the whole interface;
 - **git and the merge train** — worktrees, the suite gate, the code/data split, the publish queue;
 - **the gates** — they are pure functions over card data and never call an agent;
 - **the MCP server** — 107 tools over HTTP, which *any* MCP client can drive. Your agent doesn't

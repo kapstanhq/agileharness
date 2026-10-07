@@ -1,6 +1,5 @@
 // O esqueleto GENÉRICO de uma view de board — vale para toda rota sob `/board/<id>/…` que não tenha
-// um `loading.tsx` próprio (kanban, mapa, priorização, config, vocabulário, o card…). A home tem o
-// seu, mais fiel, em `inicio/loading.tsx`.
+// um `loading.tsx` próprio (kanban, documentos, config, o card…).
 //
 // Aqui a barra é EXATA (ela é a mesma em todas as views, e é o que responde ao clique no mesmo
 // quadro) e o corpo é deliberadamente NEUTRO: cada view tem um layout diferente — kanban em colunas,

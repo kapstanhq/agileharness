@@ -71,12 +71,24 @@ describe("a decisão do item — o mesmo «Autorizar publicar» da publicação 
       expect(d.options[0]).toMatchObject({ id: "authorize-publish", invoke: { kind: "authorize-publish", boardId: config.id, causeKey: "feira:owner:?" } });
     }
   });
-  it("refazendo ⇒ Acompanhar, sem botão; velho ⇒ Acompanhar, com a Esteira", () => {
+  // fase 3: a Esteira saiu — o pedido velho traz a alavanca dela no próprio item
+  it("refazendo ⇒ Acompanhar, sem botão; velho ⇒ Decidir, com «Refazer o pedido agora»", () => {
     const redo = decide({ rerequestedAt: new Date(NOW - 60_000).toISOString() });
     expect(redo).toMatchObject({ bucket: "acompanhar", askVerb: null, options: [] });
     const stale = decide({ staleApprovals: [`sha256:${"c".repeat(64)}`] });
-    expect(stale).toMatchObject({ bucket: "acompanhar", askVerb: null, options: [] });
-    expect(stale.more.some((o) => o.invoke.kind === "link" && o.invoke.href.endsWith("/entrega"))).toBe(true);
+    expect(stale).toMatchObject({ bucket: "decidir", askVerb: "Refazer" });
+    expect(stale.options.map((o) => o.invoke)).toEqual([{ kind: "rerequest-publish", boardId: ULTRA.id }]);
+    expect([...stale.options, ...stale.more].some((o) => o.invoke.kind === "link" && o.invoke.href.endsWith("/entrega"))).toBe(false);
+  });
+  // A consequência do botão é a verdade do board: só promete «sem publicar» quando há a medição que só lê declarada;
+  // sem ela, refazer roda a publicação do board (que, com a autorização pendente, para antes de publicar).
+  it("«Refazer o pedido agora» diz o que roda: a medição (plano declarado) ou a publicação do board (sem plano)", () => {
+    const stale = { staleApprovals: [`sha256:${"c".repeat(64)}`] };
+    const withPlan = decide(stale, { ...ULTRA, deploy: { ...ULTRA.deploy, planCommand: "./publicar feira --dry-run --json" } } as typeof ULTRA);
+    const noPlan = decide(stale, { ...ULTRA, deploy: { ...ULTRA.deploy, planCommand: undefined } } as typeof ULTRA);
+    expect(withPlan.options[0].consequence).toMatch(/sem publicar/);
+    expect(noPlan.options[0].consequence).not.toMatch(/sem publicar/);
+    expect(noPlan.options[0].consequence).toMatch(/roda a publicação dele/);
   });
 });
 

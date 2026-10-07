@@ -19,7 +19,7 @@ import { DOC_SECTION } from "@/components/doc/typography";
 import { GATE_ICON, runStatusLabel, type StepCapability, type StepGate, type StepRollup } from "@/lib/storymap/step-rollup";
 import type { RunOutcome } from "@/lib/storymap/runner/journal";
 import type { Transition } from "@/lib/storymap/runner/transitions";
-import { hopNoteWords } from "@/lib/storymap/hop-words";
+import { hopActorWords, hopNoteWords } from "@/lib/storymap/hop-words";
 
 const DASH = "—";
 
@@ -260,11 +260,8 @@ function StageTrailChips({ rollups }: { rollups: StepRollup[] }) {
 // ── 6.3 — the durable HOP TIMELINE: the card's real status trajectory read from the WS2 ledger. Every from→to
 //    hop with WHO moved it and WHY (note) — the auditable reader that makes merge:reproved / deploy:reverted /
 //    revive visible in the drawer, and turns the ledger from a write-only file into a read surface.
-const HOP_ACTOR_LABEL = (actor: string): string =>
-  actor.startsWith("run:")
-    ? "agente"
-    : (({ human: "você", cascade: "automático", system: "sistema", merge: "integração" }) as Record<string, string>)[actor] ??
-      actor;
+//    Quem moveu: o PAPEL gravado (fase 6 — condutor, Sentinela, chat, procurador, revisor…), em palavras (hop-words.ts).
+const HOP_ACTOR_LABEL = hopActorWords;
 
 export function CardHopTimeline({ transitions, statusNames = {} }: { transitions: Transition[]; statusNames?: Record<string, string> }) {
   const name = (id: string) => statusNames[id] ?? id;

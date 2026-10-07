@@ -2,7 +2,7 @@
 // pedido de um agente), um ledger (a decisão do sistema, o recibo do dono), a fila do train, a telemetria. Cada
 // produtor sinaliza o board, o barramento coalesce, a rota SSE entrega, e a tela relê — sem poll.
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { appendSystemDecision, resetSystemDecisionSink, setSystemDecisionSink } from "@/lib/storymap/runner/decision-log";
@@ -159,7 +159,7 @@ describe("a entrega e a tela", () => {
     expect(route.match(/unsubscribeInbox\(\);/g)?.length).toBe(2); // no cleanup e no cancel
   });
 
-  it("a lista, o número da barra e a home releem por `inbox.changed` — e a barra não faz mais poll", () => {
+  it("a lista e o número da barra releem por `inbox.changed` — e a barra não faz mais poll", () => {
     const home = read("../../../components/inbox/InboxHome.tsx");
     expect(home).toMatch(/useInboxChanged\(\(\) => router\.refresh\(\), \{ boards: filter \? \[filter\] : null \}\)/);
     expect(home).not.toMatch(/"agileharness"/);
@@ -169,7 +169,10 @@ describe("a entrega e a tela", () => {
     expect(summary).toMatch(/useInboxChanged\(\(\) => void load\(\)/);
     expect(summary).not.toMatch(/setInterval/);
     expect(read("../../../components/BoardHeader.tsx")).toMatch(/useInboxSummary\(\)/);
-    expect(read("../../../components/inicio/InicioScreen.tsx")).toMatch(/addEventListener\("inbox\.changed"/);
+    // a barra das páginas app-level também lê a loja (o mesmo número, a mesma releitura por `inbox.changed`)
+    expect(read("../../../components/nav/TopBar.tsx")).toMatch(/useInboxSummary\(\)/);
+    // A home (o Início) foi ELIMINADA na fase 1 — a casa do board é o Kanban; a tela que ela relia saiu junto.
+    expect(existsSync(fileURLToPath(new URL("../../../components/inicio/InicioScreen.tsx", import.meta.url)))).toBe(false);
   });
 
   it("a tela filtra pelo board que mostra; o fato do host e o evento torto sempre releem", () => {

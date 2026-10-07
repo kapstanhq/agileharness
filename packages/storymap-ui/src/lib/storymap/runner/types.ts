@@ -283,6 +283,12 @@ export interface GateReport {
 export interface MergeQueueSnapshot {
   entries: MergeQueueEntry[];
   processing: boolean;
+  /** Publicação RETIDA: commit local que não pode ir a origin (scan pré-push reprovou, ou um desfazer do
+   * train não voltou o HEAD). Presente só enquanto vale; o train não integra nem publica até soltar. */
+  pushHold?: string;
+  /** Varredura pré-push DEGRADADA (a cópia do scanner no alvo não sabe `--per-commit`/`--messages`): o que falta e
+   * o que fazer. Não retém nada — avisa que a história e as mensagens não estão sendo varridas. */
+  pushScanNote?: string;
 }
 
 /** Full picture sent to the browser on every change (small: maxConcurrent ~2). */

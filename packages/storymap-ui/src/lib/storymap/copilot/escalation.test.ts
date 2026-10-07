@@ -16,6 +16,7 @@ const ALL_IDS: EscalationTemplateId[] = [
   "blocker-secret-scan", "qa-red", "question-pending", "approval-pending", "proposal-capture",
   "review-triage", "gate-manual-approve", "design-wireframe", "governance-draft", "release-aging",
   "preserved-branch-recovery", "orphan-process-kill", "move-gate-blocked", "unplaced-card", "hitl-card-instructions",
+  "sentinel-cause",
 ];
 
 // One ref of EVERY kind in the union (roundtrip must be lossless).
@@ -32,6 +33,7 @@ const REFS: EscalationRef[] = [
   { templateId: "approval-pending", kind: "approval", boardId: "storymap", approvalId: "apr-1" },
   { templateId: "governance-draft", kind: "governance", boardId: "storymap", draftId: "d1" },
   { templateId: "move-gate-blocked", kind: "move-blocked", boardId: "storymap", cardId: "c1", target: "revisao" },
+  { templateId: "sentinel-cause", kind: "sentinel", boardId: "storymap", causeId: "stalled-run-1x2y3z" },
 ];
 
 /** Encode arbitrary JSON to the wire the same way encodeEscalationRef does (for tampered-payload tests). */
@@ -65,7 +67,7 @@ describe("EscalationRef encode/parse", () => {
 });
 
 describe("ESCALATION_TEMPLATES", () => {
-  it("is exhaustive over the 25 catalogued scenarios", () => {
+  it("is exhaustive over the 25 catalogued scenarios + the Sentinel cause (fase 6)", () => {
     expect(Object.keys(ESCALATION_TEMPLATES).sort()).toEqual([...ALL_IDS].sort());
   });
 

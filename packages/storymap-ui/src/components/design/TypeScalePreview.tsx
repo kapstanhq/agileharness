@@ -14,7 +14,7 @@ function firstPx(size: string): number | undefined {
 
 export function TypeScalePreview({ scale }: { scale: TypeLevel[] }) {
   if (scale.length === 0) {
-    return <p className="text-[11.5px] italic text-fg-subtle">Nenhum nível de escala ainda.</p>;
+    return <p className="text-[13px] italic text-fg-subtle">Nenhum nível de escala ainda.</p>;
   }
   return (
     <div className="flex flex-col gap-1.5">
@@ -32,12 +32,12 @@ export function TypeScalePreview({ scale }: { scale: TypeLevel[] }) {
             >
               Aa
             </span>
-            <span className="shrink-0 font-mono text-[10px] text-fg-subtle">{lvl.id}</span>
-            <span className="shrink-0 text-[10px] text-fg-subtle">
+            <span className="shrink-0 font-mono text-[12px] text-fg-muted">{lvl.id}</span>
+            <span className="shrink-0 text-[12px] text-fg-muted">
               {lvl.size} · {lvl.weight}
             </span>
             {lvl.rule && (
-              <span className="min-w-0 flex-1 truncate text-[10px] text-fg-subtle" title={lvl.rule}>
+              <span className="min-w-0 flex-1 truncate text-[12px] text-fg-muted" title={lvl.rule}>
                 {lvl.rule}
               </span>
             )}

@@ -123,13 +123,9 @@ export function PageTabs<T extends string>({
  * página deslocar de lado e o título "pular" para outro x. Largura é parte da gramática da seção, não
  * decisão de cada tela. Marcada no código de cada uma:
  *
- *   • `SISTEMA_MAX_W` — Configurações · Orquestração · Métricas (eram 3xl / 4xl / 5xl);
- *   • `PRODUTO_MAX_W` — Mapa · Ideias · Priorização · Personas & Sistemas (esta última era 6xl, em
- *     2 colunas).
- *
- * O **Mapa** (User Story Mapping) era a EXCEÇÃO declarada enquanto era uma grade 2D que rolava nos
- * dois eixos (4xl o reduziria a uma luneta). Virou OUTLINE — uma coluna de conteúdo como as irmãs —
- * e entrou na régua. Não o tire dela.
+ *   • `SISTEMA_MAX_W` — Configurações (Orquestração e Métricas saíram na fase 2);
+ *   • (o antigo `PRODUTO_MAX_W` sumiu: o Mapa, as Ideias e Personas & Sistemas saíram na fase 2 — cada grupo
+ *     virou UMA página, Negócio, Produto, Design, e o Software é o Kanban — e a última tela dele saiu na fase 5).
  */
 export function PageHeader({
   title,

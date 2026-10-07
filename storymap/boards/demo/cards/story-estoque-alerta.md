@@ -23,13 +23,6 @@ acceptance:
     Dado que a operação falha, quando ser avisado de estoque baixo, então vejo o
     motivo e o que fazer a seguir.
 tasks: []
-rice:
-  reach: null
-  impact: null
-  confidence: null
-  effort: null
-kano: null
-funnelStage: null
 questions:
   - id: q1
     text: Vale cobrir o caso offline nesta fatia?

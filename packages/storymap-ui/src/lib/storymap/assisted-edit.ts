@@ -1,32 +1,15 @@
 // Assisted-edit core — pure, server-safe helpers for the operator's editing bench (Fase 3).
 //
 // The bench lets the operator edit the artifacts that GOVERN the whole system — the strategy ladder,
-// Lean Canvas, Ideias, the skills/prompts each column runs — either directly OR by asking a
+// Lean Canvas, Ideias, personas and systems — either directly OR by asking a
 // specialist agent. The agent has a per-view PERSONA (assistant-registry.ts, editable on disk) and a
 // MODE (aprender / editar / sincronizar). This module holds the pure pieces the server actions
-// (assisted-edit-actions.ts) compose: the path guards and the prompt the agent answers. No fs, no
-// spawn — fully unit-testable.
+// (assisted-edit-actions.ts) compose: the path guard of a persona override and the prompt the agent
+// answers. No fs, no spawn — fully unit-testable. The bench NEVER writes skills or prompts to disk (the
+// runtime checkout is shared; the skill/prompt writers were deleted — quick-fix skill-writes).
 
 import path from "node:path";
 import { findRepoRoot } from "./paths";
-
-/** A harness-* skill folder name (the TriggerId, e.g. `harness-enrich`). Conservative on purpose. */
-export const SKILL_NAME_RE = /^harness-[a-z][a-z0-9-]*$/;
-
-/**
- * Resolve the on-disk `SKILL.md` for a `harness-*` skill, guarding against path traversal.
- * Returns null for an invalid skill name or any resolved path that escapes `.claude/skills/`.
- * The bench reads/writes the SKILL.md in the working tree — it's read at RUNTIME by the headless
- * `claude -p` (no rebuild needed), but a change must be committed on the VPS checkout to persist.
- */
-export function skillMdPath(skill: string): string | null {
-  if (!SKILL_NAME_RE.test(skill)) return null;
-  const skillsDir = path.join(findRepoRoot(), ".claude", "skills");
-  const resolved = path.resolve(skillsDir, skill, "SKILL.md");
-  const dirWithSep = skillsDir.endsWith(path.sep) ? skillsDir : skillsDir + path.sep;
-  if (!resolved.startsWith(dirWithSep)) return null;
-  return resolved;
-}
 
 /** A view-assistant id (the override filename). Conservative — no traversal/dots. */
 export const ASSISTANT_ID_RE = /^[a-z][a-z0-9-]*$/;
@@ -34,7 +17,7 @@ export const ASSISTANT_ID_RE = /^[a-z][a-z0-9-]*$/;
 /**
  * Resolve the on-disk OVERRIDE path for a view-assistant's prompt, guarding traversal.
  * Returns null for an invalid id or any resolved path that escapes `.claude/storymap-assistants/`.
- * Like SKILL.md: read at runtime, no rebuild, but must be committed on the VPS checkout to persist.
+ * Read-only here (resolveAssistantPrompt): an override is changed by a commit, never by the bench.
  */
 export function assistantPromptPath(id: string): string | null {
   if (!ASSISTANT_ID_RE.test(id)) return null;
@@ -47,17 +30,15 @@ export function assistantPromptPath(id: string): string | null {
 
 /** The kind of artifact being edited — ties a request to its view-assistant (assistant-registry). */
 export type AssistedEditKind =
-  /** the WHOLE Lean Canvas at once — there is no per-block assistant: the 12 blocks are one system. */
+  /** the WHOLE Business Model Canvas at once — there is no per-block assistant: the 9 blocks are one system. */
   | "canvas"
   | "idea"
   | "persona"
   | "system"
-  | "skill"
   /**
-   * the published Style Guide (bloco de Design, WS-4) — editar/aprender/sincronizar. `aprender` rides
-   * the generic `buildAssistedEditPrompt` below (prose contract); `editar`/`sincronizar` use the
-   * dedicated `buildStyleGuideAssistPrompt` (a guide is a multi-section STRUCTURED doc, not a single
-   * string value — same reason the canvas-wide assistant needed its own prompt builder).
+   * the published Style Guide (bloco de Design, WS-4). Its assistant now lives in the Design page's chat (the
+   * `doc-editor` purpose writes one section at a time with `write_styleguide`); the kind stays as the
+   * registry key of the guide's persona override.
    */
   | "styleguide"
   | "generic";
@@ -69,6 +50,39 @@ export type AssistedEditKind =
  *  - `sincronizar` investigar o CÓDIGO/realidade real do produto e derivar o valor verdadeiro (bootstrap da 1ª vez).
  */
 export type AssistedEditMode = "editar" | "aprender" | "sincronizar";
+
+/**
+ * As tools NATIVAS que um `sincronizar` nunca recebe. Ele LÊ o código real (Read/Grep/Glob) para derivar o valor — e
+ * roda com `cwd` no checkout de RUNTIME, que é compartilhado (o serviço é o único escritor dos boards). Antes ele
+ * subia com `--dangerously-skip-permissions` como root, e só o PROMPT pedia "não modifique": um agente com permissão
+ * total no checkout de produção. Agora: modo `default` explícito (nunca o herdado do settings do host) com esta
+ * negação dura — o que escreve nem existe na superfície — e só as tools de leitura pré-aprovadas. NÃO o modo `plan`:
+ * em `-p` ele instrui o modelo a apresentar um plano e chamar ExitPlanMode, e o `sincronizar` precisa devolver o VALOR
+ * derivado do código. (quick-fix skill-writes)
+ */
+export const SINCRONIZAR_DENIED_TOOLS: readonly string[] = ["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"];
+
+/** As tools de LEITURA que o `sincronizar` recebe pré-aprovadas (`--allowedTools`). */
+export const SINCRONIZAR_ALLOWED_TOOLS: readonly string[] = ["Read", "Grep", "Glob"];
+
+export interface AssistedEditRunOptions {
+  timeoutMs?: number;
+  effort?: string;
+  permissionMode?: "plan" | "default";
+  disallowedTools?: readonly string[];
+  allowedTools?: readonly string[];
+}
+
+/**
+ * As opções do spawn por modo. `sincronizar` investiga o código → mais tempo e esforço, SÓ leitura (ver
+ * {@link SINCRONIZAR_DENIED_TOOLS} e {@link SINCRONIZAR_ALLOWED_TOOLS}); nenhum modo pede skip-permissions. PURA — o
+ * teste prova a contenção sem spawn.
+ */
+export function assistedEditRunOptions(mode: AssistedEditMode): AssistedEditRunOptions {
+  return mode === "sincronizar"
+    ? { timeoutMs: 600_000, effort: "high", permissionMode: "default", disallowedTools: SINCRONIZAR_DENIED_TOOLS, allowedTools: SINCRONIZAR_ALLOWED_TOOLS }
+    : {};
+}
 
 /** Persona de fallback quando o kind não tem assistente registrado (ex.: "generic"). */
 export const FALLBACK_ROLE = "Você é um editor de texto técnico, preciso e conciso.";
@@ -85,8 +99,7 @@ function isMarketingKind(kind: AssistedEditKind): boolean {
  * Personas, Sistemas). Posicionamento / Resultado-alvo / Métrica de negócio saíram da lista porque
  * saíram da bancada: viraram seções do PRD, e quem escreve num documento de schema é `write_doc` —
  * não o assistente de campo único. Todos os que restam recebem o MESMO guia de estilo — é o que dá coesão à
- * escrita do board inteiro, qualquer que seja o assistente. O skill-editor fica de fora (edita o
- * SKILL.md, que tem contrato estrutural próprio).
+ * escrita do board inteiro, qualquer que seja o assistente.
  */
 function isPanelContentKind(kind: AssistedEditKind): boolean {
   return (
@@ -187,69 +200,6 @@ ${current.trim() || "(vazio — proponha do zero)"}
 # Pedido do operador
 ${ask || (mode === "sincronizar" ? "(sem pedido específico — derive o valor real do código)" : "(sem pedido específico)")}
 ${brandNote}`;
-}
-
-/**
- * The prompt for the STYLEGUIDE view-assistant's STRUCTURED modes (`editar`/`sincronizar`). A style
- * guide is a multi-section doc (10 keys — StyleGuideDoc), not a single string value, so it doesn't fit
- * the generic `buildAssistedEditPrompt` "return the raw new value" contract above — um documento com
- * várias seções não cabe num contrato que devolve UM valor. (O canvas teve o mesmo problema e ganhou
- * um construtor próprio; ele saiu com o assistente de proposta, quando o canvas virou markdown e a
- * ajuda passou a ser a conversa ancorada na tela.)
- * The agent answers with ONE JSON object shaped like `StyleGuideDoc` — coerced tolerantly on
- * read by the caller (`coerceStyleGuideDoc` never throws), so a partial/malformed reply degrades
- * gracefully instead of corrupting the guide. `aprender` for this kind still rides the generic
- * `buildAssistedEditPrompt` (it only owes prose). Pure — the caller (design-actions.ts) resolves the
- * persona, the current guide (already serialized via `styleGuideToPrompt`) and the section registry
- * before calling this; no fs/spawn here.
- */
-export function buildStyleGuideAssistPrompt(input: {
-  systemPrompt: string;
-  mode: Extract<AssistedEditMode, "editar" | "sincronizar">;
-  /** the published guide, already serialized (styleGuideToPrompt) — or "" when the board has none yet. */
-  current: string;
-  /** the section registry the agent must stay inside: key + label + hint (STYLE_SECTIONS shape, kept
-   *  inline here para este módulo nunca importar style-guide-blocks). */
-  sections: ReadonlyArray<{ key: string; label: string; hint: string }>;
-  instruction: string;
-  /** e.g. "Pacote do produto: packages/acme." — only meaningful for `sincronizar` (there's real code to read). */
-  context?: string;
-}): string {
-  const { systemPrompt, mode, current, sections, instruction, context } = input;
-  const catalogue = sections.map((s) => `- \`${s.key}\` (${s.label}): ${s.hint}`).join("\n");
-  const task =
-    mode === "sincronizar"
-      ? [
-          "Sua tarefa: SINCRONIZAR o guia de estilo com a REALIDADE do produto. Use suas ferramentas de",
-          "leitura (Read/Grep/Glob) para investigar o CÓDIGO real do pacote-alvo (CSS/tokens/tailwind) e",
-          "derivar os valores VERDADEIROS de `color`/`tokenBindings`/`typography`/`debt` a partir do que o",
-          "produto DE FATO é — nunca da memória. Preserve as demais seções (identity, principles, voice,",
-          "antiPatterns…) EXATAMENTE como estão no guia atual — o código não as revela. NÃO MODIFIQUE",
-          "nenhum arquivo: só leia e proponha.",
-        ].join("\n")
-      : [
-          "Sua tarefa: reescrever o guia de estilo seguindo o pedido do operador — mexa SÓ nas seções que",
-          "o pedido exige; preserve as demais exatamente como estão no guia atual.",
-        ].join("\n");
-
-  return `${systemPrompt}
-
-${task}
-
-# Seções válidas do guia (use EXATAMENTE estas chaves — nenhuma outra)
-${catalogue}
-
-# Guia atual
-${current.trim() || "(nenhum guia publicado ainda — proponha do zero)"}
-${context ? `\n# Contexto\n${context}\n` : ""}
-# Pedido do operador
-${instruction.trim() || (mode === "sincronizar" ? "(sem pedido específico — derive os tokens reais do código)" : "(sem pedido específico)")}
-
-# Formato da resposta (OBRIGATÓRIO)
-Responda com UM único objeto JSON e NADA MAIS — sem cercas \`\`\`, sem preâmbulo, sem explicação fora do
-JSON. O objeto deve ter a MESMA forma do "Guia atual" acima (meta/identity/principles/color/typography/
-spacing/shape/motion/voice/antiPatterns/debt/tokenBindings) — reenvie TODAS as seções, inclusive as que
-você não mudou (uma seção omitida vira VAZIA, não "preservada").`;
 }
 
 /** Abridores conversacionais que um LLM costuma colar antes do valor, apesar do contrato de saída. */

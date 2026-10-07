@@ -18,6 +18,8 @@ export interface InboxSummary {
   total: number;
   acompanhar: number;
   byBoard: Record<string, number>;
+  /** Acompanhar por board (o painel do ícone, numa página de board, conta só o board). */
+  acompanharByBoard: Record<string, number>;
   /** as entradas de Decidir (sem o item cru), na ordem do Inbox. */
   entries: InboxEntry[];
 }
@@ -46,6 +48,15 @@ const subscribe = (fn: () => void) => {
   listeners.add(fn);
   return () => listeners.delete(fn);
 };
+
+/**
+ * O resumo para quem precisa dele UMA vez, fora do ciclo de render (a saudação do Jido, que nasce num efeito): o que a
+ * barra já leu, ou a leitura em voo/nova — a MESMA, então a fala e o ícone não discordam. `null` se a leitura falhar.
+ */
+export function readInboxSummary(): Promise<InboxSummary | null> {
+  if (current) return Promise.resolve(current);
+  return load().then(() => current);
+}
 
 /** O Inbox de todos os boards (ou null antes da 1ª resposta); relê sozinho quando um `inbox.changed` chega. */
 export function useInboxSummary(): InboxSummary | null {

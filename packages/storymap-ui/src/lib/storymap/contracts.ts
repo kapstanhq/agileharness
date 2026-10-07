@@ -12,7 +12,7 @@
 // receives an UNKNOWN value (a run-result, an MCP payload, a freshly parsed .md) validates it via
 // parseCard/parseBoardConfig below; the typed code keeps the documented interface.
 //
-// The schemas describe the COERCED shape (post-coerceCard): enums are already valid ids, RICE
+// The schemas describe the COERCED shape (post-coerceCard): enums are already valid ids, numeric
 // fields are finite-or-null, etc. Enum membership is validated against the SAME id-arrays/guards
 // the rest of the app uses (frameworks.ts / types.ts) — no duplicated vocab. (Routing coerceCard's
 // per-field coercion THROUGH a tolerant variant of these schemas is a future step; for now coerce
@@ -21,10 +21,6 @@
 import { z } from "zod";
 import {
   isStoryType,
-  isKanoCategory,
-  isFunnelStage,
-  KANO_IDS,
-  FUNNEL_IDS,
   STORY_TYPE_IDS,
   IMPROVEMENT_KIND_IDS,
   BUG_SEVERITY_IDS,
@@ -76,12 +72,6 @@ const oneOf = <T extends string>(ids: readonly T[]) =>
 const CardLinkSchema = z.object({ rel: z.string(), to: z.string() });
 const CriterionSpecSchema = z.object({ criterion: z.string(), specPath: z.string().nullable().optional() });
 const TaskSchema = z.object({ id: z.string(), title: z.string(), done: z.boolean() });
-const RiceSchema = z.object({
-  reach: z.number().nullable(),
-  impact: z.number().nullable(),
-  confidence: z.number().nullable(),
-  effort: z.number().nullable(),
-});
 const StoryNarrativeSchema = z.object({
   role: z.string().nullable(),
   want: z.string().nullable(),
@@ -262,33 +252,6 @@ const CardQuestionSchema = z.object({
 });
 
 // ── OST schemas ───────────────────────────────────────────────────────────
-// Prioridade argumentada (reasoning-first) — o sinal primário que substitui o alcance×impacto.
-const FibSchema = z.union([
-  z.literal(1),
-  z.literal(2),
-  z.literal(3),
-  z.literal(5),
-  z.literal(8),
-  z.literal(13),
-]);
-/** Os ordinais WSJF que sustentam o rank — sub-bloco ADITIVO (ver lib/storymap/wsjf.ts). */
-const WsjfCallSchema = z.object({
-  value: FibSchema,
-  urgency: FibSchema,
-  unlock: FibSchema,
-  size: FibSchema,
-  basis: z.array(z.string()),
-  cohortSize: z.number(),
-  cohortAt: z.string(),
-});
-const PriorityCallSchema = z.object({
-  rank: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]),
-  rationale: z.string(),
-  riskiestAssumption: z.string().nullable().optional(),
-  source: z.enum(["agent", "human"]),
-  assessedAt: z.string(),
-  wsjf: WsjfCallSchema.nullable().optional(),
-});
 const IdeaFieldsSchema = z.object({
   // personas live on Card.personas (single source of truth) — not duplicated here.
   statement: z.string(),
@@ -299,8 +262,6 @@ const IdeaFieldsSchema = z.object({
   candidateSolutions: z.array(z.string()).optional(),
   keyAssumption: z.string().nullable().optional(),
   successSignal: z.string().nullable().optional(),
-  valueSize: z.object({ reach: z.number().nullable(), impact: z.number().nullable() }).nullable().optional(),
-  priorityCall: PriorityCallSchema.nullable().optional(),
 });
 const BetSchema = z.object({
   assumptions: z.array(z.string()),
@@ -325,6 +286,18 @@ export const CardSchema = z.object({
   status: z.string().nullable(),
   parent: z.string().nullable(),
   serves: z.string().nullable().optional(),
+  // a funcionalidade do PRD (fase 7 — feature-key.ts): autoral, sparse; null = «Outros».
+  feature: z.string().nullable().optional(),
+  // a marca de lote do condutor (fase 7): campo do pipeline, só o servidor grava.
+  batch: z
+    .object({
+      id: z.string().min(1),
+      lead: z.string().min(1),
+      sessionId: z.string().min(1),
+      at: z.string().min(1),
+      planHash: z.string().min(1).optional(),
+    })
+    .optional(),
   routing: CardRoutingSchema.nullable().optional(),
   autonomyMode: oneOf(AUTONOMY_MODES).optional(),
   // as duas escolhas opcionais do dono no início do card (card-opt-ins.ts)
@@ -406,10 +379,6 @@ export const CardSchema = z.object({
   narrative: StoryNarrativeSchema,
   acceptance: z.array(z.string()),
   tasks: z.array(TaskSchema),
-  rice: RiceSchema,
-  kano: oneOf(KANO_IDS).nullable(),
-  funnelStage: oneOf(FUNNEL_IDS).nullable(),
-  priorityCall: PriorityCallSchema.nullable().optional(),
   severity: oneOf(BUG_SEVERITY_IDS).nullable().optional(),
   frequency: oneOf(BUG_FREQUENCY_IDS).nullable().optional(),
   hasWorkaround: z.boolean().nullable().optional(),
@@ -584,6 +553,7 @@ const StatusDefSchema = z.object({
   gate: oneOf(GATE_IDS).optional(),
   trigger: oneOf(COLUMN_TRIGGER_IDS).optional(),
   autorun: z.boolean().optional(),
+  autorunOnlyInColumns: z.boolean().optional(), // o pipeline híbrido (types.ts stepAutoruns)
   terminal: z.boolean().optional(),
   delivered: z.boolean().optional(), // subconjunto ESTRITO de terminal — "no ar" (ver delivered.ts)
   autoEnterTerminal: z.boolean().optional(),
@@ -756,6 +726,8 @@ export const BoardConfigSchema = z.object({
       model: oneOf(SESSION_MODELS).optional(),
     })
     .optional(),
+  // COMO o board anda (types.ts pipelineMode): condutor (padrão quando o despacho está ligado) ou por colunas.
+  pipeline: z.enum(["conductor", "columns"]).optional(),
   // A VISTA do Kanban em raias (lanes.ts): cada raia rotula um conjunto de status; o status real vira etiqueta.
   view: z
     .object({
@@ -776,6 +748,19 @@ export const BoardConfigSchema = z.object({
     .object({
       // ausente ⇒ human: o `_base` declara só as classes do dono, nunca o modo.
       mode: oneOf(AUTONOMY_MODES).optional(),
+      // o PERFIL de autonomia (autonomy-profile.ts): uma caixa por decisão; ausente ⇒ derivado das chaves de antes.
+      agentDecides: z
+        .object({
+          spec: z.boolean().optional(),
+          design: z.boolean().optional(),
+          delivery: z.boolean().optional(),
+          publish: z.boolean().optional(),
+          deploy: z.boolean().optional(),
+          spendRaise: z.boolean().optional(),
+          copilot: z.boolean().optional(),
+          sentinel: z.boolean().optional(),
+        })
+        .optional(),
       proxyModel: oneOf(MODEL_TIERS).optional(),
       auditSampleRate: z.number().min(0).max(1).optional(),
       // a amostra das entregas TÉCNICAS que um auditor independente revê (nunca o dono — runner/technical-audit.ts).

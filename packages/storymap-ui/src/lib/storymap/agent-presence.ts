@@ -174,8 +174,13 @@ export function reduceAgentPresence(inputs: AgentPresenceInputs, now: number): A
     // sem âncora de tempo: o feed diz que o julgamento está em voo AGORA, não desde quando
     agents.push({ key: `judge:${key}`, kind: "judge", board, cardId, presence: { state: "working" } });
   }
+  // Fase 7: o feed traz uma linha por CARD da sessão (o líder primeiro, depois os itens do lote — card-live-feed.ts
+  // `sessionFacts`). Agente é a SESSÃO: conta uma vez, pela primeira linha (a do líder).
+  const seenSessions = new Set<string>();
   for (const s of feed?.sessions ?? []) {
     if (isZombieSession(s)) continue;
+    if (seenSessions.has(s.sessionId)) continue;
+    seenSessions.add(s.sessionId);
     const terminal = s.tmuxSession ? terminalByTmux.get(s.tmuxSession) : undefined;
     agents.push({
       key: `session:${s.sessionId}`,

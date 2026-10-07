@@ -8,6 +8,7 @@ import {
   extractResultUsage,
   type ResultUsage,
 } from "../runner/stream-json";
+import { mcpContainmentFlags } from "../runner/flags";
 import type { LogLevel } from "../runner/types";
 import type { HitlResponseMode } from "../hitl/types";
 
@@ -19,7 +20,7 @@ export const RESUME_SESSION_MISSING_RE = /No conversation found with session ID/
  *  Modelo de SEGMENTOS (refino de streaming): texto e tools chegam INLINE, na ordem exata, com estado vivo —
  *  o cliente aplica cada evento a `segments[]` por `segId`. */
 /** O que uma nota de sistema É (não o que ela DIZ). */
-export type CopilotFrameCode = "session-started" | "api-retry" | "mcp-unavailable";
+export type CopilotFrameCode = "session-started" | "api-retry" | "mcp-unavailable" | "guard-missing";
 
 export type CopilotSseEvent =
   /** primeiro evento — o session id REAL da sessão (echo do init; no fallback resume→fresh vem com fresh:true).
@@ -54,6 +55,9 @@ export type CopilotSseEvent =
  * estado Chat é sobre o BOARD (as tools de escrita do MCP não são montadas — token `ro`), NÃO sobre o
  * repositório, porque um `sed`/`git commit` segue alcançável por shell. Write/Edit saem porque são o caminho
  * ÓBVIO e acidental de editar arquivo — tirá-las torna "não edito nada" atrito real, não promessa de persona.
+ * Fase 6: a régua da conversa de LEITURA mudou (copilot/chat-powers.ts `CHAT_READ_ONLY_DENIED_TOOLS`): toda conversa de
+ * nível `ro` perde também o Bash — um shell alcança as credenciais do serviço, e «só leitura» passa a valer para o
+ * repositório. Esta lista segue sendo o recorte do modo `chat` antigo; o plano a soma à de leitura.
  */
 export const CHAT_DENIED_TOOLS = "Write,Edit,NotebookEdit";
 
@@ -68,7 +72,7 @@ export function buildCopilotTurnArgs(opts: {
   /** o id a usar: fresh = recém-cunhado (--session-id); resume = o existente (--resume). */
   sessionId: string;
   resume: boolean;
-  /** caminho do config MCP; ausente ⇒ degrada SEM MCP (só tools nativas). */
+  /** caminho do config MCP; ausente ⇒ roda SEM NENHUM MCP (só tools nativas) — nunca com os do operador. */
   mcpConfigPath?: string;
   /** caminho do arquivo de persona (--append-system-prompt-file); ausente ⇒ sem persona explícita. */
   systemPromptPath?: string;
@@ -78,8 +82,14 @@ export function buildCopilotTurnArgs(opts: {
    * de quem chama (o estado do board, o propósito do HITL) — e cada um nega um conjunto diferente.
    */
   deniedTools?: string;
+  /**
+   * As tools NATIVAS permitidas (`--tools`, lista do PERMITIDO — copilot/chat-powers.ts `CHAT_NATIVE_TOOLS`). Ausente ⇒ o
+   * default do CLI (todas, inclusive as que rodam shell por fora da trava dura). Vai como UM argumento separado por
+   * vírgula: a flag é variádica, e o token seguinte é sempre outra flag.
+   */
+  tools?: readonly string[];
 }): string[] {
-  const { model, effort, sessionId, resume, mcpConfigPath, systemPromptPath, deniedTools } = opts;
+  const { model, effort, sessionId, resume, mcpConfigPath, systemPromptPath, deniedTools, tools } = opts;
   return [
     "-p",
     "--output-format",
@@ -90,15 +100,37 @@ export function buildCopilotTurnArgs(opts: {
     "--effort",
     effort,
     "--dangerously-skip-permissions",
+    ...(tools && tools.length > 0 ? ["--tools", tools.join(",")] : []),
     ...(deniedTools ? ["--disallowedTools", deniedTools] : []),
     // streaming inline token-a-token: emite os stream_event (message/content_block deltas) além das mensagens
     // completas → o texto do assistente chega letra-a-letra e as tools aparecem na ordem exata, ao vivo.
     "--include-partial-messages",
     ...(systemPromptPath ? ["--append-system-prompt-file", systemPromptPath] : []),
-    ...(mcpConfigPath ? ["--strict-mcp-config", "--mcp-config", mcpConfigPath] : []),
+    // Contenção SEMPRE, com ou sem config: `--strict-mcp-config` sem `--mcp-config` = ZERO servidores MCP. Sem ele,
+    // "sem token" virava "com TODOS os MCP do operador" (conectores da conta claude.ai, o `.mcp.json` do alvo) —
+    // auto-aprovados pelo skip-permissions, inclusive no estado Chat. Mesmo conserto do smart-capture.
+    ...mcpContainmentFlags(mcpConfigPath ? [mcpConfigPath] : []),
     ...(resume ? ["--resume", sessionId] : ["--session-id", sessionId]),
   ];
 }
+
+/**
+ * Sem token MCP o Jido roda SEM conexão com o board (zero MCP — ver {@link buildCopilotTurnArgs}). Estas duas
+ * peças dizem isso em linguagem clara: a NOTA que o operador vê (nomeia a variável que falta, conforme o nível)
+ * e a CLÁUSULA de persona que impede o modelo de mandar "autorizar o conector do claude.ai" — o conserto errado,
+ * que era a resposta observada numa instância sem token. Puras (testadas).
+ */
+export function mcpUnavailableText(level: "ro" | "full"): string {
+  const envVar = level === "ro" ? "AGILEHARNESS_MCP_TOKEN_RO" : "AGILEHARNESS_MCP_TOKEN";
+  return `⚠ Conexão com o board não configurada (falta ${envVar} no serviço) — nesta conversa o Jido não lê nem altera o board.`;
+}
+
+export const BOARD_UNCONFIGURED_CLAUSE =
+  "## Conexão com o board: NÃO configurada\n" +
+  "Nesta instalação o token MCP do AgileHarness não está provisionado, então você NÃO tem as tools do board. " +
+  "Se o pedido depender do board, diga isso com clareza: a conexão com o board não está configurada neste " +
+  "serviço (falta o token MCP do AgileHarness) e quem administra o serviço precisa provisioná-lo. Nunca peça " +
+  "para autorizar um conector do claude.ai nem outra integração — não é esse o problema.";
 
 /**
  * O TAMANHO DO CONTEXTO depois de uma mensagem do assistente = o prompt que ESTA chamada de modelo leu

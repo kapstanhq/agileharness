@@ -16,7 +16,6 @@ function config(over: Partial<BoardConfig> = {}): BoardConfig {
     { id: "grill", name: "Dúvidas", trigger: "harness-grill" },
     { id: "enriquecer", name: "Especificar", trigger: "harness-enrich" },
     { id: "interview", name: "Entrevista", trigger: "harness-interview", skipForTypes: ["technical", "bug", "chore", "spike"] },
-    { id: "priorizar", name: "Estimar", trigger: "harness-prioritize" },
     { id: "design-ux", name: "Wireframe", trigger: "harness-ux", skipForTypes: ["technical", "bug", "chore", "spike"] },
     { id: "plano-tecnico", name: "Plano técnico", trigger: "harness-plan", mcpConfig: "storymap/graphify/storymap.json" },
     { id: "desenvolver", name: "Desenvolver", trigger: "harness-do" },
@@ -45,9 +44,6 @@ function card(over: Partial<Card> = {}): Card {
     narrative: { role: null, want: null, soThat: null },
     acceptance: [],
     tasks: [],
-    rice: { reach: null, impact: null, confidence: null, effort: null },
-    kano: null,
-    funnelStage: null,
     findings: [],
     order: 1,
     created: null,
@@ -122,11 +118,7 @@ describe("computeStepRollups — gate verdict (✓/✗/·)", () => {
     expect(r.left).toBe("1 pergunta");
   });
 
-  it("prioritize/qa reflect their gate fields", () => {
-    const prioritized = card({ rice: { reach: 100, impact: 2, confidence: 0.8, effort: 2 }, kano: "must-be", funnelStage: "retention" });
-    expect(find(computeStepRollups(config(), prioritized, ledger(rec("harness-prioritize"))), "harness-prioritize").gate).toBe("ok");
-    expect(find(computeStepRollups(config(), prioritized, ledger(rec("harness-prioritize"))), "harness-prioritize").left).toBe("RICE 80");
-
+  it("qa reflects its gate field", () => {
     const qa = card({ qaPassed: true });
     expect(find(computeStepRollups(config(), qa, ledger(rec("harness-qa"))), "harness-qa").gate).toBe("ok");
   });
@@ -155,8 +147,8 @@ describe("computeStepRollups — path, ordering, telemetry folding", () => {
     expect(triggers).toContain("harness-review");
     expect(triggers).not.toContain("harness-merge"); // laneStep excluded
     // forward order preserved
-    expect(triggers.indexOf("harness-enrich")).toBeLessThan(triggers.indexOf("harness-prioritize"));
-    expect(triggers.indexOf("harness-prioritize")).toBeLessThan(triggers.indexOf("harness-do"));
+    expect(triggers.indexOf("harness-enrich")).toBeLessThan(triggers.indexOf("harness-interview"));
+    expect(triggers.indexOf("harness-interview")).toBeLessThan(triggers.indexOf("harness-do"));
   });
 
   it("WS5: a step this card's TYPE skips is VISIBLE as `skipped` + reason (was silently omitted)", () => {

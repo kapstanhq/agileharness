@@ -18,7 +18,7 @@
 // FAIL-CLOSED, como a rota do turno: tela sem entrada no registro não ganha um chat genérico com persona padrão —
 // não ganha chat nenhum. Se você montou isto e não apareceu nada, falta a entrada em `CHAT_SURFACES`.
 
-import { ChatPanel } from "@/components/chat/ChatPanel";
+import { ChatPanel, type ExternalComposer } from "@/components/chat/ChatPanel";
 import type { ChatContextRef } from "@/components/chat/ChatContext";
 import { chatSurfaceFor } from "@/lib/storymap/copilot/chat-surfaces";
 import type { HitlTurn } from "@/lib/storymap/hitl/types";
@@ -32,6 +32,8 @@ export function ViewChat({
   contextRefs,
   onClose,
   className,
+  externalComposer,
+  empty,
 }: {
   boardId: string;
   /** a tela dona desta conversa — tem de ter entrada em copilot/chat-surfaces (o servidor recusa o resto). */
@@ -46,6 +48,10 @@ export function ViewChat({
   /** presente ⇒ o host oferece saída (gaveta/folha). Ausente ⇒ painel ancorado, que não fecha. */
   onClose?: () => void;
   className?: string;
+  /** presente ⇒ quem digita é o compositor do rodapé (chat/JidoComposer) — a conversa de uma página de documento. */
+  externalComposer?: ExternalComposer;
+  /** o documento da página ainda está vazio ⇒ as ações rápidas de começar (`emptyQuickActions`), quando a tela as tem. */
+  empty?: boolean;
 }) {
   const surface = chatSurfaceFor(view);
   if (!surface) return null;
@@ -63,11 +69,12 @@ export function ViewChat({
       getContext={getContext}
       greeting={initialTurns}
       placeholder={surface.placeholder}
-      quickActions={surface.quickActions}
+      quickActions={(empty && surface.emptyQuickActions) || surface.quickActions}
       techniques={surface.techniques}
       contextRefs={contextRefs}
       onClose={onClose}
       className={className}
+      externalComposer={externalComposer}
     />
   );
 }

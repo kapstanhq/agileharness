@@ -29,6 +29,7 @@ import {
 import { cn } from "@/lib/cn";
 import { BackButton, NavPopover, useHoverPopover } from "@/components/nav/NavShell";
 import { useDocViewPref, type DocWidth } from "@/lib/storymap/doc/use-doc-view-pref";
+import { aboveComposer, composerGutter } from "@/lib/ui";
 
 export interface DocViewDef {
   id: string;
@@ -79,15 +80,15 @@ export interface DocMenuItem {
 }
 
 /**
- * A folga do rodapé no CELULAR. A nav inferior é `fixed` e `md:hidden` (BoardHeader) — 57px medidos —,
- * então um `py-8` (32px) deixa o fim do documento PASSAR POR BAIXO dela: a última linha existe, rola,
- * e não há como alcançá-la. As telas irmãs (Ideias, Priorização, Inbox) já reservavam `pb-24`; as
- * superfícies de DOCUMENTO não, porque nasceram com a folga simétrica do `py-8`.
+ * A folga do rodapé. O compositor do Jido é `fixed` no fundo de toda tela de board, em toda largura (era a nav
+ * inferior do celular, 57px, até a fase 1), então um `py-8` (32px) deixa o fim do documento PASSAR POR BAIXO dele: a
+ * última linha existe, rola, e não há como alcançá-la. As telas irmãs (o Inbox) usam a mesma
+ * folga (`composerGutter`, que lê a altura que o compositor publica).
  *
  * Fica no shell, e não em cada tela, porque o defeito é do shell: seis superfícies (canvas, estilo,
  * posicionamento, vocabulário, card, card-novo) o herdavam de uma vez só.
  */
-const BOTTOM_GUTTER = "pb-24 md:pb-8";
+const BOTTOM_GUTTER = composerGutter;
 
 const WIDTH_PX: Record<DocWidth, number> = { narrow: 680, medium: 820, wide: 1040 };
 const WIDTH_LABEL: Record<DocWidth, string> = { narrow: "Estreito", medium: "Médio", wide: "Largo" };
@@ -280,12 +281,12 @@ export function DocToolbar({
           <div
             ref={overflow.ref}
             className="relative"
-            onMouseEnter={overflow.openNow}
-            onMouseLeave={overflow.closeSoon}
+            onPointerEnter={overflow.hoverOpen}
+            onPointerLeave={overflow.hoverClose}
           >
             <button
               type="button"
-              onClick={() => overflow.setOpen((o) => !o)}
+              onClick={overflow.toggle}
               aria-haspopup="menu"
               aria-expanded={overflow.open}
               title="Mais opções"
@@ -297,7 +298,7 @@ export function DocToolbar({
               <MoreHorizontal className="h-4 w-4" />
             </button>
             {overflow.open && (
-              <NavPopover align="right" label="Mais opções" className="w-48">
+              <NavPopover align="right" label="Mais opções" className="w-48 sm:w-72">
                 {/* "Editar" NÃO mora mais aqui — virou botão primário no cluster acima. O menu fica
                     com o que é ocasional: copiar a fonte, largura, e as ações da superfície. */}
                 {exportMarkdown && (
@@ -570,7 +571,7 @@ export function DocShell({
         )}
 
         {dirty && (
-          <div className="sticky bottom-0 z-20 flex items-center justify-between gap-3 border-t border-line bg-surface/95 px-4 py-3 backdrop-blur sm:px-8">
+          <div className={cn("sticky z-20 flex items-center justify-between gap-3 border-t border-line bg-surface/95 px-4 py-3 backdrop-blur sm:px-8", aboveComposer)}>
             <span className={cn("text-[12.5px]", saveDisabled ? "text-danger" : "text-fg-muted")}>
               {saveDisabled ? "Corrija o que está marcado para poder salvar" : "Alterações não salvas"}
             </span>

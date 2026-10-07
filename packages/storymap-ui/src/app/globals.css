@@ -4,7 +4,7 @@
 
 /*
  * Semantic design tokens — ONE source of truth for every surface, border and
- * text colour across ALL views (mapa / kanban / priorização / personas / config).
+ * text colour across ALL views (kanban / inbox / documentos / config).
  * A view sets `bg-canvas`, a card `bg-surface`, a divider `border-line` — never an
  * ad-hoc `dark:bg-slate-800/40` here and `dark:bg-slate-950` there.
  *
@@ -26,6 +26,10 @@
   --inset: 244 242 238; /* #F4F2EE — recessed wells (inputs, code, chart bg) */
   --surface: 255 255 255; /* #ffffff — cards, header, popovers, modals */
   --surface-hover: 240 239 236; /* #F0EFEC — hover/active on a surface */
+  /* Os dois degraus do desenho da fase 1 em volta do hover: o MACIO (#F7F6F3 — o hover de um botão de linha, a grade
+     de custo do card) e o APERTADO (#EDEBE6 — o hover de um item de menu sobre o fundo do quadro). */
+  --surface-soft: 247 246 243; /* #F7F6F3 */
+  --surface-press: 237 235 230; /* #EDEBE6 */
 
   /* Borders — warm graphite at low alpha; muted for faint dividers; emphasis on focus/active. */
   --line: 218 216 210; /* #DAD8D2 — ~rgba(55,53,47,.10) sobre papel */
@@ -43,6 +47,9 @@
    * rampa se inverteria. Em 7.37:1 o degrau muted/subtle é de 1.46x — perceptível sem pesar a página.
    * Nenhum call-site muda; a correção é aqui e vale para as ~600 ocorrências de uma vez. */
   --fg: 55 53 47; /* #37352F — 12.26:1 sobre papel */
+  /* A tinta dos TÍTULOS do desenho da fase 1 (nome da raia, título do card, migalhas da barra, a bolha da pessoa):
+     um degrau acima do corpo, para o título se destacar do texto que o segue. */
+  --fg-strong: 31 30 27; /* #1F1E1B — 16.6:1 sobre papel */
   --fg-muted: 87 86 79; /* #57564F — 7.37:1 / inset 6.59:1 */
   --fg-subtle: 112 111 104; /* #706F68 — 5.04:1 / inset 4.51:1 */
 
@@ -89,10 +96,38 @@
   --state-idle: 140 138 131; /* #8C8A83 */
   --state-live: 47 125 87; /* #2F7D57 */
 
+  /* O QUADRO NOVO (Kanban por funcionalidade, fluxo no cabeçalho — kanban-features.ts). O desenho tem SUA paleta de
+     estados, diferente das presenças acima, porque separa coisas que a presença junta (esperando condutor × na fila,
+     pausado, esquecido). Cada estado tem a cor da FORMA (bolinha, caixinha, borda) e, quando ela é texto, a TINTA
+     que passa AA:
+       run     — rodando / sistema entregando: verde. 5,0:1 no papel (forma e texto).
+       err     — erro: terracota (o mesmo `--danger`) como forma; a tinta #A3402C dá 6,3:1.
+       attn    — precisa de você: âmbar como forma (3,2:1, forma ≥3:1); a tinta #8A5A10 dá 5,9:1.
+       queued  — na fila / esperando: o cinza do contorno tracejado (#C2BFB8 = `--line-emphasis`).
+       forgot  — esquecido: cinza apagado (#A8A59D), sempre com o texto «Esquecido» ao lado.
+       new     — a novidade No ar (o que chegou desde a última visita): azul.
+     O fundo do quadro (#FAF9F7) e o poço do fluxo (#F0EEEA) também são tokens — o quadro não é a página branca. */
+  --board: 250 249 247; /* #FAF9F7 */
+  --well: 240 238 234; /* #F0EEEA */
+  --st-run: 47 125 87; /* #2F7D57 */
+  --st-err: 191 79 56; /* #BF4F38 */
+  --st-err-ink: 163 64 44; /* #A3402C */
+  --st-attn: 217 119 6; /* #D97706 */
+  --st-attn-ink: 138 90 16; /* #8A5A10 */
+  --st-queued: 194 191 184; /* #C2BFB8 */
+  --st-forgot: 168 165 157; /* #A8A59D */
+  --st-new: 37 99 235; /* #2563EB */
+  /* As caixinhas do fluxo: o contorno, o enchimento e a pilha cinza do No ar. */
+  --crate-line: 168 165 157; /* #A8A59D */
+  --crate-fill: 201 197 188; /* #C9C5BC */
+  --crate-pile: 211 208 201; /* #D3D0C9 */
+
   /* O que o RODAPÉ desta aplicação ocupa, para um overlay flutuante não aterrissar em cima dele.
      Lido por `.ah-bar` (public/ah-overlay.js), que roda em qualquer app e por isso não pode adivinhar.
-     Zero no desktop; abaixo de `md` a barra de navegação inferior existe e mede 56px (`h-14`). */
-  --ah-bottom-reserve: 0px;
+     Desde a fase 1 o rodapé é o compositor do Jido (chat/JidoComposer), fixo em TODA largura, que publica a
+     própria altura em `--jido-composer-h` no <html>; sem compositor montado, zero. (Era a nav inferior do
+     celular, 56px abaixo de `md` — saiu.) Uma tela que precise de mais sobrescreve no <body>. */
+  --ah-bottom-reserve: var(--jido-composer-h, 0px);
 
   /* (A "espinha dorsal" do Story Map tinha tokens PRÓPRIOS — `--spine-*`, o creme-âmbar da faixa-seta
      "Ações" e do nó do passo. Saíram com a grade: o mapa virou OUTLINE, onde a hierarquia se lê por
@@ -108,6 +143,8 @@
   --inset: 19 18 15; /* #13120F — recessed wells */
   --surface: 36 34 32; /* #242220 — cards, header, popovers, modals */
   --surface-hover: 48 46 42; /* #302E2A */
+  --surface-soft: 42 40 37; /* #2A2825 */
+  --surface-press: 54 52 48; /* #363430 */
 
   --line: 58 56 51; /* #3A3833 */
   --line-muted: 46 44 40; /* #2E2C28 */
@@ -117,11 +154,12 @@
    * certo — move 1 ponto —, mas o `subtle` reprovava contra as três superfícies: #7A7770 dava 3.55:1
    * sobre `surface`.
    *
-   * O alvo NÃO é a superfície lisa: o contador de coluna do Kanban e o da Priorização pintam
+   * O alvo NÃO é a superfície lisa: o contador de coluna do Kanban pinta
    * `text-fg-subtle` sobre um chip `bg-fg/[0.05]`, que compõe para ~#2E2C2A e come um pouco do
    * contraste. Mirar só `surface` deixava o chip em 4.48:1 — reprovado por 0.02, medido na varredura.
    * #96938C passa nos QUATRO fundos (surface, canvas, inset e o chip). */
   --fg: 236 234 227; /* #ECEAE3 — 13.17:1 sobre surface */
+  --fg-strong: 250 248 243; /* #FAF8F3 */
   --fg-muted: 169 166 159; /* #A9A69F — 6.52:1 / canvas 7.23:1 */
   --fg-subtle: 150 147 140; /* #96938C — 5.17:1 / canvas 5.73:1 / chip 4.54:1 */
 
@@ -147,6 +185,138 @@
   --state-idle: 122 119 112; /* #7A7770 — 3,6:1 (forma) */
   --state-live: 79 168 115; /* #4FA873 — 5,4:1 */
 
+  /* O quadro novo no escuro — os mesmos significados, clareados para o quase-preto quente. */
+  --board: 30 29 26; /* #1E1D1A */
+  --well: 44 42 38; /* #2C2A26 */
+  --st-run: 79 168 115; /* #4FA873 — 5,4:1 */
+  --st-err: 230 130 106; /* #E6826A */
+  --st-err-ink: 230 130 106; /* #E6826A — 6,4:1 */
+  --st-attn: 233 168 76; /* #E9A84C */
+  --st-attn-ink: 233 168 76; /* #E9A84C — 7,6:1 */
+  --st-queued: 94 91 85; /* #5E5B55 */
+  --st-forgot: 110 107 101; /* #6E6B65 */
+  --st-new: 96 165 250; /* #60A5FA */
+  --crate-line: 122 119 112; /* #7A7770 */
+  --crate-fill: 92 89 83; /* #5C5953 */
+  --crate-pile: 70 67 62; /* #46433E */
+}
+
+/* ── O quadro novo: os movimentos do desenho (todos atrás de prefers-reduced-motion, no fim do arquivo) ──
+   .ah-run-glow — a borda VERDE que respira do card que roda;
+   .ah-dot      — o anel / a bolinha de quem roda pulsando;
+   .ah-pulse    — a ponta da antena do Jido quando há agente rodando;
+   .ah-tick-in  — a última mensagem ao vivo entrando quando troca;
+   .ah-belt     — a esteira tracejada da raia Entrega andando (o quadro pausado a para). */
+@keyframes ahRunGlow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px rgb(var(--st-run) / 0.55), 0 0 0 4px rgb(var(--st-run) / 0.1), 0 2px 8px rgb(var(--st-run) / 0.1);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgb(var(--st-run) / 0.85), 0 0 0 6px rgb(var(--st-run) / 0.04), 0 4px 14px rgb(var(--st-run) / 0.16);
+  }
+}
+@keyframes ahDot {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.8);
+  }
+}
+@keyframes ahPulse {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes ahTickIn {
+  from {
+    opacity: 0;
+    transform: translateX(-24px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes ahBelt {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 12px 0;
+  }
+}
+/* O brilho é também a BORDA do card que roda: sem animação (movimento reduzido) ele fica no quadro do meio, parado. */
+.ah-run-glow {
+  box-shadow: 0 0 0 1px rgb(var(--st-run) / 0.7), 0 0 0 4px rgb(var(--st-run) / 0.08);
+  animation: ahRunGlow 2.4s ease-in-out infinite;
+}
+.ah-dot {
+  animation: ahDot 1.8s ease-in-out infinite;
+}
+.ah-pulse {
+  animation: ahPulse 1.4s ease-in-out infinite;
+}
+.ah-tick-in {
+  animation: ahTickIn 0.5s ease-out;
+}
+.ah-belt {
+  background: repeating-linear-gradient(90deg, rgb(var(--line-emphasis)) 0 4px, transparent 4px 10px);
+  animation: ahBelt 1.1s linear infinite;
+}
+.ah-belt[data-paused] {
+  animation: none;
+}
+
+/* A GEOMETRIA do trecho do fluxo em cima de cada raia (kanban/FlowBand). Mora aqui, e não em constantes do TS, porque
+   muda com a ALTURA da tela, que só o CSS sabe sem piscar na hidratação. Os números do computador alto e do celular são
+   os do protótipo (150px); no computador BAIXO (lib/viewport.ts `SHORT_DESKTOP_MEDIA` — o mesmo texto, conferido no
+   teste) o trecho compacta para 100px com a MESMA estrutura: nome e total, poço com as caixinhas em até 3 níveis,
+   legenda de uma linha. Todos em px a partir do topo do trecho, menos `floor` (o chão das caixinhas, a partir de baixo).
+   O teste flow-band-geometry prova que os três níveis cabem no poço e a legenda cabe no trecho, nos dois tamanhos. */
+.ah-flow {
+  --flow-h: 150px;
+  --flow-label-top: 12px;
+  --flow-well-top: 38px;
+  --flow-well-h: 72px;
+  --flow-crate: 16px;
+  --flow-floor: 48px;
+  --flow-level: 20px;
+  --flow-belt-top: 104px;
+  --flow-extra-top: 44px;
+  --flow-caption-top: 115px;
+  --flow-live-caption-top: 120px;
+  --flow-pile: 12px;
+  --flow-pile-gap: 4px;
+  --flow-day-top: 140px;
+}
+@media (min-width: 768px) and (max-height: 799px) {
+  .ah-flow {
+    --flow-h: 100px;
+    --flow-label-top: 8px;
+    --flow-well-top: 28px;
+    --flow-well-h: 46px;
+    --flow-crate: 12px;
+    /* 3px entre níveis (a mesma proporção do alto: 4px em 16): com 1px as caixinhas tracejadas se encostavam e liam
+       como sobrepostas */
+    --flow-floor: 28px;
+    --flow-level: 15px;
+    --flow-belt-top: 72px;
+    --flow-extra-top: 30px;
+    --flow-caption-top: 79px;
+    --flow-live-caption-top: 79px;
+    --flow-pile: 8px;
+    --flow-pile-gap: 3px;
+    --flow-day-top: 92px;
+  }
 }
 
 /* O PULSO de quem trabalha AGORA (presence-tone.ts: só `working` pulsa). Uma classe só, com o movimento atrás de
@@ -166,15 +336,6 @@
   }
 }
 
-/* A barra de navegação inferior só existe abaixo de `md` (BoardHeader: `fixed inset-x-0 bottom-0`,
-   `h-14`). É onde o overlay flutuante precisa subir para não pousar em cima dela — e para não roubar
-   o toque das abas, já que ele carrega o maior z-index que existe. */
-@media (max-width: 767px) {
-  :root {
-    --ah-bottom-reserve: 56px;
-  }
-}
-
 html,
 body {
   height: 100%;
@@ -190,8 +351,7 @@ body {
 }
 
 /* Thin, unobtrusive scrollbars for the (wide) board canvas — driven by tokens.
-   `.chat-scroll` compartilha SÓ a barra de rolagem: ele é o transcript de um painel de conversa, e a
-   reserva de nav inferior logo abaixo não vale para ele (ver o comentário daquela regra). */
+   `.chat-scroll` compartilha SÓ a barra de rolagem: ele é o transcript de um painel de conversa. */
 .board-scroll,
 .chat-scroll {
   scrollbar-width: thin;
@@ -216,18 +376,9 @@ body {
   background: transparent;
 }
 
-/* On mobile the fixed bottom nav (~3.5rem) overlays the viewport; reserve room at the
-   bottom of every board scroll area so the last cards/rows aren't hidden behind it.
-   NÃO vale para `.chat-scroll`, e é por isso que ele existe: o transcript do chat vive dentro de um
-   painel que já tem o COMPOSER embaixo dele — nada da nav inferior o cobre. Herdando esta reserva, o
-   transcript ganhava 64px de vão morto no fim da conversa no celular (a última mensagem parava acima do
-   fim visível, e a rolagem automática nunca alcançava o fundo de verdade). Ficou invisível enquanto a
-   conversa nascia colada no topo; virou um buraco na tela assim que ela passou a descansar no fundo. */
-@media (max-width: 767px) {
-  .board-scroll {
-    padding-bottom: calc(4rem + env(safe-area-inset-bottom));
-  }
-}
+/* (A reserva de fundo do `.board-scroll` no celular era a folga da nav inferior fixa; a nav saiu na fase 1.
+   O rodapé agora é o compositor do Jido, e quem precisa de folga dele é a TELA — `composerGutter` em lib/ui.ts —,
+   não os modais e painéis que usam esta barra de rolagem: eles abrem POR CIMA do compositor.) */
 
 /* Per-column vertical scroll — the gutter is always reserved (no content shift) but the THUMB is
    invisible until the column (`.group`) is hovered, so a resting board reads clean. */
@@ -593,6 +744,11 @@ body {
   .stack-rise,
   .term-dot,
   .ah-skeleton::after,
+  .ah-run-glow,
+  .ah-dot,
+  .ah-pulse,
+  .ah-tick-in,
+  .ah-belt,
   .jido-cursor,
   .jido-stream :is(p, li, h1, h2, h3, h4, blockquote, pre, table, hr, img) {
     animation: none !important;

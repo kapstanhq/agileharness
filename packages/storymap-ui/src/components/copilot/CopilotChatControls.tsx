@@ -1,59 +1,93 @@
 "use client";
 
-// F3.1/3.2 — os controles do Jido, na BARRA DE AÇÕES do composer: o seletor de AUTONOMIA (Chat·Copiloto·
-// Autônomo — o que ele faz SEM você) e a engrenagem com os quick-settings. Lê o MESMO read-model
-// (orchestratorOverviewAction) que a config page → nunca divergem. Copiloto/Autônomo ficam cadeados enquanto o
-// enforcement (F5.9) não shipa; Autônomo fica ADICIONALMENTE cadeado enquanto DEPLOY_AUTONOMY_ENABLED (§4) não
-// é liberado pelo operador.
+// Os controles do Jido na barra da conversa (o cockpit — `CopilotChat` sem o compositor de fora): a VERDADE do
+// estado (um ponto com o tom de `copilotStatus` + o QUANDO do próximo tick) e a engrenagem com os ajustes do
+// RUNTIME (quando ele acorda, o teto do dia, o modelo do chat). Lê o MESMO read-model (orchestratorOverviewAction)
+// que a configuração → nunca divergem.
 //
-// ONDE ele vive (e por que mudou): era uma faixa no TOPO do painel, junto do nome "Jido" e da palavra de
-// estado. O topo inteiro caiu — o nome e o estado já são o mascote no topnav da aplicação, e repeti-los aqui
-// era uma barra de moldura em cima da conversa. Os controles desceram para junto do composer, onde moram as
-// outras ações da conversa (anexo, contexto): o que se OPERA fica na mão, não na testa da tela.
-//
-// Os 3 estados são uma PROJEÇÃO de (mode, riskMatrix.deploy) — ver copilot/tier.ts. Chat=off, Copiloto=
-// autonomous+deploy:ask, Autônomo=autonomous+deploy:auto. Escolher um estado ESCREVE seu (mode,matriz) canônico.
-//
-// Quatro coisas que este componente conserta:
-//  1. RÓTULO — "off/paired/auto" não diziam nada e sugeriam que `off` desligava o Jido. Não desliga: o CHAT
-//     sempre funciona. O que o modo governa é só a autonomia (agir sem você).
-//  2. ESCOLHA INFORMADA — era um <select> nativo: três palavras sem contexto, num menu do sistema operacional
-//     onde não cabe explicação. Virou popover, e cada opção carrega a DESCRIÇÃO do comportamento
-//     (TIER_META.short; o texto completo no tooltip) — a decisão mais consequente do painel deixa de ser um
-//     chute pelo rótulo.
-//  3. VERDADE PERSISTENTE — "auto" aceso pode significar "agindo", "inerte (sem token)", "tick desarmado" ou
-//     "só leitura". O gatilho carrega um PONTO com o tom da verdade (copilotStatus, fonte única) e o popover
-//     abre com a frase inteira; o que era um chip permanente na régua não gasta mais largura à toa.
-//  4. QUANDO — "a cada 30min" não responde "falta quanto?". O relógio in-process (orchestrator-clock) dá o
-//     horário do próximo tick, e o wake por evento aparece no popover ("acorda em 40s · card X travou").
+// A AUTONOMIA saiu daqui (fase 4). O seletor Chat / Copiloto / Autônomo e o editor da matriz de risco («o que ele pode
+// fazer sozinho») viraram o controle ÚNICO da barra do topo (`shell/AutonomyControl`, caixa «O Jido agir sem você
+// pedir») — um painel, duas portas; nenhuma outra tela configura autonomia.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Loader2, Lock, Settings2, X } from "lucide-react";
+import { Loader2, Settings2, X } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { ToastCard } from "@/components/Toast";
 import { BTN_ICON, DOT, ICON, TXT } from "./ui";
-import { MenuBlock, MenuSep, Popover } from "./Popover";
 import {
   copilotChatModelAction,
   orchestratorOverviewAction,
   saveOrchestratorSettingsAction,
   type CopilotOrchestratorOverview,
 } from "@/app/copilot-actions";
-import { setBoardOrchestratorModeAction } from "@/app/actions";
-import { activationNotice, type ActivationNotice } from "@/lib/storymap/copilot/activation-notice";
 import {
   copilotStatus,
   formatCountdown,
   splitModelVariant,
   type CopilotStatusLevel,
 } from "@/lib/storymap/copilot/copilot-status";
-import { copilotTier, tierMatrix, tierMode, tierUnlocked, TIER_META, type CopilotTier } from "@/lib/storymap/copilot/tier";
-import { ChatModelEffort, RiskMatrixEditor } from "./CopilotSettingsControls";
+import { copilotTier } from "@/lib/storymap/copilot/tier";
+import { ChatModelEffort } from "./CopilotSettingsControls";
 
-/** A ordem dos 3 estados na lista (do mais contido ao mais amplo). Rótulo/descrição/tooltip vêm de TIER_META
- *  (fonte única, compartilhada com a config page). Escolher um estado escreve seu (mode,matriz) canônico — o
- *  ESTADO é a autonomia, não há sub-opção. Ver copilot/tier.ts. */
-const TIERS: CopilotTier[] = ["chat", "copiloto", "autonomo"];
+/**
+ * Só a LEITURA dos controles, sem nada na tela — para a conversa por cima da tela do compositor do Jido
+ * (chat/ChatOverlay), que não mostra a engrenagem do chat (a autonomia é o controle único da barra do topo; modelo e
+ * esforço moram no `/model`). O rosto e o diário do tick continuam precisando saber o nível do
+ * board e se um tick está rodando: é o MESMO read-model e a MESMA projeção (`copilotStatus`) dos controles, com o
+ * mesmo ritmo — re-lê a cada 30s só nos estados autônomos (em Chat não há tick a acompanhar).
+ */
+export function CopilotStatusProbe({
+  boardId,
+  onStatus,
+}: {
+  boardId: string;
+  onStatus: (s: { level: CopilotStatusLevel; running: boolean }) => void;
+}) {
+  const [overview, setOverview] = useState<CopilotOrchestratorOverview | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const read = () =>
+      orchestratorOverviewAction(boardId)
+        .then((o) => {
+          if (alive) setOverview(o);
+        })
+        .catch(() => {});
+    read();
+    return () => {
+      alive = false;
+    };
+  }, [boardId]);
+  const tier = overview ? copilotTier({ mode: overview.boardMode, riskMatrix: overview.riskMatrix }) : "chat";
+  useEffect(() => {
+    if (tier === "chat") return;
+    let alive = true;
+    const poll = setInterval(() => {
+      orchestratorOverviewAction(boardId)
+        .then((o) => {
+          if (alive) setOverview(o);
+        })
+        .catch(() => {});
+    }, 30_000);
+    return () => {
+      alive = false;
+      clearInterval(poll);
+    };
+  }, [boardId, tier]);
+  const level = overview
+    ? copilotStatus({
+        mode: overview.boardMode,
+        enabled: overview.settings.enabled.value,
+        orchTokenPresent: overview.orchTokenPresent,
+        writeBoard: overview.riskMatrix["write-board"],
+        deploy: overview.riskMatrix["deploy"],
+        paused: overview.paused,
+      }).level
+    : undefined;
+  const running = overview?.state.running ?? false;
+  useEffect(() => {
+    if (level) onStatus({ level, running });
+  }, [level, running, onStatus]);
+  return null;
+}
 
 export function CopilotChatControls({
   boardId,
@@ -61,38 +95,18 @@ export function CopilotChatControls({
   placement = "up",
 }: {
   boardId: string;
-  /** o estado REAL do board (o mesmo do chip da verdade) + se um tick está rodando — alimenta o rosto do Jido. */
+  /** o estado REAL do board (o mesmo do ponto da verdade) + se um tick está rodando — alimenta o rosto do Jido. */
   onStatus?: (s: { level: CopilotStatusLevel; running: boolean }) => void;
-  /**
-   * Para onde os painéis abrem. O seletor de modo subiu para a barra do TOPO do chat (é ele que governa a
-   * conversa inteira — ele pertence a onde o olho começa, não à mão que digita), e um painel `bottom-full`
-   * ancorado lá em cima abriria para fora da janela. `down` é o modo do topo; `up` fica para quem ainda
-   * monta estes controles perto do rodapé.
-   */
+  /** Para onde o cartão de ajustes abre: `down` quando o gatilho está no topo do painel, `up` perto do rodapé. */
   placement?: "up" | "down";
 }) {
   const [overview, setOverview] = useState<CopilotOrchestratorOverview | null>(null);
-  const [tier, setTier] = useState<CopilotTier>("chat");
-  const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [notice, setNotice] = useState<ActivationNotice | null>(null); // Item 3 — confirmação honesta da ativação
   const [nowMs, setNowMs] = useState(() => Date.now());
-
-  // auto-dismiss da confirmação (8s) — o estado PERSISTENTE agora vive no chip, então o toast pode sumir.
-  useEffect(() => {
-    if (!notice) return;
-    const t = setTimeout(() => setNotice(null), 8000);
-    return () => clearTimeout(t);
-  }, [notice]);
 
   const refresh = useCallback(() => {
     orchestratorOverviewAction(boardId)
-      .then((o) => {
-        setOverview(o);
-        // O estado ATIVO é derivado de (mode, matriz.deploy) — a mesma projeção que o resto do sistema lê.
-        setTier(copilotTier({ mode: o.boardMode, riskMatrix: o.riskMatrix }));
-      })
+      .then(setOverview)
       .catch(() => {});
   }, [boardId]);
 
@@ -100,27 +114,19 @@ export function CopilotChatControls({
     refresh();
   }, [refresh]);
 
+  const autonomous = overview ? copilotTier({ mode: overview.boardMode, riskMatrix: overview.riskMatrix }) !== "chat" : false;
+
   // Relógio local (1s) + re-leitura do read-model (30s): a contagem regressiva é local, mas nextTickAt/wake/
-  // running vivem no servidor (o timer re-arma lá) — sem o poll o header mostraria um countdown congelado.
+  // running vivem no servidor (o timer re-arma lá) — sem o poll o ponto mostraria um countdown congelado.
   useEffect(() => {
-    if (tier === "chat") return; // só há tick/countdown a acompanhar nos estados autônomos (Copiloto/Autônomo)
+    if (!autonomous) return; // só há tick/countdown a acompanhar quando o board deixa o Jido agir sozinho
     const tick = setInterval(() => setNowMs(Date.now()), 1000);
     const poll = setInterval(refresh, 30_000);
     return () => {
       clearInterval(tick);
       clearInterval(poll);
     };
-  }, [tier, refresh]);
-
-  const enforcement = overview?.enforcementShipped ?? false;
-
-  // Por que os estados acima de Chat podem estar travados — vira o title do select (as <option> não têm
-  // tooltip próprio) para não perder a explicação que os botões do segmented traziam.
-  const autonomyLockHint = !enforcement
-    ? "Copiloto/Autônomo indisponíveis: o enforcement da matriz de risco está desligado. Só Chat por enquanto."
-    : !tierUnlocked("autonomo")
-      ? "Publicação autônoma em revisão pelo operador — Autônomo libera após aprovar o mecanismo de deploy-autônomo (§4)."
-      : null;
+  }, [autonomous, refresh]);
 
   const status = useMemo(
     () =>
@@ -131,6 +137,7 @@ export function CopilotChatControls({
             orchTokenPresent: overview.orchTokenPresent,
             writeBoard: overview.riskMatrix["write-board"],
             deploy: overview.riskMatrix["deploy"],
+            paused: overview.paused,
           })
         : null,
     [overview],
@@ -145,7 +152,7 @@ export function CopilotChatControls({
     if (level) onStatus?.({ level, running });
   }, [level, running, onStatus]);
 
-  /** A frase de "quando" — o que o operador pergunta o tempo todo em modo autônomo. */
+  /** A frase de "quando" — o que o operador pergunta o tempo todo com o Jido agindo sozinho. */
   const timing = useMemo(() => {
     if (!overview || overview.boardMode !== "autonomous" || status?.inert) return null;
     if (overview.state.running) return { text: "rodando agora", live: true };
@@ -155,135 +162,20 @@ export function CopilotChatControls({
     return { text: "sem tick agendado", live: false };
   }, [overview, status, nowMs]);
 
-  const write = async (next: CopilotTier) => {
-    setErr(null);
-    const prev = tier;
-    setTier(next); // otimista
-    setBusy(true);
-    // Cada estado escreve seu (mode,matriz) canônico numa ÚNICA escrita (tier.ts). Chat só desliga o tick
-    // (mode off) e preserva a matriz atual do board (riskMatrix ausente = mantém).
-    const mode = tierMode(next);
-    const riskMatrix = next === "chat" ? undefined : tierMatrix(next);
-    const res = await setBoardOrchestratorModeAction({ boardId, mode, riskMatrix });
-    setBusy(false);
-    if (!res.ok) {
-      setTier(prev); // revert
-      setErr(res.error);
-      return;
-    }
-    if (overview) {
-      // confirmação HONESTA: usa o overview atual + a autonomia recém-escolhida (o read-model só reflete a
-      // matriz nova no próximo refresh, e o operador precisa da verdade AGORA).
-      setNotice(
-        activationNotice({
-          mode,
-          enabled: overview.settings.enabled.value,
-          orchTokenPresent: overview.orchTokenPresent,
-          tickMinutes: overview.settings.tickMinutes,
-          writeBoard: riskMatrix?.["write-board"] ?? overview.riskMatrix["write-board"],
-        }),
-      );
-    }
-    refresh();
-  };
-
-  const pickTier = async (next: CopilotTier) => {
-    // O ESTADO é a autonomia — não há mais sub-popover. Um estado travado (enforcement off, ou Autônomo antes do
-    // gate de deploy-autônomo) simplesmente não é selecionável.
-    if (busy || next === tier || !tierUnlocked(next)) return;
-    await write(next);
-  };
+  const truth = status && overview?.boardMode === "autonomous" ? { status, timing } : null;
 
   return (
-    // Um grupo compacto na barra de ações do composer: modo + engrenagem, e nada mais ocupando largura.
+    // Um grupo compacto: o PONTO da verdade (só quando o Jido age sozinho) + a engrenagem dos ajustes do runtime.
     <div className="relative flex shrink-0 items-center gap-0.5">
-      {/* AUTONOMIA (o que ele faz SEM você) — popover, não <select>. O menu nativo do sistema operacional só
-          aceita três palavras soltas; a escolha mais consequente do painel (deixar ou não o Jido agir e
-          publicar sozinho) merece a DESCRIÇÃO do comportamento ao lado de cada opção. O gatilho mostra o modo
-          atual e, no autônomo, um PONTO com o tom da verdade — "auto" aceso pode ser agindo, inerte ou só
-          leitura, e essa diferença não pode morar apenas dentro do popover fechado. */}
-      <Popover
-        label="Autonomia do Jido — o que ele faz sem você"
-        title={autonomyLockHint ?? `O que o Jido faz sem você — ${TIER_META[tier].hint}`}
-        align="left"
-        direction={placement}
-        className="w-72"
-        triggerClassName={cn(
-          "inline-flex shrink-0 items-center gap-1 rounded-lg px-1.5 py-1 font-medium text-fg-muted transition hover:bg-surface-hover hover:text-fg",
-          TXT.label,
-        )}
-        trigger={
-          <>
-            {status && overview?.boardMode === "autonomous" && (
-              <span
-                className={cn("h-1.5 w-1.5 shrink-0 rounded-full", DOT[status.tone], timing?.live && "animate-pulse")}
-              />
-            )}
-            {TIER_META[tier].label}
-            <ChevronDown className={ICON.inline} />
-          </>
-        }
-      >
-        {(close) => (
-          <>
-            {TIERS.map((t) => {
-              // Copiloto/Autônomo exigem enforcement; Autônomo depende AINDA do gate de deploy-autônomo (§4).
-              const locked = (t !== "chat" && !enforcement) || !tierUnlocked(t);
-              const active = t === tier;
-              return (
-                <button
-                  key={t}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={active}
-                  disabled={locked || busy}
-                  title={locked ? (autonomyLockHint ?? "Estado bloqueado") : TIER_META[t].hint}
-                  onClick={() => {
-                    void pickTier(t);
-                    close();
-                  }}
-                  className={cn(
-                    "flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left transition",
-                    "hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent",
-                    active && "bg-inset",
-                  )}
-                >
-                  <span className={cn("flex items-center gap-1.5 font-semibold text-fg", TXT.label)}>
-                    {TIER_META[t].label}
-                    {active && <Check className={cn(ICON.inline, "text-accent")} />}
-                    {locked && <Lock className={cn(ICON.inline, "text-fg-subtle")} />}
-                  </span>
-                  {/* A descrição BREVE do comportamento — o que muda de fato ao escolher este estado. */}
-                  <span className={cn("leading-snug text-fg-subtle", TXT.meta)}>{TIER_META[t].short}</span>
-                </button>
-              );
-            })}
-
-            {/* A VERDADE do estado + o QUANDO — antes eram um chip e um contador permanentes na régua do
-                header. Eles pertencem a esta conversa (o que o modo escolhido está REALMENTE fazendo agora),
-                e aqui cabem por extenso em vez de abreviados numa faixa de 420px. */}
-            {status && overview?.boardMode === "autonomous" && (
-              <>
-                <MenuSep />
-                <MenuBlock>
-                  <div className={cn("flex items-center gap-1.5 font-medium", TXT.meta)}>
-                    <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", DOT[status.tone])} />
-                    <span className="text-fg">{status.label}</span>
-                  </div>
-                  <div className="leading-snug text-fg-subtle">{status.detail}</div>
-                  {timing && (
-                    <div className={cn("tabular-nums", timing.live ? "text-accent" : "text-fg-subtle")}>
-                      {timing.text}
-                    </div>
-                  )}
-                </MenuBlock>
-              </>
-            )}
-          </>
-        )}
-      </Popover>
-
-      {/* Engrenagem → popover */}
+      {truth && (
+        <span
+          className={cn("inline-flex shrink-0 items-center gap-1 px-1 text-fg-muted", TXT.meta)}
+          title={`${truth.status.label} — ${truth.status.detail}`}
+        >
+          <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", DOT[truth.status.tone], truth.timing?.live && "motion-safe:animate-pulse")} />
+          {truth.timing && <span className="tabular-nums">{truth.timing.text}</span>}
+        </span>
+      )}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -293,28 +185,15 @@ export function CopilotChatControls({
       >
         <Settings2 className={ICON.action} />
       </button>
-      {busy && <Loader2 className={cn(ICON.inline, "animate-spin text-fg-subtle")} />}
-      {err && <span className={cn("shrink-0 text-rose-500", TXT.meta)} title={err}>erro</span>}
 
       {open && overview && (
         <QuickSettings
           boardId={boardId}
           overview={overview}
+          truth={truth ? { label: truth.status.label, detail: truth.status.detail, tone: truth.status.tone } : null}
           placement={placement}
           onClose={() => setOpen(false)}
           onChanged={refresh}
-        />
-      )}
-
-      {/* Item 3 — confirmação honesta da ativação (auto-some em 8s; o estado persistente fica no ponto do
-          gatilho + no popover de modo). Mesmo CARTÃO da pilha de toasts (ToastCard), só ancorado aqui — e
-          para CIMA, como todo painel desta barra. */}
-      {notice && (
-        <ToastCard
-          kind={notice.level === "ok" ? "success" : "warning"}
-          message={notice.text}
-          onDismiss={() => setNotice(null)}
-          className={cn("absolute left-0 z-50 w-72 max-w-[85vw]", placement === "up" ? "bottom-9" : "top-9")}
         />
       )}
     </div>
@@ -324,12 +203,15 @@ export function CopilotChatControls({
 function QuickSettings({
   boardId,
   overview,
+  truth,
   placement,
   onClose,
   onChanged,
 }: {
   boardId: string;
   overview: CopilotOrchestratorOverview;
+  /** a verdade do estado quando o Jido age sozinho (o ponto do gatilho, por extenso) — null em modo só-conversa. */
+  truth: { label: string; detail: string; tone: keyof typeof DOT } | null;
   /** o cartão abre para baixo (gatilho no topo do painel) ou para cima (gatilho no rodapé). */
   placement: "up" | "down";
   onClose: () => void;
@@ -387,7 +269,6 @@ function QuickSettings({
   };
 
   const last = overview.state.lastTick;
-  const risk = riskSummary(overview.riskMatrix);
 
   return (
     <>
@@ -442,6 +323,14 @@ function QuickSettings({
                   : `parou: ${last.reason ?? "sem motivo"}`
                 : "Ainda não rodou nenhum ciclo neste board."}
             </p>
+            {truth && (
+              <p className={cn("flex items-start gap-1.5 leading-snug text-fg-subtle", TXT.meta)}>
+                <span className={cn("mt-1 h-1.5 w-1.5 shrink-0 rounded-full", DOT[truth.tone])} />
+                <span>
+                  <span className="text-fg">{truth.label}</span> — {truth.detail}
+                </span>
+              </p>
+            )}
             {last && (
               <p className={cn("text-fg-subtle", TXT.meta)}>
                 {new Date(last.at).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
@@ -490,18 +379,8 @@ function QuickSettings({
             )}
           </Section>
 
-          {/* O QUE ELE PODE FAZER SOZINHO — a matriz é uma TABELA de 10 linhas com um Salvar PRÓPRIO: aberta,
-              ela era 2/3 do popover e punha dois botões "Salvar" competindo na mesma tela. Fechada, ela vira
-              uma linha de resumo (quantas classes são automáticas / perguntam / nunca) e só abre quem vai
-              mexer — que é o caso raro. Nada saiu daqui: o editor é o MESMO da config completa. */}
-          <Disclosure title="O que ele pode fazer sozinho" summary={risk}>
-            <RiskMatrixEditor
-              boardId={boardId}
-              resolved={overview.riskMatrix}
-              warnings={overview.riskMatrixWarnings}
-              onSaved={onChanged}
-            />
-          </Disclosure>
+          {/* («O que ele pode fazer sozinho» — a matriz de risco — saiu daqui na fase 4: é a caixa «O Jido agir sem você
+              pedir» do controle único de autonomia, na barra do topo.) */}
 
           {/* ("Começar uma conversa nova" saiu daqui: é ação de CONVERSA, não ajuste do Jido, e agora mora no
               cabeçalho do painel — ver CopilotChats.tsx. Ela era o único item deste cartão que não configurava
@@ -606,26 +485,4 @@ function NumberField({
       {suffix && <span className={cn("text-fg-subtle", TXT.meta)}>{suffix}</span>}
     </span>
   );
-}
-
-/** Uma seção que se ABRE — fechada mostra o resumo, aberta mostra o editor inteiro. */
-function Disclosure({ title, summary, children }: { title: string; summary: string; children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <section className="border-t border-line pt-2.5">
-      <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="flex w-full items-center gap-1.5 text-left">
-        <ChevronRight className={cn(ICON.inline, "text-fg-subtle transition", open && "rotate-90")} />
-        <span className={cn("min-w-0 flex-1 font-medium text-fg", TXT.label)}>{title}</span>
-        {!open && <span className={cn("shrink-0 tabular-nums text-fg-subtle", TXT.meta)}>{summary}</span>}
-      </button>
-      {open && <div className="mt-2">{children}</div>}
-    </section>
-  );
-}
-
-/** O resumo da matriz de risco em uma linha: quantas classes ele faz sozinho, quantas pergunta, quantas nunca. */
-function riskSummary(matrix: Record<string, string>): string {
-  const vals = Object.values(matrix);
-  const n = (d: string) => vals.filter((v) => v === d).length;
-  return `${n("auto")} auto · ${n("ask")} pergunta · ${n("never")} nunca`;
 }

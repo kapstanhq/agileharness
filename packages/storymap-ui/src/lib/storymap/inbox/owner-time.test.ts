@@ -7,7 +7,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { approvalAbsentState } from "@/components/inicio/cockpit-labels";
+import { approvalAbsentState } from "@/components/inbox/cockpit-labels";
 import { formatDecisionText, localTimeFormatter, relativeWithClock, timeToken } from "./copy";
 
 const governor = vi.hoisted(() => ({ timezone: "America/Chicago" as string | undefined }));
@@ -57,7 +57,9 @@ describe("um instante fixo sai no relógio do dono, seja qual for o fuso do proc
   });
 
   it("uma DATA pura (a proposta de PRD nasce com o dia) é o dia do calendário — não vira a véspera no fuso do dono", () => {
-    expect(relativeWithClock("2026-01-09", NOW, OWNER_TZ)).toBe("há 5 dias · 09/01");
+    // NOW é 13/01 às 21:20 em Chicago: para o dono, 09/01 foi há 4 dias do calendário (contar horas desde a meia-noite
+    // UTC dava 5 — e «há 8 h» para a proposta de minutos atrás, achado de 07/10)
+    expect(relativeWithClock("2026-01-09", NOW, OWNER_TZ)).toBe("há 4 dias · 09/01");
   });
 
   it("o primeiro render (relógio 0) não depende do relógio de ninguém: escreve o dia, nunca «hoje»", () => {

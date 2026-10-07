@@ -246,6 +246,8 @@ export interface HealthQueueEntry {
   cardId: string;
   /** ms desde a época em que entrou na fila. */
   queuedAt: number;
+  /** o motivo da última espera, como a fila do condutor gravou (`board-paused`, `slots:…`). Ausente = não sabido. */
+  waitKind?: string;
 }
 
 export interface HealthStallRow {
@@ -299,6 +301,16 @@ export interface HealthInputs {
   attribution: { actions: number; attributed: number };
   touches: { liveStories: number; technicalTouches: number; ownerSessionActions: number };
   openTechnicalQuestions: HealthOpenTechnicalQuestion[];
+  /**
+   * Os boards PAUSADOS agora (o freio em vigor — do dono ou dos agentes — é `paused`). Uma espera que o dono escolheu
+   * não é a ferramenta travada: S6 e S7 não contam o trabalho desses boards (só o citam no detalhe). Ausente = nenhum.
+   */
+  pausedBoards?: string[];
+  /**
+   * Quando cada board saiu da pausa pela última vez (ms desde a época). Retomado o board, a espera conta DA RETOMADA —
+   * sem isso, o sinal ficaria vermelho no instante em que o dono religa um board parado há dias. Ausente = sem pausa.
+   */
+  resumedAt?: Record<string, number>;
 }
 
 /** Os invokes que NÃO mudam o desfecho: ler o passo a passo, pedir ao Jido, abrir um link, olhar o status. */
@@ -340,6 +352,12 @@ function grade(value: number, t: { amber: number; red: number }): HealthLevel {
 }
 
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+
+/** O chão do relógio de um board: a espera nunca conta de antes da última retomada da pausa. */
+const sinceResume = (i: HealthInputs, board: string, since: number): number => Math.max(since, i.resumedAt?.[board] ?? -Infinity);
+
+/** O trecho do detalhe que cita o que ficou de fora por pausa — o sinal fica verde, mas a espera continua visível. */
+const pausedNote = (n: number, one: string, many: string): string => (n ? `; ${plural(n, one, many)} em board pausado (não conta)` : "");
 
 type SignalBody = Pick<HealthSignal, "label" | "unit" | "fixHint"> & Partial<Pick<HealthSignal, "rule">>;
 
@@ -532,7 +550,14 @@ function s5(i: HealthInputs, t: HealthThresholds): HealthSignal {
  * horas de uma vez (e um `[saude:S6]` em 10 min), e o delta de um conserto noutro board aparecia como «piorou». Card
  * sem salto no ledger não prova desde quando espera: conta da última entrega (sem entrega, de agora).
  */
-function s6(i: HealthInputs, t: HealthThresholds): HealthSignal {
+function s6(input: HealthInputs, t: HealthThresholds): HealthSignal {
+  // Board pausado: a fila de publicação dele é escolha de quem pausou, não vazão travada — sai da conta (e do grupo
+  // por causa), e o detalhe diz quantos cards ficaram de fora.
+  const paused = new Set(input.pausedBoards ?? []);
+  const pausedWaiting = input.publishWaiting.filter((w) => paused.has(w.board)).length;
+  const i: HealthInputs = paused.size
+    ? { ...input, publishWaiting: input.publishWaiting.filter((w) => !paused.has(w.board)), publishHeld: input.publishHeld.filter((h) => !paused.has(h.board)) }
+    : input;
   const lastMove = new Map<string, number>();
   const lastDelivered = new Map<string, number>();
   const delivered = new Map(Object.entries(i.deliveredStatuses).map(([b, ids]) => [b, new Set(ids)]));
@@ -549,7 +574,7 @@ function s6(i: HealthInputs, t: HealthThresholds): HealthSignal {
   for (const [board, waiting] of waitingByBoard) {
     const delivered = lastDelivered.get(board);
     const queueSince = Math.min(...waiting.map((w) => lastMove.get(key(w.board, w.cardId)) ?? delivered ?? i.now));
-    const since = Math.max(delivered ?? -Infinity, queueSince);
+    const since = sinceResume(i, board, Math.max(delivered ?? -Infinity, queueSince));
     const h = Math.max(0, i.now - since) / HOUR_MS;
     if (h > hours) hours = h;
     evidence.push(...waiting.map((w) => key(w.board, w.cardId)));
@@ -579,8 +604,8 @@ function s6(i: HealthInputs, t: HealthThresholds): HealthSignal {
       level,
       evidence: [...(biggest?.[1] ?? []), ...evidence],
       detail: waitingCount
-        ? `${round1(hours)} h com fila e nada no ar; ${plural(waitingCount, "card espera", "cards esperam")} publicação` + (groupSize >= 2 ? `, ${groupSize} pela mesma causa (${biggest![0]})` : "")
-        : "nenhum card espera publicação",
+        ? `${round1(hours)} h com fila e nada no ar; ${plural(waitingCount, "card espera", "cards esperam")} publicação` + (groupSize >= 2 ? `, ${groupSize} pela mesma causa (${biggest![0]})` : "") + pausedNote(pausedWaiting, "card espera", "cards esperam")
+        : "nenhum card espera publicação" + pausedNote(pausedWaiting, "card espera", "cards esperam"),
     },
   );
 }
@@ -589,15 +614,24 @@ function s6(i: HealthInputs, t: HealthThresholds): HealthSignal {
 
 function s7(i: HealthInputs, t: HealthThresholds): HealthSignal {
   const body = { label: "Fila do condutor", unit: "h", fixHint: "Vaga presa por condutor quieto ou terminal zumbi: lembrete, estacionar e só então admitir o próximo; a espera grava o motivo real." };
-  if (i.conductorQueue.length === 0) return signal("S7", body, t.s7, { value: 0, level: "ok", detail: "ninguém espera uma vaga de condutor" });
+  // Board pausado pelo freio EM VIGOR: a espera é escolha de quem pausou, não vaga presa — sai da conta e fica citada
+  // no detalhe. Retomado o board, conta da retomada. O `waitKind` gravado pela fila NÃO basta: ele só é reescrito a
+  // cada passada do despachante, então um despachante morto depois da retomada deixaria «board-paused» velho e o S7
+  // verde para sempre — exatamente a falha que o S7 existe para pegar.
+  const paused = new Set(i.pausedBoards ?? []);
+  const isPaused = (q: HealthQueueEntry): boolean => paused.has(q.board);
+  const pausedCount = i.conductorQueue.filter(isPaused).length;
+  const queue = i.conductorQueue.filter((q) => !isPaused(q)).map((q) => ({ ...q, queuedAt: sinceResume(i, q.board, q.queuedAt) }));
+  const note = pausedNote(pausedCount, "card espera", "cards esperam");
+  if (queue.length === 0) return signal("S7", body, t.s7, { value: 0, level: "ok", detail: "ninguém espera uma vaga de condutor" + note });
   // O card que espera há mais tempo: a idade da fila não pode ficar escondida atrás de uma entrada nova de maior prioridade.
-  const oldest = [...i.conductorQueue].sort((a, z) => a.queuedAt - z.queuedAt)[0];
-  const hours = (i.now - oldest.queuedAt) / HOUR_MS;
+  const sorted = [...queue].sort((a, z) => a.queuedAt - z.queuedAt);
+  const hours = Math.max(0, i.now - sorted[0].queuedAt) / HOUR_MS;
   return signal("S7", body, t.s7, {
     value: round1(hours),
     level: grade(hours, t.s7),
-    evidence: [...i.conductorQueue].sort((a, z) => a.queuedAt - z.queuedAt).map((q) => key(q.board, q.cardId)),
-    detail: `${plural(i.conductorQueue.length, "card espera", "cards esperam")} uma vaga; o mais antigo há ${round1(hours)} h`,
+    evidence: sorted.map((q) => key(q.board, q.cardId)),
+    detail: `${plural(queue.length, "card espera", "cards esperam")} uma vaga; o mais antigo há ${round1(hours)} h` + note,
   });
 }
 

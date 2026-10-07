@@ -10,7 +10,7 @@ describe("onde o overlay de feedback é montado", () => {
   });
 
   it("monta nas superfícies que exigem sessão", () => {
-    for (const p of ["/", "/board/acme/kanban", "/processes", "/perguntas", "/feedback-lab"]) {
+    for (const p of ["/", "/board/acme/kanban", "/processes", "/perguntas", "/inbox"]) {
       expect(shouldMountOverlay(p), p).toBe(true);
     }
   });

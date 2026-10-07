@@ -1,33 +1,31 @@
 // 🏛️ Os artefatos governados que vivem num DOCUMENTO — o par ler/aplicar que a casca usa.
 //
-// Dois artefatos de `GOVERNANCE_ARTIFACTS` não são campos do `board.yaml`: o **PRD** (sempre) e o
-// **Lean Canvas** (depois de o `.md` dele existir). `applyGovernanceChange` (puro, sobre
-// `BoardConfig`) não sabe — e não deve saber — escrever em disco; então a parte que precisa de I/O
-// mora aqui.
+// Dois artefatos de `GOVERNANCE_ARTIFACTS` não são campos do `board.yaml`: o **PRD** e o **canvas**
+// (hoje o Business Model Canvas, `docs/business-model-canvas.md`). `applyGovernanceChange` (puro,
+// sobre `BoardConfig`) não sabe — e não deve saber — escrever em disco; então a parte que precisa de
+// I/O mora aqui.
 //
-// A REGRA que decide qual caminho vale, e ela é uma só: **escreva onde `loadDoc` LÊ.** Para o PRD
-// isso é sempre o `.md` (a escada do YAML é só a projeção legada). Para o canvas depende: enquanto
-// o `docs/lean-canvas.md` não existir, `loadDoc` projeta do `board.yaml` e o YAML É o canônico —
-// materializar o `.md` a partir de uma aprovação deixaria o campo `canvas:` sendo lido por quem
-// projeta e escrito por mais ninguém.
+// A REGRA que decide qual caminho vale, e ela é uma só: **escreva onde `loadDoc` LÊ.** Para os dois
+// isso é sempre o `.md`: o `canvas:` do `board.yaml` é o Lean Canvas ANTIGO (outras chaves, outro
+// método) e só alimenta a projeção de quem ainda não tem o arquivo. Gravar um bloco do BMC ali
+// criaria uma chave que ninguém lê; gravar no `.md` materializa a projeção e é o que a tela mostra.
 //
 // A regra que este arquivo existe para garantir: **o caminho governado grava exatamente onde o
 // caminho da tela grava** — os mesmos bytes, o mesmo `writeSchemaDoc`, a mesma validação de schema.
-// O Lean Canvas tem hoje o defeito oposto (a governança escreve o campo `canvas:` do YAML enquanto
-// `loadDoc`, depois da migração, lê só o `.md`, e nada reconcilia os dois). Uma proposta aprovada que
-// não muda o que o leitor lê é pior que uma proposta recusada: ela reporta sucesso.
+// Uma proposta aprovada que não muda o que o leitor lê é pior que uma proposta recusada: ela reporta
+// sucesso.
 //
 // SERVIDOR (`loadDoc`/`writeSchemaDoc` tocam disco).
 
-import { loadDoc, schemaDocExists, writeSchemaDoc } from "./schema-doc-io";
+import { loadDoc, writeSchemaDoc } from "./schema-doc-io";
 import { PRD_SCHEMA, PRD_DOC_TYPE } from "./schemas/prd";
-import { LEAN_CANVAS_SCHEMA } from "./schemas/lean-canvas";
+import { BMC_SCHEMA } from "./schemas/business-model-canvas";
 import { sectionBlocks } from "./schemas/lean-canvas-legacy";
 import { parseSchemaBody, replaceSectionBlocks, serializeSchemaDoc, sectionContent, type SchemaDoc } from "./schema-codec";
 import { serializeDocMd } from "./md-codec";
 import { blockIdFactory } from "./doc-model";
 import { coerceCanvasBlock } from "../canvas";
-import { isGovernanceDraftStale } from "../governance";
+import { isGovernanceDraftStale, retiredDraftChange } from "../governance";
 import type { DocSchema } from "./doc-schema";
 import type { BoardConfig, CanvasTag, GovernanceDraft } from "../types";
 
@@ -37,8 +35,8 @@ import type { BoardConfig, CanvasTag, GovernanceDraft } from "../types";
  */
 export function governedDoc(artifact: string): { schema: DocSchema; as: "section" | "tags" } | undefined {
   if (artifact === "prd") return { schema: PRD_SCHEMA, as: "section" };
-  if (artifact === "canvas") return { schema: LEAN_CANVAS_SCHEMA, as: "section" };
-  if (artifact === "canvasTags") return { schema: LEAN_CANVAS_SCHEMA, as: "tags" };
+  if (artifact === "canvas") return { schema: BMC_SCHEMA, as: "section" };
+  if (artifact === "canvasTags") return { schema: BMC_SCHEMA, as: "tags" };
   return undefined;
 }
 
@@ -59,7 +57,7 @@ export function pendingDraftsForDoc(
 ): GovernanceDraft[] {
   const out: GovernanceDraft[] = [];
   for (const draft of drafts) {
-    if (draft.status !== "pending" || isGovernanceDraftStale(draft, now)) continue;
+    if (draft.status !== "pending" || isGovernanceDraftStale(draft, now) || retiredDraftChange(draft)) continue;
     const changes = draft.changes.filter((c) => governedDoc(c.artifact)?.schema.docType === docType);
     if (changes.length > 0) out.push({ ...draft, changes });
   }
@@ -71,13 +69,16 @@ export function pendingDraftsForDoc(
  * tem de dar exatamente a mesma resposta que `loadDoc` dá ao LER — senão a aprovação grava num lugar
  * e o leitor lê de outro, que é o defeito que este módulo existe para não repetir.
  */
-export async function docIsCanonical(boardId: string, artifact: string): Promise<boolean> {
-  const alvo = governedDoc(artifact);
-  if (!alvo) return false;
-  // O PRD nasceu markdown: mesmo sem o arquivo, `loadDoc` devolve a projeção e o primeiro save
-  // materializa — a escada do YAML nunca foi lida por ninguém depois desta migração.
-  if (alvo.schema.docType === PRD_DOC_TYPE) return true;
-  return schemaDocExists(boardId, alvo.schema);
+export async function docIsCanonical(_boardId: string, artifact: string): Promise<boolean> {
+  // PRD e BMC nasceram markdown: mesmo sem o arquivo, `loadDoc` devolve a projeção e o primeiro save
+  // materializa — o YAML antigo (escada estratégica, `canvas:` do Lean Canvas) nunca é escrito de
+  // volta. Continua assíncrona porque o contrato dos chamadores é esse.
+  return governedDoc(artifact) !== undefined;
+}
+
+/** O bloco existe no Business Model Canvas? Fail-closed como `isPrdSection`. */
+export function isCanvasBlock(field: string | null | undefined): boolean {
+  return typeof field === "string" && BMC_SCHEMA.sections.some((s) => s.key === field);
 }
 
 /** A seção existe no schema do PRD? Fail-closed: quem propõe uma chave inventada é RECUSADO. */

@@ -8,7 +8,6 @@ import { coerceCard } from "@/lib/storymap/repo";
 import { isCopilotActionable, recoveryRetryLimit, stuckItemsFromFailures, type CockpitItem, type CockpitItemKind } from "@/lib/storymap/demands";
 import { AUTONOMO_DOCTRINE_VERSION } from "@/lib/storymap/copilot/tier";
 import { emptyOrchestratorState, itemsInRecoveryBackoff, markRecoveryHandoff, type OrchestratorState } from "./orchestrator-state";
-import { buildOrchestratorWakePrompt } from "./orchestrator-spawn";
 import { buildRecoveryFixCard, planRecoveryHandoffs, runBusinessRecoveryPass, type BusinessRecoveryDeps } from "./business-recovery";
 import { stewardMayAskOwner } from "./steward-deps";
 import type { BoardConfig, Card } from "@/lib/storymap/types";
@@ -208,13 +207,7 @@ describe("o steward não escala ao dono num board só-negócio", () => {
   });
 });
 
-describe("o que o Jido lê ao acordar num board só-negócio", () => {
-  it("recupera o técnico com limite, não empurra gate e nunca pergunta ao dono", () => {
-    const p = buildOrchestratorWakePrompt("autonomo", { businessOnly: true });
-    expect(p).toMatch(/SÓ-NEGÓCIO/);
-    expect(p).toMatch(/gate/i);
-    expect(p).toMatch(/card de conserto/);
-    expect(p).toMatch(/nunca pergunte ao dono/i);
-    expect(buildOrchestratorWakePrompt("autonomo")).not.toMatch(/SÓ-NEGÓCIO/);
-  });
-});
+
+// Fase 6 — o «prompt de acordar» do tique só-negócio saiu com o tique antigo. Quem acorda por uma falha técnica é a
+// Sentinela, e o que ela pode ler e fazer está provado em sentinel.test.ts (só a máquina; dinheiro, marca, PRD e dados
+// de pessoas são do dono; em Mínima ela só diagnostica e o diagnóstico vai ao Inbox).

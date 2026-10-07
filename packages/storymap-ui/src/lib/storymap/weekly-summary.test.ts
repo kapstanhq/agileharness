@@ -6,9 +6,11 @@ import { coerceCard } from "./repo";
 import type { OwnerWaiting } from "./owner-waiting";
 import type { SystemDecision } from "./system-decisions";
 import type { BoardConfig } from "./types";
+import { REVIEW_TTL_DAYS } from "./inbox/contract";
 import {
   addDays,
   buildWeeklySummary,
+  DELIVERY_REVIEW_TTL_DAYS,
   isMonday,
   localClock,
   mondayOf,
@@ -259,5 +261,23 @@ describe("o custo projetado da semana — por MOEDA, nunca somado entre moedas",
     expect(projectedMonthlyText([{ currency: "BRL", amount: 5 }, { currency: "USD", amount: 7 }])).toMatch(/^\+.*5.* e \+.*7.* por mês$/);
     expect(projectedMonthlyText([])).toBe("nenhum custo a mais por mês");
     expect(projectedMonthlyText([{ currency: "BRL", amount: 0 }])).toBe("nenhum custo a mais por mês");
+  });
+});
+
+describe("integração da fase 6 — a amostra de entrega vencida vai para o resumo (não some muda do Inbox)", () => {
+  const week = weekWindow("2026-06-08", SP);
+  it("a amostra pendente que venceu DENTRO da semana entra; a revisada e a que vence depois não", () => {
+    const b = board("armazem", "Armazém", [
+      card("story-ex9201", "Busca por editora", { deliveryAudit: { sampledAt: "2026-06-03" } }), // vence 10/06
+      card("story-ex9202", "Lista de desejos", { deliveryAudit: { sampledAt: "2026-06-03", auditedAt: "2026-06-05", outcome: "confirmed" } }),
+      card("story-ex9203", "Resenhas", { deliveryAudit: { sampledAt: "2026-06-12" } }), // vence 19/06
+    ]);
+    const s = buildWeeklySummary({ week, boards: [b], transitions: [], decisions: [], runs: [], waiting: [] });
+    expect(s.expiredAudits.map((i) => i.cardId)).toEqual(["story-ex9201"]);
+    expect(s.expiredAudits[0].title).toBe("Busca por editora");
+  });
+
+  it("o prazo é o MESMO do Inbox", () => {
+    expect(DELIVERY_REVIEW_TTL_DAYS).toBe(REVIEW_TTL_DAYS);
   });
 });

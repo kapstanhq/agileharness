@@ -26,10 +26,10 @@ export function CardMoveMenu({
   if (targets.length === 0) return null;
 
   return (
-    <div ref={menu.ref} className="relative" onMouseEnter={menu.openNow} onMouseLeave={menu.closeSoon}>
+    <div ref={menu.ref} className="relative" onPointerEnter={menu.hoverOpen} onPointerLeave={menu.hoverClose}>
       <button
         type="button"
-        onClick={() => menu.setOpen((o) => !o)}
+        onClick={menu.toggle}
         disabled={disabled}
         aria-haspopup="menu"
         aria-expanded={menu.open}

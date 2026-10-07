@@ -19,77 +19,10 @@ import {
   resolvesToIdea,
   getAddressedIdea,
   cardsAddressing,
-  groupIdeasByStatus,
+  ideaAsTriageCard,
   ADDRESSES_REL,
 } from "./idea";
-import type { IdeaStatus } from "./frameworks";
 import type { Card } from "./types";
-
-// ── Agrupamento da bancada por estado de EXPLORAÇÃO ───────────────────────────
-//
-// Cada asserção aqui trava uma decisão de leitura da tela, e todas elas têm modo de falha silencioso:
-// um grupo vazio que aparece, um cabeçalho sobre lista de um item, uma ideia legada sem `status` que
-// desaparece do agrupamento, ou "Decidida" e "Descartada" fundidas — nada disso quebra nada, só
-// piora a tela sem ninguém notar no code review.
-
-function idea(id: string, status: IdeaStatus | undefined, updatedMs: number): Card {
-  return {
-    id,
-    title: id,
-    type: "idea",
-    links: [],
-    ...(status ? { idea: { statement: id, status } } : {}),
-    updatedMs,
-  } as unknown as Card;
-}
-
-describe("groupIdeasByStatus", () => {
-  it("agrupa na ordem do ciclo de vida e omite os grupos vazios", () => {
-    const groups = groupIdeasByStatus([
-      idea("d", "discarded", 4),
-      idea("a", "open", 3),
-      idea("c", "addressed", 2),
-    ]);
-    expect(groups.map((g) => g.key)).toEqual(["open", "addressed", "discarded"]);
-    expect(groups.map((g) => g.label)).toEqual(["Nova", "Decidida", "Descartada"]);
-  });
-
-  it("marca como terminal SÓ o que está encerrado — e nunca funde os dois desfechos", () => {
-    const groups = groupIdeasByStatus([
-      idea("a", "open", 1),
-      idea("b", "exploring", 2),
-      idea("c", "addressed", 3),
-      idea("d", "discarded", 4),
-    ]);
-    expect(groups.filter((g) => g.terminal).map((g) => g.key)).toEqual(["addressed", "discarded"]);
-    expect(groups.filter((g) => !g.terminal).map((g) => g.key)).toEqual(["open", "exploring"]);
-  });
-
-  it("com UM grupo só, o rótulo vem null — cabeçalho sobre a lista inteira é enfeite", () => {
-    const groups = groupIdeasByStatus([idea("a", "open", 1), idea("b", "open", 2)]);
-    expect(groups).toHaveLength(1);
-    expect(groups[0].label).toBeNull();
-    expect(groups[0].items).toHaveLength(2);
-  });
-
-  it("ideia legada sem status cai em Nova — o mesmo default da leitura e do pontinho da linha", () => {
-    const groups = groupIdeasByStatus([idea("velha", undefined, 1), idea("nova", "exploring", 2)]);
-    expect(groups.find((g) => g.key === "open")?.items.map((i) => i.id)).toEqual(["velha"]);
-  });
-
-  it("dentro do grupo, a mais recente no topo", () => {
-    const groups = groupIdeasByStatus([
-      idea("antiga", "open", 100),
-      idea("recente", "open", 900),
-      idea("meio", "open", 500),
-    ]);
-    expect(groups[0].items.map((i) => i.id)).toEqual(["recente", "meio", "antiga"]);
-  });
-
-  it("lista vazia devolve zero grupos (nunca quatro cabeçalhos vazios)", () => {
-    expect(groupIdeasByStatus([])).toEqual([]);
-  });
-});
 
 // ── T1: guards ────────────────────────────────────────────────────────────────
 
@@ -319,7 +252,7 @@ describe("getAddressedIdea (Fatia 4 — hydrates the run context)", () => {
 // ── Fatia 2: OST-light fields + rollup ─────────────────────────────────────────
 
 describe("coerceCard — idea OST-light fields (Fatia 2)", () => {
-  it("preserves candidateSolutions, keyAssumption, successSignal, valueSize (sparse round-trip)", () => {
+  it("preserves candidateSolutions, keyAssumption, successSignal (sparse round-trip)", () => {
     const card = coerceCard("idea-ost", {
       type: "idea",
       idea: {
@@ -327,14 +260,12 @@ describe("coerceCard — idea OST-light fields (Fatia 2)", () => {
         candidateSolutions: ["editor de contexto", "validação de premissa"],
         keyAssumption: "o operador QUER editar o cérebro, não só os cards",
         successSignal: "edições de contexto por semana sobe",
-        valueSize: { reach: 100, impact: 3 },
       },
     }, "");
     expect(card.idea).toMatchObject({
       candidateSolutions: ["editor de contexto", "validação de premissa"],
       keyAssumption: "o operador QUER editar o cérebro, não só os cards",
       successSignal: "edições de contexto por semana sobe",
-      valueSize: { reach: 100, impact: 3 },
     });
     expect(parseCard(card).ok).toBe(true);
   });
@@ -350,12 +281,14 @@ describe("coerceCard — idea OST-light fields (Fatia 2)", () => {
     expect(card.idea).not.toHaveProperty("valueSize");
   });
 
-  it("valueSize keeps a partial axis (reach set, impact null)", () => {
-    const card = coerceCard("idea-partial", {
+  it("a nota de valor antiga (valueSize) de uma ideia legada é ignorada na leitura — a priorização saiu", () => {
+    const card = coerceCard("idea-ex9352", {
       type: "idea",
-      idea: { statement: "Dor", valueSize: { reach: 50, impact: null } },
+      idea: { statement: "Dor", valueSize: { reach: 50, impact: 2 }, priorityCall: { rank: 2, rationale: "r" } },
     }, "");
-    expect(card.idea?.valueSize).toEqual({ reach: 50, impact: null });
+    expect(card.idea).not.toHaveProperty("valueSize");
+    expect(card.idea).not.toHaveProperty("priorityCall");
+    expect(card.idea?.statement).toBe("Dor");
   });
 });
 
@@ -386,7 +319,6 @@ describe("idea block survives the REAL write→read round-trip (write.ts + gray-
         candidateSolutions: ["sol A", "sol B"],
         keyAssumption: "premissa arriscada",
         successSignal: "métrica sobe",
-        valueSize: { reach: 100, impact: 3 },
       },
     }, "");
     // The exact path writeCard/readCards use: cardToFrontmatter → matter.stringify → matter → coerceCard.
@@ -400,7 +332,40 @@ describe("idea block survives the REAL write→read round-trip (write.ts + gray-
       candidateSolutions: ["sol A", "sol B"],
       keyAssumption: "premissa arriscada",
       successSignal: "métrica sobe",
-      valueSize: { reach: 100, impact: 3 },
     });
+  });
+});
+
+describe("ideaAsTriageCard — o create_idea vira card da Triagem", () => {
+  it("sem título nem enunciado não há card", () => {
+    expect(ideaAsTriageCard({})).toBeNull();
+    expect(ideaAsTriageCard({ title: "  ", statement: " " })).toBeNull();
+  });
+
+  it("o enunciado vira o título quando falta o título, e não se repete no texto", () => {
+    expect(ideaAsTriageCard({ statement: "Exportar a lista em planilha" })).toEqual({
+      title: "Exportar a lista em planilha",
+      body: "",
+    });
+  });
+
+  it("os campos de exploração viram seções curtas, na ordem, sem os vazios", () => {
+    const r = ideaAsTriageCard({
+      title: "Planilha da lista",
+      statement: "Quem organiza quer levar a lista para fora",
+      evidence: "três pedidos no suporte",
+      candidateSolutions: [" CSV ", "", "link compartilhado"],
+      keyAssumption: "  ",
+      successSignal: "metade de quem monta listas exporta no primeiro mês",
+    });
+    expect(r?.title).toBe("Planilha da lista");
+    expect(r?.body).toBe(
+      [
+        "Quem organiza quer levar a lista para fora",
+        "**O que sustenta:** três pedidos no suporte",
+        "**Caminhos possíveis:**\n- CSV\n- link compartilhado",
+        "**Como saber que deu certo:** metade de quem monta listas exporta no primeiro mês",
+      ].join("\n\n"),
+    );
   });
 });

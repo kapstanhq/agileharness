@@ -29,7 +29,6 @@
 import { isDeployStep } from "./demands";
 import { isDeliveryApprovalStep } from "./delivery-audit";
 import { archivedKanbanStatusIds } from "./views";
-import type { CardLiveKind } from "./card-live-status";
 import type { OwnerDecisions } from "./inbox/decidir-set";
 import type { BoardConfig, Card, StatusDef } from "./types";
 
@@ -59,7 +58,7 @@ const SYSTEM_CLAIM = /\b(sistema|system|autom[aá]tic)/i;
 
 const declaresDemand = (l: { demand?: boolean | unknown[] }) => l.demand === true || (Array.isArray(l.demand) && l.demand.length > 0);
 
-/** The board's declared lanes, resolved — or null when it declares none (the legacy Kanban renders). PURE. */
+/** The board's declared lanes, resolved — or null when it declares none (the Kanban then derives lanes from the columns — kanban-features `kanbanLanes`). PURE. */
 export function boardLanes(config: Pick<BoardConfig, "view">): ResolvedLane[] | null {
   const lanes = config.view?.lanes;
   if (!lanes?.length) return null;
@@ -251,89 +250,6 @@ export function groupStoriesByLane(
   return { lanes: [...lanes, ...synthetic], byLane, outside };
 }
 
-/**
- * The status a card DROPPED on a lane moves to: the lane's first status that exists on the board and is not
- * hidden (the hidden reopen/capture lanes are entered by their own actions, never by a drag). The move still goes
- * through `moveCardAction`, so the status's gate decides — a lane never opens a way around one. "Outros", the owner's
- * lane (a card cannot be DRAGGED into needing the owner — only a decision puts it there) and a lane with no droppable
- * status accept no drop (null). PURE.
- */
-export function laneDropStatus(lane: ResolvedLane, config: Pick<BoardConfig, "statuses">): string | null {
-  if (lane.others || lane.demand) return null;
-  for (const id of lane.statuses) {
-    const def = config.statuses.find((s) => s.id === id);
-    if (def && def.hidden !== true) return def.id;
-  }
-  return null;
-}
-
-/**
- * The TAG a card carries in the lane view — the detail the lane folds away: the card's real status, by its board name
- * (the unknown id itself when the board does not know it). PURE.
- * It used to add `integrando`/`publicando` from the status's DECLARED behaviour — a static label that read «integrando»
- * on a card with the merge train empty. What is happening NOW is the card's live line (card-live-status.ts),
- * from evidence; the tag only says where the card is.
- */
-export function laneStatusTags(card: Pick<Card, "status">, config: Pick<BoardConfig, "statuses">): string[] {
-  if (!card.status) return ["sem status"];
-  const def = config.statuses.find((s) => s.id === card.status);
-  return [def ? def.name || def.id : card.status];
-}
-
-// ── as seções por atividade dentro de uma raia ─────────────────────────────────────────────────────────
-
-/**
- * As SEÇÕES de uma raia, pela presença de cada card: quem age, quem espera, quem parou, a fila do condutor (recolhida)
- * e o resto. Uma raia «Construindo» com 9 cards dizia só «9»; o dono não via que 2 trabalhavam, 1 tinha parado e 6
- * esperavam vaga.
- */
-export const LANE_SECTIONS = [
-  { id: "agindo", label: "Agindo", collapsed: false },
-  { id: "esperando", label: "Esperando", collapsed: false },
-  { id: "parado", label: "Parado", collapsed: false },
-  { id: "fila", label: "Na fila do condutor", collapsed: true },
-  { id: "sem", label: "Sem ninguém", collapsed: false },
-] as const;
-export type LaneSectionId = (typeof LANE_SECTIONS)[number]["id"];
-
-/** O que a seção precisa saber de um card: o tipo da linha de estado dele (card-live-status.ts), ou null. */
-export type LiveKindOf = (cardId: string) => CardLiveKind | null;
-
-/** Cada tipo de linha cai em UMA seção. Record exaustivo: um tipo novo sem seção não compila. */
-const SECTION_OF: Record<CardLiveKind | "none", LaneSectionId> = {
-  run: "agindo",
-  working: "agindo",
-  judging: "agindo",
-  integrating: "agindo",
-  publishing: "agindo",
-  owner: "esperando",
-  waiting: "esperando",
-  quiet: "parado",
-  "terminal-prompt": "parado",
-  stopped: "parado",
-  queued: "fila",
-  live: "sem",
-  none: "sem",
-};
-
-export interface LaneSection {
-  id: LaneSectionId;
-  label: string;
-  collapsed: boolean;
-  cards: Card[];
-}
-
-/**
- * Os cards de uma raia em seções, na ordem de {@link LANE_SECTIONS}, mantendo a ordem dada dentro de cada uma; só as
- * seções com card. PURA. Uma raia com UMA seção só não precisa de cabeçalho — quem desenha decide.
- */
-export function laneSections(cards: readonly Card[], kindOf: LiveKindOf): LaneSection[] {
-  const by = new Map<LaneSectionId, Card[]>();
-  for (const c of cards) {
-    const id = SECTION_OF[kindOf(c.id) ?? "none"];
-    const list = by.get(id) ?? [];
-    list.push(c);
-    by.set(id, list);
-  }
-  return LANE_SECTIONS.filter((s) => by.has(s.id)).map((s) => ({ ...s, cards: by.get(s.id)! }));
-}
+// (Saíram na fase 1, com o card e o quadro antigos: `laneDropStatus` — o arraste —, `laneStatusTags` — a etiqueta do
+// status na raia — e `laneSections` — a raia dividida por atividade. O quadro novo agrupa por funcionalidade e mostra o
+// estado de cada item: kanban-features.ts.)

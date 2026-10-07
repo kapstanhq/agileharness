@@ -4,7 +4,8 @@
 import { describe, expect, it, vi } from "vitest";
 import path from "node:path";
 import { overwriteRefusal, planSkillsSync, syncSkills, type SkillsSyncDeps } from "./skills-sync";
-import type { SkillTree } from "@/lib/storymap/skills-drift";
+import { readSkillTrees, type SkillTree } from "@/lib/storymap/skills-drift";
+import { findRepoRoot } from "@/lib/storymap/paths";
 
 const tree = (name: string, body: string): SkillTree => ({ name, files: { "SKILL.md": body } });
 const TOOL = [tree("harness-conductor", "v2"), tree("harness-qa", "v0.7"), tree("harness-grill", "g")];
@@ -134,5 +135,30 @@ describe("overwrite é do operador — um token escopado só traz as que faltam"
     expect(overwriteRefusal([" "], true)).toBeNull();
     expect(overwriteRefusal(undefined, true)).toBeNull();
     expect(overwriteRefusal(["harness-qa"], true)).toMatch(/operador/);
+  });
+});
+
+// A skill do condutor virou NÚCLEO + ref/ (o detalhe de cada bloco num arquivo que o núcleo manda ler). O sync leva a
+// skill como ÁRVORE — se levasse só o SKILL.md, o alvo ficaria com um núcleo que manda ler arquivos que não existem nele.
+describe("a skill dividida viaja inteira (núcleo + ref/)", () => {
+  const real = readSkillTrees(findRepoRoot()).find((t) => t.name === "harness-conductor");
+
+  it("a árvore da ferramenta carrega os ref/ do condutor ao lado do SKILL.md", () => {
+    expect(real).toBeDefined();
+    const files = Object.keys(real!.files);
+    expect(files).toContain("SKILL.md");
+    for (const f of ["ref/pre-voo-moldar.md", "ref/construir.md", "ref/verificar.md", "ref/publicar.md"]) expect(files).toContain(f);
+  });
+
+  it("um alvo com o condutor ANTIGO (só o SKILL.md) DIFERE — trocar exige o pedido do operador, e a cópia leva o diretório", async () => {
+    const antigo: SkillTree = { name: "harness-conductor", files: { "SKILL.md": "monolito antigo" } };
+    const p = planSkillsSync([real!], [antigo]);
+    expect(p.copy).toEqual([]);
+    expect(p.keptDiffering).toEqual(["harness-conductor"]);
+    const { deps, written } = fakes({ readTrees: (root) => (root === "/tool" ? [real!] : [antigo]) });
+    const r = await syncSkills(deps, { overwrite: ["harness-conductor"] });
+    expect(r).toMatchObject({ ok: true, submitted: true, overwritten: ["harness-conductor"] });
+    // copyTree recebe o DIRETÓRIO da skill (núcleo e ref/ juntos), nunca o arquivo
+    expect(written).toEqual([{ from: path.join("/tool", ".claude", "skills", "harness-conductor"), to: path.join("/wt/s1", ".claude", "skills", "harness-conductor") }]);
   });
 });

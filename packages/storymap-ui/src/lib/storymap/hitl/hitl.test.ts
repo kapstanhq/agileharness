@@ -132,24 +132,4 @@ describe("purpose-registry", () => {
     // e o recorte que a torna usável: o mundo do OPERADOR continua sendo citado com precisão.
     expect(AGENT_VOICE_CLAUSE).toMatch(/caminho de arquivo|id de card/i);
   });
-
-  // W5.2 — o Explorador de Ideias. O que este teste protege não é a existência do propósito, é o RECORTE de
-  // poder dele: ler muito, escrever só no documento. Um `mcpLevel: "full"` aqui daria a uma conversa de
-  // exploração o direito de mover card e disparar deploy.
-  it("o propósito 'idea-explorer' é read-only no board e não edita arquivos", () => {
-    const p = hitlPurposeById("idea-explorer");
-    expect(p?.mcpLevel).toBe("ro");
-    const denied = (p?.deniedTools ?? "").split(",");
-    expect(denied).toEqual(expect.arrayContaining(["Write", "Edit", "NotebookEdit"]));
-    expect(denied).not.toContain("Bash"); // diagnóstico read-only continua possível (decisão do Operador)
-    expect(p?.doneContract).toBeUndefined(); // explorar não resolve com payload — quem decide é o humano
-  });
-
-  it("o Explorador NÃO promete criar tarefas sozinho (a decisão é do humano)", () => {
-    // A persona é o único lugar onde isto pode vazar: se ela mandar "crie os cards ao final", ele cria — e a
-    // Ideia volta a virar cascata automática, que é o que o desenho do Explorador desfez.
-    const prompt = hitlPurposeById("idea-explorer")!.defaultPrompt;
-    expect(prompt).toMatch(/NÃO crie card/i);
-    expect(prompt).toMatch(/ação do HUMANO/i);
-  });
 });

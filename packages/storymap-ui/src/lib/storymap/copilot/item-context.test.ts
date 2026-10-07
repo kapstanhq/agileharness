@@ -9,7 +9,7 @@ const mkCard = (over: Partial<Card> = {}): Card =>
   ({
     id: "c1", type: "story", title: "Card Um", storyType: "user", status: "revisar-codigo", parent: null, release: null,
     personas: [], systems: [], links: [], narrative: { role: "", want: "", soThat: "" }, acceptance: [], tasks: [],
-    rice: {}, kano: null, funnelStage: null, findings: [], order: 10, created: null, updated: null, body: "", ...over,
+    findings: [], order: 10, created: null, updated: null, body: "", ...over,
   }) as unknown as Card;
 
 const mergeRef: EscalationRef = { templateId: "merge-conflict", kind: "merge", boardId: "storymap", cardId: "c1", runId: "r1", entryStatus: "conflict" };
@@ -61,5 +61,20 @@ describe("buildItemContext", () => {
     const block = buildItemContext({ boardId: "storymap", ref: mergeRef, unavailable: ["merge-queue indisponível: timeout"] });
     expect(block).toContain("### Fontes indisponíveis");
     expect(block).toContain("merge-queue indisponível: timeout");
+  });
+});
+
+describe("integração da fase 6 — o diagnóstico da Sentinela no <contexto> do «Resolver no chat»", () => {
+  it("leva o motivo, os cards e o diagnóstico como DADO (no bloco), nunca na instrução", () => {
+    const ref: EscalationRef = { templateId: "sentinel-cause", kind: "sentinel", boardId: "livraria", causeId: "stalled-run-1x2y3z" };
+    const block = buildItemContext({
+      boardId: "livraria",
+      ref,
+      sentinel: { reason: "Execução parada ou morta: run sem saída", diagnosis: "O worktree perdeu o package.json.", cardIds: ["story-ex9001"], at: "2026-10-07T10:00:00Z", did: "diagnosed" },
+    });
+    expect(block).toContain("Diagnóstico da Sentinela · causa stalled-run-1x2y3z");
+    expect(block).toContain("story-ex9001");
+    expect(block).toContain("diagnóstico: O worktree perdeu o package.json.");
+    expect(block.trim().endsWith(MCP_EVIDENCE_HINT)).toBe(true);
   });
 });

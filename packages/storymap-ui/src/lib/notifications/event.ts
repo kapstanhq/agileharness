@@ -54,8 +54,6 @@ export interface AgileHarnessEvent {
   releaseName?: string | null;
   /** immediate parent card title (step for a story, activity for a step) */
   parentTitle?: string | null;
-  /** derived RICE score, when all inputs are present (stories) */
-  riceScore?: number | null;
 
   /**
    * The card's DECISION for the owner at emit time — the item that leads the card in the Inbox's «Decidir»
@@ -235,7 +233,6 @@ export function describeEvent(e: AgileHarnessEvent): EventLabel {
   const name = e.title ? `“${e.title}”` : (e.cardId ?? "");
   const parent = e.parentTitle ? `em ${e.parentTitle}` : null;
   const release = e.releaseName ? `Release: ${e.releaseName}` : null;
-  const rice = e.riceScore != null ? `RICE ${e.riceScore}` : null;
 
   switch (e.type) {
     case "card.created":
@@ -254,7 +251,6 @@ export function describeEvent(e: AgileHarnessEvent): EventLabel {
             board,
             e.fromStatusName ?? e.fromStatus ? `de ${e.fromStatusName ?? e.fromStatus}` : null,
             parent,
-            rice,
           ]),
           time,
         ]
@@ -264,7 +260,7 @@ export function describeEvent(e: AgileHarnessEvent): EventLabel {
     case "card.updated":
       return {
         title: `${noun} ${VERB[e.type]} · ${board}`,
-        body: [name, contextLine([parent, release, e.statusName ? `Status: ${e.statusName}` : null, rice]), time]
+        body: [name, contextLine([parent, release, e.statusName ? `Status: ${e.statusName}` : null]), time]
           .filter(Boolean)
           .join("\n"),
       };

@@ -28,7 +28,7 @@ triggers:
 
 # /harness-plan — AgileHarness: technical plan (+ tasks on the canonical pipeline)
 
-The `harness-plan` trigger automation. It turns a prioritized, designed story into a concrete
+The `harness-plan` trigger automation. It turns a ready, designed story into a concrete
 **technical plan**, and — on the canonical pipeline (the `storymap` board) — also the
 **tasks[]** in the SAME run, so the same mind that investigates the code and decides the
 approach decomposes the work too (no second context reload, no plan→tasks handoff drift).
@@ -109,7 +109,7 @@ but the card is NOT in `plano-tecnico`, report its status and stop.
    - **Restrição do dono — tecnologia** (ONLY when the card has `techPreference`, and then FIRST): quote it
      verbatim and say how the plan follows it. It is a HARD constraint, never a suggestion — the approach,
      the files and the contracts below must use it. If it is impossible (it contradicts the codebase or
-     another constraint), do NOT swap it silently: ask the owner (`ask_question`, category `technical`
+     another constraint), do NOT swap it silently: ask the owner (`ask_question` in the Inbox's plain-language format — `context` = what happened in 1–2 plain sentences, `text` = ONE question, 2–4 short-action `options`, no file names/sha/branch/run jargon; category `technical`
      with `[humano]` in the context) and stop.
    - **Objetivo** — one paragraph tying the plan to the acceptance criteria.
    - **Arquivos a tocar** — concrete repo-relative paths + what changes in each.

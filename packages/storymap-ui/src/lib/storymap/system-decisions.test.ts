@@ -62,6 +62,11 @@ describe("as entradas de cada produtor — quem, o quê, por quê, quando, o car
     expect(r).toMatchObject({ kind: "recovery-fix-card", agent: "jido", cardId: "story-fix", undo: { kind: "discard-card", cardId: "story-fix" } });
     const s = deliverySkipEntry("b", card("story-d", { status: "concluida" }), { at, id: "sd-5" });
     expect(s).toMatchObject({ kind: "delivery-skip", undo: { kind: "reopen-card", cardId: "story-d", deliveredIn: "concluida" } });
+    // fase 6 (6D): sem o veredito do verificador o registro NÃO diz «verificador» — a entrega é auto-certificada
+    expect(s).toMatchObject({ agent: "auto-certificada" });
+    expect(s.why).not.toMatch(/verificador independente aprovou/);
+    const v = deliverySkipEntry("b", card("story-d", { status: "concluida" }), { at, id: "sd-5b", verified: { runId: "r1", model: "sonnet" } });
+    expect(v).toMatchObject({ agent: "verifier", why: expect.stringMatching(/verificador independente/) });
     expect(publishEntry("b", card("story-q"), { sha: "bbb", previousSha: "aaa" }, { at, id: "sd-6" }).undo).toEqual({ kind: "republish-previous", cardId: "story-q", sha: "bbb", previousSha: "aaa" });
     // sem sha anterior não há para onde voltar: sem «Desfazer»
     expect(publishEntry("b", card("story-q"), { sha: "bbb" }, { at, id: "sd-7" }).undo).toBeUndefined();
@@ -185,10 +190,14 @@ describe("a superfície provisória «Acompanhar» (a onda 2 do Inbox a absorve)
     expect(undoLabel({ kind: "return-to-triage", cardId: "c", from: "x" })).toMatch(/Triagem/);
   });
 
-  it("a página lista pela projeção pura e desfaz pela ação de servidor (a pré-condição é dela)", () => {
-    const page = readFileSync(fileURLToPath(new URL("../../app/board/[boardId]/acompanhar/page.tsx", import.meta.url)), "utf8");
-    const view = readFileSync(fileURLToPath(new URL("../../components/AcompanharView.tsx", import.meta.url)), "utf8");
-    expect(page).toMatch(/followUpItems\(/);
-    expect(view).toMatch(/undoSystemDecisionAction\(/);
+  // Fase 3: a página /acompanhar virou parte de «Os agentes estão cuidando», no fim do Inbox — o registro (os dias
+  // anteriores a «Resolvido hoje») sai da MESMA projeção pura, e o «Desfazer» é o do Inbox (UndoControl), que chama a
+  // ação de servidor (a pré-condição é dela).
+  it("o registro do Inbox lista pela projeção pura e desfaz pela ação de servidor (a pré-condição é dela)", () => {
+    const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
+    expect(read("../../components/inbox/registry.ts")).toMatch(/followUpItems\(/);
+    expect(read("../../components/inbox/UndoControl.tsx")).toMatch(/undoSystemDecisionAction\(/);
+    // o link antigo /acompanhar é redirecionado no next.config (antes de qualquer render) para a seção aberta
+    expect(read("../../../next.config.js")).toMatch(/source: "\/board\/:boardId\/acompanhar"/);
   });
 });

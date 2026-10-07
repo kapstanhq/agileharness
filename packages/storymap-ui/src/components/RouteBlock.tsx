@@ -2,7 +2,7 @@
 
 // Fase 4.2 — "Rota": the drawer block that makes a card's per-instance ROUTE (which dispensable steps it
 // skips, model/effort caps, why, who decided) VISIBLE and editable — before this, the whole routing surface
-// lived only in YAML/MCP. Self-contained (its own setCardRouteAction, like PriorityBlock) because `routing` is
+// lived only in YAML/MCP. Self-contained (its own setCardRouteAction) because `routing` is
 // pipeline-owned (a normal drawer save rejects it). Picking a board routeProfile MATERIALIZES its skips/caps
 // on the card (the runner reads routing.skips/caps directly, never the profile name — the server action does
 // the union). Load-bearing steps (plano/dev/review/QA) are shown LOCKED — never skippable.

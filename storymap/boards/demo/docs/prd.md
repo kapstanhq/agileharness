@@ -1,16 +1,9 @@
 ---
 doc: prd
+format: 2
 ---
 
 # PRD
-
-## Resumo executivo
-
-A Aurora é uma livraria de bairro com sete anos de fichas de gosto escritas à mão no balcão. Este PRD descreve o produto que leva essa curadoria para fora da loja: uma vitrine online que recomenda pelo **gosto declarado** do leitor, e não pelo histórico de compra dele.
-
-**Por que agora:** as fichas foram digitalizadas este ano, e os 300 clientes que já as têm são um público que sabemos servir e que hoje compra no marketplace por falta de alternativa online.
-
-> Board de demonstração. Os dados são fictícios e existem para que as telas do AgileHarness tenham o que mostrar a quem acabou de instalar.
 
 ## Problema
 
@@ -23,7 +16,7 @@ A Aurora é uma livraria de bairro com sete anos de fichas de gosto escritas à 
 
 - Devolver um livro que não era o esperado custa mais caro que o livro — então o leitor deixa de arriscar, e volta a comprar o óbvio.
 
-## Público
+## Personas
 
 ### Leitor frequente (early adopter)
 
@@ -40,25 +33,17 @@ A Aurora é uma livraria de bairro com sete anos de fichas de gosto escritas à 
 
 - **Job-to-be-done** — saber da tiragem pequena ANTES de ela esgotar. Compra por escassez, não por recomendação.
 
-## Posicionamento
+## Proposta de valor
 
 Para leitores que compram por indicação e não por catálogo, a Aurora é a livraria que conhece o seu gosto — ao contrário dos marketplaces, que conhecem o seu histórico de compra.
 
-## Objetivos e métricas
+A Aurora é uma livraria de bairro com sete anos de fichas de gosto escritas à mão no balcão. Este PRD descreve o produto que leva essa curadoria para fora da loja: uma vitrine online que recomenda pelo **gosto declarado** do leitor, e não pelo histórico de compra dele.
 
-A aposta: se a recomendação da casa for boa o bastante, o leitor volta a comprar **na Aurora** o que hoje compra no marketplace — e a curadoria, que hoje é um custo do balcão, vira o motivo de a loja existir online.
+**Por que agora:** as fichas foram digitalizadas este ano, e os 300 clientes que já as têm são um público que sabemos servir e que hoje compra no marketplace por falta de alternativa online.
 
-O resultado-alvo mede a fração de pedidos que nascem de uma recomendação nossa, porque é isso que separa «temos uma loja online» de «temos a nossa loja online».
+> Board de demonstração. Os dados são fictícios e existem para que as telas do AgileHarness tenham o que mostrar a quem acabou de instalar.
 
-### Métrica de negócio
-
-- Valor de vida do cliente (CLV) em 24 meses
-
-### Resultado-alvo
-
-- Dobrar a fração de pedidos que nascem de uma recomendação da casa (hoje 11%) até o fim do r2.
-
-## Escopo
+## Funcionalidades
 
 ### Nesta versão
 
@@ -67,18 +52,7 @@ O resultado-alvo mede a fração de pedidos que nascem de uma recomendação nos
 - Trecho do audiolivro antes de comprar.
 - Devolução em um clique nos primeiros 7 dias.
 
-### Fora, por ora
-
-- Clube de assinatura mensal — depende de a recomendação já estar boa; vender assinatura antes disso queima o cliente.
-- Pré-venda de edições especiais (serve o colecionador, que é o terceiro público).
-- App nativo. A vitrine é web e responsiva.
-
-### Nunca
-
-- Recomendar por «quem comprou também comprou». É exatamente a alternativa da qual o cliente está fugindo — fazer isso apaga a razão de existir.
-- Vender o dado de gosto do leitor, ou usá-lo fora da recomendação da casa.
-
-## Jornadas
+## Fluxo de uso
 
 - **Declarar o gosto** — o leitor chega pela newsletter ou pela loja física → preenche a ficha (autores, temas, o que NÃO quer) → vê a primeira vitrine já personalizada.
 - **Descobrir o próximo livro** — abre a vitrine → lê o porquê de cada indicação → ouve o trecho → compra.
@@ -86,25 +60,17 @@ O resultado-alvo mede a fração de pedidos que nascem de uma recomendação nos
 - **Presentear** — responde três perguntas sobre a outra pessoa → recebe três opções com o porquê → envia com a devolução já incluída.
 - **Curar (o lado da casa)** — o livreiro vê o que a curadoria automatiza recomendou → corrige o que está errado → a correção vale para os próximos leitores de gosto parecido.
 
-## Decisões já tomadas
+## Métricas de sucesso
 
-- **Recomendação por gosto DECLARADO, nunca por histórico de compra.** Não é preferiência técnica: é o posicionamento. Quem implementar «quem comprou também comprou» apagou o produto.
-- **Toda recomendação mostra o PORQUÊ.** Uma indicação sem justificativa é indistinguível da do marketplace, e é assim que a confiança se perde.
-- **A devolução de 7 dias é parte do produto, não política.** Ela aparece ANTES da compra, e o frete dela já está no custo.
-- **A ficha de gosto é do leitor.** Ele vê, edita e apaga. Nada dela sai da recomendação da casa.
-- **As 40 editoras pequenas têm prioridade na vitrine** quando empatam com um título de editora grande — é a vantagem que o marketplace não consegue copiar.
+- A aposta: se a recomendação da casa for boa o bastante, o leitor volta a comprar **na Aurora** o que hoje compra no marketplace — e a curadoria, que hoje é um custo do balcão, vira o motivo de a loja existir online.
+- O resultado-alvo mede a fração de pedidos que nascem de uma recomendação nossa, porque é isso que separa «temos uma loja online» de «temos a nossa loja online».
+- Métrica de negócio: Valor de vida do cliente (CLV) em 24 meses
+- Resultado-alvo: Dobrar a fração de pedidos que nascem de uma recomendação da casa (hoje 11%) até o fim do r2.
 
-## Riscos e perguntas em aberto
+## Fora do escopo
 
-- [ ] Fichas escritas à mão e digitalizadas podem sair ilegíveis: se mais de uma em cada dez falhar na leitura, a vitrine nasce com buracos. Conferir uma amostra de 40 antes de importar as outras.
-- [ ] Os 300 clientes com ficha ainda não foram perguntados se aceitam vê-la usada numa vitrine online.
-- [ ] Edição de tiragem pequena esgota entre o clique e o pagamento. Falta decidir se a reserva dura 15 minutos ou até o fim do pedido.
-- [ ] Se mais de um em cada cinco pedidos voltar, o frete embutido da devolução consome a margem do livro.
-- [x] Os 11% de pedidos vindos de recomendação foram contados só no balcão, de março a junho. Valem como ponto de partida, e não como meta.
-
-## Pronto quando
-
-- Um leitor com ficha preenchida abre a vitrine e reconhece pelo menos um título que não teria achado sozinho. Observável: teste com 10 dos 300 clientes da loja física.
-- Toda indicação na vitrine carrega o porquê, e o porquê cita algo que o leitor declarou. Observável na própria tela, sem abrir o banco.
-- A devolução em 7 dias fecha em um clique e a ficha de gosto muda depois dela. Observável: devolver e ver a próxima vitrine diferente.
-- Nenhuma tela sugere título por «quem comprou também comprou». Observável: revisão da vitrine inteira antes de publicar.
+- Clube de assinatura mensal — depende de a recomendação já estar boa; vender assinatura antes disso queima o cliente.
+- Pré-venda de edições especiais (serve o colecionador, que é o terceiro público).
+- App nativo. A vitrine é web e responsiva.
+- Nunca: Recomendar por «quem comprou também comprou». É exatamente a alternativa da qual o cliente está fugindo — fazer isso apaga a razão de existir.
+- Nunca: Vender o dado de gosto do leitor, ou usá-lo fora da recomendação da casa.

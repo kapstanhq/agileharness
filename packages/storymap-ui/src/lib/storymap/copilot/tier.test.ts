@@ -9,8 +9,6 @@ import {
   tierMode,
   tierPersonaClause,
   tierStance,
-  tierUnlocked,
-  TIER_META,
   peerReviewAllowed,
   deleteAutonomyAllowed,
   liberdadeDoctrineBlock,
@@ -56,16 +54,6 @@ describe("tierMode", () => {
   });
 });
 
-describe("tierUnlocked — Autônomo gated by DEPLOY_AUTONOMY_ENABLED", () => {
-  it("chat and copiloto are always selectable", () => {
-    expect(tierUnlocked("chat")).toBe(true);
-    expect(tierUnlocked("copiloto")).toBe(true);
-  });
-  it("autônomo follows the deploy-autonomy gate", () => {
-    expect(tierUnlocked("autonomo")).toBe(DEPLOY_AUTONOMY_ENABLED);
-  });
-});
-
 describe("tierMatrix — canonical writes + kernel invariants", () => {
   it("copiloto: board powers auto, deploy asks, shell/undo human-only", () => {
     const m = tierMatrix("copiloto");
@@ -86,19 +74,6 @@ describe("tierMatrix — canonical writes + kernel invariants", () => {
       const m = tierMatrix(tier);
       expect(m["run-free"]).not.toBe("auto");
       expect(m.destructive).toBe("never");
-    }
-  });
-});
-
-describe("TIER_META", () => {
-  it("has label + short + hint for all three tiers", () => {
-    for (const tier of ["chat", "copiloto", "autonomo"] as const) {
-      expect(TIER_META[tier].label).toBeTruthy();
-      expect(TIER_META[tier].hint.length).toBeGreaterThan(10);
-      // `short` é o que o seletor de modo MOSTRA em cada opção — sem ele a opção vira um rótulo mudo, e
-      // com o `hint` inteiro vira uma parede. Curto de verdade: uma linha que cabe ao lado do rótulo.
-      expect(TIER_META[tier].short.length).toBeGreaterThan(10);
-      expect(TIER_META[tier].short.length).toBeLessThanOrEqual(70);
     }
   });
 });

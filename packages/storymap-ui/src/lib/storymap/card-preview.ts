@@ -5,7 +5,6 @@
 
 import type { RunSubstateKind } from "./run-substate";
 import type { Card } from "./types";
-import { riceScore } from "./rice";
 import { inboxItemHref } from "./deep-links";
 
 /** Split a list into the first `max` shown + how many are hidden (>= 0). */
@@ -104,25 +103,21 @@ export interface ReadViewSpec {
   acceptance: boolean;
   personas: boolean;
   systems: boolean;
-  kano: boolean;
-  funnelStage: boolean;
-  rice: boolean;
   body: boolean;
   /** true when NO section has content — drives the "estado vazio elegante" fallback */
   empty: boolean;
 }
 
-export function cardReadViewSpec(card: Pick<Card, "narrative" | "acceptance" | "personas" | "systems" | "kano" | "funnelStage" | "rice" | "body">): ReadViewSpec {
+// RICE/KANO/funil saíram na fase 5 (sem priorização): um card antigo que ainda os traz no frontmatter não
+// conta como "tem conteúdo" por causa deles.
+export function cardReadViewSpec(card: Pick<Card, "narrative" | "acceptance" | "personas" | "systems" | "body">): ReadViewSpec {
   const narrative = !!(card.narrative?.role?.trim() || card.narrative?.want?.trim() || card.narrative?.soThat?.trim());
   const acceptance = (card.acceptance?.length ?? 0) > 0;
   const personas = (card.personas?.length ?? 0) > 0;
   const systems = (card.systems?.length ?? 0) > 0;
-  const kano = card.kano != null;
-  const funnelStage = card.funnelStage != null;
-  const rice = riceScore(card.rice) != null;
   const body = (card.body?.trim().length ?? 0) > 0;
-  const empty = !narrative && !acceptance && !personas && !systems && !kano && !funnelStage && !rice && !body;
-  return { narrative, acceptance, personas, systems, kano, funnelStage, rice, body, empty };
+  const empty = !narrative && !acceptance && !personas && !systems && !body;
+  return { narrative, acceptance, personas, systems, body, empty };
 }
 
 /** A pergunta aberta de um card, no Inbox (AC4): a página do ITEM da pergunta — a antiga fila /perguntas saiu na onda 2

@@ -153,3 +153,14 @@ describe("o medidor de cota parado é item do Inbox, do host e do dono", () => {
     expect(meterStallItem({ since: Number.NaN, detectedAt: 0, detail: "" }, "b")).toBeNull();
   });
 });
+
+// revisão da fase 3: a pergunta sem `askedAt` (escrita à mão no arquivo, as do board de demonstração) saía com
+// since = null — a linha de contexto do Inbox ficava sem «há N min» enquanto o Kanban mostrava a idade do passo.
+describe("a idade de uma pergunta", () => {
+  it("o carimbo da pergunta quando existe; senão a idade do passo (a do Kanban), nunca nula", () => {
+    const stamped = questionItems(cardCockpitItems(card([q("q1", { askedAt: "2026-10-01" })], { created: "2026-09-20" } as Partial<Card>), cfg(), "b"));
+    expect(stamped[0].since).toBe("2026-10-01");
+    const bare = questionItems(cardCockpitItems(card([q("q1")], { created: "2026-09-20" } as Partial<Card>), cfg(), "b"));
+    expect(bare[0].since).toBe("2026-09-20");
+  });
+});

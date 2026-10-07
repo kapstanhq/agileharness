@@ -90,7 +90,8 @@ The card must be `status: corrigir` with `mode: fix` and a non-empty `bugReport.
 - `bugReport.target` — an optional route/screen/env hint.
 - `bugReport.screenshot` — an optional broken-state image under `bugs/<id>/`.
 - The story's EXISTING `narrative`, `acceptance`, `personas`, `systems` — the shipped
-  contract the bug VIOLATES; the baseline of correct behaviour, not a blank slate.
+  contract the bug VIOLATES; the baseline of correct behaviour, not a blank slate. Keep its `feature`; if it has
+  none, set it to the PRD funcionalidade id from `get_vocabulary` → `features` (no fit ⇒ leave it empty: «Outros»; never invent one).
 - The story's EXISTING `tasks` (and the plan sidecar `plans/<id>.md`, if any) describe
   the work ALREADY BUILT (typically all `done: true`) — they do NOT describe the fix.
   Step 4 reconciles them so a downstream build never re-runs stale build tasks.
@@ -134,15 +135,15 @@ The card must be `status: corrigir` with `mode: fix` and a non-empty `bugReport.
    <contexto>, quando <ação>, então <expected> (hoje: <actual>)`. Keep them verifiable. Keep
    `narrative` (the story's intent didn't change — it regressed). Keep `mode: fix`.
 
-   **Priority (type-aware WSJF — see `storymap/frameworks.md` §4):**
-   - **NEW bug** (came from the Triagem, no prior feature prioritization): set/confirm the
-     bug axes — `severity` (how bad) + `frequency` (always|often|sometimes|rare, how often)
-     + `hasWorkaround` (true/false). These yield the bug's `priorityScore` that ranks it in
-     the unified backlog. The triage seeds them; correct them from your diagnosis. Do NOT add
-     `rice`/`kano`/`funnelStage` — a bug isn't a feature.
-   - **REOPENED bug** (the card already has the shipped feature's `rice`/`kano`/`funnelStage`):
-     **PRESERVE** them untouched — the card keeps its original feature `priorityScore` (a bug
-     doesn't re-prioritize a shipped feature). See the guardrail.
+   **Severity — a fact of the bug, not a score.** There is no prioritization step and no
+   priority field: the order of the work is the card's POSITION in its Kanban column (the
+   owner moves it with «Fazer antes» / «Pode esperar»). What you DO set/confirm from your
+   diagnosis is `bugReport.severity` (blocker|high|medium|low — how bad) and, when known,
+   `frequency` (always|often|sometimes|rare) + `hasWorkaround` (true/false) as triage
+   metadata. A `blocker`/`high` bug (or a `medium` one labelled security/personal data) is
+   URGENT: the conductor's queue takes it before the column order — so never inflate the
+   severity to jump the queue. Never invent RICE/KANO/funnel fields (they no longer exist;
+   an old card may still carry them in the frontmatter — leave them, nothing reads them).
 
    This new `acceptance` is the source of truth the task reconciliation in step 4 derives from.
 
@@ -172,11 +173,10 @@ The card must be `status: corrigir` with `mode: fix` and a non-empty `bugReport.
    - **Plan sidecar:** if the root cause is architectural (a contract/data-shape defect),
      flag in `## Bug` that `plans/<id>.md` is stale and the build must revisit it; a
      surgical fix needs no replan.
-   **Why not route through `quebrar-tasks`/`priorizar`?** See the canonical rationale in
+   **Why not route through `quebrar-tasks`?** See the canonical rationale in
    **`@.claude/skills/harness-triage-shared/GUARDRAILS.md`** ("Por que não rotear por
-   quebrar-tasks/priorizar") — those columns auto-run `harness-prioritize`, which would
-   overwrite the already-decided `rice`/`kano`/`funnelStage`. Fix keeps the original
-   prioritization and reconciles tasks IN-PLACE here instead.
+   quebrar-tasks") — the fix reconciles tasks IN-PLACE here instead of re-entering the
+   shaping steps the shipped story already passed.
 
 5. **Report.** State: the diagnosis (current files + root cause + blame/commit if found),
    the reproduction, the respec (`acceptance` expected×actual + how you reconciled
@@ -188,8 +188,8 @@ The card must be `status: corrigir` with `mode: fix` and a non-empty `bugReport.
 
 Os guardrails comuns de reabertura e o ciclo de vida do `mode` são canônicos em
 **`@.claude/skills/harness-triage-shared/GUARDRAILS.md`** — leia-os: nunca recriar do zero ·
-reconciliar as build tasks (nunca deixar vazar) · uma reabertura não re-prioriza a story
-entregue (um bug NOVO carrega `severity`+`frequency`+`hasWorkaround`, não RICE) ·
+reconciliar as build tasks (nunca deixar vazar) · uma reabertura não volta ao começo da
+fila nem ganha nota (a vez é a posição na coluna; um bug carrega `severity`, um fato) ·
 read-only no código de produto · **manter `mode: fix`** (quem o limpa é o `harness-qa` em
 `qa-automatizado → revisao`, NÃO o `harness-review`) · não auto-executar escritas de código ·
 nunca tocar `packages/storymap-ui/`.

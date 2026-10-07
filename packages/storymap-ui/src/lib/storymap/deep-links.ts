@@ -4,8 +4,6 @@
 // IO/React — only strings + `import type` (invariant 5). Every surface that used to hand-roll a
 // `/board/<id>/kanban` literal imports these instead (the URLs-only-via-helpers invariant of this WS).
 
-import type { Demand } from "./demands";
-
 /** The board's Inbox list. `boardId` is a validated slug (SLUG_RE in copilot/escalation.ts) — a plain segment. */
 export function inboxHref(boardId: string): string {
   return `/board/${boardId}/inbox`;
@@ -131,38 +129,12 @@ export function cardHref(boardId: string, cardId: string, opts?: { view?: CardVi
 }
 
 /**
- * A página de CRIAÇÃO de um card. O contexto inicial viaja na query — é assim que o "+ story" de uma
- * célula passo×release do Mapa nasce já com pai, release e o status de entrada.
+ * The page of ONE funcionalidade of the board (fase 7): the PRD description, its items by state and «Feito». The id
+ * is the PRD feature slug, `outros` (the items outside the PRD) or, on a board without PRD features, the map node id.
+ * Encoded like the card id; read it back with {@link decodeRouteParam}.
  */
-export function newCardHref(
-  boardId: string,
-  init: { type: string; parent?: string | null; release?: string | null; status?: string | null },
-): string {
-  const q = new URLSearchParams({ tipo: init.type });
-  if (init.parent) q.set("pai", init.parent);
-  if (init.release) q.set("release", init.release);
-  if (init.status) q.set("status", init.status);
-  return `/board/${boardId}/card/novo?${q.toString()}`;
-}
-
-/**
- * A vocabulary entity's page. This one is not merely hygiene: the WRITE path is open — the MCP
- * `save_persona`/`save_system` take `id: z.string()` with no slugify — so an agent can legitimately
- * store `"Mãe Solo"` or `"usuario:novo"` today, and without the pair below that entity's page is a
- * permanent 404.
- */
-export function vocabEntityHref(boardId: string, kind: "persona" | "sistema", id: string): string {
-  return `/board/${boardId}/vocabulario/${kind}/${encodeURIComponent(id)}`;
-}
-
-/**
- * Destination of a demand row (/perguntas, the Kanban pill, push): the PAGE of the Inbox item the demand projects to
- * (`Demand.itemId`, built by the same projection that builds the item). Without an item id, the board's Inbox list.
- * B11: the old "transitional exception" (deploy-unsettled / release-aging → the kanban) is gone — both kinds have had
- * an Inbox item since WS-5 — and so is `?focus=<cardId>`.
- */
-export function demandHref(d: Pick<Demand, "boardId" | "itemId"> & Partial<Demand>): string {
-  return d.itemId ? inboxItemHref(d.boardId, d.itemId) : inboxHref(d.boardId);
+export function featureHref(boardId: string, featureId: string): string {
+  return `/board/${boardId}/funcionalidade/${encodeURIComponent(featureId)}`;
 }
 
 /** Anchor a merge-train entry in /processes (receptor §4.6) — `MergeQueueRow`'s key is `mq:<runId>`. */

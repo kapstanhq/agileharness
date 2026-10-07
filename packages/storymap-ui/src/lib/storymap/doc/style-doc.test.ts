@@ -35,6 +35,7 @@ const guide = (): StyleGuideDoc => ({
     lexicon: { preferred: [{ use: "exemplar", avoid: "unidade" }], forbidden: ["encalhe"], exceptions: [] },
     prose: "Voz de quem indica o próximo livro.",
   },
+  components: { items: [{ name: "Botão de compra", rule: "um por página de livro" }], prose: "" },
   antiPatterns: [{ symptom: "3 acentos na mesma view", fix: "reduza a 1" }],
   debt: { knownIssues: ["FAB antigo sem token"] },
 });

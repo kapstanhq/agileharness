@@ -24,7 +24,7 @@ describe("classifyTrigger — lane membership (AC1)", () => {
   });
 
   it("routes the .md-only fast skills to the LIGHT lane", () => {
-    for (const t of ["harness-enrich", "harness-prioritize", "harness-tasks", "harness-plan", "harness-ux"] as const) {
+    for (const t of ["harness-enrich", "harness-tasks", "harness-plan", "harness-ux"] as const) {
       expect(classifyTrigger(t)).toBe("light");
     }
   });

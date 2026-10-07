@@ -1,9 +1,8 @@
 // Types for gate-core.js (the isomorphic CommonJS single-source of the pipeline gates). This
 // .d.ts shadows the .js for type-checking so the TS app gets a fully typed API while the
-// pre-write hook require()s the same .js at runtime. gates.ts / rice.ts / priority.ts re-export
+// pre-write hook require()s the same .js at runtime. gates.ts re-exports
 // from here, so consumers keep their existing import paths.
-import type { BoardConfig, Card, GateId, Rice } from "./types";
-import type { BugSeverity } from "./frameworks";
+import type { BoardConfig, Card, GateId } from "./types";
 
 /** Resolve um id de card para o card daquele board. O `hasPlacement` usa para validar a âncora. */
 export type CardLookup = (id: string) => Card | null | undefined;
@@ -55,9 +54,6 @@ export function qaHasEvidence(card: Card): boolean;
 /** deploy-truth (D-DT4) — does the card POSITIVELY declare code (stagedAt stamped OR a full commitRange)?
  *  The single no-code ruler shared by hasReleased, hasDeployProof AND the server settle handler. */
 export function declaresCode(card: Card): boolean;
-export function riceScore(rice: Rice | null | undefined): number | null;
-export function priorityKind(card: Card): "feature" | "bug" | "melhoria";
-export function bugSeverityOf(card: Card): BugSeverity | null;
 
 /** Board inheritance (B5) — merge two id-keyed RAW lists (base order + per-id override + append).
  *  The single algorithm behind repo.ts mergeRawById AND the pre-write gate hook. */
@@ -96,6 +92,10 @@ export function placementSpec(card: Card, config?: BoardConfig | null): Placemen
 /** Rótulo PT-BR do que um card é ("uma user story", "um passo (step)"…), para mensagens de erro. */
 export function describeCardKind(card: Card): string;
 
+/** Gates aposentados → o sucessor (lidos, nunca descartados). */
+export const RETIRED_GATE_SUCCESSORS: Readonly<Record<string, GateId>>;
+/** O id canônico: um aposentado vira o sucessor; qualquer outro valor passa como veio. */
+export function canonicalGateId<T>(id: T): T | GateId;
 export function gateForStatus(config: BoardConfig, statusId: string | null | undefined): GateId | undefined;
 export function evaluateGate(
   card: Card,

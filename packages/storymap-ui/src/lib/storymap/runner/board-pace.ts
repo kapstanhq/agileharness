@@ -344,7 +344,7 @@ export function scopeNarrowed(before: EffectiveScope | null, after: EffectiveSco
  * decisão explícita do dono ou do agente, e as comportas de cada coluna seguem valendo.)
  *
  * FICAM FORA, e andam normalmente para o tipo ser decidido: captura, triagem, dúvidas, especificação (`enriquecer`),
- * entrevista, estimativa (`priorizar`), o go/no-go (`pronta`), o design, e as portas de reentrada (`refinar`, `corrigir`,
+ * entrevista, a fila «A fazer» (`pronta`), o design, e as portas de reentrada (`refinar`, `corrigir`,
  * `descontinuar` — diagnóstico, não construção). Também ficam fora as colunas de ENTREGA (`revisao`, `merge`, `stage`,
  * `release`, `deploy`): terminar e publicar o que já foi construído não é «começar» (a fila de publicação, o merge train, o
  * run manual e as ações do operador nunca são barrados pelo escopo).

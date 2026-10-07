@@ -34,11 +34,11 @@ describe("card id immutability contract (the card-id-immutability fix)", () => {
 
   it("forces ONLY the id — every other field of the transformation survives", () => {
     const captured = story("story-ex0147", { status: "enriquecer" });
-    const enriched: Card = { ...captured, id: "story-slug", title: "Novo título", status: "priorizar" };
+    const enriched: Card = { ...captured, id: "story-slug", title: "Novo título", status: "interview" };
     const pinned = pinCardId(enriched, captured.id);
     expect(pinned.id).toBe("story-ex0147");
     expect(pinned.title).toBe("Novo título");
-    expect(pinned.status).toBe("priorizar");
+    expect(pinned.status).toBe("interview");
   });
 
   it("the capture id is the PERMANENT id: a fresh story id is story-<6 base36> and that shape is what gets frozen", () => {

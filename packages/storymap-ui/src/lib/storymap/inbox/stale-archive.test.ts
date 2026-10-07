@@ -96,13 +96,15 @@ describe("o texto — confirmação que diz o que acontece, sem jargão", () => 
 
 describe("a tela e o servidor", () => {
   const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
-  it("a linha fica sob Decidir, sempre montada (o recibo sobrevive a Decidir vazio), e confirma antes de arquivar", () => {
-    const sections = read("../../../components/inbox/InboxSections.tsx");
-    expect(sections).toMatch(/const stale = useMemo\(\(\) => archivableStale\(decidir\)/);
-    expect(sections).toMatch(/<StaleArchive entries=\{stale\} \/>/);
+  it("a linha fica sob a lista, sempre montada (o recibo sobrevive à lista vazia), e arquiva num clique com «Desfazer tudo»", () => {
+    const home = read("../../../components/inbox/InboxHome.tsx");
+    expect(home).toMatch(/const stale = useMemo\(\(\) => archivableStale\(decidir\)/);
+    expect(home).toMatch(/<StaleArchive entries=\{stale\} \/>/);
     const ui = read("../../../components/inbox/StaleArchive.tsx");
-    expect(ui).toMatch(/onClick=\{\(\) => setConfirming\(true\)\}/);
-    expect(ui).toMatch(/<ConfirmDialog/);
+    // fase 3: um clique, sem diálogo — nada é apagado (vai para o arquivo como adiado) e o recibo desfaz tudo
+    expect(ui).toMatch(/onClick=\{\(\) => void archive\(\)\}/);
+    expect(ui).not.toMatch(/ConfirmDialog/);
+    expect(ui).toMatch(/Nada é apagado/);
     expect(ui).toMatch(/Desfazer tudo/);
     expect(ui).toMatch(/undoInboxReceiptAction\(/);
   });

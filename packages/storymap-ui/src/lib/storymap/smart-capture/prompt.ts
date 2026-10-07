@@ -88,7 +88,7 @@ function renderBoard(config: BoardConfig, cards: Card[]): string {
  */
 function renderOpenIdeas(cards: Card[]): string {
   const open = cards.filter((c) => c.type === "idea" && (c.idea?.status ?? "open") === "open");
-  if (!open.length) return "(nenhuma ideia aberta na bancada)";
+  if (!open.length) return "(nenhuma ideia aberta no board)";
   return open.map((o) => `- ${o.id} — "${o.idea?.statement?.trim() || o.title}"`).join("\n");
 }
 
@@ -156,7 +156,7 @@ function renderImages(imagePaths: string[]): { section: string; toolsLine: strin
  * Norte do produto — o digest do PRD, que o chamador resolve (`boardStrategy`). Vazio → seção omitida.
  *
  * Antes esta função lia os três campos do `board.yaml` por conta própria, e numa ORDEM diferente da
- * que `priority-context` usava para os MESMOS três campos. Ninguém decidiu isso; foi digitado duas
+ * que outra leitura (já apagada) usava para os MESMOS três campos. Ninguém decidiu isso; foi digitado duas
  * vezes. Hoje a ordem é uma só porque a fonte é uma só.
  */
 function renderNorthStar(strategy: string): string {
@@ -171,7 +171,7 @@ function renderNorthStar(strategy: string): string {
 }
 
 /** Dica de intenção do orquestrador humano (① chips) — um PRIOR forte sobre a natureza da captura. WS-9:
- *  a captura estruturada só classifica DEFEITO ou TRABALHO — dor crua não é opção aqui (vai para a bancada). */
+ *  a captura estruturada só classifica DEFEITO ou TRABALHO — dor crua não é opção aqui (vira item da Triagem). */
 function renderIntentHint(hint?: "story" | "bug" | null): string {
   if (!hint) return "";
   const map = {
@@ -205,7 +205,7 @@ export function buildProposalPrompt(input: {
   /** a voz de marca do BOARD (`brandVoiceNote` do Guia de Estilo dele); omitida/vazia = o prompt não impõe voz nenhuma. */
   brandVoice?: string;
   /** ① dica do humano sobre a natureza (chips): prior forte no PASSO 1. null/omitido = IA decide sozinha.
-   *  WS-9: só "story" | "bug" (a captura estruturada não cunha ◆ — dor crua vai para a bancada). */
+   *  WS-9: só "story" | "bug" (a captura estruturada não cunha ◆ — dor crua vira item da Triagem). */
   intentHint?: "story" | "bug" | null;
 }): string {
   const { config, cards, text } = input;
@@ -215,7 +215,7 @@ export function buildProposalPrompt(input: {
 
   return `Você é um Product Manager assistente de um board de User Story Mapping (Jeff Patton).
 Sua tarefa: ler um TEXTO LIVRE do usuário e PROPOR quais cards criar no board — sem escrever nada.
-Outro processo (/harness-enrich) preenche narrativa, critérios de aceite e RICE depois.
+Outro processo (/harness-enrich) preenche narrativa e critérios de aceite depois.
 EXCEÇÃO: se o texto-fonte JÁ trouxer narrativa (papel/vontade/resultado), aceite ou contexto de decisões,
 PROPAGUE esses campos nos itens (narrative/acceptance/body). NÃO invente — só propague o que JÁ está no texto.
 Guard de custo: NÃO adicione narrative/acceptance/body se o texto-fonte não os contiver; omitir é sempre correto.
@@ -225,7 +225,7 @@ Guard de custo: NÃO adicione narrative/acceptance/body se o texto-fonte não os
 ${renderNorthStar(input.strategy)}## Backbone e stories existentes (reaproveite estes ids como \`parent\`; detecte duplicatas)
 ${renderBoard(config, cards)}
 
-## Ideias abertas na bancada (o espaço do problema — NÃO crie nenhuma; LIGUE-se a elas)
+## Ideias abertas no board (o espaço do problema — NÃO crie nenhuma; LIGUE-se a elas)
 Se a DOR por trás de uma story que você propor JÁ está enunciada numa destas ◆, aponte \`addresses\` = o id da
 ideia (em vez de criar um artefato paralelo cego). Você NUNCA cria/edita ideia aqui.
 ${renderOpenIdeas(cards)}
@@ -250,8 +250,8 @@ ${renderStoryTypes()}
   guarda-chuva com o campo \`tasks: [{title}, …]\` — NÃO N cards separados. N cards similares = N-1 pipelines
   inteiros desperdiçados. Só separe em cards distintos quando são superfícies/objetivos genuinamente diferentes.
 - type "idea" (◆ — espaço do problema, OST): você NÃO cria aqui. A captura ESTRUTURADA nunca cunha
-  ideia — ela só produz story/step/activity. Ideia nasce na BANCADA de Ideias (um ponto de
-  entrada separado e deliberado), quando alguém quer só ENUNCIAR uma dor sem comprometer trabalho. O único elo
+  ideia — ela só produz story/step/activity. Uma dor que alguém só quer ENUNCIAR, sem comprometer trabalho,
+  entra como item da TRIAGEM (ver DOR CRUA abaixo), nunca como ◆. O único elo
   que você pode desenhar com uma ◆ é \`addresses\` numa story (apontar UMA das ideias ABERTAS listadas
   acima, quando a dor daquela story já está enunciada lá).
 
@@ -279,19 +279,22 @@ Várias coisas independentes no texto → um item por uma, cada uma classificada
 
 DOR CRUA (o que NÃO vira card aqui): uma DOR/necessidade do usuário SEM solução conhecida (o PORQUÊ, não o quê) —
 "o responsável nunca sabe se a criança já saiu da piscina", "as famílias largam a matrícula antes de terminar o formulário". A captura estruturada é para
-quem JÁ sabe o que precisa ser feito; dor crua a explorar pertence à BANCADA de Ideias (o ponto de entrada
-leve). Então:
+quem JÁ sabe o que precisa ser feito; dor crua a explorar entra pela TRIAGEM, onde é triada como qualquer item.
+Então:
 - Se o texto tem um ENTREGÁVEL discernível por trás da dor, classifique-o como a story mais próxima
   (user/bug/technical/chore) e registre no \`rationale\` que a certeza é baixa (o humano ajusta na revisão). Se a
-  dor coincide com uma ◆ ABERTA da bancada, LIGUE a story a ela por \`addresses\`.
+  dor coincide com uma ◆ ABERTA do board, LIGUE a story a ela por \`addresses\`.
 - Se é SÓ dor, sem entregável discernível, NÃO invente um item: em vez do card, emita a nota no \`summary\`
-  ("há uma dor crua aqui — registre na bancada de Ideias: «…»"). Um item ◆ que escape será IGNORADO no
-  aceite (a captura não cria ideias) — então prefira a nota a um ◆.
+  ("há uma dor crua aqui: «…» — se quiser registrá-la, responda «registre na Triagem»"). Um item ◆ que escape
+  será IGNORADO no aceite (a captura não cria ideias) — então prefira a nota a um ◆.
+- Se o humano PEDIR para registrar a dor (p.ex. «registre na Triagem»), emita UM item type:"story",
+  storyType:"user", cujo título ENUNCIA a necessidade sem escolher solução (ex.: "Famílias concluírem a matrícula
+  sem abandonar o formulário"), "confidence" ≤ 0.5 e o \`rationale\` dizendo que é uma dor a triar.
 
 FRONTEIRA cinzenta (defeito ↔ percepção): um problema de QUALIDADE PERCEBIDA (lentidão percebida, transição feia,
 "parece um bug") pode ser CORRIGIDO como bug OU ser dor crua a explorar. Quando for genuinamente ambíguo, escolha
 o tipo MAIS provável de story, mas emita "confidence" ≤ 0.5 e "ambiguous": true — o humano desambigua na revisão
-(e pode mandar a dor crua para a bancada). Quando estiver claro, "confidence" ≥ 0.8 e omita "ambiguous".
+(e pode registrar a dor crua como item da Triagem). Quando estiver claro, "confidence" ≥ 0.8 e omita "ambiguous".
 
 Regra de ouro do TÍTULO: um título que descreve algo QUEBRADO acontecendo ("a lista de chamada mostra o aluno duas vezes") é DEFEITO (story:bug),
 NÃO user story; um título de user story descreve uma CAPACIDADE/RESULTADO ("remarcar uma aula perdida sem ligar para a secretaria"). Não se
@@ -320,7 +323,7 @@ CONFLITAREM ao editar o mesmo arquivo. Na dúvida, MENOS cards.
 - Exemplos:
   • ❌ "Modelar AgentQuestion" · "Capturar o marcador no output" · "Criar a página de respostas" ·
     "Retomar o run" · "Badge no card"  →  ✅ 1 story "Perguntas do agente para destravar o run".
-  • ❌ "Remover RICE do card" · "Adicionar chip de tipo" · "Score no rodapé" · "Busca no mover-para"
+  • ❌ "Tirar o selo do card" · "Adicionar chip de tipo" · "Score no rodapé" · "Busca no mover-para"
     →  ✅ 1 story "Ler o card do Kanban sem ruído" (tudo na mesma superfície; título = intenção, não a tarefa).
 
 # Régua da fatia vertical (sanity check de VALOR — raciocínio, não regra mecânica)
@@ -335,8 +338,8 @@ NÃO aplique a régua a technical/chore/spike/bug: um enabler de infra (índice,
 
 # Regras
 - Dor vs. trabalho (dual-track): aplique o PASSO 1 acima. A captura ESTRUTURADA só emite story/step/activity —
-  NUNCA ◆ ideia (isso é a bancada). Se o texto é dor crua sem entregável, prefira a NOTA no summary a
-  inventar um item. Se a dor coincide com uma ◆ ABERTA da bancada (lista acima), LIGUE a story a ela por
+  NUNCA ◆ ideia. Se o texto é dor crua sem entregável, prefira a NOTA no summary a
+  inventar um item. Se a dor coincide com uma ◆ ABERTA do board (lista acima), LIGUE a story a ela por
   \`addresses\` (= o id da ideia existente) — preserva o fio de ouro sem duplicar a dor.
 - Quebre a demanda em stories por CAPACIDADE/VALOR (ver Granularidade acima); na dúvida, MENOS cards.
 - LUGAR NO MAPA (regra dura — a hierarquia tem UMA forma, e cada tipo ancora num lugar diferente):
@@ -368,7 +371,7 @@ NÃO aplique a régua a technical/chore/spike/bug: um enabler de infra (índice,
   Se o board já tem a story da superfície e o texto pede trabalho SOBRE ela, isso NÃO é duplicata: é entrega
   (\`serves\`) ou extensão (\`targetCardId\`) — ver PASSO 1, caso 0. Marcar duplicata e propor a story assim
   mesmo é o pior dos dois mundos: cria o card errado E adia a decisão.
-${input.brandVoice ? `- ${input.brandVoice}\n` : ""}- Stories/backbone nascerão no status "${entryStatus}". A captura NÃO cria ideias (type:"idea") — dor crua vai para a bancada de Ideias (ponto de entrada separado).
+${input.brandVoice ? `- ${input.brandVoice}\n` : ""}- Stories/backbone nascerão no status "${entryStatus}". A captura NÃO cria ideias (type:"idea") — dor crua só vira item (story de usuário na Triagem) quando o humano pedir.
 
 # Exemplos de classificação (o PASSO 1 em ação)
 
@@ -386,17 +389,17 @@ EXEMPLO 2 — a entrada é DOR CRUA, só problema e nenhuma solução escolhida 
 Texto: "Tem família que larga a matrícula no meio do formulário e a gente só descobre semanas depois. Já se falou em
 pedir menos campos, em ligar, em mandar lembrete... nada fechou."
 Saída CORRETA:
-{ "summary": "Há uma dor crua aqui — registre na bancada de Ideias: «Famílias abandonam a matrícula no meio do formulário». Nenhuma das saídas citadas foi decidida, então a captura estruturada não cria item.",
+{ "summary": "Há uma dor crua aqui: «Famílias abandonam a matrícula no meio do formulário». Nenhuma das saídas citadas foi decidida, então não proponho card — se quiser registrá-la, responda «registre na Triagem».",
   "items": [] }
 Saída ERRADA (NÃO faça): escolher por conta própria uma das saídas ("Reduzir os campos do formulário") e emiti-la como
 story — a equipe nem decidiu isso —, OU emitir um card type:"idea" (a captura não cunha ◆; seria ignorado no aceite).
 
 EXEMPLO 3 — a entrada é uma dor com um ENTREGÁVEL discernível → emita a story mais próxima, com certeza baixa e o elo \`addresses\`:
-(a bancada tem a ◆ aberta "idea-ex9863" — «A recepção perde tempo procurando quem pagou».)
+(o board tem a ◆ aberta "idea-ex9863" — «A recepção perde tempo procurando quem pagou».)
 Texto: "A recepção perde um tempão para achar quem está devendo. Se a lista de alunos tivesse um filtro de
 mensalidade em aberto, já ajudava muito."
 Saída CORRETA:
-{ "summary": "A dor coincide com uma ideia aberta da bancada, e o texto aponta um entregável provável: um filtro na lista de alunos.",
+{ "summary": "A dor coincide com uma ideia aberta do board, e o texto aponta um entregável provável: um filtro na lista de alunos.",
   "items": [ { "tempId": "i1", "type": "story", "confidence": 0.5, "title": "Ver quem está com a mensalidade em aberto",
     "storyType": "user", "parent": "step-ex9861", "addresses": "idea-ex9863",
     "rationale": "O filtro é uma solução sugerida de passagem, não uma decisão; certeza baixa — o humano ajusta na revisão." } ] }
@@ -434,13 +437,13 @@ QUALQUER item inclua "confidence" (0..1 — sua certeza na CLASSIFICAÇÃO do ti
   serves = id/tempId da USER STORY que ela implementa, parent = null. Opcionais (inclua SÓ quando o texto-fonte
   já os trouxer; o /harness-enrich preenche depois): narrative {role,want,soThat}, acceptance[], body, tasks[]
   ({id?,title}) — tasks SÓ no card GUARDA-CHUVA de N ajustes na MESMA superfície/arquivo (1 card com N tasks em
-  vez de N cards; regra de consolidação acima). E, quando a dor da story já está enunciada numa ◆ ABERTA da
-  bancada, addresses = o id daquela ideia existente.
+  vez de N cards; regra de consolidação acima). E, quando a dor da story já está enunciada numa ◆ ABERTA do
+  board, addresses = o id daquela ideia existente.
 - ESTENDER um card existente (nada é criado) → tempId, type:"story", title (o que será acrescentado),
   targetCardId (id EXISTENTE do board), tasks[] (obrigatório — é o que será acrescentado), rationale.
   Não inclua parent/serves/narrative aqui: eles são ignorados neste modo.
 - type:"activity" | "step" → tempId, type, title, parent (activity → null; step → o id/tempId da activity), rationale.
-(Se for só dor crua, NÃO emita item — ponha a nota "registre na bancada" no summary. Omita os campos opcionais ausentes.)`;
+(Se for só dor crua, NÃO emita item — ponha no summary a nota que oferece registrá-la na Triagem. Omita os campos opcionais ausentes.)`;
 }
 
 /**

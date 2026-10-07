@@ -1,4 +1,5 @@
 import { AppTopBar } from "@/components/nav/TopBar";
+import { RunnerStatusProvider } from "@/components/RunnerStatusProvider";
 import { WeeklySummaryView } from "@/components/WeeklySummaryView";
 import { collectWeeklySummary, ownerTimeZone } from "@/lib/storymap/weekly-summary-collect";
 import { addDays, isMonday, mondayOf } from "@/lib/storymap/weekly-summary";
@@ -15,9 +16,10 @@ export default async function SemanaPage(props: { searchParams: Promise<{ de?: s
   const monday = isMonday(de) && de <= current ? de : current;
   const summary = await collectWeeklySummary(monday, now);
   return (
-    <>
+    // O anel da cota da barra lê a métrica do SSE vivo: fora do provider ele ficaria no fantasma para sempre.
+    <RunnerStatusProvider>
       <AppTopBar title="Resumo da semana" backHref="/" />
       <WeeklySummaryView summary={summary} current={monday === current} previous={addDays(monday, -7)} next={monday < current ? addDays(monday, 7) : null} />
-    </>
+    </RunnerStatusProvider>
   );
 }

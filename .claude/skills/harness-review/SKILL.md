@@ -238,6 +238,23 @@ harness-review`. Use ids `q<N>` que não colidam com perguntas já existentes:
 > decisão em forma de pergunta aberta. As stakes / o PORQUÊ vão no `context:` (1–2 linhas);
 > a prova detalhada (IDs, hashes, diffs) vai num finding `detail` — **nunca** no `text`.
 
+**O formato do Inbox — linguagem simples (vale para toda pergunta).** O Inbox mostra cada pergunta a uma
+pessoa em três partes, e cada campo é uma delas: `context:` = **o que aconteceu** (1–2 frases simples: quem
+fez o quê e o que está em jogo; ≤ 400 caracteres), `text:` = **o que você precisa da pessoa** (UMA pergunta;
+≤ 240 caracteres), `options:` = **as respostas possíveis** (2–4; cada `label` é uma AÇÃO CURTA que vira um
+botão de um clique, ≤ 60 caracteres — o porquê vai em `pros`/`cons`), `recommendation:` = a sua sugestão
+(vira o botão «Usar a sugestão»). Sem jargão nessas partes: nada de arquivo, sha, branch, run, gate, merge,
+deploy, worktree, finding — diga em palavras («a busca», «a publicação», «o aviso da revisão»). Pela tool
+`ask_question`, pergunta vazia ou fora desses tamanhos é recusada. Exemplo (inventado, da livraria):
+
+```yaml
+context: "A busca do catálogo já acha livros pelo título. Para achar pelo autor, ela pode ignorar acentos ou exigir a grafia exata."
+text: "A busca por autor deve ignorar acentos?"
+options:
+  - { id: o1, label: "Ignorar acentos (Jose acha José)", pros: ["acha mais livros"], recommended: true }
+  - { id: o2, label: "Exigir a grafia exata", cons: ["quem digita sem acento não acha nada"] }
+```
+
 ```yaml
 questions:
   - id: q1
@@ -248,7 +265,7 @@ questions:
     category: interview         # SEMPRE — interview (produto/UX) | money (sempre do dono) — ver abaixo
     context: <o PORQUÊ — o trade-off em jogo, o que muda conforme a escolha (1-2 linhas)>
     mode: single                # single (uma) | multi (várias)
-    options:                    # 2–5 caminhos PLAUSÍVEIS (não fatos inventados)
+    options:                    # 2–4 caminhos PLAUSÍVEIS (não fatos inventados)
       - id: o1
         label: <caminho A>
         pros: [<por que é bom — curto>]
@@ -263,14 +280,17 @@ questions:
 
 - **SEMPRE preencha `context:`** — as stakes, o que muda conforme a resposta. É o que
   deixa o Inbox decidir num toque sem reabrir o card.
-- **SEMPRE preencha `category:`** — é o que a chave de autonomia do board lê. Numa story
-  **ultra**, uma pergunta `interview` vai a um PROXY (contexto limpo, PRD + personas + decisões
-  passadas do dono, premissas registradas); sem `category` ela nunca vai — e trava a story no dono.
+- **SEMPRE preencha `category:`** — é o que o PERFIL de autonomia do board lê (`board_autonomy`).
+  Com a caixa `spec` ligada, uma pergunta `interview`/`technical` vai a um PROXY cego (contexto limpo,
+  PRD + personas + decisões passadas do dono, premissas registradas); com ela desligada, ao dono; sem
+  `category` ela nunca vai — e trava a story no dono. Um achado que pede mudar ou apagar um TESTE
+  EXISTENTE vira pergunta `guardrail` (revisor de diff independente — nunca o proxy, nunca você; até esse
+  revisor existir, é do dono — o merge train também a abre sozinho quando o diff mexe num teste existente).
   `interview` = decisão de produto/UX/comportamento (uma regra de comportamento com duas leituras);
   `money` = gasto, fornecedor, preço, API paga, publicação externa, PRD/metas, e decisões que tocam
   auth/rules/pagamentos/dados pessoais — SEMPRE do dono (comece o `context:` com `[humano]`);
   `ui-choice` = escolher entre variantes de tela já desenhadas. Na dúvida, `money`.
-- **Com opções discretas** → dê `options:` (2–5, ids `o1`,`o2`,…) com `mode:
+- **Com opções discretas** → dê `options:` (2–4 — o `ask_question` recusa fora disso; ids `o1`,`o2`,…, no formato de linguagem simples acima) com `mode:
   single|multi`, `pros`/`cons` curtos por opção, e marque a melhor com `recommended:
   true` (**no máximo UMA** em toda a pergunta). O texto livre do humano está sempre
   disponível ao lado — as opções são atalho, não jaula.

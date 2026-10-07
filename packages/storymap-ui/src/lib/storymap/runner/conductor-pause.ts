@@ -32,7 +32,7 @@ import { openQuestions } from "@/lib/storymap/questions";
 import type { SystemDecision } from "@/lib/storymap/system-decisions";
 import type { BoardConfig, Card } from "@/lib/storymap/types";
 import { isLiveConductor } from "./conductor";
-import type { AgentSession } from "./session-worktree";
+import { sessionCardIds, type AgentSession } from "./session-worktree";
 
 /** `autorun.park` do settings — os tempos da escada (ver {@link quietLadderStep} e types.ts `autorun.park`). */
 export interface ParkSettings {
@@ -68,6 +68,11 @@ interface PaneDeps {
   runsClaude(tmux: string): Promise<boolean>;
   /** digita e envia a linha — true se entregue. */
   deliver(tmux: string, text: string): Promise<boolean>;
+  /**
+   * Fase 7 — os OUTROS cards do lote do líder `lead` (os que carregam a mesma marca `batch.id`), sem o líder. É o que
+   * deixa a resposta a um item retomar o lote inteiro depois de ele estacionar. Ausente ⇒ nenhum (só o card respondido).
+   */
+  batchItems?(board: string, lead: Card): Promise<Card[]>;
   now?(): number;
   log?(line: string): void;
 }
@@ -115,7 +120,8 @@ export async function wakeConductor(
     if (config.statuses.find((s) => s.id === card.status)?.terminal) return "terminal";
     const live = await deps.liveTmux().catch(() => null);
     if (live === null) return "unknown"; // sem saber quem está vivo, nem digita nem reabre
-    const session = (await deps.sessions()).find((s) => s.board === board && s.cardId === cardId && !!s.tmuxSession && isLiveConductor(s, live, deps.heartbeatAlive, deps.treeGone));
+    // fase 7: o condutor de um LOTE acorda pela resposta a QUALQUER card dele (`sessionCardIds`)
+    const session = (await deps.sessions()).find((s) => s.board === board && sessionCardIds(s).includes(cardId) && !!s.tmuxSession && isLiveConductor(s, live, deps.heartbeatAlive, deps.treeGone));
     if (session?.tmuxSession) {
       if (!(await deps.runsClaude(session.tmuxSession))) return "undeliverable";
       const ok = await deps.deliver(session.tmuxSession, input.line ?? wakeLine(by, input.questionIds, ownerOnlyOpenQuestions(card).length));
@@ -125,11 +131,35 @@ export async function wakeConductor(
     // Sem condutor vivo: o card está estacionado. Só retoma quando não sobra pergunta aberta — uma que ainda espera
     // (do dono ou do proxy) acorda o card de novo quando for respondida.
     if (openQuestions(card).length > 0) return "still-waiting";
-    await deps.admitResume(board, cardId);
+    // Fase 7: um card de LOTE retoma o lote INTEIRO — o líder primeiro, depois os itens —, e só quando nenhum deles
+    // segue com pergunta aberta (o lote estacionou como unidade e volta como unidade).
+    const members = await batchMembers(deps, board, card, config);
+    if (members.some((m) => openQuestions(m).length > 0)) return "still-waiting";
+    for (const m of members.length ? members : [card]) await deps.admitResume(board, m.id);
     return "resumed";
   } catch (err) {
     log(`${board}/${cardId}: não foi possível acordar o condutor — ${err instanceof Error ? err.message : String(err)}`);
     return "unknown";
+  }
+}
+
+/**
+ * Fase 7 — os cards do lote de `card` que ainda são do condutor (conduzidos, fora de status terminal), com o LÍDER
+ * primeiro. Vazio quando o card não está num lote (ou o líder já saiu dele): quem chama trata o card sozinho, como antes.
+ * Nunca lança — uma leitura que falha deixa o card sozinho.
+ */
+async function batchMembers(deps: Pick<PaneDeps, "readCard" | "batchItems">, board: string, card: Card, config: BoardConfig): Promise<Card[]> {
+  const mark = card.batch;
+  if (!mark) return [];
+  try {
+    const lead = mark.lead === card.id ? card : await deps.readCard(board, mark.lead);
+    if (!lead || lead.batch?.id !== mark.id) return [];
+    const items = (await deps.batchItems?.(board, lead)) ?? [];
+    const open = (c: Card) => isConducted(c) && !config.statuses.find((s) => s.id === c.status)?.terminal;
+    const out = [lead, ...items.filter((i) => i.id !== lead.id && i.batch?.id === mark.id)].filter(open);
+    return out.some((c) => c.id === card.id) ? out : [];
+  } catch {
+    return [];
   }
 }
 
@@ -197,11 +227,34 @@ export const DECLARED_PARK_LINE =
   "(4) worktree_discard — o branch com commits não integrados fica preservado; (5) NÃO limpe o driver do card; " +
   "(6) encerre o turno sem pedir mais nada. Quando a pergunta for respondida, o serviço reabre um condutor para este card na frente da fila.";
 
+/**
+ * Fase 6 (6D) — a linha do estacionar quando o card ESPERA OUTRA HISTÓRIA (um `depends-on` que não terminou, um bloqueio
+ * `blocked-by-*` aberto): antes o condutor soltava o card (limpava o driver) e a cascata o pegava, gastando runs que não
+ * podiam avançar; e ninguém o retomava quando a dependência chegava. Agora: o driver FICA, o card volta à fila do condutor
+ * e ESPERA lá (conductor.ts `dependencyHold`) até a dependência chegar — então um condutor novo o retoma na frente.
+ */
+export const DEPENDENCY_PARK_LINE =
+  "estacionar — este card espera OUTRA história terminar (um depends-on ou um bloqueio de dependência aberto) e esta sessão está segurando uma vaga de condutor. " +
+  "Faça, nesta ordem: (1) confirme que a dependência está DECLARADA no card (link depends-on para o card de que ele depende, ou um achado blocked-by-<o que> de severidade blocker); " +
+  "(2) atualize no card a seção «Estado do condutor» (bloco e passo atuais, o que já está pronto, o que falta, de qual história ele depende e o nome do branch); " +
+  "(3) commite tudo o que há no worktree; (4) release_claim; (5) worktree_discard — o branch com commits não integrados fica preservado; " +
+  "(6) NÃO limpe o driver do card — soltar o card deixaria a cascata pegá-lo; (7) encerre o turno sem pedir mais nada. " +
+  "Quando a dependência chegar, o serviço reabre um condutor para este card na frente da fila.";
+
+/**
+ * Fase 6 (6D) — o pedido de estacionar IGNORADO: entregue uma vez, a sessão seguiu viva e quieta. Este fator ×
+ * `afterMinutes` depois do pedido, o serviço o REPETE uma vez e registra; o mesmo tempo depois disso, ESCALA ao operador
+ * (um achado no card — o Inbox oferece «Parar condutor»). Nunca mata a sessão sozinho: parar é do dono.
+ */
+export const PARK_IGNORED_FACTOR = 2;
+/** O achado que o operador vê quando o condutor ignorou o pedido de estacionar duas vezes. */
+export const PARK_IGNORED_FINDING_ID = "conductor-park-ignored";
+
 /** As retomadas por erro de transporte são contadas nesta janela: duas falhas seguidas são infraestrutura, não acaso. */
 export const TRANSPORT_RETRY_WINDOW_MS = 60 * 60_000;
 
 /** Por que a sessão foi estacionada — decide a linha e o que acontece com o card depois. */
-export type ParkCause = "owner" | "transport" | "quiet" | "declared";
+export type ParkCause = "owner" | "transport" | "quiet" | "declared" | "dependency";
 
 /**
  * A linha do estacionar quando o BOARD foi pausado com «parar agora» (board-pace.ts). Palavras fixas, os mesmos passos
@@ -218,6 +271,11 @@ export const PACE_PARK_LINE =
 export interface ConductorParkMemo {
   board: string;
   cardId: string;
+  /**
+   * Fase 7 — os ITENS do lote da sessão (sem o líder `cardId`), lidos quando o passe gravou a memória. Uma sessão de lote
+   * estaciona como UNIDADE: quando ela sai, cada item volta à fila junto com o líder (o condutor novo os re-pega).
+   */
+  batchCardIds?: string[];
   /** o pedido de estacionar foi entregue (uma vez por sessão). */
   askedAt?: number;
   /** `pace` = o board foi pausado com «parar agora» ({@link parkBoardConductors}); as outras vêm da escada. */
@@ -226,6 +284,10 @@ export interface ConductorParkMemo {
   nudgedAt?: number;
   /** as retomadas por erro de transporte entregues (instantes). */
   retriedAt?: number[];
+  /** fase 6 (6D) — o pedido de estacionar ignorado foi REPETIDO (instante). */
+  reaskedAt?: number;
+  /** fase 6 (6D) — o pedido ignorado foi ESCALADO ao operador (instante). */
+  escalatedAt?: number;
 }
 export type ConductorParkState = Map<string, ConductorParkMemo>;
 
@@ -246,6 +308,8 @@ export interface QuietLadderFacts {
   slotWaiters: number;
   /** o claude do pane tem filho vivo, ou a sonda não soube (conductor-quiet.ts `childBusy`). Ausente ⇒ não. */
   childBusy?: boolean;
+  /** fase 6 (6D) — o card espera OUTRA história (o motivo), ou null/ausente. */
+  dependencyWait?: string | null;
 }
 
 /**
@@ -302,6 +366,9 @@ export function quietLadderStep(f: QuietLadderFacts, memo: ConductorParkMemo | u
     return recent.length < s.transportRetries ? { kind: "transport-retry", attempt: recent.length + 1 } : { kind: "park", cause: "transport" };
   }
   if (f.ownerWait) return f.quietForMs >= min(s.afterMinutes) ? { kind: "park", cause: "owner" } : { kind: "none" };
+  // Fase 6 (6D): esperando OUTRA história, quieto ⇒ estacionar com o driver (a fila o segura até a dependência chegar) —
+  // com ou sem fila esperando vaga: uma sessão que só espera outro card nunca deve segurar uma vaga nem soltar o card.
+  if (f.dependencyWait) return f.quietForMs >= min(s.afterMinutes) ? { kind: "park", cause: "dependency" } : { kind: "none" };
   if (f.slotWaiters <= 0) return { kind: "none" };
   // story-ex9602: a espera declarada segura a vaga, mas não para sempre — com prazo, até o prazo; sem prazo, até
   // `declaredAfterMinutes` quieta. Depois, o pedido de estacionar que a transforma numa pergunta do dono.
@@ -318,6 +385,7 @@ export function quietLadderStep(f: QuietLadderFacts, memo: ConductorParkMemo | u
 export function ladderLine(step: Exclude<QuietLadderStep, { kind: "none" }>): string {
   if (step.kind === "transport-retry") return TRANSPORT_RETRY_LINE;
   if (step.kind === "nudge") return NUDGE_LINE;
+  if (step.cause === "dependency") return DEPENDENCY_PARK_LINE;
   return step.cause === "owner" ? PARK_LINE : step.cause === "declared" ? DECLARED_PARK_LINE : QUIET_PARK_LINE;
 }
 
@@ -349,10 +417,34 @@ export function ladderDecision(
       ? `a sessão espera uma decisão sua há ${ctx.quietMin} min — o trabalho fica guardado e o card volta para a frente da fila quando você decidir`
       : step.cause === "declared"
         ? `a sessão declarou uma espera e ficou parada há ${ctx.quietMin} min com ${fila} — o pedido vira uma pergunta sua no card, o trabalho fica guardado e o card volta quando você responder`
+        : step.cause === "dependency"
+        ? `a sessão espera outra história terminar e ficou parada há ${ctx.quietMin} min — o trabalho fica guardado, o card segue com o driver e volta quando a dependência chegar`
         : step.cause === "transport"
         ? `o erro de API se repetiu depois de ${ctx.retries} retomada(s) («${(ctx.transportError ?? "API Error").slice(0, 120)}») — o trabalho fica guardado e o card volta para a fila`
         : `a sessão seguiu quieta depois do lembrete, sem pausa declarada, com ${fila} — o trabalho fica guardado e o card volta para a fila`;
   return { ...base, kind: "conductor-park", what: `Estacionou o condutor de «${ctx.card.title}»`, why, undo: { kind: "resume-conductor", cardId: ctx.card.id } };
+}
+
+/** A linha do estacionar de cada causa (a mesma que o primeiro pedido digitou). PURA. */
+export function parkLineFor(cause: ConductorParkMemo["parkCause"]): string {
+  if (cause === "pace") return PACE_PARK_LINE;
+  if (cause === "dependency") return DEPENDENCY_PARK_LINE;
+  if (cause === "declared") return DECLARED_PARK_LINE;
+  if (cause === "owner") return PARK_LINE;
+  return QUIET_PARK_LINE;
+}
+
+/**
+ * Fase 6 (6D) — o pedido de estacionar foi IGNORADO? PURA. A sessão segue viva (quem chama só pergunta por sessões vivas),
+ * quieta no prompt e sem prompt desenhado: {@link PARK_IGNORED_FACTOR} × `afterMinutes` depois do pedido ⇒ repetir uma vez
+ * (`reask`); o mesmo tempo depois da repetição ⇒ escalar ao operador (`escalate`); depois disso, nada (uma vez por sessão).
+ */
+export function parkIgnoredStep(memo: ConductorParkMemo, quietForMs: number | null, asking: boolean, s: ParkSettings, now: number): "none" | "reask" | "escalate" {
+  if (memo.askedAt === undefined || memo.escalatedAt !== undefined) return "none";
+  if (quietForMs == null || asking) return "none";
+  const window = PARK_IGNORED_FACTOR * Math.max(1, s.afterMinutes) * 60_000;
+  if (memo.reaskedAt === undefined) return now - memo.askedAt >= window && quietForMs >= Math.min(window, now - memo.askedAt) ? "reask" : "none";
+  return now - memo.reaskedAt >= window && quietForMs >= Math.min(window, now - memo.reaskedAt) ? "escalate" : "none";
 }
 
 export interface ConductorParkDeps extends PaneDeps {
@@ -376,14 +468,34 @@ export interface ConductorParkDeps extends PaneDeps {
   /** o registro de decisões do sistema. */
   record?(entry: SystemDecision): Promise<void>;
   newId?(): string;
+  /** fase 6 (6D) — o card espera OUTRA história? (cascade-decision.ts `dependencyWait`) — o motivo, ou null. Ausente ⇒ nunca. */
+  dependencyWait?(board: string, card: Card, config: BoardConfig): Promise<string | null>;
+  /** fase 6 (6D) — o pedido de estacionar foi ignorado duas vezes: o achado do operador no card (o Inbox oferece «Parar condutor»). */
+  escalateIgnoredPark?(board: string, cardId: string, detail: string): Promise<void>;
   state: ConductorParkState;
 }
 
 export interface ConductorParkReport {
   asked: Array<{ board: string; cardId: string; tmuxSession: string; cause?: ParkCause }>;
+  /** fase 6 (6D) — pedidos de estacionar ignorados: repetidos (`reask`) ou escalados ao operador (`escalate`). */
+  ignored?: Array<{ board: string; cardId: string; tmuxSession: string; step: "reask" | "escalate" }>;
   nudged: Array<{ board: string; cardId: string; tmuxSession: string }>;
   retried: Array<{ board: string; cardId: string; tmuxSession: string; attempt: number }>;
   requeued: Array<{ board: string; cardId: string }>;
+}
+
+/** Fase 7 — os itens do lote da sessão (sem o líder) para a memória do passe; nada quando ela conduz um card só. PURA. */
+function batchMemo(s: Pick<AgentSession, "cardId" | "batch">): Pick<ConductorParkMemo, "batchCardIds"> {
+  const items = sessionCardIds(s).filter((id) => id !== s.cardId);
+  return items.length ? { batchCardIds: items } : {};
+}
+
+/** Fase 7 — os cards dos itens do lote da sessão, lidos agora (um que falha ou sumiu fica de fora). */
+async function batchItemCards(deps: Pick<PaneDeps, "readCard">, s: AgentSession): Promise<Card[]> {
+  const ids = batchMemo(s).batchCardIds ?? [];
+  if (!ids.length || !s.board) return [];
+  const cards = await Promise.all(ids.map((id) => deps.readCard(s.board as string, id).catch(() => null)));
+  return cards.filter((c): c is Card => !!c);
 }
 
 /**
@@ -412,10 +524,20 @@ export async function parkWaitingConductors(deps: ConductorParkDeps): Promise<Co
         if (back) {
           // Quem parou por QUIETUDE (ou por uma espera declarada sem pergunta do dono) cedeu a vaga; o erro de API e a pausa
           // do board INTERROMPERAM trabalho: voltam na frente. A espera que virou pergunta do dono volta pelo acordar (a resposta).
-          const ok = await deps.requeue(memo.board, memo.cardId, memo.parkCause === "quiet" || memo.parkCause === "declared" ? "yield" : "resume").then(() => true, () => false);
+          // a espera por OUTRA história volta na frente — e a fila a segura até a dependência chegar (conductor.ts)
+          const place = memo.parkCause === "quiet" || memo.parkCause === "declared" ? "yield" : "resume";
+          const ok = await deps.requeue(memo.board, memo.cardId, place).then(() => true, () => false);
           if (!ok) continue; // tenta de novo no próximo passe
           report.requeued.push({ board: memo.board, cardId: memo.cardId });
           log(`${memo.board}/${memo.cardId}: o condutor estacionou (${memo.parkCause}) — o card voltou para a fila`);
+          // Fase 7: o lote estacionou como unidade — cada item ainda conduzido volta junto, logo atrás do líder.
+          for (const itemId of memo.batchCardIds ?? []) {
+            const item = await deps.readCard(memo.board, itemId).catch(() => null);
+            if (!item || !isConducted(item) || config?.statuses.find((x) => x.id === item.status)?.terminal || openQuestions(item).length > 0) continue;
+            if (!(await deps.requeue(memo.board, itemId, place).then(() => true, () => false))) continue;
+            report.requeued.push({ board: memo.board, cardId: itemId });
+            log(`${memo.board}/${itemId}: item do lote de ${memo.cardId} — voltou para a fila junto com o líder`);
+          }
         }
       }
       deps.state.delete(id);
@@ -426,26 +548,65 @@ export async function parkWaitingConductors(deps: ConductorParkDeps): Promise<Co
       const board = s.board as string;
       const cardId = s.cardId as string;
       const memo = deps.state.get(s.sessionId);
-      if (memo?.askedAt !== undefined) continue; // já pedido: uma vez por sessão
+      if (memo?.askedAt !== undefined) {
+        // já pedido: uma vez por sessão — e, se a sessão IGNOROU o pedido (segue viva e quieta), repete uma vez e escala.
+        const quietIgnored = deps.quietForMs(tmux);
+        const step = parkIgnoredStep(memo, quietIgnored, deps.asking(tmux), settings, now);
+        if (step === "none") continue;
+        if (step === "reask") {
+          if (!(await deps.runsClaude(tmux)) || !(await deps.deliver(tmux, parkLineFor(memo.parkCause)))) continue;
+          deps.state.set(s.sessionId, { ...memo, reaskedAt: now });
+        } else {
+          const detail =
+            `O condutor deste card (${tmux}) recebeu o pedido de estacionar duas vezes e seguiu parado no prompt, segurando a vaga. ` +
+            "Use «Parar condutor» (encerra a sessão e guarda o trabalho) ou «Devolver ao fluxo».";
+          await deps.escalateIgnoredPark?.(board, cardId, detail).catch(() => {});
+          deps.state.set(s.sessionId, { ...memo, escalatedAt: now });
+        }
+        (report.ignored ??= []).push({ board, cardId, tmuxSession: tmux, step });
+        log(`${board}/${cardId}: o pedido de estacionar foi ignorado — ${step === "reask" ? "repetido uma vez" : "escalado ao operador"} (${tmux})`);
+        if (deps.record) {
+          await deps
+            .record({
+              v: 1,
+              id: deps.newId?.() ?? `park-ignored-${s.sessionId}-${now}`,
+              at: new Date(now).toISOString(),
+              board,
+              cardId,
+              agent: "system",
+              kind: "conductor-park",
+              what: step === "reask" ? "Repetiu o pedido de estacionar que o condutor ignorou" : "Levou ao operador o condutor que ignorou o pedido de estacionar",
+              why:
+                step === "reask"
+                  ? `o pedido foi entregue há ${Math.round((now - (memo.askedAt ?? now)) / 60_000)} min e a sessão segue parada no prompt`
+                  : "a sessão ignorou o pedido duas vezes — parar é decisão sua (o serviço nunca mata um condutor sozinho)",
+            })
+            .catch(() => {});
+        }
+        continue;
+      }
       const quiet = deps.quietForMs(tmux);
       if (quiet == null || deps.asking(tmux)) continue;
       const [card, config] = await Promise.all([deps.readCard(board, cardId), deps.readBoardConfig(board)]);
       if (!card || !config || !isConducted(card)) continue;
+      // Fase 7: num LOTE, uma pergunta do dono aberta num ITEM também é espera do dono (a sessão espera a resposta dela).
+      const items = await batchItemCards(deps, s);
       const facts: QuietLadderFacts = {
         quietForMs: quiet,
         asking: false,
         transportError: deps.transportError?.(tmux) ?? null,
         declaredWaiting: !!s.progress?.waiting,
         declaredUntilMs: s.progress?.until ? Date.parse(s.progress.until) || null : null,
-        ownerWait: waitsForOwner(card, config),
+        ownerWait: waitsForOwner(card, config) || items.some((i) => openQuestions(i).length > 0 && waitsForOwner(i, config)),
         slotWaiters: deps.slotWaiters?.(board) ?? 0,
         childBusy: deps.childBusy?.(tmux) ?? false,
+        dependencyWait: (await deps.dependencyWait?.(board, card, config).catch(() => null)) ?? null,
       };
       const step = quietLadderStep(facts, memo, settings, now);
       if (step.kind === "none") continue;
       if (!(await deps.runsClaude(tmux))) continue;
       if (!(await deps.deliver(tmux, ladderLine(step)))) continue; // tenta de novo no próximo passe
-      const next: ConductorParkMemo = { ...(memo ?? { board, cardId }), board, cardId };
+      const next: ConductorParkMemo = { ...(memo ?? { board, cardId }), board, cardId, ...batchMemo(s) };
       const quietMin = Math.round(quiet / 60_000);
       if (step.kind === "transport-retry") {
         next.retriedAt = [...(next.retriedAt ?? []).filter((t) => now - t < TRANSPORT_RETRY_WINDOW_MS), now];
@@ -459,7 +620,7 @@ export async function parkWaitingConductors(deps: ConductorParkDeps): Promise<Co
         next.askedAt = now;
         next.parkCause = step.cause;
         report.asked.push({ board, cardId, tmuxSession: tmux, cause: step.cause });
-        log(`${board}/${cardId}: condutor quieto há ${quietMin}min (${step.cause === "owner" ? "esperando o dono" : step.cause === "transport" ? "erro de API repetido" : step.cause === "declared" ? "espera declarada longa, com fila esperando" : "depois do lembrete, com fila esperando"}) — pedido de estacionar enviado (${tmux})`);
+        log(`${board}/${cardId}: condutor quieto há ${quietMin}min (${step.cause === "owner" ? "esperando o dono" : step.cause === "dependency" ? "esperando outra história" : step.cause === "transport" ? "erro de API repetido" : step.cause === "declared" ? "espera declarada longa, com fila esperando" : "depois do lembrete, com fila esperando"}) — pedido de estacionar enviado (${tmux})`);
       }
       deps.state.set(s.sessionId, next);
       if (deps.record) {
@@ -508,7 +669,7 @@ export async function parkBoardConductors(deps: BoardParkDeps, board: string): P
       if (deps.asking?.(s.tmuxSession)) continue;
       if (!(await deps.runsClaude(s.tmuxSession))) continue;
       if (!(await deps.deliver(s.tmuxSession, PACE_PARK_LINE))) continue;
-      deps.state.set(s.sessionId, { ...(deps.state.get(s.sessionId) ?? {}), board, cardId: s.cardId, askedAt: now, parkCause: "pace" });
+      deps.state.set(s.sessionId, { ...(deps.state.get(s.sessionId) ?? {}), board, cardId: s.cardId, ...batchMemo(s), askedAt: now, parkCause: "pace" });
       asked.push({ cardId: s.cardId, tmuxSession: s.tmuxSession });
       log(`${board}/${s.cardId}: o board foi pausado — pedido de estacionar enviado (${s.tmuxSession})`);
     }

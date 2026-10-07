@@ -76,9 +76,6 @@ const existingCard: Card = {
   narrative: { role: null, want: null, soThat: null },
   acceptance: [],
   tasks: [],
-  rice: { reach: null, impact: null, confidence: null, effort: null },
-  kano: null,
-  funnelStage: null,
   findings: [],
   created: null,
   updated: null,
@@ -446,9 +443,6 @@ describe("createCardAction: o draft sem âncora não vira mais órfão", () => {
     narrative: { role: null, want: null, soThat: null },
     acceptance: [],
     tasks: [],
-    rice: { reach: null, impact: null, confidence: null, effort: null },
-    kano: null,
-    funnelStage: null,
     findings: [],
     created: null,
     updated: null,
@@ -484,8 +478,8 @@ describe("createCardAction: o draft sem âncora não vira mais órfão", () => {
 });
 
 // --- WS-9 (D15): a captured IDEA is NEVER materialized (the ◆ mint is barred at accept) ----------
-// Decisão do Operador: a captura estruturada não cunha ideia — ◆ nasce só na bancada. O
-// guard (guardCaptureIdeas) IGNORA um item type:"idea" com um warning apontando a bancada;
+// Decisão do Operador: a captura estruturada não cunha ideia. O guard (guardCaptureIdeas) IGNORA um item
+// type:"idea" com um warning que diz como reclassificá-lo (story de usuário, na Triagem);
 // nunca lança (retrocompat com sidecars ◆ legados). Só o MATERIALIZAR é barrado — o parse do ◆ continua.
 describe("WS-9: a captured idea ◆ does NOT materialize (barred at accept, warned)", () => {
   it("does NOT write a card for a type:idea item — emits an idea-ignored warning instead", async () => {
@@ -506,7 +500,7 @@ describe("WS-9: a captured idea ◆ does NOT materialize (barred at accept, warn
     if (!result.ok) throw new Error("expected ok");
     const w = result.data?.warnings ?? [];
     expect(w).toContainEqual(expect.objectContaining({ tempId: "i1", code: "idea-ignored" }));
-    expect(w[0].detail).toMatch(/bancada de Ideias/i);
+    expect(w[0].detail).toMatch(/story de usuário[\s\S]*Triagem/i);
   });
 
   it("materializes the OTHER items of the batch; only the ◆ is dropped", async () => {
@@ -530,7 +524,6 @@ describe("WS-9: a captured idea ◆ does NOT materialize (barred at accept, warn
     const item: ProposedItem = {
       tempId: "i1", type: "idea", title: "Dor rica", rationale: "r", body: "evidência",
       candidateSolutions: ["sol A", "sol B"], keyAssumption: "premissa", successSignal: "sinal",
-      valueSize: { reach: 500, impact: 3 },
     };
     const result = await commit({ boardId: "test-board", items: [item] });
     expect(result.ok).toBe(true);
@@ -978,8 +971,8 @@ describe("guardCaptureIdeas (WS-9): bars ◆ from materializing, links kept clea
     const out = guardCaptureIdeas(items);
     expect(out.items.map((i) => i.tempId)).toEqual(["i1"]);
     expect(out.warnings).toEqual([
-      { tempId: "o1", code: "idea-ignored", detail: expect.stringMatching(/bancada de Ideias/i) },
-      { tempId: "o2", code: "idea-ignored", detail: expect.stringMatching(/bancada de Ideias/i) },
+      { tempId: "o1", code: "idea-ignored", detail: expect.stringMatching(/Triagem/i) },
+      { tempId: "o2", code: "idea-ignored", detail: expect.stringMatching(/Triagem/i) },
     ]);
   });
 

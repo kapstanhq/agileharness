@@ -32,13 +32,6 @@ tasks:
   - id: t3
     title: Cobrir com teste de aceite
     done: false
-rice:
-  reach: null
-  impact: null
-  confidence: null
-  effort: null
-kano: null
-funnelStage: null
 questions:
   - id: q1
     text: Vale cobrir o caso offline nesta fatia?

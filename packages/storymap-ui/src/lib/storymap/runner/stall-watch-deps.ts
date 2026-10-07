@@ -20,12 +20,13 @@ import { isAutonomousDelivery } from "@/lib/storymap/delivery-audit";
 import { isConducted } from "@/lib/storymap/driver";
 import { OWNER_DECISION_STOP_REASON } from "@/lib/storymap/owner-waiting";
 import { decideCascade } from "@/lib/notifications/server/channels/cascade-decision";
-import type { BoardConfig, Card } from "@/lib/storymap/types";
+import type { BoardConfig, Card, Finding } from "@/lib/storymap/types";
 import { updateCardOnDisk, withCreateLock, writeCard } from "@/lib/storymap/write";
 import { capturePane } from "@/lib/terminal/tmux";
 import { getCardClaims } from "./claims";
 import { conductorQuiet, paneHasLiveChildren, type ConductorQuiet, type PaneProc, type QuietIo } from "./conductor-quiet";
-import { diskConductorQueueStore, isConductorOrphan, isLiveConductor, isSlotWait } from "./conductor";
+import { diskConductorQueueStore, isConductorOrphan, isLiveConductor, isSlotWait, type ConductorQueueEntry } from "./conductor";
+import { diskConductorHandoffStore, type ConductorHandoff } from "./conductor-handoff";
 import { ladderGraceMs } from "./conductor-pause";
 import { conductorTreeGone } from "./fleet-deps";
 import { loadRunnerConfig } from "./config";
@@ -42,7 +43,7 @@ import { tryGetPublishBreaker } from "./publish-breaker";
 import { listPublishRequests } from "./publish-queue";
 import { publishLogTargets } from "./publish-status";
 import { isSessionAlive } from "./session-liveness";
-import { allSessions } from "./session-worktree";
+import { allSessions, sessionCardIds, type AgentSession } from "./session-worktree";
 import { readTransitions } from "./transitions";
 import { isPassageStep, sweepStalledCards, type StallBoard, type StallFacts, type StallRow, type StallWatchDeps } from "./stall-watch";
 import { boardGateNow } from "./board-pace-store";
@@ -141,7 +142,7 @@ function clockOf(timeZone: string | undefined): (ms: number) => string {
 /** Os fatos de board, lidos UMA vez por varredura. Cada leitura que falha vira o lado SEGURO (ninguém é julgado). */
 async function boardWideFacts() {
   const now = Date.now();
-  const [probe, sessions, queue, publishes, proofs, breaker, merge] = await Promise.all([
+  const [probe, sessions, queue, publishes, proofs, breaker, merge, handoffs] = await Promise.all([
     probeLiveTmuxSessions().catch(() => ({ ok: false as const, reason: "sonda falhou" })),
     allSessions().catch(() => null),
     diskConductorQueueStore()
@@ -157,9 +158,14 @@ async function boardWideFacts() {
     Promise.resolve()
       .then(() => getMergeQueue().getSnapshot().entries)
       .catch(() => null),
+    // fase 7: as passagens ao train ainda sem veredito — a entrega de um LOTE está nelas (o train só conhece o líder)
+    diskConductorHandoffStore()
+      .load()
+      .then((st) => st.entries)
+      .catch(() => null),
   ]);
   const attention = new Map(currentTerminalAttention().map((t) => [t.session, t]));
-  return { now, liveTmux: probe.ok ? new Set(probe.names) : null, sessions, queue, publishes, proofs, breaker, merge, attention };
+  return { now, liveTmux: probe.ok ? new Set(probe.names) : null, sessions, queue, publishes, proofs, breaker, merge, handoffs, attention };
 }
 
 type BoardWide = Awaited<ReturnType<typeof boardWideFacts>>;
@@ -167,7 +173,7 @@ type BoardWide = Awaited<ReturnType<typeof boardWideFacts>>;
 async function factsOf(wide: BoardWide, board: StallBoard, card: Card): Promise<StallFacts> {
   const mine = <T extends { board?: string; cardId?: string }>(list: readonly T[] | null) => (list ?? []).some((e) => e.board === board.id && e.cardId === card.id);
   // Uma leitura que falhou (null) conta como «tem alguém nele»: sem fato, o vigia não mexe.
-  const unknown = wide.publishes === null || wide.proofs === null || wide.breaker === null || wide.merge === null;
+  const unknown = wide.publishes === null || wide.proofs === null || wide.breaker === null || wide.merge === null || (!!card.batch && wide.handoffs === null);
   const claims = await getCardClaims()
     .list(board.id)
     .catch(() => null);
@@ -180,7 +186,9 @@ async function factsOf(wide: BoardWide, board: StallBoard, card: Card): Promise<
   const mergeBusy = (wide.merge ?? []).some((e) => e.board === board.id && e.cardId === card.id && isActiveMergeStatus(e.status));
   // A reserva de um card CONDUZIDO é do próprio condutor (ele a segura enquanto vive): contá-la como «tem alguém»
   // esconderia justamente o condutor quieto. Nos outros passos uma reserva é uma sessão trabalhando no card.
-  const inFlight = unknown || claims === null || engineBusy || mergeBusy || (!isConducted(card) && mine(claims));
+  // Fase 7: a entrega de um LOTE ainda no train (passagem sem veredito) carrega o item também — o train só conhece o líder.
+  const handoffBusy = batchHandoffPending(wide.handoffs ?? [], board.id, card);
+  const inFlight = unknown || claims === null || engineBusy || mergeBusy || handoffBusy || (!isConducted(card) && mine(claims));
 
   let deployRunning = false;
   try {
@@ -195,20 +203,25 @@ async function factsOf(wide: BoardWide, board: StallBoard, card: Card): Promise<
   const publishOpen = (wide.publishes ?? []).some((r) => r.board === board.id && (r.status === "waiting" || r.status === "publishing"));
 
   let conductor: StallFacts["conductor"] = null;
-  if (wide.liveTmux && wide.sessions && wide.queue) {
-    const session = wide.sessions.find((s) => s.board === board.id && s.cardId === card.id && isLiveConductor(s, wide.liveTmux, (x) => isSessionAlive(x, wide.now), conductorTreeGone));
+  const { liveTmux, sessions, queue } = wide;
+  if (liveTmux && sessions && queue) {
+    const isLive = (s: AgentSession) => isLiveConductor(s, liveTmux, (x) => isSessionAlive(x, wide.now), conductorTreeGone);
+    const { session, queued, foldedIntoLead } = conductorHold(card, board, sessions, queue, isLive);
     // A foto do vigia de terminais quando ela sabe; senão transcript + tela (conductor-quiet.ts) — o vigia olha no
     // máximo 12 sessões e, depois de um restart, só declara `idle` quem ele viu trabalhar.
-    const quiet: ConductorQuiet = session ? await conductorQuiet(session, session.tmuxSession ? wide.attention.get(session.tmuxSession) : undefined, wide.now, QUIET_IO) : { quietForMs: null, asking: false };
+    // Fase 7: num ITEM do lote (a sessão viva o segura, mas lidera outro card), a quietude é julgada só no líder — um
+    // aviso por sessão, o do líder, que nomeia os itens.
+    const leadElsewhere = foldedIntoLead || (!!session && session.cardId !== card.id);
+    const quiet: ConductorQuiet = session && !leadElsewhere ? await conductorQuiet(session, session.tmuxSession ? wide.attention.get(session.tmuxSession) : undefined, wide.now, QUIET_IO) : { quietForMs: null, asking: false };
     // A ESCADA do estacionar (conductor-pause.ts) age neste condutor quando o último turno morreu num erro de transporte
     // ou há fila esperando vaga no board: enquanto ela tem prazo, a quietude é tratada — o aviso só vem depois dela. O
     // filho vivo no pane NÃO cala o aviso (revisão do WP5-F2: o processo esquecido escondia o condutor para sempre); ele só
     // estende o prazo da escada pela janela dele — a mesma conta dela (`ladderGraceMs`).
-    const slotWaiters = wide.queue.filter((e) => e.board === board.id && isSlotWait(e.lastWaitKind)).length;
+    const slotWaiters = queue.filter((e) => e.board === board.id && isSlotWait(e.lastWaitKind)).length;
     const ladderGrace = ladderGraceMs(loadRunnerConfig().autorun.park, { transportError: !!quiet.transportError, slotWaiters, childBusy: quiet.childBusy === true });
-    conductor = {
+    conductor = foldedIntoLead ? null : {
       live: !!session,
-      queued: mine(wide.queue),
+      queued,
       quietForMs: quiet.quietForMs,
       asking: quiet.asking,
       declaredWaiting: !!session?.progress?.waiting,
@@ -220,7 +233,7 @@ async function factsOf(wide: BoardWide, board: StallBoard, card: Card): Promise<
   // aprovação do dono vem do ledger de transições). Leitura que falha ⇒ «segura» (sem fato, o vigia não mexe).
   let ownerHeld = false;
   const def = board.config.statuses.find((s) => s.id === card.status);
-  if (def && isPassageStep(def) && cardOwnerClass(card)) {
+  if (def && isPassageStep(def, board.config, card) && cardOwnerClass(card)) {
     const ownerApproved = await readTransitions({ board: board.id, cardId: card.id })
       .then((ts) => !isAutonomousDelivery(ts, board.config))
       .catch(() => false);
@@ -229,6 +242,98 @@ async function factsOf(wide: BoardWide, board: StallBoard, card: Card): Promise<
   }
 
   return { inFlight, deployRunning, publishOpen, proofPending: mine(wide.proofs), breakerHeld: mine(wide.breaker), ownerHeld, conductor };
+}
+
+// ── Fase 7: lotes do condutor ─────────────────────────────────────────────────────────────────────────
+
+/** A sessão de condutor viva que SEGURA `cardId` (o líder ou um item do lote — `sessionCardIds`), ou undefined. PURA. */
+export function conductorSessionFor(
+  sessions: readonly AgentSession[],
+  board: string,
+  cardId: string,
+  isLive: (s: AgentSession) => boolean,
+): AgentSession | undefined {
+  return sessions.find((s) => s.board === board && sessionCardIds(s).includes(cardId) && isLive(s));
+}
+
+/**
+ * O card tem lugar na fila do condutor? A entrada dele, ou a entrada do LÍDER que o leva como item do lote (a retomada
+ * depois do train — `handoff.batchCardIds`). PURA.
+ */
+export function queuedForConductor(queue: readonly Pick<ConductorQueueEntry, "board" | "cardId" | "handoff">[], board: string, cardId: string): boolean {
+  return queue.some((e) => e.board === board && (e.cardId === cardId || !!e.handoff?.batchCardIds?.includes(cardId)));
+}
+
+/**
+ * A entrega do lote deste card ainda está com o train (uma passagem SEM veredito da sessão do lote, ou do líder)? O
+ * train só conhece o líder; sem isto, um item submetido parecia «sem ninguém» até o veredito. PURA.
+ */
+export function batchHandoffPending(handoffs: readonly Pick<ConductorHandoff, "board" | "cardId" | "runId" | "verdict">[], board: string, card: Pick<Card, "batch">): boolean {
+  const mark = card.batch;
+  if (!mark) return false;
+  return handoffs.some((h) => h.board === board && !h.verdict && (h.runId === mark.sessionId || h.cardId === mark.lead));
+}
+
+/**
+ * Quem segura um card conduzido AGORA, para o vigia (fase 7): a sessão viva que o tem (`sessionCardIds`), o lugar na fila
+ * (a entrada dele ou a do líder que o leva) e se ele entra no aviso do líder ({@link batchItemFoldsIntoLead}) — um lote
+ * cuja sessão acabou dá UM aviso, o do líder, que nomeia os itens; o item fica sem veredito próprio. PURA.
+ */
+export function conductorHold(
+  card: Pick<Card, "id" | "batch">,
+  board: Pick<StallBoard, "id" | "cards" | "config">,
+  sessions: readonly AgentSession[],
+  queue: readonly Pick<ConductorQueueEntry, "board" | "cardId" | "handoff">[],
+  isLive: (s: AgentSession) => boolean,
+): { session: AgentSession | undefined; queued: boolean; foldedIntoLead: boolean } {
+  const session = conductorSessionFor(sessions, board.id, card.id, isLive);
+  const queued = queuedForConductor(queue, board.id, card.id);
+  const owned = (id: string) => !!conductorSessionFor(sessions, board.id, id, isLive) || queuedForConductor(queue, board.id, id);
+  const foldedIntoLead = !session && !queued && batchItemFoldsIntoLead(card, board.cards, board.config, owned);
+  return { session, queued, foldedIntoLead };
+}
+
+/**
+ * Um ITEM de lote sem condutor e sem fila entra no aviso do LÍDER em vez de ganhar o seu? Sim quando o líder ainda leva o
+ * mesmo lote (mesma marca `batch.id`), segue conduzido fora de status terminal e também está sem dono (`leadOwned`
+ * falso): os dois esperam o operador pelo mesmo motivo — a sessão do lote acabou —, e o aviso do líder nomeia o item. Um
+ * líder que saiu do lote, foi devolvido ao fluxo ou ganhou um condutor que não leva o item deixa o item com o aviso próprio.
+ * PURA.
+ */
+export function batchItemFoldsIntoLead(
+  card: Pick<Card, "id" | "batch">,
+  cards: readonly Card[],
+  config: Pick<BoardConfig, "statuses">,
+  leadOwned: (leadId: string) => boolean,
+): boolean {
+  const mark = card.batch;
+  if (!mark || mark.lead === card.id) return false;
+  const lead = cards.find((c) => c.id === mark.lead);
+  if (!lead || lead.batch?.id !== mark.id || !isConducted(lead)) return false;
+  if (config.statuses.find((s) => s.id === lead.status)?.terminal) return false;
+  return !leadOwned(lead.id);
+}
+
+/**
+ * Os ITENS que esperam junto com o líder `lead` de um lote: os cards com a mesma marca `batch.id`, ainda conduzidos, sem o
+ * líder, na ordem do board. Vazio quando `lead` não lidera um lote. PURA.
+ */
+export function batchItemsWaiting(lead: Pick<Card, "id" | "batch"> | undefined, cards: readonly Card[]): Array<Pick<Card, "id" | "title">> {
+  const mark = lead?.batch;
+  if (!lead || !mark || mark.lead !== lead.id) return [];
+  return cards.filter((c) => c.id !== lead.id && c.batch?.id === mark.id && isConducted(c)).map((c) => ({ id: c.id, title: c.title }));
+}
+
+/** O aviso do líder com os itens do lote nomeados (nenhum item ⇒ o aviso como está). PURA. */
+export function withBatchItems(finding: Finding, items: ReadonlyArray<Pick<Card, "id" | "title">>): Finding {
+  if (!items.length) return finding;
+  const names = items.map((i) => `«${i.title}» (${i.id})`);
+  const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} e ${names.at(-1)}`;
+  const plural = items.length === 1 ? "o item" : "os itens";
+  return {
+    ...finding,
+    detail: `${finding.detail} Este card lidera um lote: ${plural} ${list} ${items.length === 1 ? "depende" : "dependem"} da mesma sessão e ${items.length === 1 ? "espera" : "esperam"} junto com ele — ao retomar ou devolver o card, decida também ${items.length === 1 ? "esse item" : "esses itens"}.`,
+  };
 }
 
 /**
@@ -331,8 +436,11 @@ export function defaultStallWatchDeps(): StallWatchDeps {
       });
     },
     stamp: async (board, cardId, finding) => {
+      // Fase 7: o aviso de «parado» do LÍDER de um lote nomeia os itens que esperam junto com ele (um aviso só por lote).
+      const items = finding.id === CARD_STALLED_FINDING_ID ? await readCards(board).then((cards) => batchItemsWaiting(cards.find((c) => c.id === cardId), cards), () => []) : [];
+      const stamped = withBatchItems(finding, items);
       await updateCardOnDisk(board, cardId, (fresh) => {
-        const next = upsertFindingIfChanged(fresh.findings ?? [], finding);
+        const next = upsertFindingIfChanged(fresh.findings ?? [], stamped);
         return next ? { ...fresh, findings: next } : null;
       });
     },

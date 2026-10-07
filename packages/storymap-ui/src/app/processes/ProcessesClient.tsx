@@ -57,7 +57,7 @@ function svcRowKey(serviceId: string): string {
 
 const ORIGIN_META: Record<OriginKind, { label: string; hex: string; hint: string }> = {
   kanban: { label: "kanban", hex: "#3b82f6", hint: "disparado pela cascata do autorun (card avançando no pipeline)" },
-  ajuda: { label: "ajuda", hex: "#8b5cf6", hint: "assistente de painel (Lean Canvas, Posicionamento, Ideias…)" },
+  ajuda: { label: "ajuda", hex: "#8b5cf6", hint: "assistente de documento (Business Model Canvas, PRD, guia de estilo)" },
   merge: { label: "merge", hex: "#14b8a6", hint: "merge train integrando / regenerando após conflito" },
   manual: { label: "manual", hex: "#64748b", hint: "você disparou (Rodar agora / Sincronizar / terminal)" },
   externo: { label: "externo", hex: "#f97316", hint: "claude iniciado fora do sistema (SSH / tmux manual)" },
@@ -179,7 +179,7 @@ function MergeQueueRow({
           <span className="shrink-0 rounded bg-surface-hover px-1.5 py-0.5 text-[10px] font-medium text-fg-muted">
             {entry.board}
           </span>
-          <span className="shrink-0 font-mono text-[10px] text-fg-subtle opacity-0 transition group-hover/mq:opacity-100">
+          <span className="shrink-0 font-mono text-[10px] text-fg-subtle opacity-0 transition group-hover/mq:opacity-100 nohover:opacity-100">
             {entry.branch}
           </span>
         </div>
@@ -405,7 +405,7 @@ function ServiceRow({
               {service.cardTitle ?? service.cardId}
             </Link>
           )}
-          <span className="flex items-center gap-x-2 text-[10px] text-fg-subtle opacity-0 transition group-hover:opacity-100">
+          <span className="flex items-center gap-x-2 text-[10px] text-fg-subtle opacity-0 transition group-hover:opacity-100 nohover:opacity-100">
             <span className="font-mono">{service.id}</span>
           </span>
         </div>
@@ -751,6 +751,18 @@ export function ProcessesClient({
           <OriginFilter origins={presentOrigins} value={originFilter} onChange={setOriginFilter} />
         </header>
 
+        {mq?.pushHold && (
+          <div role="alert" className="mb-2 rounded-md border border-danger/40 bg-danger/10 px-2.5 py-2 text-[11px] text-fg">
+            <div className="font-semibold">Publicação retida — o train não integra nem envia nada até soltar</div>
+            <div className="mt-1 break-words font-mono text-[10.5px] text-fg-muted">{mq.pushHold}</div>
+          </div>
+        )}
+        {mq?.pushScanNote && (
+          <div role="status" className="mb-2 rounded-md border border-st-attn/40 bg-st-attn/10 px-2.5 py-2 text-[11px] text-fg-muted">
+            <span className="font-semibold text-fg">Varredura de segredo degradada: </span>
+            <span className="break-words">{mq.pushScanNote}</span>
+          </div>
+        )}
         {mqActive.length > 0 && (
           <div className="group/mq mb-2 flex items-center gap-1.5 text-[11px] text-fg-muted">
             <GitMerge className="h-3.5 w-3.5 text-fg-subtle" />

@@ -28,18 +28,6 @@ function fail<T = unknown>(e: unknown): Result<T> {
   return { ok: false, error: e instanceof Error ? e.message : String(e) };
 }
 
-/** Normalize a value-size input → null when neither axis is a finite number (sparse persistence). */
-function normalizeValueSize(
-  v: { reach: number | null; impact: number | null } | null | undefined,
-): { reach: number | null; impact: number | null } | null {
-  if (!v) return null;
-  const num = (n: number | null): number | null => (typeof n === "number" && Number.isFinite(n) ? n : null);
-  const reach = num(v.reach);
-  const impact = num(v.impact);
-  if (reach == null && impact == null) return null;
-  return { reach, impact };
-}
-
 /**
  * Cria uma Ideia. Ela nasce pelo TÍTULO (o nome que você daria a ela), e o
  * `statement` é escrito DENTRO do documento — por isso os dois são opcionais aqui, exigindo apenas
@@ -56,7 +44,6 @@ export async function createIdeaAction(input: {
   candidateSolutions?: string[];
   keyAssumption?: string | null;
   successSignal?: string | null;
-  valueSize?: { reach: number | null; impact: number | null } | null;
 }): Promise<Result<{ card: Card }>> {
   await requireSession("createIdeaAction");
   try {
@@ -70,8 +57,6 @@ export async function createIdeaAction(input: {
     if (candidateSolutions.length) idea.candidateSolutions = candidateSolutions;
     if (input.keyAssumption?.trim()) idea.keyAssumption = input.keyAssumption.trim();
     if (input.successSignal?.trim()) idea.successSignal = input.successSignal.trim();
-    const valueSize = normalizeValueSize(input.valueSize);
-    if (valueSize) idea.valueSize = valueSize;
     const card: Card = { ...base, idea };
     return await createCardAction({ boardId: input.boardId, card });
   } catch (e) {
@@ -98,7 +83,6 @@ export async function updateIdeaAction(input: {
   keyAssumption?: string | null;
   successSignal?: string | null;
   candidateSolutions?: string[];
-  valueSize?: { reach: number | null; impact: number | null } | null;
 }): Promise<Result<{ card: Card }>> {
   await requireSession("updateIdeaAction");
   try {
@@ -120,14 +104,12 @@ export async function updateIdeaAction(input: {
       const candidateSolutions = input.candidateSolutions !== undefined
         ? input.candidateSolutions.map((s) => s.trim()).filter(Boolean)
         : prev.candidateSolutions ?? [];
-      const valueSize = input.valueSize !== undefined ? normalizeValueSize(input.valueSize) : prev.valueSize ?? null;
       // Build the block SPARSELY (omit empty fields) so the persisted card .md stays lean.
       const idea: IdeaFields = { statement, evidence, status };
       if (discardReason) idea.discardReason = discardReason;
       if (candidateSolutions.length) idea.candidateSolutions = candidateSolutions;
       if (keyAssumption) idea.keyAssumption = keyAssumption;
       if (successSignal) idea.successSignal = successSignal;
-      if (valueSize) idea.valueSize = valueSize;
       // Título e `statement` são CAMPOS DISTINTOS. Antes o statement era espelhado no título a
       // cada save — parte do que fazia a Oportunidade parecer uma story de um campo só. Hoje o título é
       // o nome da Ideia (editável por si) e o statement é a primeira seção do documento; só um card
@@ -140,7 +122,7 @@ export async function updateIdeaAction(input: {
       };
     });
     if (!updated) return { ok: false, error: "Ideia não encontrada." };
-    revalidatePath(`/board/${input.boardId}/ideias`);
+    revalidatePath(`/board/${input.boardId}/kanban`);
     return { ok: true, data: { card: updated } };
   } catch (e) {
     return fail(e);
@@ -205,87 +187,11 @@ export async function appendToIdeaAction(input: {
       return { ...fresh, body, idea };
     });
     if (!updated) return { ok: false, error: "Ideia não encontrada (ou o card não é uma ideia)." };
-    revalidatePath(`/board/${input.boardId}/ideias`);
-    revalidatePath(`/board/${input.boardId}/ideia/${input.cardId}`);
+    revalidatePath(`/board/${input.boardId}/kanban`);
+    revalidatePath(`/board/${input.boardId}/card/${encodeURIComponent(input.cardId)}`);
     return { ok: true, data: { card: updated } };
   } catch (e) {
     return fail(e);
-  }
-}
-
-/**
- * O CONTEXTO da tela de Ideias para o Explorador (a conversa é da TELA, não de uma ideia — ver
- * copilot/chat-surfaces). Ele precisa saber QUE ideias existem, em que pé cada uma está e o que já foi
- * escrito nelas; o corpo inteiro de cada documento não cabe (e ele lê sob demanda pelo MCP quando quiser).
- *
- * Read-only e à prova de falha: um erro devolve um bloco dizendo isso, nunca derruba a abertura do chat.
- * O bloco é DADO, não instrução — a persona já manda ignorar comandos vindos daqui.
- */
-export async function ideasChatContextAction(boardId: string, focusId?: string): Promise<string> {
-  await requireSession("ideasChatContextAction");
-  try {
-    const cards = await readCards(boardId);
-    const ideas = cards.filter((c) => c.type === "idea");
-    if (!ideas.length) {
-      return `Board "${boardId}" — a bancada de Ideias está VAZIA. Nenhuma ideia anotada ainda.`;
-    }
-    // O FOCO — a ideia que o operador tem aberta na tela de detalhe.
-    //
-    // É a MESMA conversa da bancada (uma raia por TELA, não por artefato — ver chat-surfaces): abrir uma ideia
-    // não começa um chat novo, só diz de qual delas estamos falando agora. Por isso o foco entra como um bloco
-    // EXTRA no topo, com o documento INTEIRO — a listagem abaixo continua ali, e é ela que deixa o agente
-    // comparar esta com as outras sem precisar buscá-las.
-    const focus = focusId ? ideas.find((c) => c.id === focusId) : undefined;
-    const focusBlock = focus
-      ? [
-          `## Ideia em foco: [${focus.id}] «${focus.title}»`,
-          "O operador está com ESTE documento aberto. Quando ele disser \"esta ideia\", é esta. O documento",
-          "inteiro vai abaixo — não precisa relê-lo por tool para responder sobre ele.",
-          "",
-          `estado da exploração: ${focus.idea?.status ?? "open"}`,
-          focus.idea?.statement?.trim() ? `enunciado: ${focus.idea.statement.trim()}` : "",
-          focus.idea?.evidence?.trim() ? `o que sustenta: ${focus.idea.evidence.trim()}` : "",
-          focus.idea?.keyAssumption?.trim() ? `premissa-chave: ${focus.idea.keyAssumption.trim()}` : "",
-          focus.idea?.successSignal?.trim() ? `sinal de sucesso: ${focus.idea.successSignal.trim()}` : "",
-          focus.idea?.candidateSolutions?.length ? `caminhos: ${focus.idea.candidateSolutions.join(" · ")}` : "",
-          "",
-          "documento:",
-          (focus.body ?? "").trim() || "(o corpo ainda está vazio)",
-          "",
-          "---",
-          "",
-        ]
-          .filter((l) => l !== "")
-          .join("\n")
-      : "";
-    const lines = ideas.map((c) => {
-      const i = c.idea;
-      const st = i?.status ?? "open";
-      const addressed = cardsAddressing(c, cards).length;
-      const bits = [
-        `- [${c.id}] «${c.title}» — exploração: ${st}${addressed ? ` · ${addressed} tarefa(s) já a endereçam` : ""}`,
-      ];
-      if (i?.statement?.trim()) bits.push(`  enunciado: ${truncate(i.statement, 240)}`);
-      if (i?.evidence?.trim()) bits.push(`  o que sustenta: ${truncate(i.evidence, 200)}`);
-      if (i?.keyAssumption?.trim()) bits.push(`  premissa-chave: ${truncate(i.keyAssumption, 160)}`);
-      if (i?.candidateSolutions?.length) bits.push(`  caminhos: ${i.candidateSolutions.slice(0, 4).join(" · ")}`);
-      if (st === "discarded" && i?.discardReason) bits.push(`  descartada porque: ${truncate(i.discardReason, 160)}`);
-      const body = (c.body ?? "").trim();
-      if (body) bits.push(`  documento: ${body.length} caracteres escritos (leia com get_card se precisar)`);
-      return bits.join("\n");
-    });
-    return [
-      focusBlock,
-      `Board "${boardId}" — bancada de IDEIAS (${ideas.length}). Cada uma é um documento de exploração FORA do`,
-      "pipeline: nada aqui virou tarefa ainda. Estados: open (anotada) · exploring (em pesquisa) · addressed",
-      "(virou tarefa) · discarded (não vamos seguir, com motivo).",
-      "",
-      ...lines,
-    ]
-      .filter(Boolean)
-      .join("\n");
-  } catch (e) {
-    return `Não consegui ler a bancada de Ideias (${e instanceof Error ? e.message : String(e)}).`;
   }
 }
 

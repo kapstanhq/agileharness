@@ -178,11 +178,6 @@ function PresenceDot({ status, className }: { status: CardLiveStatus; className?
   return <span className={cn("h-[7px] w-[7px] shrink-0 rounded-full", tone.dot, tone.pulse && STATE_PULSE, className)} aria-hidden />;
 }
 
-/** O filete à esquerda do card do Kanban, pela MESMA presença (transparente quando nada vive). */
-export function cardLiveRail(status: CardLiveStatus | null): string {
-  return status ? presenceTone(status).rail : "bg-transparent";
-}
-
 /** «+442 −8 · 14 arquivos» — abre o diff (a mesma janela de sempre). */
 function DiffChip({ boardId, cardId, diff }: { boardId: string; cardId: string; diff: DiffStat }) {
   const [open, setOpen] = useState(false);
@@ -302,7 +297,8 @@ function CardLiveStatusView({
 
   return (
     // Sem `role=status` por card: com 60 cards na tela, 60 regiões vivas faziam o leitor de tela anunciar o board inteiro
-    // a cada quadro do SSE. A contagem viva do board (KanbanPulse) é o único anúncio.
+    // a cada quadro do SSE. (O pulso do board, KanbanPulse, era o único anúncio; saiu na fase 1 — o fluxo no cabeçalho
+    // diz o mesmo à vista, e o quadro não tem região viva.)
     <div className={cn("min-w-0", big ? "text-[12.5px]" : "text-[11.5px]", className)} title={full}>
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
         {/* a frase QUEBRA em vez de cortar: no celular o card tem ~160px, e «Esperando a janela de ações · volta às…» cortado

@@ -22,6 +22,12 @@ export interface ReceiptUndoDeps {
   appendTransition?(t: { board: string; cardId: string; from: string | null; to: string; actor: "human"; note: string }): Promise<void>;
   /** depois de uma mudança de status: a fila do train (best-effort) — nunca a automação de entrada. */
   afterStatusChange?(board: string, cardId: string): Promise<void>;
+  /**
+   * Fase 6 (6D) — depois de voltar um MOVIMENTO (`move-back`): desfaz só o que aquele movimento (`forward`) disparou — o
+   * run que nasceu com ele, o despacho do condutor que ainda não virou sessão — e avisa o condutor vivo
+   * (card-intents-deps.ts `undoForwardMoveEffects`). Best-effort.
+   */
+  undoMoveEffects?(board: string, card: Card, forward: { from: string; to: string }): Promise<unknown>;
   now?(): number;
 }
 
@@ -76,6 +82,7 @@ export async function undoInboxReceipt(deps: ReceiptUndoDeps, input: { board: st
     if (!written) return { ok: false, error: "o card não existe mais neste board" };
     if (written.status && written.status !== from) {
       await deps.appendTransition?.({ board: input.board, cardId: u.cardId, from, to: written.status, actor: "human", note: "undo:inbox" }).catch(() => {});
+      if (u.kind === "move-back") await deps.undoMoveEffects?.(input.board, written, { from: u.to, to: u.from })?.catch(() => {});
       await deps.afterStatusChange?.(input.board, u.cardId).catch(() => {});
     }
     const text = undoneText(u, written, config);

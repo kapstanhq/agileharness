@@ -32,6 +32,8 @@ import { CONDUCTOR_TMUX_NAME, diskConductorQueueStore } from "@/lib/storymap/run
 import { readInboxReceipts } from "@/lib/storymap/runner/receipts-log";
 import { buildFleetRows } from "@/lib/storymap/runner/fleet-view";
 import { tryGetPublishBreaker } from "@/lib/storymap/runner/publish-breaker";
+import { type BoardPaceRow, effectivePaceLevel, holdExpired, type PaceActor, type PaceChange } from "@/lib/storymap/runner/board-pace";
+import { readBoardPace } from "@/lib/storymap/runner/board-pace-store";
 import type { AgentSession } from "@/lib/storymap/runner/session-worktree";
 import { allSessions } from "@/lib/storymap/runner/session-worktree";
 import { readTransitions } from "@/lib/storymap/runner/transitions";
@@ -144,6 +146,75 @@ export function publishWaitingOf(boardId: string, config: BoardConfig, cards: re
       return !def?.terminal && (isDeployStep(def) || PUBLISH_REST_STATUSES.has(c.status));
     })
     .map((c) => ({ board: boardId, cardId: c.id }));
+}
+
+/**
+ * A PAUSA de cada board, para S6/S7 não lerem uma espera escolhida como ferramenta travada: os boards cujo freio em vigor
+ * é `paused` (do dono OU dos agentes — `holdInForce`, então um prazo vencido já conta como solto) e, para os que não
+ * estão pausados, QUANDO saíram da última pausa. A retomada é o mais recente entre (a) o prazo vencido de um freio de
+ * pausa ainda gravado e (b) o instante, no histórico, em que o ritmo EM VIGOR passou de pausado a não pausado — ver
+ * {@link pauseResumesOf}. PURA.
+ */
+export function boardPauseOf(rows: readonly BoardPaceRow[], now: number): Pick<HealthInputs, "pausedBoards" | "resumedAt"> {
+  const pausedBoards: string[] = [];
+  const resumedAt: Record<string, number> = {};
+  for (const row of rows) {
+    if (effectivePaceLevel(row, now) === "paused") {
+      pausedBoards.push(row.board);
+      continue;
+    }
+    const ends: number[] = [];
+    for (const h of [row.owner, row.agent]) if (h?.level === "paused" && h.until && holdExpired(h, now)) ends.push(Date.parse(h.until));
+    ends.push(...pauseResumesOf(row.history ?? [], now));
+    const last = Math.max(...ends.filter((t) => Number.isFinite(t) && t <= now));
+    if (Number.isFinite(last)) resumedAt[row.board] = last;
+  }
+  return { pausedBoards, resumedAt };
+}
+
+/**
+ * Os instantes em que o ritmo EM VIGOR saiu de pausado, refazendo o histórico com as MESMAS regras do ritmo
+ * (`applyPaceChange`/`expirePace` em board-pace.ts): o freio do dono e o dos agentes são camadas separadas; uma mudança
+ * do DONO substitui o freio dele e apaga o dos agentes; uma mudança de AGENTE só toca o freio dos agentes; um freio
+ * vence no seu `until` (vencido, nunca segue pausando — volta a `slow` ou sai); o board está pausado se alguma camada
+ * pausa. Uma mudança de agente com o dono ainda pausado NÃO é retomada. PURA.
+ */
+export function pauseResumesOf(history: readonly PaceChange[], now: number): number[] {
+  type Layer = { paused: boolean; until?: number };
+  const layers: Record<PaceActor["kind"], Layer> = { owner: { paused: false }, agent: { paused: false } };
+  const paused = (): boolean => layers.owner.paused || layers.agent.paused;
+  const ends: number[] = [];
+  let was = false;
+  const settle = (at: number): void => {
+    const is = paused();
+    if (was && !is) ends.push(at);
+    was = is;
+  };
+  // os prazos que vencem até `t`, na ordem em que vencem
+  const expireUntil = (t: number): void => {
+    const due = (Object.keys(layers) as PaceActor["kind"][])
+      .filter((k) => layers[k].paused && layers[k].until != null && (layers[k].until as number) <= t)
+      .sort((a, z) => (layers[a].until as number) - (layers[z].until as number));
+    for (const k of due) {
+      const at = layers[k].until as number;
+      layers[k] = { paused: false };
+      settle(at);
+    }
+  };
+  for (const c of [...history].sort((a, z) => Date.parse(a.at) - Date.parse(z.at))) {
+    const at = Date.parse(c.at);
+    if (!Number.isFinite(at)) continue;
+    expireUntil(at);
+    const until = c.until ? Date.parse(c.until) : NaN;
+    const layer: Layer = c.expired ? { paused: false } : { paused: c.level === "paused", ...(Number.isFinite(until) ? { until } : {}) };
+    if (c.by.kind === "owner") {
+      layers.owner = layer;
+      if (!c.expired) layers.agent = { paused: false };
+    } else layers.agent = layer;
+    settle(at);
+  }
+  expireUntil(now);
+  return ends;
 }
 
 /**
@@ -349,6 +420,8 @@ export async function collectHealthInputs(now: number = Date.now(), opts: Collec
   }
 
   const attribution = attributionOf(actions as AttributedAction[]);
+  // ilegível/ausente ⇒ nenhum board pausado (o sinal mede como antes — fail-open para o alarme, nunca o esconde)
+  const pause = boardPauseOf(readBoardPace().rows, now);
   return {
     now,
     inbox: inboxes.flatMap((b) => inboxEntriesOf(b, now)),
@@ -367,12 +440,13 @@ export async function collectHealthInputs(now: number = Date.now(), opts: Collec
     ...fleetPart,
     conductorQueue: queue.flatMap((q) => {
       const queuedAt = Date.parse(q.queuedAt);
-      return Number.isFinite(queuedAt) ? [{ board: q.board, cardId: q.cardId, queuedAt }] : [];
+      return Number.isFinite(queuedAt) ? [{ board: q.board, cardId: q.cardId, queuedAt, ...(q.lastWaitKind ? { waitKind: q.lastWaitKind } : {}) }] : [];
     }),
     stall: stallRows.map((r) => ({ key: r.key, firstSeenAt: r.firstSeenAt, ...(r.escalatedAt != null ? { escalatedAt: r.escalatedAt } : {}) })),
     toolFailures: toolFailuresFromEvents(events),
     attribution: { actions: attribution.actions, attributed: attribution.attributed },
     touches: { liveStories, technicalTouches, ownerSessionActions: attribution.ownerSessionActions },
     openTechnicalQuestions,
+    ...pause,
   };
 }

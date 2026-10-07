@@ -211,7 +211,7 @@ export function deriveMood(s: FaceSignals): MoodId {
   // 9. em repouso e o board não vai acordá-lo (desligado, tick desarmado, sem token) — MAS só dorme se ninguém
   //    estiver conversando com ele. "O board não vai acordá-lo" e "ninguém está falando com ele" são coisas
   //    diferentes; colapsá-las mostrava `dormindo` no meio de uma conversa viva.
-  if (!s.recentTurn && (s.level === "off" || s.level === "auto-disarmed" || s.level === "auto-inert")) {
+  if (!s.recentTurn && (s.level === "off" || s.level === "auto-disarmed" || s.level === "auto-inert" || s.level === "auto-paused")) {
     return "dormindo";
   }
   // 10. em repouso, mas a sessão está pesada — a cara pede um /compact.
@@ -223,19 +223,6 @@ export function deriveMood(s: FaceSignals): MoodId {
 /** O humor já resolvido em metadados (o que o consumidor lê para label/short/tone). Pura. */
 export function faceFor(signals: FaceSignals): MoodMeta {
   return EXPRESSIONS[deriveMood(signals)];
-}
-
-/** Os humores que INTERROMPEM: o que ele SENTE agora vale mais que qualquer notícia. */
-const URGENT_MOODS = new Set<MoodId>(["panico", "surpreso", "erro", "glitch"]);
-
-/**
- * Este humor é dos que interrompem? Mora aqui — junto do vocabulário — porque tem DOIS consumidores
- * que precisam concordar: a fala do balão (`copilot/speech`, onde o humor urgente vence o diário) e o
- * anúncio de notícias no topnav (BoardHeader, onde uma notícia do board NÃO pode cobrir a cara de quem
- * quebrou ou parou esperando você). Duas cópias desta lista seriam duas ideias diferentes de urgente.
- */
-export function isUrgentMood(mood: MoodId): boolean {
-  return URGENT_MOODS.has(mood);
 }
 
 /**

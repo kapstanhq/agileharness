@@ -4,13 +4,13 @@
 // precisa ser feito, a ideia (◆) é cerimônia — nas capturas diretas, nenhuma ideia
 // exercitava candidateSolutions/sizing/rastreabilidade; cada uma ia direto a "Gerar stories" 1:1. Então a
 // captura estruturada (harness-capture / o modal / usm_capture MCP) NÃO classifica mais como
-// `type:"idea"` — bug/technical/chore/user story, direto. `idea` fica reservada à bancada
-// (create_idea / a view de Ideias), o ponto de entrada leve e deliberado.
+// `type:"idea"` — bug/technical/chore/user story, direto. A dor crua entra como story de usuário na
+// Triagem (a bancada de Ideias saiu na fase 2; os cards `idea` que existem são migrados na fase 5).
 //
 // O prompt de classificação já não oferece o caminho ◆, mas o prompt é HEURÍSTICO e sidecars de proposta
 // LEGADOS ainda carregam itens ◆. Por isso o cinto-e-suspensório mora AQUI, no chokepoint de escrita
 // (commitProposalAction): um item `type:"idea"` é IGNORADO (nunca materializa card) com um warning
-// apontando a bancada. NUNCA lança sobre um ◆ legado — só o materializar é barrado (o parse dele continua).
+// que diz como reclassificá-lo. NUNCA lança sobre um ◆ legado — só o materializar é barrado (o parse dele continua).
 
 import type { CardCommitWarning } from "../types";
 import type { ProposedItem } from "./types";
@@ -39,7 +39,7 @@ export function guardCaptureIdeas(items: ProposedItem[]): IdeaGuardResult {
       tempId: it.tempId,
       code: "idea-ignored" as const,
       detail:
-        "item ignorado: a captura não cria ideias — registre esta dor na bancada de Ideias",
+        "item ignorado: a captura não cria ideias — reclassifique esta dor como story de usuário (ela entra na Triagem)",
     }));
 
   const kept = items

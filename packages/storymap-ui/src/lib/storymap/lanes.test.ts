@@ -14,21 +14,17 @@ import {
   boardLanes,
   groupStoriesByLane,
   LANE_OTHERS_ID,
-  laneDropStatus,
   laneOfCard,
-  laneSections,
-  laneStatusTags,
   laneViewProblems,
   type ResolvedLane, LANE_DEFERRED_ID } from "./lanes";
 import { readBoardConfig } from "./repo";
 import { FIXTURE_BOARD } from "./board-fixture";
 import type { OwnerDecisions } from "./inbox/decidir-set";
-import type { CardLiveKind } from "./card-live-status";
 import type { BoardConfig, Card, LaneDef } from "./types";
 
 // The old-style map: the owner's lane listing fixed statuses. The lint must accuse it.
 const OLD_MAP: LaneDef[] = [
-  { id: "chegada", label: "Chegada", statuses: ["capturando", "triage", "grill", "priorizar", "descontinuar"] },
+  { id: "chegada", label: "Chegada", statuses: ["capturando", "triage", "grill", "descontinuar"] },
   { id: "risco", label: "Risco", statuses: ["enriquecer", "interview", "design-ux", "design-ui", "com-design", "refinar", "corrigir"] },
   { id: "dono", label: "Com o dono", statuses: ["pronta", "stage", "deploy"], demand: true },
   { id: "mesa", label: "Mesa", statuses: ["ready", "plano-tecnico", "desenvolver", "revisar-codigo", "qa-automatizado", "revisao", "merge", "release", "concluida"] },
@@ -38,7 +34,7 @@ const OLD_MAP: LaneDef[] = [
 const NEW_MAP: LaneDef[] = [
   { id: "fila", label: "Fila", statuses: ["capturando", "triage", "grill", "descontinuar"] },
   { id: "dono", label: "Com o dono", statuses: [], demand: true },
-  { id: "forma", label: "Forma", statuses: ["priorizar", "pronta", "enriquecer", "interview", "design-ux", "design-ui", "com-design", "refinar"] },
+  { id: "forma", label: "Forma", statuses: ["pronta", "enriquecer", "interview", "design-ux", "design-ui", "com-design", "refinar"] },
   { id: "bancada", label: "Bancada", statuses: ["ready", "plano-tecnico", "desenvolver", "corrigir"] },
   { id: "prova", label: "Prova", statuses: ["revisar-codigo", "qa-automatizado", "revisao", "merge"] },
   { id: "envio", label: "Envio", statuses: ["stage", "deploy", "release", "concluida"] },
@@ -78,8 +74,9 @@ const owner = (ids: string[], extra: { total?: number; more?: Record<string, num
 });
 
 describe("boardLanes — a vista só existe quando declarada", () => {
-  it("sem `view.lanes` ⇒ null (o Kanban legado renderiza intacto)", () => {
-    expect(boardLanes(base)).toBeNull();
+  it("sem `view.lanes` ⇒ null (o mapa de raias não é inventado aqui; o Kanban deriva as raias das colunas — kanban-features `kanbanLanes`)", () => {
+    // O board de demonstração HERDA as seis raias do `_base` (fase 1) — a ausência é provada tirando a vista dele.
+    expect(boardLanes({ ...base, view: undefined })).toBeNull();
     expect(boardLanes({ ...base, view: {} })).toBeNull();
     expect(boardLanes({ ...base, view: { lanes: [] } })).toBeNull();
   });
@@ -225,40 +222,6 @@ describe("laneOfCard / groupStoriesByLane — todo card em UMA raia, nada some",
   });
 });
 
-describe("laneDropStatus / laneStatusTags", () => {
-  it("soltar numa raia = o primeiro status visível dela (o gate ainda decide); 'Outros' e a raia do dono não aceitam", () => {
-    const cfg = withLanes(NEW_MAP);
-    const lanes = boardLanes(cfg)!;
-    expect(laneDropStatus(lanes.find((l) => l.id === "fila")!, cfg)).toBe("triage"); // capturando é oculto
-    expect(laneDropStatus(lanes.find((l) => l.id === "bancada")!, cfg)).toBe("ready");
-    expect(laneDropStatus(lanes.find((l) => l.id === "dono")!, cfg)).toBeNull();
-    expect(laneDropStatus({ id: LANE_OTHERS_ID, label: "Outros", statuses: [], demand: false, others: true }, cfg)).toBeNull();
-  });
-
-  it("a etiqueta é só o status REAL — o que acontece agora é a linha viva do card, não um rótulo fixo por status", () => {
-    expect(laneStatusTags({ status: "release" }, base)).toEqual(["Liberar"]);
-    expect(laneStatusTags({ status: "merge" }, base)).toEqual(["Integrar"]);
-    expect(laneStatusTags({ status: "deploy" }, base)).toEqual(["Publicar"]);
-    expect(laneStatusTags({ status: "status-futuro" }, base)).toEqual(["status-futuro"]);
-    expect(laneStatusTags({ status: null }, base)).toEqual(["sem status"]);
-  });
-});
-
-describe("laneSections — a raia dividida pelo que cada card está fazendo", () => {
-  it("agindo, esperando, parado, fila (recolhida) e sem ninguém, na ordem fixa; só as seções com card", () => {
-    const kinds: Record<string, CardLiveKind | null> = { a: "working", b: "queued", c: "quiet", d: null, e: "integrating", f: "queued", g: "stopped" };
-    const cards = Object.keys(kinds).map((id) => story(id, "desenvolver"));
-    const sections = laneSections(cards, (id) => kinds[id]);
-    expect(sections.map((s) => [s.id, s.cards.map((c) => c.id)])).toEqual([
-      ["agindo", ["a", "e"]],
-      ["parado", ["c", "g"]],
-      ["fila", ["b", "f"]],
-      ["sem", ["d"]],
-    ]);
-    expect(sections.find((s) => s.id === "fila")!.collapsed).toBe(true);
-  });
-});
-
 describe("«Adiado — não agora» tem a sua faixa", () => {
   const lanes = [
     { id: "a", label: "A", statuses: ["triage"], demand: false },
@@ -266,14 +229,13 @@ describe("«Adiado — não agora» tem a sua faixa", () => {
   ];
   const c = (id: string, status: string, deferred = false) => ({ id, type: "story", status, ...(deferred ? { deferred: { reason: "x", since: "2026-10-02", by: "human" } } : {}) }) as unknown as Card;
 
-  it("o adiado sai da raia do status e vai para a faixa sintética, sem aceitar soltura", () => {
+  it("o adiado sai da raia do status e vai para a faixa sintética", () => {
     const g = groupStoriesByLane([c("1", "triage"), c("2", "enriquecer", true), c("3", "enriquecer")], lanes as never);
     expect(g.byLane.get("a")!.map((x) => x.id)).toEqual(["1"]);
     expect(g.byLane.get("b")!.map((x) => x.id)).toEqual(["3"]);
     expect(g.byLane.get(LANE_DEFERRED_ID)!.map((x) => x.id)).toEqual(["2"]);
     const lane = g.lanes.find((l) => l.id === LANE_DEFERRED_ID)!;
     expect(lane).toMatchObject({ deferred: true, others: true, demand: false });
-    expect(laneDropStatus(lane, { statuses: [] } as never)).toBeNull();
   });
 
   it("sem nenhum adiado a faixa nem existe", () => {

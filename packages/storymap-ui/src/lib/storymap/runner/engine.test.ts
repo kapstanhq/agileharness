@@ -252,7 +252,7 @@ function makeEngine(
     // story-ex9520: inject the FULL-card reader (DI) the spawn-flag
     // resolution uses to route model/effort by complexity. Default = null (card-less → the engine falls
     // back to resolveColumnArgs, behavior identical to the pre-routing suite); the routing tests pass a
-    // reader that returns a card whose storyType/rice/tasks drive the derived (model, effort).
+    // reader that returns a card whose storyType/tasks drive the derived (model, effort).
     readCard?: (board: string, cardId: string) => Promise<Card | null>;
     // story-ex9516: inject the telemetry port (DI). Default = a no-op double
     // (keeps settle() off the real disk-backed singleton); the telemetry test passes a recording double.
@@ -597,7 +597,6 @@ describe("RunnerEngine.runSkill — security + idempotency + concurrency", () =>
       type: "story",
       storyType: "chore",
       tasks: [],
-      rice: { reach: null, impact: null, confidence: null, effort: null },
     } as unknown as Card;
     const { engine, cmds } = makeEngine(async () => null, { readCard: async () => choreCard });
     expect(engine.runSkill("acme", "story-1", "harness-do", devDef).ok).toBe(true);
@@ -1173,9 +1172,9 @@ describe("RunnerEngine.runSkill — falha-fantasma guard (exit≠0 após o card 
     // Disable isolation so emitComplete fires immediately (non-isolated path). The ex0119 describe
     // block covers the isolated-path deferral separately.
     process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0";
-    // Reader: enqueue read → "priorizar" (before), finish read → "pronta" (after) ⇒ advanced.
+    // Reader: enqueue read → "interview" (before), finish read → "pronta" (after) ⇒ advanced.
     let calls = 0;
-    const reader = async () => (calls++ === 0 ? "priorizar" : "pronta");
+    const reader = async () => (calls++ === 0 ? "interview" : "pronta");
     const { engine, children, finishes } = makeEngine(reader);
     const seen: Array<{ outcome: string }> = [];
     engine.onComplete((ev) => seen.push(ev as { outcome: string }));
@@ -1208,7 +1207,7 @@ describe("RunnerEngine.runSkill — falha-fantasma guard (exit≠0 após o card 
 
 describe("RunnerEngine.runSkill — sucesso-fantasma guard (exit 0 mas o card NÃO avançou)", () => {
   // The MIRROR of the falha-fantasma guard: a CLEAN exit from a skill that MUST advance the card on
-  // success (advancesOnSuccess: enrich/prioritize/plan/tasks) which left it in its trigger column is a
+  // success (advancesOnSuccess: enrich/plan/tasks) which left it in its trigger column is a
   // no-op — the skill claimed success but did nothing. Without this it was silently recorded "ok" and
   // the card wedged forever (no visible failure + autorun dedupe blocks a re-fire).
   const fastDef: StatusDef = { id: "enriquecer", name: "Enriquecer" };
@@ -1232,7 +1231,7 @@ describe("RunnerEngine.runSkill — sucesso-fantasma guard (exit 0 mas o card N�
   it("a clean exit of harness-enrich that DID advance is a normal ok (no false positive)", async () => {
     process.env.AGILEHARNESS_AUTORUN_WORKTREE = "0";
     let calls = 0;
-    const reader = async () => (calls++ === 0 ? "enriquecer" : "priorizar"); // advanced
+    const reader = async () => (calls++ === 0 ? "enriquecer" : "interview"); // advanced
     const { engine, children, finishes } = makeEngine(reader);
     engine.runSkill("storymap", "ghost-ok", "harness-enrich", fastDef);
     await flush();
@@ -1505,7 +1504,7 @@ describe("RunnerEngine.runSkill — board-data (isCode:false) runs edit main liv
   // exit is a genuine success (not a sucesso-fantasma no-op).
   const advancingReader = () => {
     let calls = 0;
-    return async () => (calls++ === 0 ? "enriquecer" : "priorizar");
+    return async () => (calls++ === 0 ? "enriquecer" : "interview");
   };
 
   it("creates NO worktree, spawns in repoRoot, and never enqueues a merge — even with isolation ON", async () => {
@@ -1600,13 +1599,13 @@ describe("RunnerEngine.runSkill — board-data (isCode:false) runs edit main liv
       return next;
     };
     // PER-CARD advancing reader: each card independently reads `enriquecer` first (before) then
-    // `priorizar` (after) — so BOTH harness-enrich runs are genuine successes (not sucesso-fantasma no-ops),
+    // `interview` (after) — so BOTH harness-enrich runs are genuine successes (not sucesso-fantasma no-ops),
     // and both reach the board-data commit. A single shared counter would starve the 2nd run's advance.
     const seenByCard = new Map<string, number>();
     const perCardAdvancingReader = async (_board: string, cardId: string) => {
       const n = seenByCard.get(cardId) ?? 0;
       seenByCard.set(cardId, n + 1);
-      return n === 0 ? "enriquecer" : "priorizar";
+      return n === 0 ? "enriquecer" : "interview";
     };
     const { engine, children, worktreeBoardCommits } = makeEngine(perCardAdvancingReader, {
       commitSerializer: orderingSerializer,
@@ -1907,6 +1906,8 @@ describe("SM-09 — per-app context note injected into the spawn prompt", () => 
       );
       expect(note).toContain("as instruções do repositório e do pacote packages/storymap-ui");
       expect(note).toContain("atende a(s) persona(s) ana, davi");
+      // a persona agora mora na seção «Personas» do PRD; o board.yaml segue citado como piso legado
+      expect(note).toContain('seção "Personas" do PRD');
       expect(note).toContain("storymap/boards/storymap/board.yaml");
     });
 
@@ -1959,6 +1960,8 @@ describe("SM-09 — per-app context note injected into the spawn prompt", () => 
 
       for (const note of [semEscada, comEscada]) {
         expect(note).toContain("storymap/boards/storymap/docs/prd.md");
+        // PRD formato 2: as decisões já tomadas moraram para o contexto dos agentes — o ponteiro cita os dois
+        expect(note).toContain("storymap/boards/storymap/docs/contexto.md");
         expect(note).toContain("Decisões já tomadas");
       }
       // O VALOR nunca viaja inline — a nota é interpolada verbatim num `-p "..."`, e o texto do PRD
@@ -2137,7 +2140,7 @@ describe("SM-09 — per-app context note injected into the spawn prompt", () => 
     // granted, chased an MCP tool it was not, and spent its budget asking a human who does not exist.
     it("systemPromptFor: a light-lane skill carries the BOARD-DATA invariants (it must know its own standing)", () => {
       expect(systemPromptFor("harness-grill")).toBe(BOARD_DATA_SKILL_INVARIANTS);
-      expect(systemPromptFor("harness-prioritize")).toBe(BOARD_DATA_SKILL_INVARIANTS);
+      expect(systemPromptFor("harness-plan")).toBe(BOARD_DATA_SKILL_INVARIANTS);
     });
 
     it("the light-lane invariants state the exemption, the empty MCP surface, and the no-human rule", () => {
@@ -4637,42 +4640,42 @@ describe("RunnerEngine pre-check — settle a $0 no-op WITHOUT spawning (WS-5.3)
 
 // ── WS-8.1 cancel phase-brake (recentlyCancelledAgeMs / forceRelease marker) ──────────────────────────
 describe("RunnerEngine cancel phase-brake (WS-8.1)", () => {
-  const codeDef3: StatusDef = { id: "priorizar", name: "Priorizar" };
+  const codeDef3: StatusDef = { id: "interview", name: "Entrevista" };
 
   it("forceRelease arms the brake at the card's resting status; a same-status re-eval is braked, a MOVE clears it", async () => {
-    const { engine, children } = makeEngine(async () => "priorizar"); // status read for the marker
+    const { engine, children } = makeEngine(async () => "interview"); // status read for the marker
     engine.runSkill("acme", "c1", "harness-enrich", codeDef3);
     await flush();
     expect(children).toHaveLength(1);
-    await engine.forceRelease("acme", "c1"); // kills the child + arms the brake with status "priorizar"
+    await engine.forceRelease("acme", "c1"); // kills the child + arms the brake with status "interview"
     // same status (the cascade would re-engage from here) → braked (age ≥ 0)
-    expect(engine.recentlyCancelledAgeMs("acme", "c1", "priorizar")).toBeGreaterThanOrEqual(0);
+    expect(engine.recentlyCancelledAgeMs("acme", "c1", "interview")).toBeGreaterThanOrEqual(0);
     // a human MOVE (different status) clears the brake as a side effect
     expect(engine.recentlyCancelledAgeMs("acme", "c1", "pronta")).toBeNull();
     // …and it stays cleared thereafter
-    expect(engine.recentlyCancelledAgeMs("acme", "c1", "priorizar")).toBeNull();
+    expect(engine.recentlyCancelledAgeMs("acme", "c1", "interview")).toBeNull();
   });
 
   it("clearRecentlyCancelled drops the brake explicitly", async () => {
-    const { engine } = makeEngine(async () => "priorizar");
+    const { engine } = makeEngine(async () => "interview");
     engine.runSkill("acme", "c1", "harness-enrich", codeDef3);
     await flush();
     await engine.forceRelease("acme", "c1");
-    expect(engine.recentlyCancelledAgeMs("acme", "c1", "priorizar")).toBeGreaterThanOrEqual(0);
+    expect(engine.recentlyCancelledAgeMs("acme", "c1", "interview")).toBeGreaterThanOrEqual(0);
     engine.clearRecentlyCancelled("acme", "c1");
-    expect(engine.recentlyCancelledAgeMs("acme", "c1", "priorizar")).toBeNull();
+    expect(engine.recentlyCancelledAgeMs("acme", "c1", "interview")).toBeNull();
   });
 
   it("an explicit manual re-run (retry/enqueue) drops the brake once the cancelled run settled", async () => {
-    const { engine, children } = makeEngine(async () => "priorizar");
+    const { engine, children } = makeEngine(async () => "interview");
     engine.runSkill("acme", "c1", "harness-enrich", codeDef3);
     await flush();
     await engine.forceRelease("acme", "c1"); // arms the brake + kills the child
     children[0].emit("close", 143, "SIGTERM"); // the cancelled run settles → releases the in-flight lock
     await flush();
-    expect(engine.recentlyCancelledAgeMs("acme", "c1", "priorizar")).toBeGreaterThanOrEqual(0); // still braked
+    expect(engine.recentlyCancelledAgeMs("acme", "c1", "interview")).toBeGreaterThanOrEqual(0); // still braked
     engine.runSkill("acme", "c1", "harness-enrich", codeDef3, { origin: "manual" }); // explicit resume → clears
-    expect(engine.recentlyCancelledAgeMs("acme", "c1", "priorizar")).toBeNull();
+    expect(engine.recentlyCancelledAgeMs("acme", "c1", "interview")).toBeNull();
   });
 
   it("a card that was never cancelled is never braked", () => {
@@ -4842,7 +4845,6 @@ describe("RunnerEngine.runSkill — corte por orçamento (budget-cut)", () => {
       status: "desenvolver",
       tasks: [],
       findings,
-      rice: { reach: null, impact: null, confidence: null, effort: null },
     }) as unknown as Card;
   const settleTicks = async () => {
     for (let i = 0; i < 4; i++) await flush(); // leitura do status + carimbo do finding + settle

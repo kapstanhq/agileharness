@@ -97,8 +97,25 @@ describe("ownerPublishHold — o card não vai ao ar por cima de uma decisão do
     expect(ownerPublishHold({ ...c, status: "construir" }, def("construir"), def("integrar"), config())).not.toBeNull();
   });
 
-  it("modo humano: o dono já aprova cada passo — nenhuma trava nova", () => {
-    expect(ownerPublishHold(card({ questions: [ownerQ] }), def("aprovar"), def("integrar"), config("human"))).toBeNull();
+  // Fase 4 (decisão do dono): «Aprovar entrega» TRAVADA EM CÓDIGO. Antes, no modo humano, só o texto da skill segurava o
+  // agente em «Aprovar entrega»; agora a caixa `delivery` do perfil desligada (o modo humano de antes, ou Mínima) segura
+  // qualquer agente que atravesse o passo — e o dono, que já atravessou, segue livre.
+  it("modo humano (caixa «aprovar a entrega» desligada): nenhum agente atravessa «Aprovar entrega»; o dono que aprovou segue", () => {
+    const c = card({ questions: [] });
+    expect(ownerPublishHold(c, def("aprovar"), def("integrar"), config("human"))).toMatch(/Aprovar entrega/);
+    expect(ownerPublishHold({ ...c, status: "construir" }, def("construir"), def("integrar"), config("human"))).toMatch(/Aprovar entrega/);
+    expect(ownerPublishHold(c, def("aprovar"), def("integrar"), config("human"), { ownerApproved: true })).toBeNull();
+    // depois da aprovação (o dono já moveu), o resto do caminho rumo ao ar segue livre
+    expect(ownerPublishHold({ ...c, status: "integrar" }, def("integrar"), def("release"), config("human"))).toBeNull();
+    // e a exceção do card vale: uma story `ultra` num board humano atravessa com a prova
+    expect(ownerPublishHold({ ...c, autonomyMode: "ultra" }, def("aprovar"), def("integrar"), config("human"))).toBeNull();
+  });
+
+  it("perfil explícito: a caixa «aprovar a entrega» decide, não o modo", () => {
+    const c = card({ questions: [] });
+    const withBox = (delivery: boolean) => ({ ...config("ultra"), autonomy: { mode: "ultra" as const, agentDecides: { spec: true, delivery } } });
+    expect(ownerPublishHold(c, def("aprovar"), def("integrar"), withBox(false))).toMatch(/Aprovar entrega/);
+    expect(ownerPublishHold(c, def("aprovar"), def("integrar"), withBox(true))).toBeNull();
   });
 
   it("a cascata e o advance-card param com o motivo; sem decisão do dono, seguem", () => {

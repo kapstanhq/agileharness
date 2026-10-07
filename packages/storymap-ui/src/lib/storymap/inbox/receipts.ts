@@ -189,7 +189,8 @@ export interface ResolvedEntry {
   itemId?: string;
   cardId?: string;
   /** o «Desfazer» — o recibo do dono ou a decisão do sistema. */
-  undo?: { source: "receipt" | "system"; id: string; label: string; requiresNote?: boolean };
+  /** `reopens` = reabrir uma entrega: o «Desfazer» roda já com o motivo padrão (REOPEN_DEFAULT_NOTE), um clique como no item. */
+  undo?: { source: "receipt" | "system"; id: string; label: string; reopens?: boolean };
   /** quando foi desfeito (o desfecho segue na lista, dizendo que voltou atrás). */
   undoneAt?: string;
 }
@@ -289,7 +290,7 @@ export function resolvedToday(input: {
       whoLabel: agentLabel(d.agent),
       what: d.why ? `${d.what} — por quê: ${d.why}` : d.what,
       ...(d.cardId ? { cardId: d.cardId } : {}),
-      ...(d.undoable && d.undo ? { undo: { source: "system" as const, id: d.id, label: undoLabel(d.undo), ...(d.undo.kind === "reopen-card" ? { requiresNote: true } : {}) } } : {}),
+      ...(d.undoable && d.undo ? { undo: { source: "system" as const, id: d.id, label: undoLabel(d.undo), ...(d.undo.kind === "reopen-card" ? { reopens: true } : {}) } } : {}),
       ...(d.undoneAt ? { undoneAt: d.undoneAt } : {}),
     });
   }

@@ -111,6 +111,8 @@ export function clearReopenPending(card: Card): Card {
  * lint vermelho e, com ele, o merge train fechado para TODAS as sessões. Aqui — no chokepoint — toda
  * lane de fix passa a gravar o par completo, que é o que o doc-comment acima já promete para o clear.
  *
+ * Também apaga a marca de LOTE do condutor (`batch`): ela vale para uma rodada do condutor, não para a reabertura.
+ *
  * `status` stays the CALLER's responsibility — it differs per action (refine→refinar, fix→corrigir,
  * retire→descontinuar|arquivados by level), so the action spreads it after. Pure.
  */
@@ -130,5 +132,7 @@ export function applyReopen(
           // inventaria um campo que o schema dele não tem.
           { bugReport: reopen.bugReport, ...(card.type === "story" ? { storyType: "bug" as const } : {}) }
         : { retirement: reopen.retirement };
-  return { ...card, mode: reopen.mode, ...cleared, ...block };
+  // A marca de LOTE do condutor (`batch`) é de UMA rodada: a reabertura é trabalho novo — sem ela, um item reaberto
+  // passaria pela parada do plano com a aprovação do lote antigo, e o teto e o gasto do lote seguiriam valendo.
+  return { ...card, mode: reopen.mode, ...cleared, ...block, batch: undefined };
 }

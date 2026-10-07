@@ -418,6 +418,18 @@ describe("as outras decisões do dono", () => {
     expect(h.woke.at(-1)).toMatch(/NÃO aprovou/);
   });
 
+  it("o motivo DEPOIS do «Não rodar» de um clique: só o dono, só sobre o recusado, nunca vazio; troca o padrão e avisa o agente", async () => {
+    const r = await proposed();
+    // antes da recusa não há o que explicar — explicar nunca decide
+    expect(await h.svc.explainRejection({ id: r.id, caller: "operator-session", reason: "x" })).toMatchObject({ ok: false });
+    await h.svc.reject({ id: r.id, caller: "operator-session", reason: "O dono não aprovou pelo Inbox." });
+    expect(await h.svc.explainRejection({ id: r.id, caller: "mcp-token", reason: "x" })).toMatchObject({ ok: false });
+    expect(await h.svc.explainRejection({ id: r.id, caller: "operator-session", reason: "   " })).toMatchObject({ ok: false });
+    const j = await h.svc.explainRejection({ id: r.id, caller: "operator-session", reason: "a vitrine da livraria muda amanhã" });
+    expect(j).toMatchObject({ ok: true, value: { status: "rejected", rejectReason: "a vitrine da livraria muda amanhã" } });
+    expect(h.woke.at(-1)).toMatch(/explicou por que não aprovou.*vitrine da livraria/);
+  });
+
   it("desfazer depois do sucesso: só o dono; roda o desfazer uma vez ⇒ «undone» (sem ser automático)", async () => {
     const p = await proposed();
     await h.svc.approve({ id: p.id, hash: p.hash, caller: "operator-session" });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bannedTermsIn, clip, dayToken, formatDecisionText, localTimeFormatter, quoted, relativeWithClock, staleDays, staleLabel, timeToken } from "./copy";
+import { ASK_FORMAT, askFormatProblems, bannedTermsIn, clip, dayToken, formatDecisionText, localTimeFormatter, quoted, relativeWithClock, staleDays, staleLabel, timeToken } from "./copy";
 
 const NOW = Date.parse("2026-09-28T23:19:00Z"); // 20:19 em São Paulo
 const TZ = "America/Sao_Paulo";
@@ -52,6 +52,24 @@ describe("o tempo, no fuso de quem lê", () => {
     expect(relativeWithClock("2026-09-24T12:00:00Z", NOW, TZ)).toBe("há 4 dias · 24/09");
     expect(relativeWithClock(null, NOW, TZ)).toBeNull();
   });
+
+  it("uma data pura conta DIAS do calendário de quem lê, nunca horas desde a meia-noite UTC", () => {
+    // NOW é 28/09 20:19 em São Paulo (29/09 em UTC): a proposta de 28/09 é de hoje para o dono
+    expect(relativeWithClock("2026-09-28", NOW, TZ)).toBe("hoje · 28/09");
+    expect(relativeWithClock("2026-09-27", NOW, TZ)).toBe("ontem · 27/09");
+    expect(relativeWithClock("2026-09-24", NOW, TZ)).toBe("há 4 dias · 24/09");
+  });
+});
+
+describe("o glossário — nomes técnicos que vazaram em 07/10", () => {
+  it("pega o nome técnico de uma parte publicada e o «fail-closed»", () => {
+    expect(bannedTermsIn("Autorizar a publicação do código de negócio em face:loja?").map((t) => t.id)).toContain("unit-id");
+    expect(bannedTermsIn("a publicação ficou retida (fail-closed)").map((t) => t.id)).toContain("fail-closed");
+  });
+  it("não confunde frase com dois-pontos, endereço ou marcador de tempo", () => {
+    expect(bannedTermsIn("O que aconteceu: nada foi publicado.")).toEqual([]);
+    expect(bannedTermsIn("Veja em https://exemplo.test/ajuda")).toEqual([]);
+  });
 });
 
 describe("o objeto e o parado", () => {
@@ -68,5 +86,29 @@ describe("o objeto e o parado", () => {
     expect(staleDays(undefined, NOW)).toBeNull();
     expect(staleLabel(81)).toBe("parado há 81 dias");
     expect(staleLabel(1)).toBe("parado há 1 dia");
+  });
+});
+
+describe("fase 3 — o formato de uma pergunta de agente (ask_question)", () => {
+  const ok = {
+    context: "A busca do catálogo já acha livros pelo título. Para achar pelo autor, ela pode ignorar acentos ou exigir a grafia exata.",
+    text: "A busca por autor deve ignorar acentos?",
+    options: [{ label: "Ignorar acentos (Jose acha José)" }, { label: "Exigir a grafia exata" }],
+  };
+  it("aceita a pergunta no formato (o exemplo das skills)", () => {
+    expect(askFormatProblems({ questions: [ok] })).toEqual([]);
+    expect(askFormatProblems({ texts: ["Pode publicar a vitrine nova hoje?"] })).toEqual([]);
+  });
+  it("recusa pergunta vazia, chamada vazia e texto livre vazio", () => {
+    expect(askFormatProblems({})).toHaveLength(1);
+    expect(askFormatProblems({ questions: [{ ...ok, text: "  " }] })[0]).toMatch(/text está vazio/);
+    expect(askFormatProblems({ texts: [""] })[0]).toMatch(/vazio/);
+  });
+  it("recusa fora dos tamanhos: pergunta longa, contexto longo, 1 ou 5 opções, rótulo que não cabe num botão", () => {
+    expect(askFormatProblems({ questions: [{ ...ok, text: "x".repeat(ASK_FORMAT.textMax + 1) }] })[0]).toMatch(/máximo 240/);
+    expect(askFormatProblems({ questions: [{ ...ok, context: "x".repeat(ASK_FORMAT.contextMax + 1) }] })[0]).toMatch(/context/);
+    expect(askFormatProblems({ questions: [{ ...ok, options: [{ label: "Só uma" }] }] })[0]).toMatch(/de 2 a 4/);
+    expect(askFormatProblems({ questions: [{ ...ok, options: ["a", "b", "c", "d", "e"].map((label) => ({ label })) }] })[0]).toMatch(/de 2 a 4/);
+    expect(askFormatProblems({ questions: [{ ...ok, options: [{ label: "y".repeat(81) }, { label: "Outra" }] }] })[0]).toMatch(/botão/);
   });
 });

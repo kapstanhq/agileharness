@@ -60,6 +60,7 @@ describe("contracts — repo-wide spec conformance (EVERY board + EVERY card)", 
       { type: "activity", title: "Backbone" },
       { findings: [{ id: "f1", lens: "security", severity: "blocker", title: "SQLi", status: "open", file: "a.ts", line: 3 }] },
       { stagedAt: "2026-06-10", releasedAt: "2026-06-11", commitRange: { base: "aaa", head: "bbb" }, diffSnapshot: { base: "aaa", mergeCommit: "ccc" } },
+      // um card ANTIGO com a priorização no frontmatter (saiu do modelo) continua coagindo para um card válido
       { type: "story", rice: { reach: 100, impact: 2, confidence: 0.8, effort: 4 }, kano: "performance", funnelStage: "activation", duplicateOf: "story-x" },
     ];
     const failures = inputs

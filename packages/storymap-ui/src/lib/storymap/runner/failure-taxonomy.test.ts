@@ -201,11 +201,37 @@ describe("regras declaradas — compilação defensiva e custo", () => {
   });
 
   it("custo com teto também SEM literal a pré-filtrar (alternância): o orçamento corta a leitura", () => {
-    const log = "pod pod pod node pod ".repeat(Math.ceil((256 * 1024) / 21));
+    // O relógio é INJETADO: medir o tempo de parede reprovava sob carga da máquina (869 ms numa suíte cheia) sem que o
+    // corte tivesse falhado. O que se prova é o comportamento do orçamento: estourado, as janelas que faltam não são lidas.
+    // O casamento só existe no FIM do log (a cauda do 2º segmento, longe da 1ª janela) — alternância, então nenhum
+    // literal o pré-filtra.
+    const log = `${"pod pod pod node pod ".repeat(Math.ceil((256 * 1024) / 21))}node evicted`;
     const rules: FailureRules = { failureClasses: [{ pattern: "(pod|node).*evicted", class: "infra" }] };
-    const t0 = performance.now();
-    classifyFailure({ message: log }, rules);
-    expect(performance.now() - t0).toBeLessThan(QA_FAILURE_SCAN_BUDGET_MS + 400);
+    const all = failureScanWindows(log);
+    const hit = all.findIndex((w) => w.includes("node evicted"));
+    expect(hit).toBeGreaterThan(1); // a regra precisa ler várias janelas até achar
+
+    // relógio parado: o orçamento nunca estoura, as janelas são lidas em ordem até a que casa
+    let frozenReads = 0;
+    const frozen = () => {
+      frozenReads++;
+      return 0;
+    };
+    expect(classifyFailure({ message: log }, rules, frozen)).toBe("infra");
+    expect(frozenReads).toBe(1 + hit + 1); // o prazo + uma consulta por janela lida, até a que casou
+
+    // relógio que anda além do orçamento a cada janela: lida a 1ª, o prazo estoura e a leitura PARA antes da cauda
+    let t = 0;
+    let budgetReads = 0;
+    const slow = () => {
+      budgetReads++;
+      const now = t;
+      t += QA_FAILURE_SCAN_BUDGET_MS * 0.75;
+      return now;
+    };
+    expect(classifyFailure({ message: log }, rules, slow)).toBe("app"); // a regra não chegou a ver «node evicted»
+    expect(budgetReads).toBe(3); // o prazo, a 1ª janela (dentro), a 2ª consulta (fora → corta)
+    expect(budgetReads).toBeLessThan(frozenReads);
   });
 
   it("o literal exigido: o maior trecho fixo, e null quando não dá para afirmar um", () => {

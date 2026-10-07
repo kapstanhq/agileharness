@@ -2,9 +2,13 @@
 
 // ⚙ Sistema · Configurações — os KNOBS: as global runner settings (storymap/settings.yaml — kill
 // switch, concurrency, watchdogs, claude binary, global extra args e os fallbacks de
-// model/effort/maxTurns por coluna), o copiloto (Jido) e o Toolkit & MCP. Per-column policy is edited
-// in the Kanban (⚙ on a column); this shows it read-only + the global defaults columns inherit.
+// model/effort/maxTurns por coluna), o runtime do copiloto (Jido) e o Toolkit & MCP. A policy de cada coluna
+// aparece aqui só para leitura (com os padrões globais que as colunas herdam).
 // ENV AGILEHARNESS_AUTORUN_* vars always win → flagged up top.
+//
+// AUTONOMIA não se configura aqui (fase 4): o que os agentes fazem sozinhos é o controle único da barra do topo
+// (`shell/AutonomyControl`). O «Autopilot ligado» abaixo é o interruptor GLOBAL do runner (um freio de máquina, como
+// o ritmo do board), não um nível de autonomia.
 //
 // Duas coisas SAÍRAM daqui, e as duas eram navegação disfarçada de conteúdo:
 //   • "Rotas & Especialistas" → virou seção da tela Orquestração (é sobre o SISTEMA de agentes, não
@@ -28,13 +32,14 @@ import type { ConfigCockpitData } from "@/lib/storymap/config-cockpit";
 import { PageHeader, PageTabs, usePageTab, type PageTab } from "@/components/nav/PageTabs";
 import { BoardHeader } from "./BoardHeader";
 import { EffortSelect, ModelSelect } from "./ColumnPolicyControls";
-import { CopilotConfigPanel } from "./CopilotConfigPanel";
+import { JidoRuntimePanel } from "./JidoRuntimePanel";
 import { ToolkitMcpTab } from "./ToolkitMcpTab";
+import { composerGutter } from "@/lib/ui";
 
 type ConfigTab = "autopilot" | "copiloto" | "toolkit";
 const TABS: readonly PageTab<ConfigTab>[] = [
   { id: "autopilot", label: "Autopilot", icon: SlidersHorizontal, hint: "O runner que executa as skills" },
-  { id: "copiloto", label: "Jido", icon: Bot, hint: "O copiloto — modo, autonomia e riscos" },
+  { id: "copiloto", label: "Jido", icon: Bot, hint: "O copiloto — quando ele acorda e quanto pode gastar" },
   { id: "toolkit", label: "Toolkit & MCP", icon: KeyRound, hint: "Ferramentas e tokens que os agentes usam" },
 ];
 
@@ -53,7 +58,7 @@ export function AutorunSettingsPanel({
   boards: BoardSummary[];
   settings: RunnerSettings;
   envOverrides: string[];
-  /** Fase 5.1 — the Copiloto tab's read model (orchestrator settings/mode/state/riskMatrix + 6.5 gate). */
+  /** the Jido tab's read model (orchestrator settings/mode/state). */
   overview: CopilotOrchestratorOverview;
   /** Fase 5.2/5.3/5.4 — the read-only cockpit data (routes/specialists/toolkit/mcpTokens). */
   cockpit: ConfigCockpitData;
@@ -97,17 +102,17 @@ export function AutorunSettingsPanel({
     <div className="flex h-screen flex-col">
       <BoardHeader boards={boards} config={board.config} view="config" />
 
-      <div className="board-scroll flex-1 overflow-auto bg-canvas p-4 sm:p-6">
+      <div className={`board-scroll flex-1 overflow-auto bg-canvas px-4 pt-4 sm:px-6 sm:pt-6 ${composerGutter}`}>
         {/* SISTEMA_MAX_W — a MESMA largura das irmãs (ver `nav/PageTabs`). */}
         <div className="mx-auto max-w-4xl">
           <PageHeader
             title="Configurações"
             icon={SlidersHorizontal}
-            description="Os ajustes deste board — o autopilot que executa as skills, o copiloto e as ferramentas que os agentes usam."
+            description="Os ajustes da máquina — o autopilot que executa as skills, o runtime do copiloto e as ferramentas que os agentes usam. A autonomia (o que os agentes fazem sozinhos) mora no botão «Autonomia» da barra do topo."
             tabs={<PageTabs label="Seções de Configurações" tabs={TABS} value={tab} onChange={setTab} />}
           />
 
-          {tab === "copiloto" && <CopilotConfigPanel boardId={board.config.id} overview={overview} settings={settings} />}
+          {tab === "copiloto" && <JidoRuntimePanel overview={overview} settings={settings} />}
           {tab === "toolkit" && <ToolkitMcpTab data={cockpit} />}
 
           {tab === "autopilot" && (
@@ -151,7 +156,7 @@ export function AutorunSettingsPanel({
                 className={cn(inputCls, "w-28")}
               />
             </Field>
-            <Field label="Watchdog skills rápidas (ms)" hint="Mata enrich/tasks/prioritize travados.">
+            <Field label="Watchdog skills rápidas (ms)" hint="Mata enrich/tasks/plan travados.">
               <input
                 type="number"
                 min={1000}
@@ -199,7 +204,7 @@ export function AutorunSettingsPanel({
           <Card
             title="Padrão por coluna (fallback)"
             icon={<Cpu className="h-4 w-4" />}
-            hint="Usado por qualquer coluna automática que não defina o seu próprio. A policy específica de cada coluna fica no Kanban."
+            hint="Usado por qualquer coluna automática que não defina o seu próprio."
           >
             <Field label="Modelo padrão" hint="">
               <ModelSelect value={draft.columnDefaults.model} onChange={(model) => setColDefault({ model })} />
@@ -225,7 +230,7 @@ export function AutorunSettingsPanel({
           <Card
             title="Policy por coluna (neste board)"
             icon={<Zap className="h-4 w-4" />}
-            hint="Modelo/effort efetivos de cada coluna com skill. Edite no Kanban (⚙ no topo da coluna)."
+            hint="Modelo/effort efetivos de cada coluna com skill (definidos no board.yaml do board)."
           >
             <div className="overflow-hidden rounded-lg border border-line">
               <table className="w-full text-xs">

@@ -42,6 +42,8 @@ export function AskChoices({
   onSubmit,
   disabled,
   className,
+  suggestionClassName,
+  inlineOptionClassName,
 }: {
   ask: AskSpec;
   /** ids marcados (o host é dono da seleção — a mesma que o botão Enviar do composer consome). */
@@ -55,6 +57,10 @@ export function AskChoices({
   onSubmit?: () => void;
   disabled?: boolean;
   className?: string;
+  /** a forma dos botões de resposta rápida (a conversa do Jido os desenha como botões de borda). Ausente ⇒ a pílula. */
+  suggestionClassName?: string;
+  /** a forma de botão EM LINHA para opções que são só ações (ver OptionChips). Ausente ⇒ as linhas de largura cheia. */
+  inlineOptionClassName?: string;
 }) {
   const hasOptions = ask.options.length > 0;
   const multi = ask.mode === "multi";
@@ -68,7 +74,14 @@ export function AskChoices({
       )}
 
       {hasOptions && (
-        <OptionChips options={ask.options} mode={ask.mode} selected={selected} onToggle={onToggle} disabled={disabled} />
+        <OptionChips
+          options={ask.options}
+          mode={ask.mode}
+          selected={selected}
+          onToggle={onToggle}
+          disabled={disabled}
+          inlineClassName={inlineOptionClassName}
+        />
       )}
 
       {/* O RODAPÉ da escolha: o fim explícito do `multi` (o single resolve no toque) e a saída aberta.
@@ -110,7 +123,7 @@ export function AskChoices({
               type="button"
               onClick={() => onSuggestion(s)}
               disabled={disabled}
-              className={QUICK_CHIP}
+              className={suggestionClassName ?? QUICK_CHIP}
               title={s}
             >
               <span className="truncate">{s}</span>

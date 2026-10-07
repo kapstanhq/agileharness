@@ -8,9 +8,10 @@
 // promoteStyleGuideDoc is the SINGLE writer of the canonical (`design/style-guide.md` + the board.yaml
 // `styleGuide` pointer): it re-coerces the doc, refuses a stale `baseVersion` (plain optimistic
 // concurrency), compiles the .md (D3 — never a byte of the LLM), bumps `version+1` and writes the hash.
-// checkAA (WCAG contrast) is INFORMATIONAL only — surfaced for display, it never blocks a write.
-// requestStyleGuideAssistAction / applyStyleGuideAssistAction are the human-authoring + drift-sync path:
-// the request produces a doc for review, the apply routes through promoteStyleGuideDoc.
+// checkAA (WCAG contrast) is INFORMATIONAL only for the human — it never blocks a write from the page.
+// applyStyleGuideAssistAction is the human-authoring path (the Design page's Editar/Salvar);
+// writeStyleGuideSectionAction is an agent's path (the MCP `write_styleguide`): one section, never the tom, and
+// a contrast regression refused. Both route through promoteStyleGuideDoc.
 
 import { requireSession } from "@/lib/auth/action-guard";
 import { promises as fs } from "node:fs";
@@ -20,28 +21,17 @@ import { writeBoardConfig } from "@/lib/storymap/write";
 import { findRepoRoot, resolveBoundFilePath } from "@/lib/storymap/paths";
 import { readStyleGuide, writeStyleGuide } from "@/lib/storymap/sidecars";
 import {
+  agentStyleSectionWrite,
   checkAA,
   coerceStyleGuideDoc,
   compileStyleGuideMd,
   computeStyleGuideHash,
-  diffStyleGuide,
   isEmptyStyleGuideDoc,
   styleGuideToPrompt,
 } from "@/lib/storymap/style-guide";
 import { auditTokensAgainstCss, type DriftReport } from "@/lib/storymap/style-drift";
-import { STYLE_SECTIONS } from "@/lib/storymap/style-guide-blocks";
-import {
-  buildAssistedEditPrompt,
-  buildStyleGuideAssistPrompt,
-  stripAgentPreamble,
-  FALLBACK_ROLE,
-  type AssistedEditMode,
-} from "@/lib/storymap/assisted-edit";
-import { assistantForKind } from "@/lib/storymap/assistant-registry";
-import { resolveAssistantPrompt } from "./assisted-edit-actions";
-import { runClaudeJson } from "@/lib/storymap/smart-capture/claude";
 import type { BoardConfig } from "@/lib/storymap/types";
-import type { AAReport, StyleGuideDiff, StyleGuideDoc, StyleGuidePointer } from "@/lib/storymap/style-guide";
+import type { AAReport, StyleGuideDoc, StyleGuidePointer } from "@/lib/storymap/style-guide";
 
 type Result<T = unknown> = { ok: true; data?: T } | { ok: false; error: string };
 
@@ -125,9 +115,8 @@ async function promoteStyleGuideDoc(
 // `tokenBindings` point to (or a heuristic default set when the guide declares none), and runs the
 // PURE `auditTokensAgainstCss` (WS-0). Fails OPEN to "não aplicável" — a board with no `package:` or
 // no published guide is not an error, it's simply nothing to audit (D15).
-// (a) requestStyleGuideAssistAction / applyStyleGuideAssistAction: the human-authoring / drift-sync
-// path (editar/aprender/sincronizar). The apply routes through `promoteStyleGuideDoc` above — the
-// SINGLE writer of the canonical.
+// (a) applyStyleGuideAssistAction (the page) and writeStyleGuideSectionAction (an agent, by MCP) both route
+// through `promoteStyleGuideDoc` above — the SINGLE writer of the canonical.
 
 /** Mirrors engine.ts's own SAME-NAMED guard (`buildContextNote`) — a `package:` path is embedded
  *  into a spawn prompt there; here it is joined onto the filesystem for an actual read, so it MUST
@@ -168,6 +157,24 @@ export interface StyleGuideDriftResult {
 const DRIFT_RUNTIME_NOTE =
   "Comparado contra a árvore de runtime (o checkout onde o serviço AgileHarness roda) — durante uma janela " +
   "de release, código ainda em voo num worktree de stage pode aparecer aqui como divergência falsa.";
+
+/**
+ * O guia como CONTEXTO da conversa da página de Design (o compositor do rodapé), relido a cada turno — o que acabou
+ * de ser salvo entra na próxima resposta. O assistente grava uma seção por vez com `write_styleguide` (o tom não: ali
+ * ele propõe), e a pessoa grava pelo Editar/Salvar da página — os dois pelo mesmo escritor único (`promoteStyleGuideDoc`).
+ */
+export async function styleGuideChatContextAction(boardId: string): Promise<string | undefined> {
+  await requireSession("styleGuideChatContextAction");
+  const guide = await readStyleGuide(boardId);
+  const note =
+    "Leia com get_styleguide e grave UMA seção por vez com write_styleguide (cores, tipografia, estética, componentes, " +
+    "anti-padrões, dívidas). O TOM (voz) é da marca, do dono — ali só proponha, na conversa. Cor que reprove o " +
+    "contraste AA é recusada.";
+  if (!guide || isEmptyStyleGuideDoc(guide)) {
+    return ["## Documento em foco: guia de estilo (design/style-guide.md)", "", "O guia deste board ainda está VAZIO.", "", note].join("\n");
+  }
+  return ["## Documento em foco: guia de estilo (design/style-guide.md)", "", note, "", styleGuideToPrompt(guide)].join("\n");
+}
 
 /**
  * (b) — the drift audit server action. Report-only (D15): never writes product code, never
@@ -219,75 +226,6 @@ export async function styleGuideDriftAction(input: { boardId: string }): Promise
   }
 }
 
-/** What `requestStyleGuideAssistAction` returns — a `aprender` guidance blurb, or a structured
- *  `editar`/`sincronizar` proposal (re-coerced doc + server-recomputed AA + a diff against the LIVE
- *  canonical) the operator reviews before calling `applyStyleGuideAssistAction`. */
-export type StyleGuideAssistResult =
-  | { kind: "guidance"; text: string }
-  | { kind: "proposal"; doc: StyleGuideDoc; aa: AAReport; diff: StyleGuideDiff; baseVersion: number };
-
-/**
- * (a) — ask the styleguide view-assistant. `aprender` returns prose (nothing to apply); `editar`/
- * `sincronizar` return a structured proposal diffed against the canonical — NOTHING is persisted here
- * (mirrors requestCanvasAssistAction/requestAssistedEditAction: propose then a separate, explicit
- * apply call). `sincronizar` runs WITH read tools + a long budget (600s) so the agent can investigate
- * the board's real code — same knob `assisted-edit-actions.ts` uses for `system`/`persona` sync.
- */
-export async function requestStyleGuideAssistAction(input: {
-  boardId: string;
-  mode: AssistedEditMode;
-  instruction: string;
-}): Promise<Result<StyleGuideAssistResult>> {
-  await requireSession("requestStyleGuideAssistAction");
-  try {
-    const mode = input.mode ?? "editar";
-    const instruction = input.instruction?.trim() ?? "";
-    if (!instruction && mode !== "sincronizar") {
-      return { ok: false, error: "Descreva o que você quer que o agente faça no guia." };
-    }
-
-    const config = await readBoardConfig(input.boardId);
-    const canonical = (await readStyleGuide(input.boardId)) ?? coerceStyleGuideDoc(null);
-    const assistant = assistantForKind("styleguide");
-    const systemPrompt = assistant ? await resolveAssistantPrompt(assistant.id, assistant.defaultPrompt) : FALLBACK_ROLE;
-    const current = styleGuideToPrompt(canonical);
-    const helperContext = { label: `${assistant?.label ?? "Assistente de Estilo"} · ${mode}`, view: assistant?.view };
-
-    if (mode === "aprender") {
-      const prompt = buildAssistedEditPrompt({ systemPrompt, kind: "styleguide", mode: "aprender", label: "Guia de Estilo", current, instruction });
-      const raw = await runClaudeJson(prompt, { context: helperContext });
-      const text = raw.trim();
-      if (!text) return { ok: false, error: "O agente não retornou uma resposta. Tente reescrever o pedido." };
-      return { ok: true, data: { kind: "guidance", text } };
-    }
-
-    // editar/sincronizar → structured JSON doc (buildStyleGuideAssistPrompt, not the generic raw-value contract).
-    const pkgContext = mode === "sincronizar" && config.package ? `Pacote do produto: ${config.package}.` : undefined;
-    const prompt = buildStyleGuideAssistPrompt({ systemPrompt, mode, current, sections: STYLE_SECTIONS, instruction, context: pkgContext });
-    const raw =
-      mode === "sincronizar"
-        ? await runClaudeJson(prompt, { timeoutMs: 600_000, effort: "high", dangerouslySkipPermissions: true, context: helperContext })
-        : await runClaudeJson(prompt, { timeoutMs: 600_000, effort: "high", context: helperContext });
-
-    const stripped = stripAgentPreamble(raw);
-    let parsedJson: unknown;
-    try {
-      parsedJson = JSON.parse(stripped);
-    } catch {
-      return { ok: false, error: "O agente não retornou um JSON válido. Tente reescrever o pedido." };
-    }
-    // Invariant 7 (wire→disk fixed point): coerce this LLM-authored JSON immediately — it is untrusted
-    // data, never instruction, and coerceStyleGuideDoc never throws on a malformed shape.
-    const doc = coerceStyleGuideDoc(parsedJson);
-    if (isEmptyStyleGuideDoc(doc)) return { ok: false, error: "O agente não retornou um guia com conteúdo." };
-    const aa = checkAA(doc);
-    const diff = diffStyleGuide(canonical, doc);
-    return { ok: true, data: { kind: "proposal", doc, aa, diff, baseVersion: config.styleGuide?.version ?? 0 } };
-  } catch (e) {
-    return fail(e);
-  }
-}
-
 /**
  * (a) — apply an authored/sync'd guide the operator reviewed. Routes through `promoteStyleGuideDoc` —
  * the SINGLE writer of the canonical (re-coerce + version bump + hash + compile + flush). This IS the
@@ -301,4 +239,29 @@ export async function applyStyleGuideAssistAction(input: {
 }): Promise<Result<{ pointer: StyleGuidePointer }>> {
   await requireSession("applyStyleGuideAssistAction");
   return promoteStyleGuideDoc(input.boardId, input.doc, { baseVersion: input.baseVersion });
+}
+
+/**
+ * A escrita de um AGENTE numa seção do guia — o que a tool `write_styleguide` chama (decisão do dono, 06/10:
+ * cores, tipografia, estética e componentes os agentes mantêm; o tom é do dono). A decisão é do kernel puro
+ * (`agentStyleSectionWrite`: seção do dono, formato e regressão de AA recusados); a gravação passa pelo MESMO
+ * `promoteStyleGuideDoc` — o escritor único do arquivo e do ponteiro segue sendo um só.
+ */
+export async function writeStyleGuideSectionAction(input: {
+  boardId: string;
+  section: string;
+  value: unknown;
+}): Promise<Result<{ section: string; pointer: StyleGuidePointer; aa: AAReport }>> {
+  await requireSession("writeStyleGuideSectionAction");
+  try {
+    const config = await readBoardConfig(input.boardId);
+    const prev = (await readStyleGuide(input.boardId)) ?? coerceStyleGuideDoc(null);
+    const decided = agentStyleSectionWrite(prev, input.section, input.value);
+    if (!decided.ok) return { ok: false, error: decided.error };
+    const res = await promoteStyleGuideDoc(input.boardId, decided.doc, { baseVersion: config.styleGuide?.version ?? 0 });
+    if (!res.ok) return res;
+    return { ok: true, data: { section: input.section, pointer: res.data!.pointer, aa: checkAA(decided.doc) } };
+  } catch (e) {
+    return fail(e);
+  }
 }

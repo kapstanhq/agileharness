@@ -62,7 +62,6 @@ describe("a tabela default por skill — NEUTRA, por camadas de peso (25 / 15 / 
       ["harness-enrich", 5],
       ["harness-ux", 5],
       ["harness-interview", 5],
-      ["harness-prioritize", 5],
       ["harness-capture", 5],
     ];
     for (const [t, usd] of esperado) expect(resolveRunBudgetUSD(t, undefined), t).toBe(usd);
@@ -74,7 +73,7 @@ describe("a tabela default por skill — NEUTRA, por camadas de peso (25 / 15 / 
 
   it("as camadas são ordenadas: construção >= leitura profunda >= conserto/QA >= leves", () => {
     const usd = (t: TriggerId) => resolveRunBudgetUSD(t, undefined) as number;
-    const leves: TriggerId[] = ["harness-grill", "harness-ui", "harness-ux", "harness-enrich", "harness-interview", "harness-prioritize", "harness-capture"];
+    const leves: TriggerId[] = ["harness-grill", "harness-ui", "harness-ux", "harness-enrich", "harness-interview", "harness-capture"];
     const fundas: TriggerId[] = ["harness-review", "harness-plan", "harness-sync-card"];
     const execucao: TriggerId[] = ["harness-fix", "harness-qa"];
     for (const f of fundas) expect(usd("harness-do")).toBeGreaterThanOrEqual(usd(f));

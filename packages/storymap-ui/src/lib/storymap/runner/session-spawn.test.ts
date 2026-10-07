@@ -22,8 +22,17 @@ import {
   spawnWorkSession,
   hostNeedsRootBypass,
   writeSessionMcpConfig,
+  CONDUCTOR_TOOLS,
+  sessionToolScope,
+  sessionMcpToolset,
+  sessionContextPackPath,
+  writeSessionContextPack,
+  removeSessionArtifacts,
+  SHELL_RUNNING_TOOLS,
+  HARD_DENY_COVERED_SHELL_TOOLS,
   type SessionSpawnDeps,
 } from "./session-spawn";
+import { MCP_TOOLSET_HEADER } from "@/lib/storymap/mcp/toolsets";
 import { sessionClaimActor, type CardClaim } from "./claims";
 import type { AgentRole, AgentSession, SessionStore } from "./session-worktree";
 
@@ -136,6 +145,70 @@ describe("buildSessionClaudeArgs — FATO MEDIDO: --mcp-config é VARIÁDICO", (
   });
 });
 
+// O início de uma sessão de condutor custava ~236k tokens porque ela herdava TUDO do operador (conectores, plugins,
+// MCPs globais, todas as tools nativas). Só o PAPEL condutor fica enxuto; o terminal do operador segue como hoje.
+describe("superfície do condutor — --tools + --strict-mcp-config SÓ para o driver conductor", () => {
+  it("condutor: o argv exato — prompt PRIMEIRO, --tools numa string só, --strict-mcp-config, --mcp-config ÚLTIMO", () => {
+    const args = buildSessionClaudeArgs({
+      prompt: "/harness-conductor acme/story-ex9101",
+      model: "opus",
+      effort: "high",
+      mcpConfigPath: "/s/x.json",
+      ...sessionToolScope("conductor"),
+    });
+    expect(args).toEqual([
+      "/harness-conductor acme/story-ex9101",
+      "--model",
+      "opus",
+      "--effort",
+      "high",
+      "--tools",
+      "Agent,Bash,Read,Edit,Write,Glob,Grep,TaskStop,WebFetch,WebSearch,ToolSearch",
+      "--strict-mcp-config",
+      "--mcp-config",
+      "/s/x.json",
+    ]);
+  });
+
+  it("SEGURANÇA: nenhuma tool que roda shell fora da trava dura do host (o hook gerenciado casa só com `Bash`)", () => {
+    // `Monitor` executa o `command` dele no mesmo shell, e o hook `hard-deny` sai cedo para todo tool_name que não seja
+    // Bash: uma sessão com Monitor rodaria o comando catastrófico que a trava recusa sem ela ver. Esta lista quebra antes.
+    const shells = CONDUCTOR_TOOLS.filter((t) => (SHELL_RUNNING_TOOLS as readonly string[]).includes(t));
+    expect(shells.filter((t) => !HARD_DENY_COVERED_SHELL_TOOLS.includes(t))).toEqual([]);
+    expect(CONDUCTOR_TOOLS as readonly string[]).not.toContain("Monitor");
+  });
+
+  it("--tools é variádico: a lista é UM token e o seguinte é uma flag (nunca um valor que ela engula)", () => {
+    const args = buildSessionClaudeArgs({ prompt: "p", mcpConfigPath: "/s/x.json", ...sessionToolScope("conductor") });
+    const i = args.indexOf("--tools");
+    expect(args[i + 1]).toBe(CONDUCTOR_TOOLS.join(","));
+    expect(args[i + 2].startsWith("--")).toBe(true);
+    expect(args.indexOf("--mcp-config")).toBe(args.length - 2);
+  });
+
+  it("sessão comum (sem driver, ou o terminal do operador): o argv de sempre, sem --tools nem --strict-mcp-config", () => {
+    expect(sessionToolScope(undefined)).toEqual({});
+    const args = buildSessionClaudeArgs({ prompt: "p", model: "opus", mcpConfigPath: "/s/x.json", ...sessionToolScope(undefined) });
+    expect(args).toEqual(["p", "--model", "opus", "--mcp-config", "/s/x.json"]);
+  });
+
+  it("condutor SEM token: estrito mesmo assim (nenhuma MCP do operador vaza), e nada depois do prompt é posicional", () => {
+    const args = buildSessionClaudeArgs({ prompt: "p", ...sessionToolScope("conductor") });
+    expect(args).toEqual(["p", "--tools", CONDUCTOR_TOOLS.join(","), "--strict-mcp-config"]);
+  });
+
+  it("a lista do condutor não carrega tool que ele não usa (Skill, NotebookEdit, AskUserQuestion…)", () => {
+    for (const t of ["Skill", "NotebookEdit", "AskUserQuestion"]) expect(CONDUCTOR_TOOLS).not.toContain(t as never);
+  });
+
+  // MEDIDO no CLI 2.1.289 (stream-json, um MCP de 140 tools, --strict-mcp-config): sem ToolSearch nenhum schema MCP é
+  // adiado — o 1º turno leva os 140 (~125k tokens); com ela, ~7,6k, e a tool MCP segue chamável nos dois casos. Tirar
+  // ToolSearch da lista enxuta só INFLA o início que a lista existe para cortar.
+  it("ToolSearch FICA na lista do condutor: é ela que deixa o CLI adiar os schemas do MCP", () => {
+    expect(CONDUCTOR_TOOLS).toContain("ToolSearch");
+  });
+});
+
 describe("shellQuote/buildSessionCommand — o comando vai p/ `bash -lc`", () => {
   it("aspas simples no prompt não escapam do quoting (nem viram comando)", () => {
     const cmd = buildSessionCommand("claude", buildSessionClaudeArgs({ prompt: `don't; rm -rf /` }));
@@ -183,6 +256,12 @@ describe("buildSessionPrompt — o contrato chega COM a sessão, não num doc qu
     const p = buildSessionPrompt({ ...base, worktreePath: "/w", branch: "agent/s-1", handoff: true });
     expect(p).toContain("RECICLAGEM");
     expect(p).toContain("não recomece do zero");
+  });
+
+  it("fase 7 — a reciclagem de um condutor de LOTE nomeia os itens, cujos claims já são da sessão", () => {
+    const p = buildSessionPrompt({ ...base, board: "acme", cardId: "story-ex9501", handoff: true, batchCardIds: ["story-ex9502", "story-ex9503"] });
+    expect(p).toContain("LOTE: acme/story-ex9502, acme/story-ex9503");
+    expect(buildSessionPrompt({ ...base, board: "acme", cardId: "story-ex9501" })).not.toContain("LOTE:");
   });
 });
 
@@ -559,6 +638,27 @@ describe("sessão condutora — comando na frente, driver no registro, reciclage
     const [stored] = await deps.worktree.store.load();
     expect(stored.driver).toBe("conductor");
     expect(commands[0]).toContain("'/harness-conductor acme/story-1\n\n");
+    // o condutor nasce ENXUTO: só as tools que ele usa, só o MCP do AgileHarness
+    expect(commands[0]).toContain(`'--tools' '${CONDUCTOR_TOOLS.join(",")}' '--strict-mcp-config'`);
+  });
+
+  it("spawnWorkSession SEM driver (o terminal do operador via claude_new): nada de --tools nem --strict-mcp-config", async () => {
+    const commands: string[] = [];
+    const deps = spawnDeps({
+      tmux: {
+        exists: async () => false,
+        create: async (_n: string, command: string) => {
+          commands.push(command);
+          return { ok: true };
+        },
+        survives: async () => true,
+        kill: async () => {},
+      } as never,
+    });
+    const res = await spawnWorkSession(deps, { role: "triage", task: "/harness-conductor acme/story-1", board: "acme", cardId: "story-1" });
+    expect(res.ok).toBe(true);
+    expect(commands[0]).not.toContain("--tools");
+    expect(commands[0]).not.toContain("--strict-mcp-config");
   });
 
   it("recycleSession de um condutor: o prompt novo começa pelo comando da skill (+ o handoff)", async () => {
@@ -596,6 +696,8 @@ describe("sessão condutora — comando na frente, driver no registro, reciclage
     expect(res.ok).toBe(true);
     expect(commands[0]).toContain("'/harness-conductor acme/story-1\n\n");
     expect(commands[0]).toContain("RECICLAGEM");
+    // o reciclado herda a MESMA superfície enxuta do despachado
+    expect(commands[0]).toContain(`'--tools' '${CONDUCTOR_TOOLS.join(",")}' '--strict-mcp-config'`);
   });
 });
 
@@ -678,5 +780,182 @@ describe("o modelo da sessão com a variante de 1M (v0.8.2)", () => {
 
   it("o override do chamador (o condutor) com [1m] vence a rota do card", () => {
     expect(resolveSessionRoute({ role: "implement", override: "opus[1m]", cardRoute: { model: "sonnet", effort: "high" } }).model).toBe("opus[1m]");
+  });
+});
+
+// ── o PACOTE DE CONTEXTO e o CONJUNTO DE TOOLS do papel (fase 6) ─────────────────────────────────────────────────
+// O condutor nasce com o norte do produto no prompt de SISTEMA (`--append-system-prompt-file`, o canal que sobrevive à
+// compactação) e com a superfície MCP do papel dele (o cabeçalho de toolset no arquivo de MCP). Uma sessão que não é
+// condutora não muda nada.
+describe("o condutor nasce com o pacote de contexto e o conjunto de tools do papel", () => {
+  function recording(over: Partial<SessionSpawnDeps> = {}) {
+    const commands: string[] = [];
+    const files = new Map<string, { data: string; opts: unknown }>();
+    const deps = spawnDeps({
+      fs: {
+        mkdir: async () => undefined,
+        writeFile: async (file: unknown, data: unknown, opts: unknown) => void files.set(String(file), { data: String(data), opts }),
+      } as never,
+      tmux: {
+        exists: async () => false,
+        create: async (_n: string, command: string) => {
+          commands.push(command);
+          return { ok: true };
+        },
+        survives: async () => true,
+        kill: async () => {},
+      } as never,
+      contextPack: async (board: string, cardId: string) => ({ text: `# Pacote de contexto · ${board}/${cardId} · abc123`, hash: "abc123", tokens: 12 }),
+      ...over,
+    });
+    return { deps, commands, files };
+  }
+  const conduct = { role: "triage" as AgentRole, task: "conduzir", board: "acme", cardId: "story-ex9101", driver: "conductor" as const, command: "/harness-conductor acme/story-ex9101" };
+
+  it("spawn de condutor: escreve o pacote (0600) e o entrega por --append-system-prompt-file ANTES do --mcp-config", async () => {
+    const { deps, commands, files } = recording();
+    const res = await spawnWorkSession(deps, conduct);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const packPath = sessionContextPackPath("/state", res.session.sessionId);
+    expect(files.get(packPath)?.data).toContain("# Pacote de contexto · acme/story-ex9101 · abc123");
+    expect(files.get(packPath)?.opts).toMatchObject({ mode: 0o600 });
+    expect(res.contextPack).toEqual({ path: packPath, hash: "abc123", tokens: 12 });
+    const cmd = commands[0];
+    expect(cmd).toContain(`'--append-system-prompt-file' '${packPath}'`);
+    // fato 1: o --mcp-config é variádico e fica por ÚLTIMO
+    expect(cmd.indexOf("--append-system-prompt-file")).toBeLessThan(cmd.indexOf("--mcp-config"));
+    expect(cmd.trimEnd().endsWith(`'${sessionMcpConfigPath("/state", res.session.sessionId)}'`)).toBe(true);
+  });
+
+  it("o arquivo de MCP do condutor pede o conjunto `conductor` (o token segue o mesmo, fora do argv)", async () => {
+    const { deps, files } = recording();
+    const res = await spawnWorkSession(deps, conduct);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const cfg = JSON.parse(files.get(sessionMcpConfigPath("/state", res.session.sessionId))!.data);
+    expect(cfg.mcpServers.storymap.headers[MCP_TOOLSET_HEADER]).toBe("conductor");
+    expect(cfg.mcpServers.storymap.url).toContain("/api/mcp/tok/mcp");
+  });
+
+  it("sessão que NÃO é condutora: sem pacote, sem cabeçalho de papel (herda a superfície do nível, como antes)", async () => {
+    let asked = 0;
+    const { deps, commands, files } = recording({
+      contextPack: async () => {
+        asked++;
+        return { text: "x", hash: "h", tokens: 1 };
+      },
+    });
+    const res = await spawnWorkSession(deps, { role: "triage", task: "t", board: "acme", cardId: "story-ex9101" });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(asked).toBe(0);
+    expect(commands[0]).not.toContain("--append-system-prompt-file");
+    expect(res.contextPack).toBeUndefined();
+    const cfg = JSON.parse(files.get(sessionMcpConfigPath("/state", res.session.sessionId))!.data);
+    expect(cfg.mcpServers.storymap.headers?.[MCP_TOOLSET_HEADER]).toBeUndefined();
+  });
+
+  it("FAIL-OPEN: o montador do pacote falha ⇒ a sessão nasce sem pacote (nunca deixa de nascer por ele)", async () => {
+    const { deps, commands } = recording({
+      contextPack: async () => {
+        throw new Error("disco");
+      },
+    });
+    const res = await spawnWorkSession(deps, conduct);
+    expect(res.ok).toBe(true);
+    expect(commands[0]).not.toContain("--append-system-prompt-file");
+  });
+
+  it("reciclagem de um condutor RE-MONTA o pacote (as fontes podem ter mudado) e mantém o conjunto do papel", async () => {
+    const store = memSessionStore([
+      {
+        sessionId: "s-live",
+        agentId: "a-live",
+        role: "implement",
+        task: "conduzir",
+        branch: "agent/s-live",
+        worktreePath: "/w",
+        baseCommit: "b",
+        board: "acme",
+        cardId: "story-ex9101",
+        driver: "conductor",
+        tmuxSession: "agent-velha",
+        openedAt: new Date(0).toISOString(),
+        heartbeatAt: new Date(0).toISOString(),
+      },
+    ]);
+    let n = 0;
+    const { deps, commands, files } = recording({
+      worktree: { ...spawnDeps().worktree, store } as never,
+      contextPack: async () => ({ text: `pacote v${++n}`, hash: `h${n}`, tokens: 3 }),
+    });
+    const res = await recycleSession(deps, { sessionId: "s-live" });
+    expect(res.ok).toBe(true);
+    expect(n).toBe(1);
+    expect(files.get(sessionContextPackPath("/state", "s-live"))?.data).toBe("pacote v1");
+    expect(commands[0]).toContain(`'--append-system-prompt-file' '${sessionContextPackPath("/state", "s-live")}'`);
+    expect(JSON.parse(files.get(sessionMcpConfigPath("/state", "s-live"))!.data).mcpServers.storymap.headers[MCP_TOOLSET_HEADER]).toBe("conductor");
+  });
+
+  it("a linha do registro guarda hash + tokens do pacote (telemetria; o que a skill compara depois de reciclar)", async () => {
+    const { deps } = recording();
+    const res = await spawnWorkSession(deps, conduct);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const row = (await deps.worktree.store.load()).find((r) => r.sessionId === res.session.sessionId);
+    expect(row?.contextPack).toEqual({ hash: "abc123", tokens: 12 });
+  });
+
+  it("skill MONOLÍTICA no worktree (sem ref/) ⇒ sem pacote: com ela o pacote só somaria tokens", async () => {
+    const seen: string[] = [];
+    let asked = 0;
+    const { deps, commands } = recording({
+      hasSplitConductorSkill: async (cwd: string) => {
+        seen.push(cwd);
+        return false;
+      },
+      contextPack: async () => {
+        asked++;
+        return { text: "x", hash: "h", tokens: 1 };
+      },
+    });
+    const res = await spawnWorkSession(deps, conduct);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(seen).toEqual(["/repo"]);
+    expect(asked).toBe(0);
+    expect(commands[0]).not.toContain("--append-system-prompt-file");
+    expect((await deps.worktree.store.load()).find((r) => r.sessionId === res.session.sessionId)?.contextPack).toBeUndefined();
+  });
+
+  it("a sessão que sai do registro leva junto o token MCP e o pacote (nada se acumula em .runner/sessions)", async () => {
+    const removed: string[] = [];
+    const base = spawnDeps().worktree;
+    const { deps } = recording({
+      worktree: { ...base, removeSessionFiles: async (id: string) => void removed.push(id) } as never,
+      tmux: { exists: async () => false, create: async () => ({ ok: true }), survives: async () => false, kill: async () => {} } as never,
+    });
+    const res = await spawnWorkSession(deps, conduct);
+    expect(res.ok).toBe(false);
+    expect(removed).toHaveLength(1);
+    const rm: string[] = [];
+    await removeSessionArtifacts({ rm: async (f: unknown) => void rm.push(String(f)) } as never, "/state", "s-9");
+    expect(rm.sort()).toEqual([sessionContextPackPath("/state", "s-9"), sessionMcpConfigPath("/state", "s-9")].sort());
+  });
+
+  it("helpers: o papel só para o condutor; pacote vazio não vira arquivo", async () => {
+    expect(sessionMcpToolset("conductor")).toBe("conductor");
+    expect(sessionMcpToolset(undefined)).toBeUndefined();
+    const fs = { mkdir: async () => undefined, writeFile: async () => undefined } as never;
+    expect(await writeSessionContextPack(fs, "/state", "s", { text: "  ", hash: "h", tokens: 0 })).toBeNull();
+    expect(await writeSessionContextPack(fs, "/state", "s", null)).toBeNull();
+    expect(buildSessionClaudeArgs({ prompt: "p", appendSystemPromptFile: "/s/p.md", mcpConfigPath: "/s/m.json" })).toEqual([
+      "p",
+      "--append-system-prompt-file",
+      "/s/p.md",
+      "--mcp-config",
+      "/s/m.json",
+    ]);
   });
 });

@@ -15,13 +15,11 @@ import {
   removeItem,
   resolveItemTags,
   stripTagFromCanvas,
-  stripUnknownTagRefs,
   tagIdFromName,
   upsertItem,
   MAX_ITEMS_PER_BLOCK,
   MAX_ITEM_TEXT,
 } from "./canvas";
-import { CANVAS_BLOCKS, CANVAS_BLOCK_KEYS, CANVAS_GRID_BLOCKS, subBlocksOf } from "./canvas-blocks";
 import type { BoardConfig, CanvasTag } from "./types";
 
 const TAGS: CanvasTag[] = [
@@ -206,36 +204,6 @@ describe("blockToText / itemsOf", () => {
   });
 });
 
-describe("the block registry (canvas-blocks)", () => {
-  it("has the 9 Lean blocks in the grid + 3 sub-blocks folded into their parents", () => {
-    expect(CANVAS_GRID_BLOCKS).toHaveLength(9);
-    expect(CANVAS_BLOCKS).toHaveLength(12);
-    expect(subBlocksOf("problem").map((b) => b.key)).toEqual(["existingAlternatives"]);
-    expect(subBlocksOf("uniqueValueProposition").map((b) => b.key)).toEqual(["highLevelConcept"]);
-    expect(subBlocksOf("customerSegments").map((b) => b.key)).toEqual(["earlyAdopters"]);
-  });
-
-  it("every grid block carries a fill-order 1..9 EXACTLY once, and a cell", () => {
-    const orders = CANVAS_GRID_BLOCKS.map((b) => b.order).sort((a, b) => (a ?? 0) - (b ?? 0));
-    expect(orders).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    for (const b of CANVAS_GRID_BLOCKS) expect(b.cell).toBeTruthy();
-  });
-
-  it("a sub-block has NO order and points at a REAL parent (senão ele não renderiza em lugar nenhum)", () => {
-    const subs = CANVAS_BLOCKS.filter((b) => b.parent != null);
-    expect(subs).toHaveLength(3);
-    for (const sub of subs) {
-      expect(sub.order).toBeUndefined();
-      expect(CANVAS_BLOCK_KEYS).toContain(sub.parent!);
-      expect(sub.cell).toBeUndefined(); // sub-bloco não ocupa célula própria
-    }
-  });
-
-  it("keys are unique (o agente é validado contra esta lista)", () => {
-    expect(new Set(CANVAS_BLOCK_KEYS).size).toBe(CANVAS_BLOCK_KEYS.length);
-  });
-});
-
 describe("ensureItemIds — a repeated id is two items, not one", () => {
   it("RE-KEYS a duplicate id (React would otherwise render two notes as one, and deleting either would delete both)", () => {
     const out = ensureItemIds([
@@ -244,32 +212,6 @@ describe("ensureItemIds — a repeated id is two items, not one", () => {
     ]);
     expect(out.map((i) => i.text)).toEqual(["primeiro", "segundo"]); // nenhum item se perde
     expect(new Set(out.map((i) => i.id)).size).toBe(2); // e os ids são distintos
-  });
-});
-
-describe("stripUnknownTagRefs — the referential invariant (no item wears a tag that doesn't exist)", () => {
-  const tags: CanvasTag[] = [{ id: "ciclista", name: "Ciclista" }];
-
-  it("strips a ref to a tag outside the vocabulary and returns ONLY the blocks it repaired", () => {
-    const canvas = {
-      problem: {
-        items: [
-          { id: "i1", text: "a", tags: ["ciclista", "fantasma"] },
-          { id: "i2", text: "b", tags: ["fantasma"] },
-        ],
-      },
-      solution: { items: [{ id: "i1", text: "c", tags: ["ciclista"] }] },
-    };
-    const repaired = stripUnknownTagRefs(canvas, tags);
-    expect(Object.keys(repaired)).toEqual(["problem"]); // solution já estava íntegro
-    expect(repaired.problem?.items[0].tags).toEqual(["ciclista"]);
-    expect(repaired.problem?.items[1].tags).toBeUndefined(); // sem tag válida → o campo some
-    expect(canvas.problem.items[0].tags).toEqual(["ciclista", "fantasma"]); // entrada intocada
-  });
-
-  it("an EMPTY vocabulary orphans every ref — and the repair clears them all", () => {
-    const canvas = { problem: { items: [{ id: "i1", text: "a", tags: ["ciclista"] }] } };
-    expect(stripUnknownTagRefs(canvas, []).problem?.items[0].tags).toBeUndefined();
   });
 });
 

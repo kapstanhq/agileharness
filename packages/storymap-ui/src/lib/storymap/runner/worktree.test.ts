@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { sessionsFilePath } from "./session-liveness";
@@ -6,8 +6,14 @@ import {
   commitBoardDataScoped,
   deprovisionNodeModules,
   expandWorkspaceGlob,
+  makePrePushScan,
   makeWorktreeOps,
   planNodeModulesLinks,
+  prePushScanNotes,
+  PRE_PUSH_SCAN_TIMEOUT_CAP_MS,
+  resetPrePushScanStateForTests,
+  scaledScanTimeout,
+  scannerSupportsPerCommit,
   provisionNodeModules,
   repoRootOfWorktree,
   rescueCommitMessage,
@@ -16,10 +22,12 @@ import {
   runWorktreePath,
   sanitizeWorkspaceGlobs,
   workspaceGlobsFromPackageJson,
+  withPrivateMessageFile,
   type ExecFn,
   type WorktreeFs,
 } from "./worktree";
 import { itPosix } from "./test-platform";
+import { CAPABILITIES_LINE } from "../../../../../../scripts/git-hooks/scan-secrets.mjs";
 
 // A recording exec double (DI) so the git plumbing is unit-testable without touching a real
 // repo. Each WorktreeOps method is asserted by the exact `git` command line + cwd it issues.
@@ -100,7 +108,7 @@ describe("WorktreeOps.commit — git add -A && git commit on the run branch (f1)
     ]);
     // story-ex0156: a mensagem é TEXTO LIVRE (trailer Decision: do agente) e NUNCA vai inline no
     // shell — só o PATH controlado do arquivo -F. O conteúdo chega ao git byte-exato.
-    expect(calls[3].cmd).toMatch(/^git commit --no-verify -F "[^"]*harness-commit-msg-\d+-\d+\.txt"$/);
+    expect(calls[3].cmd).toMatch(/^git commit --no-verify -F "[^"]*\/harness-msg-[^/"]+\/COMMIT_MSG"$/);
     expect(messages).toEqual(["usm(harness-do): acme/story-1 [run sess-1]"]);
     expect(calls.every((c) => c.cwd === worktreePath)).toBe(true);
   });
@@ -259,7 +267,7 @@ describe("WorktreeOps.commitBoardState — HEAD=estado boundary commit, SCOPED t
       `"${process.execPath}" "${scanner}" --staged`,
     ]);
     // story-ex0156: mensagem via arquivo -F (nunca inline no shell), byte-exata.
-    expect(calls[3].cmd).toMatch(/^git commit --no-verify -F "[^"]*harness-commit-msg-\d+-\d+\.txt"$/);
+    expect(calls[3].cmd).toMatch(/^git commit --no-verify -F "[^"]*\/harness-msg-[^/"]+\/COMMIT_MSG"$/);
     expect(messages).toEqual(["board: estado vivo (storymap/story-1)"]);
     expect(calls.map((c) => c.cmd)).not.toContain("git add -A"); // ex0112: the whole-tree sweep IS the bug
     expect(calls.every((c) => c.cwd === "/repo")).toBe(true);
@@ -417,7 +425,7 @@ describe("WorktreeOps.commitBoardStateAndPush — scoped commit + push to origin
     const { exec, calls } = makeExec("storymap/boards/storymap/cards/story-1.md\n");
     const res = await makeWorktreeOps(exec).commitBoardStateAndPush("/repo", "board: storymap/story-1");
     expect(res).toMatchObject({ committed: true, pushed: true });
-    expect(calls.map((c) => c.cmd)).toContain("git push origin HEAD");
+    expect(calls.map((c) => c.cmd)).toContain("git push origin HEAD --no-follow-tags");
   });
 
   it("an EMPTY board delta commits nothing and pushes nothing (gated on a real commit)", async () => {
@@ -1075,5 +1083,100 @@ describe("commitBoardDataScoped — a régua de código é a DECLARADA (layout p
     // A fonte é o que garante que o caminho de produção (que chama com 3 argumentos) use o declarado.
     const fonte = readFileSync(path.join(__dirname, "worktree.ts"), "utf8");
     expect(fonte).toMatch(/codePrefixes: readonly string\[\] \| undefined = declaredCodePrefixes\(loadRunnerConfig\(\)\.autorun\.staging\)/);
+  });
+});
+
+// A mensagem de commit é texto livre AINDA NÃO VARRIDO (o scan roda depois do commit): o arquivo que a leva ao
+// `git commit -F` não pode ser legível por outro usuário do /tmp compartilhado, nem ter nome previsível, nem
+// sobrar quando o commit lança.
+describe("withPrivateMessageFile — o arquivo da mensagem é privado e sempre sai", () => {
+  itPosix("diretório 0700 e arquivo 0600, nome aleatório, conteúdo exato; tudo apagado depois", async () => {
+    let seen = "";
+    const out = await withPrivateMessageFile("feat: x\n\ncorpo", async (file) => {
+      seen = file;
+      expect(statSync(path.dirname(file)).mode & 0o777).toBe(0o700);
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+      expect(readFileSync(file, "utf8")).toBe("feat: x\n\ncorpo");
+      return "ok";
+    });
+    expect(out).toBe("ok");
+    expect(path.basename(path.dirname(seen))).toMatch(/^harness-msg-.{6}$/);
+    expect(existsSync(path.dirname(seen))).toBe(false);
+  });
+
+  itPosix("apaga o diretório mesmo quando o commit LANÇA", async () => {
+    let seen = "";
+    await expect(
+      withPrivateMessageFile("msg", async (file) => {
+        seen = file;
+        throw new Error("commit falhou");
+      }),
+    ).rejects.toThrow("commit falhou");
+    expect(existsSync(path.dirname(seen))).toBe(false);
+  });
+});
+
+describe("makePrePushScan — sonda de capacidade do scanner do ALVO e timeout escalado", () => {
+  const A = "a".repeat(40);
+  const B = "b".repeat(40);
+  // a cópia do scanner do alvo: `caps` = o que ela imprime em --capabilities; `count` = o rev-list --count
+  function makeExec(opts: { caps: string; count?: string; scanExit?: number }) {
+    const calls: Array<{ cmd: string; timeout: number }> = [];
+    const exec: ExecFn = async (cmd, o) => {
+      calls.push({ cmd, timeout: o?.timeout ?? 0 });
+      if (cmd.includes("--capabilities")) return { stdout: opts.caps, stderr: "" };
+      if (cmd.includes("rev-list --count")) return { stdout: opts.count ?? "", stderr: "" };
+      if (cmd.includes("scan-secrets.mjs") && opts.scanExit) throw Object.assign(new Error("x"), { code: opts.scanExit, stderr: "achado" });
+      return { stdout: "", stderr: "" };
+    };
+    const scans = () => calls.filter((c) => c.cmd.includes("scan-secrets.mjs") && c.cmd.includes("--range"));
+    return { exec, calls, scans };
+  }
+
+  it("a linha que o scanner imprime é a que o portão reconhece (os dois lados do contrato)", () => {
+    expect(scannerSupportsPerCommit(`${CAPABILITIES_LINE}\n`)).toBe(true);
+    expect(scannerSupportsPerCommit("")).toBe(false);
+    expect(scannerSupportsPerCommit("scan-secrets-capabilities: range messages\n")).toBe(false);
+  });
+
+  it("scanner que ANUNCIA as capacidades: varre por commit e com mensagens, sem aviso", async () => {
+    resetPrePushScanStateForTests();
+    const { exec, scans } = makeExec({ caps: `${CAPABILITIES_LINE}\n` });
+    expect(await makePrePushScan(exec, "/alvo", "/alvo", 60_000)(`${A}..${B}`)).toBeNull();
+    expect(scans()[0]?.cmd).toMatch(/--range [0-9a-f]{40}\.\.[0-9a-f]{40} --messages --per-commit$/);
+    expect(prePushScanNotes()).toEqual([]);
+  });
+
+  it("cópia ANTIGA (ignora as flags e não imprime a linha): cai no modo antigo — não trava o push — e o aviso fica visível", async () => {
+    resetPrePushScanStateForTests();
+    const { exec, scans } = makeExec({ caps: "" });
+    expect(await makePrePushScan(exec, "/alvo", "/alvo", 60_000)(`${A}..${B}`)).toBeNull();
+    expect(scans()[0]?.cmd).toMatch(/--range [0-9a-f]{40}\.\.[0-9a-f]{40}$/); // sem flags que ela fingiria cumprir
+    expect(prePushScanNotes().join("")).toMatch(/DEGRADADA em \/alvo/);
+    // o achado da cópia antiga continua retendo (exit 2), e o erro dela continua fail-closed
+    const found = makeExec({ caps: "", scanExit: 2 });
+    expect(await makePrePushScan(found.exec, "/alvo", "/alvo", 60_000)(`${A}..${B}`)).toMatchObject({ internalError: false });
+    const broken = makeExec({ caps: "", scanExit: 1 });
+    expect(await makePrePushScan(broken.exec, "/alvo", "/alvo", 60_000)(`${A}..${B}`)).toMatchObject({ internalError: true });
+    // atualizada a cópia, o aviso some no próximo push
+    const upgraded = makeExec({ caps: `${CAPABILITIES_LINE}\n` });
+    await makePrePushScan(upgraded.exec, "/alvo", "/alvo", 60_000)(`${A}..${B}`);
+    expect(prePushScanNotes()).toEqual([]);
+  });
+
+  it("o timeout ESCALA com os commits do range (um acúmulo grande não vira erro interno permanente), até o teto", async () => {
+    resetPrePushScanStateForTests();
+    const { exec, scans } = makeExec({ caps: `${CAPABILITIES_LINE}\n`, count: "1800\n" });
+    await makePrePushScan(exec, "/alvo", "/alvo", 60_000)(`${A}..${B}`);
+    expect(scans()[0]?.timeout).toBe(scaledScanTimeout(60_000, 1800));
+    expect(scaledScanTimeout(60_000, 1800)).toBeGreaterThan(1800 * 76); // o pior custo medido por commit
+    expect(scaledScanTimeout(60_000, 0)).toBe(60_000);
+    expect(scaledScanTimeout(60_000, 10_000_000)).toBe(PRE_PUSH_SCAN_TIMEOUT_CAP_MS);
+  });
+
+  it("um range fora de forma nunca chega ao shell (erro interno, sem exec)", async () => {
+    const { exec, calls } = makeExec({ caps: "" });
+    expect(await makePrePushScan(exec, "/alvo", "/alvo", 60_000)("HEAD~1..HEAD; rm -rf /")).toMatchObject({ internalError: true });
+    expect(calls).toEqual([]);
   });
 });

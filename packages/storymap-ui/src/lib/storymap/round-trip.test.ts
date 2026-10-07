@@ -30,9 +30,6 @@ describe("card serialization round-trip (real gray-matter + js-yaml)", () => {
       narrative: { role: "Como leitor", want: "quero ver os lançamentos do autor", soThat: "para não perder a próxima leitura" },
       acceptance: ["dado X, quando Y, então Z", "outro critério"],
       tasks: [{ id: "t1", title: "buscar", done: true }, { id: "t2", title: "render", done: false }],
-      rice: { reach: 100, impact: 2, confidence: 0.8, effort: 4 },
-      kano: "performance",
-      funnelStage: "activation",
       order: 30,
     });
     const back = roundTrip({ ...original, body: "Descrição do card." });
@@ -46,11 +43,27 @@ describe("card serialization round-trip (real gray-matter + js-yaml)", () => {
     expect(back.narrative).toEqual(original.narrative);
     expect(back.acceptance).toEqual(original.acceptance);
     expect(back.tasks).toEqual(original.tasks);
-    expect(back.rice).toEqual(original.rice);
-    expect(back.kano).toBe("performance");
-    expect(back.funnelStage).toBe("activation");
     expect(back.order).toBe(30);
     expect(back.body).toBe("Descrição do card.");
+  });
+
+  // A priorização saiu do modelo: um card ANTIGO com rice/kano/funil/priorityCall no frontmatter continua legível (as
+  // chaves são ignoradas) e elas somem na próxima gravação — sem quebrar nada do resto.
+  it("tolera a priorização legada no frontmatter e a descarta na gravação", () => {
+    const legacy = card({
+      title: "Card antigo",
+      status: "pronta",
+      order: 20,
+      rice: { reach: 100, impact: 2, confidence: 0.8, effort: 4 },
+      kano: "performance",
+      funnelStage: "activation",
+      priorityCall: { rank: 2, rationale: "r", source: "agent", assessedAt: "2026-01-01" },
+    });
+    expect(legacy.title).toBe("Card antigo");
+    expect(legacy.order).toBe(20);
+    const fm = cardToFrontmatter(legacy) as Record<string, unknown>;
+    for (const k of ["rice", "kano", "funnelStage", "priorityCall"]) expect(fm, k).not.toHaveProperty(k);
+    expect(roundTrip(legacy).status).toBe("pronta");
   });
 
   it("preserves pipeline-owned fields + normalizes their date fields", () => {
@@ -310,7 +323,7 @@ describe("card serialization round-trip (real gray-matter + js-yaml)", () => {
   it("D15: bet + owner survive the real js-yaml round-trip; both stay sparse when absent", () => {
     const back = roundTrip(
       card({
-        status: "priorizar",
+        status: "pronta",
         owner: "agent",
         bet: {
           assumptions: ["leitores aceitam comprar sem criar conta antes"],
@@ -325,10 +338,10 @@ describe("card serialization round-trip (real gray-matter + js-yaml)", () => {
       riskiestAssumption: "eles confiam na nota média mostrada na vitrine",
       experimentStatus: "untested",
     });
-    const fm = cardToFrontmatter(card({ status: "priorizar" }));
+    const fm = cardToFrontmatter(card({ status: "pronta" }));
     expect("bet" in fm).toBe(false);
     expect("owner" in fm).toBe(false);
     // an assumption-less bet coerces to null on read (coerceBet) → the write side mirrors that: no key
-    expect("bet" in cardToFrontmatter(card({ status: "priorizar", bet: { assumptions: [] } }))).toBe(false);
+    expect("bet" in cardToFrontmatter(card({ status: "pronta", bet: { assumptions: [] } }))).toBe(false);
   });
 });

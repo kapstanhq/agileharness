@@ -37,14 +37,41 @@ export function OptionChips({
   selected,
   onToggle,
   disabled,
+  inlineClassName,
 }: {
   options: HitlOption[];
   mode?: "single" | "multi";
   selected: Set<string>;
   onToggle: (id: string) => void;
   disabled?: boolean;
+  /**
+   * A forma de BOTÃO EM LINHA (a conversa do Jido: botões de borda lado a lado, que quebram de linha). Vale só
+   * quando as opções são AÇÕES — single e sem nada a explicar (sem descrição, sem prós/contras). Com explicação
+   * a linha de largura cheia continua: é ela que dá lugar para o texto que decide a escolha.
+   */
+  inlineClassName?: string;
 }) {
   const single = mode === "single";
+  if (inlineClassName && single && options.every((o) => !optionDetail(o))) {
+    return (
+      <div className="flex flex-wrap gap-2" role="radiogroup">
+        {options.map((o) => (
+          <button
+            key={o.id}
+            type="button"
+            disabled={disabled}
+            onClick={() => onToggle(o.id)}
+            role="radio"
+            aria-checked={selected.has(o.id)}
+            title={o.recommended ? `${o.label} (recomendado)` : o.label}
+            className={inlineClassName}
+          >
+            <span className="truncate">{o.label}</span>
+          </button>
+        ))}
+      </div>
+    );
+  }
   return (
     <div className="space-y-1.5" role={single ? "radiogroup" : undefined}>
       {options.map((o) => {

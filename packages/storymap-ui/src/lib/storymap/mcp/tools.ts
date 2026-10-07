@@ -13,14 +13,14 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { defineTool } from "./register";
-import { currentMcpActor, isScopedActor, mcpActorAttribution } from "./actor";
+import { currentMcpActor, isAgentActor, isScopedActor, mcpActorAttribution } from "./actor";
 import { agentRoundsDecision } from "@/lib/storymap/runner/review-rounds-agent";
 import { getLockedExecService } from "@/lib/storymap/runner/locked-exec-service";
 import { callerTag } from "./caller";
 import { effectiveScope, SCOPE_TYPE_ORDER, scopeCardOf, scopeTypesOf, storyTypeChangeLine, storyTypeChangeRefusal, type BoardPaceView, type ScopeCard } from "@/lib/storymap/runner/board-pace";
 import { boardPaceRow } from "@/lib/storymap/runner/board-pace-store";
 import { appendAgentAction } from "@/lib/storymap/runner/agent-actions";
-import { docIsCanonical, isPrdSection, prdSectionKeys, readGovernedValue } from "@/lib/storymap/doc/doc-governance";
+import { docIsCanonical, isCanvasBlock, isPrdSection, prdSectionKeys, readGovernedValue } from "@/lib/storymap/doc/doc-governance";
 
 import { getBoard, listBoards, readBoardConfig, readCard, readCards } from "@/lib/storymap/repo";
 import { registerBoard, setBoardAutorun } from "@/lib/storymap/board-registry";
@@ -28,6 +28,7 @@ import { BoardDeployConfigSchema } from "@/lib/storymap/contracts";
 import { terminalStatusIds } from "@/lib/storymap/views";
 import { liveOpenBlockers } from "@/lib/storymap/runner/findings";
 import { servesIsPlacement } from "@/lib/storymap/unplaced";
+import { ideaAsTriageCard } from "@/lib/storymap/idea";
 import { getRunnerRegistry } from "@/lib/storymap/runner/registry";
 import { getRunnerEngine } from "@/lib/storymap/runner/engine";
 import { getTelemetryStore } from "@/lib/storymap/runner/telemetry";
@@ -37,7 +38,7 @@ import { describeMainRed, readMainRed } from "@/lib/storymap/runner/gate-health"
 import { getRunnerJournal } from "@/lib/storymap/runner/journal";
 import { getCardClaims, type CardClaim } from "@/lib/storymap/runner/claims";
 import { waitForRunCore } from "@/lib/storymap/runner/run-wait";
-import { allSessions } from "@/lib/storymap/runner/session-worktree";
+import { allSessions, sessionCardIds } from "@/lib/storymap/runner/session-worktree";
 import { readWorktreeSessionCost } from "@/lib/vps/session-cost";
 import { loadRunnerConfig } from "@/lib/storymap/runner/config";
 import { buildCostImpactInput } from "@/lib/storymap/cost-impact";
@@ -95,14 +96,18 @@ import {
   updateFindingStatusAction,
 } from "@/app/actions";
 import {
-  createIdeaAction,
   generateTasksForIdeaAction,
   appendToIdeaAction,
   updateIdeaAction,
 } from "@/app/idea-actions";
 import { readDocAction, writeDocSectionAction } from "@/app/doc-actions";
 import { appendToVocabAction } from "@/app/vocab-actions";
-import { listDocEntries } from "@/lib/storymap/doc/doc-registry";
+import { placeCardInColumnAction } from "@/app/card-order-actions";
+import { listDocEntries, retiredDocMessage } from "@/lib/storymap/doc/doc-registry";
+import { boardFeatures, boardPersonas } from "@/lib/storymap/board-strategy";
+import { featureCtx, featureKeyOf } from "@/lib/storymap/feature-key";
+import { featureAnchoredOnce } from "@/lib/storymap/runner/feature-anchor";
+import { featureOnlyBoardRefusal, featureOnlyFieldsRefused, featureOnlyToolRefusal, isFeatureOnlyHandle } from "./handle-scope";
 import { serializeSchemaDoc } from "@/lib/storymap/doc/schema-codec";
 import { SIDECAR_KINDS, listGovernanceDrafts, readGovernanceDraft, readStyleGuide, writeGovernanceDraft, writeSidecarByKind } from "@/lib/storymap/sidecars";
 import { wireframeDocTextView } from "@/lib/storymap/design-canvas";
@@ -111,13 +116,14 @@ import { makePeerReviewPort, type PeerReviewRequest } from "@/lib/storymap/runne
 import { getCapacityGovernor } from "@/lib/storymap/runner/capacity-service";
 import { governanceConflicts, withdrawRefusal } from "@/lib/storymap/governance";
 import { checkAA } from "@/lib/storymap/style-guide";
-import { styleGuideDriftAction } from "@/app/design-actions";
+import { styleGuideDriftAction, writeStyleGuideSectionAction } from "@/app/design-actions";
 import { EFFORT_LEVELS, GOVERNANCE_ARTIFACTS, MODEL_TIERS } from "@/lib/storymap/types";
-import { CANVAS_BLOCK_KEYS } from "@/lib/storymap/canvas-blocks";
+import { BMC_BLOCK_KEYS } from "@/lib/storymap/doc/schemas/business-model-canvas";
 import type { EffortLevel, ModelTier } from "@/lib/storymap/types";
 import { openQuestions } from "@/lib/storymap/questions";
-import { effectiveAutonomy, isOwnerDecisionQuestion } from "@/lib/storymap/autonomy";
+import { agentAnswerRefusal, effectiveAutonomy } from "@/lib/storymap/autonomy";
 import { ownerPublishHold } from "@/lib/storymap/owner-waiting";
+import { isConducted } from "@/lib/storymap/driver";
 import { followUpItems } from "@/lib/storymap/system-decisions";
 import { touchesPerStory } from "@/lib/storymap/touches";
 import { rolloutReadiness, type RolloutBoardInput } from "@/lib/storymap/rollout";
@@ -127,9 +133,7 @@ import { PIPELINE_OWNED_FIELDS } from "@/lib/storymap/card-merge";
 import {
   BUG_SEVERITY_IDS,
   DISPOSITION_IDS,
-  FUNNEL_IDS,
   IMPROVEMENT_KIND_IDS,
-  KANO_IDS,
   IDEA_STATUS_IDS,
   REMOVAL_LEVEL_IDS,
   REMOVAL_SCOPE_IDS,
@@ -138,21 +142,20 @@ import {
 import type {
   BugSeverity,
   Disposition,
-  FunnelStage,
   ImprovementKind,
-  KanoCategory,
   IdeaStatus,
   RemovalLevel,
   RemovalScope,
   StoryType,
 } from "@/lib/storymap/frameworks";
-import { FINDING_STATUSES } from "@/lib/storymap/types";
+import { FINDING_STATUSES, pipelineMode, stepAutoruns } from "@/lib/storymap/types";
 import { ahHealth, defaultAhHealthDeps } from "@/lib/storymap/health/health-tool";
 import { resolvedClaudeBin } from "../runner/claude-bin";
 import type { Card, CardLink, FindingStatus, Persona, ReviewChainMark, StatusDef, SystemDef, TriggerId } from "@/lib/storymap/types";
 import { triggerForCard } from "@/lib/storymap/skip-routing";
 import { REOPEN_DESTINATIONS, type ReopenDestination } from "@/lib/storymap/reopen";
 import type { CaptureTurn, ProposedItem } from "@/lib/storymap/smart-capture/types";
+import { askFormatProblems } from "@/lib/storymap/inbox/copy";
 
 // --- result helpers -------------------------------------------------------
 
@@ -205,9 +208,8 @@ export function slim(c: Card, isTerminal = false) {
     mode: c.mode ?? null,
     parent: c.parent,
     release: c.release,
-    rice: c.rice,
-    kano: c.kano,
-    funnelStage: c.funnelStage,
+    // a funcionalidade do PRD (fase 7) — só quando o card tem uma (o shape dos cards sem ela não muda).
+    ...(c.feature ? { feature: c.feature } : {}),
     tasks: { done: c.tasks.filter((t) => t.done).length, total: c.tasks.length },
     acceptance: c.acceptance.length,
     openFindings: c.findings.filter((f) => f.status === "open").length,
@@ -221,10 +223,30 @@ export function slim(c: Card, isTerminal = false) {
  * get_card body-cost projection (story-ex0021). The card's `body` (long accumulated markdown) is the
  * only heavy field; a status/field check in an orchestration session doesn't need it. `verbose:false`
  * (the DEFAULT) DROPS it — keeping every structured control field (status, tasks, acceptance, findings,
- * rice/kano, reviewedAt/qaPassed…) — and leaves a `bodyOmitted` + `bodyChars` marker so the caller knows
+ * reviewedAt/qaPassed…) — and leaves a `bodyOmitted` + `bodyChars` marker so the caller knows
  * a body exists and can re-request with `verbose:true`. `verbose:true` returns the card INTACT (the legacy
  * shape). Additive/backward-safe: the param is optional; only the default RESPONSE shape got leaner.
  */
+/**
+ * Fase 7 — confere a funcionalidade pedida contra as do PRD do board. `undefined` ⇒ nada a mudar; `null`/vazio ⇒ limpar
+ * («Outros»); id desconhecido ⇒ a recusa com a lista dos válidos. Agente nunca inventa funcionalidade: a nova é um
+ * `propose_change` no PRD.
+ */
+async function resolveFeatureArg(board: string, raw: string | null | undefined): Promise<{ ok: true; value: string | null | undefined } | { ok: false; error: string }> {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const id = raw?.trim() ?? "";
+  if (!id) return { ok: true, value: null };
+  const features = await boardFeatures(board).catch(() => []);
+  if (features.some((f) => f.id === id)) return { ok: true, value: id };
+  if (!features.length) {
+    return { ok: false, error: `feature «${id}»: o PRD deste board não tem funcionalidades (seção «Funcionalidades», um ### por funcionalidade) — deixe o campo vazio, ou proponha a funcionalidade com propose_change.` };
+  }
+  return {
+    ok: false,
+    error: `feature «${id}» não existe no PRD deste board. Válidas: ${features.map((f) => `${f.id} (${f.name})`).join("; ")}. Nenhuma serve? Deixe vazio (null = «Outros») ou proponha uma nova com propose_change.`,
+  };
+}
+
 export function projectCardForGet(c: Card, verbose = false) {
   if (verbose) return c;
   const { body, ...rest } = c;
@@ -243,7 +265,7 @@ const proposedItemShape = z.object({
   tempId: z.string().describe("id do item dentro deste lote (ex.: 'i1'), usado em refs de parent"),
   type: z
     .enum(["story", "activity", "step", "idea"])
-    .describe("idea = uma DOR/problema (espaço do problema); nasce inerte na bancada de Ideias; a evidência vai no campo body"),
+    .describe("idea = uma DOR/problema (espaço do problema); nasce inerte e SEM tela (a bancada de Ideias saiu); para a dor aparecer na Triagem do Kanban, prefira type:'story' storyType:'user' que enuncia a necessidade; a evidência vai no campo body"),
   title: z.string(),
   storyType: enumOf<StoryType>(STORY_TYPE_IDS as StoryType[]).nullable().optional(),
   parent: z.string().nullable().optional().describe("id de card existente OU tempId do mesmo lote OU null"),
@@ -295,7 +317,6 @@ const proposedItemShape = z.object({
   candidateSolutions: z.array(z.string()).optional().describe("SÓ type:idea — soluções candidatas (espaço da solução, OST-light)"),
   keyAssumption: z.string().nullable().optional().describe("SÓ type:idea — premissa mais arriscada a validar antes de apostar"),
   successSignal: z.string().nullable().optional().describe("SÓ type:idea — sinal-líder de que a dor está sendo resolvida"),
-  valueSize: z.object({ reach: z.number().nullable(), impact: z.number().nullable() }).nullable().optional().describe("SÓ type:idea — dimensionamento de valor da dor (stories herdam)"),
 });
 
 // --- enqueue resolution ---------------------------------------------------
@@ -469,7 +490,9 @@ export function registerStorymapTools(server: McpServer): void {
         board: r.board,
         armed: cfg ? cfg.autorunDisabled !== true : r.armed,
         changed: r.changed,
-        colunasQueDisparam: (cfg?.statuses ?? []).filter((s) => s.autorun === true && s.trigger).map((s) => s.id),
+        // O pipeline híbrido: num board com condutor os passos `autorunOnlyInColumns` não disparam (stepAutoruns).
+        colunasQueDisparam: cfg ? cfg.statuses.filter((s) => stepAutoruns(s, cfg) && s.trigger).map((s) => s.id) : [],
+        pipeline: cfg ? pipelineMode(cfg) : null,
       });
     },
   );
@@ -498,6 +521,51 @@ export function registerStorymapTools(server: McpServer): void {
       if (board && !views.length) return fail(`board "${board}" não existe — confira o id com list_boards.`);
       const shown = views.map(paceToolView);
       return json(board ? shown[0] : { boards: shown });
+    },
+  );
+
+  // A AUTONOMIA do board (autonomy-profile.ts) — só leitura, para os agentes lerem o perfil em vez de deduzir do yaml.
+  // Não existe tool de escrita: a autonomia muda só pelo painel do operador, com a sessão dele.
+  defineTool(server,
+    "board_autonomy",
+    {
+      title: "Autonomia do board (o que os agentes decidem sozinhos)",
+      description:
+        "Lê a AUTONOMIA de um board: `profile` = cada caixa do que os agentes podem fazer sozinhos (spec = o crítico aprova " +
+        "o plano e o procurador responde as dúvidas da especificação; design = escolher a tela; delivery = atravessar " +
+        "«Aprovar entrega» com a prova; publish = publicar; deploy = deploy em produção; spendRaise = passar do teto de " +
+        "gasto do card dentro do ritmo; copilot = o Jido agir no board; sentinel = a Sentinela consertar a máquina — EM BREVE, " +
+        "nada a lê ainda), `conflicts` (caixas ligadas sem a pré-requisito, num board legado), " +
+        "`preset` (minima | maxima | personalizada) e `alwaysOwner` — o que é do dono em QUALQUER perfil (dinheiro e " +
+        "código de cobrança, marca, PRD e metas, dados de pessoas, comandos travados, irreversível e comandos fora da " +
+        "trava, a própria autonomia; mudar um teste existente também espera o dono). Com uma caixa desligada, aquele ponto PARA no dono — pergunte ou espere, nunca atravesse. " +
+        "Só leitura: nenhum agente muda a autonomia.",
+      inputSchema: { board: z.string().describe("id do board") },
+    },
+    async ({ board }) => {
+      const config = await readBoardConfig(board).catch(() => null);
+      if (!config) return fail(`board "${board}" não existe — confira o id com list_boards.`);
+      const { autonomyProfileOf, shownPresetOf, hasExplicitProfile, alwaysOwnerPoints, dependencyBlock, profileConflicts, AUTONOMY_BOXES } = await import("@/lib/storymap/autonomy-profile");
+      const { loadRunnerConfig } = await import("@/lib/storymap/runner/config");
+      const profile = autonomyProfileOf(config, loadRunnerConfig());
+      const explicit = hasExplicitProfile(config);
+      return json({
+        board,
+        profile,
+        // o nível que a TELA mostra: um agente nunca lê «Máxima» quando o dono vê «Personalizada»
+        preset: shownPresetOf(profile),
+        source: explicit ? "explicit" : "legacy",
+        boxes: AUTONOMY_BOXES.map((b) => ({
+          key: b.key,
+          label: b.label,
+          on: profile[b.key],
+          ...(b.soon ? { soon: true } : {}),
+          ...(profile[b.key] ? {} : { blockedBy: dependencyBlock(profile, b.key) }),
+        })),
+        conflicts: profileConflicts(profile),
+        alwaysOwner: alwaysOwnerPoints(config).map((p) => ({ id: p.id, label: p.label, detail: p.long ?? p.detail })),
+        cardException: "Card.autonomyMode (set_card_autonomy) sobrepõe só spec, design e delivery daquele card.",
+      });
     },
   );
 
@@ -622,7 +690,9 @@ export function registerStorymapTools(server: McpServer): void {
           name: s.name,
           gate: s.gate ?? null,
           trigger: s.trigger ?? null,
-          autorun: s.autorun ?? false,
+          // o autorun EFETIVO neste board (num board com condutor, os passos do meio não disparam — stepAutoruns)
+          autorun: stepAutoruns(s, cfg),
+          ...(s.autorunOnlyInColumns ? { autorunSoNoModoColunas: true } : {}),
           terminal: s.terminal ?? false,
         })),
       );
@@ -640,16 +710,27 @@ export function registerStorymapTools(server: McpServer): void {
         board: z.string(),
         status: z.string().optional().describe("id da coluna para filtrar, ex.: desenvolver"),
         query: z.string().optional().describe("texto livre que casa título ou id"),
+        feature: z
+          .string()
+          .optional()
+          .describe("id de uma funcionalidade do PRD (get_vocabulary → features) — os cards do grupo dela no Kanban; 'outros' = os que não cabem em nenhuma"),
         limit: z.number().int().positive().max(200).optional().describe("padrão 100"),
       },
     },
-    async ({ board, status, query, limit }) => {
+    async ({ board, status, query, feature, limit }) => {
       let cards = await readCards(board);
       if (!cards.length) {
         const exists = (await listBoards()).some((b) => b.id === board);
         if (!exists) return fail(`board não encontrado: ${board}`);
       }
       if (status) cards = cards.filter((c) => c.status === status);
+      if (feature?.trim()) {
+        // a MESMA chave do Kanban (feature-key.ts): a própria, a herdada do `serves`, ou «Outros».
+        const all = new Map(cards.map((c) => [c.id, c] as const));
+        const ctx = featureCtx(all, await boardFeatures(board).catch(() => []), await featureAnchoredOnce(board).catch(() => false));
+        const want = feature.trim();
+        cards = cards.filter((c) => featureKeyOf(c, ctx).id === want);
+      }
       if (query) {
         const q = query.toLowerCase();
         cards = cards.filter(
@@ -681,7 +762,7 @@ export function registerStorymapTools(server: McpServer): void {
     {
       title: "Detalhar card",
       description:
-        "Retorna os campos de controle de um card: narrativa, critérios de aceite, tasks, RICE/KANO/funil, " +
+        "Retorna os campos de controle de um card: narrativa, critérios de aceite, tasks, " +
         "findings de code-review, modo de reabertura (refine/fix/retire). Por PADRÃO omite o corpo markdown " +
         "(pesado) — devolve só o marcador bodyOmitted+bodyChars — para checagens repetidas de status numa " +
         "sessão de orquestração não pagarem o custo de token do body toda vez. Passe verbose:true quando " +
@@ -735,7 +816,9 @@ export function registerStorymapTools(server: McpServer): void {
       description:
         "Move um card para outra coluna (status) e/ou muda parent/release/ordem. RESPEITA os gates do " +
         "pipeline — se o gate da coluna de destino bloquear, retorna o motivo e não move. Mover para uma " +
-        "coluna com autorun dispara a skill automaticamente (cascata), igual à UI.",
+        "coluna com autorun dispara a skill automaticamente (cascata), igual à UI. A ORDEM DO TRABALHO é a " +
+        "posição na coluna (não há nota de prioridade): `position: top` é o «Fazer antes» (vai ao topo da " +
+        "coluna), `position: bottom` o «Pode esperar» (vai ao fim) — o condutor e o suggest_work seguem essa ordem.",
       inputSchema: {
         board: z.string(),
         cardId: z.string(),
@@ -748,9 +831,15 @@ export function registerStorymapTools(server: McpServer): void {
           .describe("dual-track: node do mapa que esta ENTREGA serve (override do parent); '' limpa"),
         release: z.string().nullable().optional(),
         order: z.number().optional(),
+        position: z
+          .enum(["top", "bottom"])
+          .optional()
+          .describe("«Fazer antes» (top) / «Pode esperar» (bottom): põe o card no topo ou no fim da coluna (depois do move, se houver status)"),
       },
     },
-    async ({ board, cardId, status, parent, serves, release, order }) => {
+    async ({ board, cardId, status, parent, serves, release, order, position }) => {
+      const anchorRefusal = featureOnlyToolRefusal("move_card", "write-board", currentMcpActor());
+      if (anchorRefusal) return fail(anchorRefusal);
       // A decisão do dono ESPERA (owner-waiting.ts): quem move por aqui é um AGENTE — em só-negócio ele não leva ao
       // ar um card com uma decisão do dono aberta. O dono move pela UI; o resto do board segue.
       if (status) {
@@ -765,9 +854,34 @@ export function registerStorymapTools(server: McpServer): void {
         if (current && isScopedActor() && status !== current.status && heldByForcedTransfer(current, cfg)) {
           return fail(`${cardId} chegou a este board por uma mudança forçada e espera o juiz da triagem daqui (ou o operador) — um agente não o tira da Triagem.`);
         }
+        // Fase 6 (6D) — os CRÍTICOS LANÇADOS PELO SERVIÇO (runner/critics.ts): um agente só leva o card a construir com o
+        // plano aprovado (pelo crítico, ou pelo dono na Mínima), e só tira uma entrega autônoma de «Aprovar entrega» com o
+        // verificador independente aprovando ESTA mudança. O crítico que falta é chamado aqui, em segundo plano. Vale para
+        // TODO agente — o escopado e o que entra com o token do operador sob um rótulo de agente (o chat): só o dono, sem
+        // rótulo de agente, passa por cima (o movimento dele vence).
+        if (current && isAgentActor() && status !== current.status) {
+          const { criticMoveHold } = await import("@/lib/storymap/runner/critics-deps");
+          const held = await criticMoveHold(board, current, cfg, status);
+          if (held) return fail(`${cardId}: ${held}`);
+        }
+        if (current && isScopedActor() && status !== current.status) {
+          // A CAIXA DE CORREIO DO CARD (runner/card-intents.ts): um agente não desfaz em silêncio o último movimento do dono.
+          const { ownerMoveRevertHold } = await import("@/lib/storymap/runner/card-intents-deps");
+          const revert = await ownerMoveRevertHold(board, current, status);
+          if (revert) return fail(`${cardId}: ${revert}`);
+        }
       }
-      const r = await moveCardAction({ boardId: board, cardId, status, parent, serves, release, order });
-      return r.ok ? json({ ok: true, cardId, status: status ?? "(inalterado)" }) : fail(r.error);
+      const moves = status !== undefined || parent !== undefined || serves !== undefined || release !== undefined || order !== undefined;
+      if (moves) {
+        const r = await moveCardAction({ boardId: board, cardId, status, parent, serves, release, order });
+        if (!r.ok) return fail(r.error);
+      }
+      if (position) {
+        const p = await placeCardInColumnAction({ boardId: board, cardId, where: position });
+        if (!p.ok) return fail(p.error);
+        return json({ ok: true, cardId, status: status ?? "(inalterado)", order: p.data.order, positionChanged: p.data.changed });
+      }
+      return json({ ok: true, cardId, status: status ?? "(inalterado)" });
     },
   );
 
@@ -805,7 +919,7 @@ export function registerStorymapTools(server: McpServer): void {
       title: "Editar campos do card",
       description:
         "Edita os campos AUTORAIS de um card (os que o humano escreve: título, narrativa, aceite, " +
-        "personas, sistemas, RICE/KANO/funil, corpo). NÃO toca em campos do pipeline " +
+        "personas, sistemas, a funcionalidade do PRD (`feature`, validada contra get_vocabulary → features), corpo). NÃO toca em campos do pipeline " +
         "(findings, wireframe, qa, modo) — esses são das skills. Tentar setar um campo de pipeline " +
         "aqui retorna ERRO explícito (use approve_qa para qa* / deixe o autorun para os demais), em " +
         "vez de ignorar em silêncio. NÃO muda status: setar status aqui retorna erro — use move_card " +
@@ -838,17 +952,11 @@ export function registerStorymapTools(server: McpServer): void {
         acceptance: z.array(z.string()).optional().describe("critérios de aceite (Gherkin recomendado)"),
         personas: z.array(z.string()).optional().describe("ids de personas do board"),
         systems: z.array(z.string()).optional().describe("ids de sistemas do board"),
-        rice: z
-          .object({
-            reach: z.number().nullable(),
-            impact: z.number().nullable(),
-            confidence: z.number().nullable(),
-            effort: z.number().nullable(),
-          })
-          .partial()
-          .optional(),
-        kano: enumOf<KanoCategory>(KANO_IDS as KanoCategory[]).nullable().optional(),
-        funnelStage: enumOf<FunnelStage>(FUNNEL_IDS as FunnelStage[]).nullable().optional(),
+        feature: z
+          .string()
+          .nullable()
+          .optional()
+          .describe("id da funcionalidade do PRD (get_vocabulary → features); null limpa (o card vai a «Outros»). Nunca invente: nenhuma serve ⇒ deixe vazio"),
         body: z.string().optional().describe("corpo markdown do card"),
         status: z
           .string()
@@ -860,6 +968,14 @@ export function registerStorymapTools(server: McpServer): void {
       },
     },
     async (input) => {
+      // Fase 7 — o handle da ÂNCORA (handle-scope.ts) só liga o card a uma funcionalidade: qualquer outro campo recusa.
+      // Decidido pela CREDENCIAL que autenticou, não pelo nome que o agente declara.
+      if (isFeatureOnlyHandle(currentMcpActor())) {
+        const elsewhere = featureOnlyBoardRefusal("update_card", currentMcpActor(), input.board);
+        if (elsewhere) return fail(elsewhere);
+        const extra = featureOnlyFieldsRefused(input as Record<string, unknown>);
+        if (extra.length) return fail(`update_card: esta credencial só escreve \`feature\` — recusado: ${extra.join(", ")}.`);
+      }
       // PIPELINE-OWNED FIELDS: update_card never writes them. Instead of stripping them silently
       // (the old behaviour, which led to hand-editing the YAML), REJECT explicitly so the caller
       // knows to use approve_qa (qa*) or to let the autorun cascade own the rest.
@@ -885,11 +1001,13 @@ export function registerStorymapTools(server: McpServer): void {
           "update_card não muda status — use move_card. move_card valida o gate da coluna E dispara os " +
             "efeitos de entrada (onEnter: promote-stage/deploy-board) e o autorun; gravar status aqui " +
             "pularia esses efeitos e divergiria o card da realidade do código. update_card edita só os " +
-            "campos autorais (título, narrativa, aceite, personas, sistemas, RICE/KANO/funil, corpo).",
+            "campos autorais (título, narrativa, aceite, personas, sistemas, corpo).",
         );
       }
       const current = await readCard(input.board, input.cardId);
       if (!current) return fail(`card não encontrado: ${input.board}/${input.cardId}`);
+      const feature = await resolveFeatureArg(input.board, input.feature);
+      if (!feature.ok) return fail(feature.error);
       // R6 (escopo de tipos do ritmo) — com o board limitando o que começa, o TIPO é a catraca: um agente não reclassifica
       // uma funcionalidade já classificada (só o dono). Recusa AQUI, com a frase que diz o que fazer; a ação de servidor
       // (updateCardAction) repete a régua para as outras portas e grava a trilha de quem troca com sucesso.
@@ -926,16 +1044,7 @@ export function registerStorymapTools(server: McpServer): void {
       if (input.acceptance !== undefined) next.acceptance = input.acceptance;
       if (input.personas !== undefined) next.personas = input.personas;
       if (input.systems !== undefined) next.systems = input.systems;
-      if (input.rice !== undefined) {
-        next.rice = {
-          reach: input.rice.reach ?? current.rice.reach,
-          impact: input.rice.impact ?? current.rice.impact,
-          confidence: input.rice.confidence ?? current.rice.confidence,
-          effort: input.rice.effort ?? current.rice.effort,
-        };
-      }
-      if (input.kano !== undefined) next.kano = input.kano;
-      if (input.funnelStage !== undefined) next.funnelStage = input.funnelStage;
+      if (feature.value !== undefined) next.feature = feature.value ?? undefined;
       if (input.body !== undefined) next.body = input.body;
       // status intentionally NOT applied — update_card rejects status above (use move_card). next.status
       // stays === current.status, so updateCardAction sees no status change (no gate/autorun/effects).
@@ -1025,7 +1134,8 @@ export function registerStorymapTools(server: McpServer): void {
       title: "Criar card",
       description:
         "Cria UM card na Triagem (coluna de entrada/staging) do board. Story por padrão " +
-        "(ou type:'idea' para registrar uma DOR/problema, que nasce inerte na bancada de Ideias). " +
+        "(type:'idea' registra uma DOR/problema, mas nasce inerte e SEM tela — a bancada de Ideias saiu; para a dor " +
+        "entrar na Triagem do Kanban, crie uma story de usuário que ENUNCIA a necessidade, sem escolher solução). " +
         "USE para um item ÚNICO e isolado. ⚠️ NÃO use para capturar um plano completo: para transformar " +
         "um brain-dump em backbone (atividades + steps) + stories parenteadas (≥3 itens ou hierarquia " +
         "activity/step/story), use usm_capture(mode:'propose'→'apply') — create_card cria 1 stub raso por " +
@@ -1047,7 +1157,7 @@ export function registerStorymapTools(server: McpServer): void {
       inputSchema: {
         board: z.string(),
         title: z.string(),
-        type: z.enum(["story", "activity", "step", "idea"]).optional().describe("padrão story; idea registra uma DOR/problema (nasce inerte na bancada de Ideias)"),
+        type: z.enum(["story", "activity", "step", "idea"]).optional().describe("padrão story; idea registra uma DOR/problema (nasce inerte e sem tela — prefira story user na Triagem)"),
         body: z.string().optional().describe("para type:idea, a evidência/contexto da dor"),
         storyType: enumOf<StoryType>(STORY_TYPE_IDS as StoryType[]).optional(),
         parent: z.string().optional().describe("id de um card pai (activity/step) ou outro card"),
@@ -1058,6 +1168,11 @@ export function registerStorymapTools(server: McpServer): void {
         release: z.string().optional(),
         personas: z.array(z.string()).optional(),
         systems: z.array(z.string()).optional(),
+        feature: z
+          .string()
+          .nullable()
+          .optional()
+          .describe("id da funcionalidade do PRD (get_vocabulary → features). Nenhuma serve ⇒ omita (o card fica em «Outros»)"),
         continuesFrom: z
           .string()
           .optional()
@@ -1069,6 +1184,11 @@ export function registerStorymapTools(server: McpServer): void {
       },
     },
     async (a) => {
+      const anchorRefusal = featureOnlyToolRefusal("create_card", "write-board", currentMcpActor());
+      if (anchorRefusal) return fail(anchorRefusal);
+      // a funcionalidade é conferida ANTES de criar: um id inventado recusa sem deixar card para trás.
+      const feature = await resolveFeatureArg(a.board, a.feature);
+      if (!feature.ok) return fail(feature.error);
       const type = a.type ?? "story";
       // O teto de rodadas de revisão (decisão do dono), pelo PORTÃO ÚNICO dos agentes (runner/review-rounds-agent.ts): a
       // origem é o `continuesFrom` explícito (neste board, e DENTRO da árvore da sessão quando ela carrega cadeia) ou,
@@ -1135,7 +1255,17 @@ export function registerStorymapTools(server: McpServer): void {
         roundsChecked: true,
       });
       if (!r.ok) return fail(r.error);
-      const created = (r.data?.created ?? []).map((c) => slim(c));
+      let createdCards = r.data?.created ?? [];
+      if (feature.value) {
+        // a criação em lote (commitProposalAction) não conhece `feature`: o card nasce e a funcionalidade entra logo
+        // em seguida, sob a trava do card. Uma falha aqui não desfaz o card — ele fica em «Outros» e a âncora o liga.
+        const { updateCardOnDisk } = await import("@/lib/storymap/write");
+        const fid = feature.value;
+        createdCards = await Promise.all(
+          createdCards.map(async (c) => (await updateCardOnDisk(a.board, c.id, (cur) => ({ ...cur, feature: fid })).catch(() => null)) ?? c),
+        );
+      }
+      const created = createdCards.map((c) => slim(c));
       const warnings = r.data?.warnings ?? [];
       // Orphan-stub lint (t6): nudge toward usm_capture when a story is created parentless.
       return json({ created, ...(warnings.length ? { warnings } : {}) });
@@ -1490,10 +1620,18 @@ export function registerStorymapTools(server: McpServer): void {
     async ({ board, cardId, questionId, answer }) => {
       // DINHEIRO É DO DONO, em todo modo (autonomy.ts): gasto, fornecedor, preço, publicação externa, PRD. Quem
       // responde por aqui é um AGENTE — então a pergunta só-do-dono é recusada aqui, e o dono responde pela UI.
-      const target = (await readCard(board, cardId))?.questions?.find((q) => q.id === questionId);
-      if (target && target.status === "open" && isOwnerDecisionQuestion(target)) {
+      // E a resposta do DONO nunca é sobrescrita por um agente; a pergunta que ele reabriu (ou que o procurador devolveu)
+      // é dele para sempre (autonomy.ts agentAnswerRefusal).
+      const [targetCard, targetCfg] = await Promise.all([readCard(board, cardId), readBoardConfig(board).catch(() => null)]);
+      const target = targetCard?.questions?.find((q) => q.id === questionId);
+      // Um agente ESCOPADO (a frota, o tick) também respeita o perfil: a caixa desligada deixa a decisão com o dono. O
+      // token `full` é o do operador (e o chat do Jido que age por ele) — esse responde pelo dono.
+      const refusal = target ? agentAnswerRefusal(target, targetCfg, isScopedActor() ? targetCard : null) : null;
+      if (target && refusal) {
         return fail(
-          `a pergunta ${questionId} é decisão só do dono (dinheiro, [humano] ou uma classe de negócio) — um agente não a responde; ela espera o dono no Inbox (/inbox).`,
+          target.status === "open"
+            ? `a pergunta ${questionId}: ${refusal} — um agente não a responde; ela espera o dono no Inbox (/inbox).`
+            : `a pergunta ${questionId}: ${refusal}.`,
         );
       }
       // F6.3 — quem responde via MCP é o AGENTE (copiloto/tick), nunca o humano (o humano usa a UI
@@ -1512,8 +1650,13 @@ export function registerStorymapTools(server: McpServer): void {
       description:
         "Adiciona uma ou mais perguntas/diretrizes ABERTAS a um card (HITL) — o operador empurra um follow-up para o " +
         "loop do agente; a próxima skill as lê como contexto. Dedup por texto (não empilha duplicatas). " +
+        "ESCREVA EM LINGUAGEM SIMPLES — o Inbox mostra a pergunta a uma pessoa, sem jargão: `context` = O QUE ACONTECEU " +
+        "(1–2 frases: quem fez o quê; sem nome de arquivo, sha, branch, run, gate, merge, deploy, worktree), `text` = O QUE " +
+        "VOCÊ PRECISA DA PESSOA (UMA pergunta, ≤ 240 caracteres), `options` = as respostas possíveis (2–4, cada uma uma AÇÃO " +
+        "CURTA que vira um botão de um clique, ≤ 60 caracteres; o porquê vai em pros/cons), `recommendation` = a sua " +
+        "sugestão (vira o botão «Usar a sugestão»). Pergunta vazia ou fora desses tamanhos é RECUSADA com o que corrigir. " +
         "`texts` = perguntas de texto livre (o formato de sempre). `questions` = perguntas ESTRUTURADAS, o formato " +
-        "que a fila /perguntas renderiza: `context` (o que está em jogo), 2–8 `options` com `pros`/`cons` curtos e " +
+        "que o Inbox renderiza: `context`, 2–4 `options` com `pros`/`cons` curtos e " +
         "NO MÁXIMO UMA `recommended: true`, `mode` single|multi; sem opções, `recommendation` em prosa; e a " +
         "`category` da decisão — OBRIGATÓRIA em cada pergunta estruturada (interview/ui-choice/technical/delivery/" +
         "owner/money). Numa story em modo ULTRA (só-negócio) o dono decide SÓ negócio: interview, ui-choice, " +
@@ -1529,32 +1672,35 @@ export function registerStorymapTools(server: McpServer): void {
         questions: z
           .array(
             z.object({
-              text: z.string().describe("a pergunta — uma, clara"),
-              context: z.string().optional().describe("por que você pergunta / o que está em jogo (1–2 linhas)"),
+              text: z.string().describe("O QUE VOCÊ PRECISA DA PESSOA — uma pergunta, clara, sem jargão (≤ 240 caracteres)"),
+              context: z.string().optional().describe("O QUE ACONTECEU — 1–2 frases simples: quem fez o quê e o que está em jogo (≤ 400 caracteres)"),
               options: z
                 .array(
                   z.object({
-                    label: z.string(),
+                    label: z.string().describe("a resposta como AÇÃO CURTA — vira um botão de um clique (≤ 60 caracteres)"),
                     pros: z.array(z.string()).optional(),
                     cons: z.array(z.string()).optional(),
                     recommended: z.boolean().optional().describe("a SUA recomendação — no máximo uma por pergunta"),
                   }),
                 )
-                .optional(),
+                .optional()
+                .describe("as respostas possíveis: de 2 a 4"),
               mode: z.enum(["single", "multi"]).optional().describe("single (padrão) = escolhe uma; multi = várias"),
-              recommendation: z.string().optional().describe("só para pergunta SEM opções: a resposta que você recomenda"),
+              recommendation: z.string().optional().describe("só para pergunta SEM opções: a resposta que você sugere — vira o botão «Usar a sugestão» (≤ 240 caracteres)"),
               // OBRIGATÓRIA: quem escreve uma pergunta estruturada SABE o tipo da decisão — e uma pergunta sem tipo
               // nunca vai ao proxy, então esquecê-la travava uma story ultra no dono em silêncio.
               category: z
-                .enum(["interview", "ui-choice", "technical", "delivery", "owner", "money"])
+                .enum(["interview", "ui-choice", "technical", "delivery", "owner", "money", "guardrail"])
                 .describe(
                   "OBRIGATÓRIA — o TIPO da decisão (a chave de autonomia lê daqui): interview (produto/usuário que o " +
                     "PRD responde), ui-choice (qual variante de tela), technical (caminho de implementação, trade-off " +
                     "técnico), delivery (aprovar/integrar uma entrega), owner (decisão de NEGÓCIO do dono — diga qual " +
                     "em ownerClass: brand-voice = falar em nome da marca fora do produto, prd = mudar PRD/metas/escopo, " +
                     "personal-data = apagar/coletar dado de pessoa, mudar o que é público), money (gasto, fornecedor, " +
-                    "preço, API paga — SEMPRE do dono). Numa story ULTRA, interview/ui-choice/technical/delivery vão a " +
-                    "um PROXY; owner e money esperam o dono.",
+                    "preço, API paga, código de cobrança — SEMPRE do dono), guardrail (mudar/apagar um TESTE EXISTENTE " +
+                    "ou afrouxar uma guarda — vai a um revisor de diff independente, NUNCA ao procurador). Com a " +
+                    "autonomia do board ligada (board_autonomy), interview/technical vão a um PROXY se a caixa spec " +
+                    "está ligada, ui-choice se design, delivery se delivery; owner e money esperam o dono sempre.",
                 ),
               ownerClass: z
                 .string()
@@ -1568,6 +1714,9 @@ export function registerStorymapTools(server: McpServer): void {
       },
     },
     async ({ board, cardId, texts, questions, askedBy }) => {
+      // o FORMATO de linguagem simples (inbox/copy.ts): pergunta vazia ou fora dos tamanhos volta com o que corrigir
+      const problems = askFormatProblems({ texts, questions });
+      if (problems.length) return fail(`Pergunta fora do formato do Inbox — corrija e chame de novo:\n- ${problems.join("\n- ")}`);
       const r = await askQuestionsAction({ boardId: board, cardId, texts, questions, askedBy });
       if (!r.ok) return fail(r.error);
       const open = r.data ? openQuestions(r.data.card) : [];
@@ -1901,6 +2050,14 @@ export function registerStorymapTools(server: McpServer): void {
       },
     },
     async ({ board, cardId, driver }) => {
+      // Tirar a condução ANTES do plano aprovado seria a porta dos fundos do crítico do plano: o portão só vale para card
+      // conduzido, então limpar o driver, mover para construir e pôr o driver de volta pulava o crítico. Um AGENTE não
+      // limpa o driver de um card que ainda não passou pelo «vai» do plano — o operador devolve ao fluxo pela tela.
+      if (driver === null && isAgentActor()) {
+        const { driverClearHold } = await import("@/lib/storymap/runner/critics-deps");
+        const held = await driverClearHold(board, cardId);
+        if (held) return fail(`${cardId}: ${held}`);
+      }
       const r = await setCardDriverAction({ boardId: board, cardId, driver });
       if (!r.ok) return fail(r.error);
       return json({
@@ -1922,7 +2079,9 @@ export function registerStorymapTools(server: McpServer): void {
     {
       title: "Definir o modo de autonomia da story (human × ultra)",
       description:
-        "A EXCEÇÃO por story à chave de autonomia do board (board.yaml `autonomy.mode`). `ultra`: as perguntas de " +
+        "A EXCEÇÃO por story à autonomia do board (o perfil — board_autonomy). Sobrepõe SÓ as três caixas de story: " +
+        "spec, design e delivery (`ultra` liga as três para esta story; `human` desliga as três); publicar, deploy, " +
+        "gasto, copiloto e Sentinela seguem o board. `ultra`: as perguntas de " +
         "entrevista e de escolha de tela desta story vão a um PROXY (execução headless com contexto limpo, guiada " +
         "pelo PRD, personas e decisões passadas do dono; respostas com premissas e amostra de auditoria no Inbox). " +
         "`human`: o dono responde tudo, mesmo num board ultra. `null`: volta a seguir o board. Dinheiro nunca vai " +
@@ -2033,7 +2192,7 @@ export function registerStorymapTools(server: McpServer): void {
         "re-pedir devolve o pedido já aberto, nunca gera dois deploys. Acompanhe com publish_status. " +
         "Funciona nos DOIS modos de release do board: em `auto` o sistema já pede sozinho (você raramente " +
         "precisa); em `manual` o trabalho acumula e ESTA tool é o pedido — a mesma alavanca do botão " +
-        "Publicar da Esteira. É risco `deploy`: num board autônomo, o riskMatrix decide se você pode " +
+        "«Publicar» do Inbox. É risco `deploy`: num board autônomo, o riskMatrix decide se você pode " +
         "chamá-la sem perguntar.",
       inputSchema: {
         board: z.string().describe("board cujo código staged será publicado"),
@@ -2170,16 +2329,20 @@ export function registerStorymapTools(server: McpServer): void {
         // NENHUM card é reprovado por essas falhas (a atribuição as absolve, corretamente) — e por isso
         // mesmo ninguém ficava sabendo. `null` quando a main está verde.
         mainRed: describeMainRed(await readMainRed().catch(() => null)),
+        // PUBLICAÇÃO RETIDA (portão pré-push): o motivo E o que fazer para soltar; `null` = nada retido. E o aviso de
+        // varredura pré-push degradada (scanner do alvo antigo). Sem isto a retenção só aparecia num log.
+        pushHold: mqSnap.pushHold ?? null,
+        pushScanNote: mqSnap.pushScanNote ?? null,
       };
       // Backward-compat: without board+cardId the payload is identical to before (running + failures).
       // With both, append the card's telemetry history (AC4) — the durable last-N runs with metrics.
       if (board && cardId) {
         const history = await getTelemetryStore().listByCard(board, cardId, limit ?? 20);
-        // The LIVE conductor(s) on this card, with their spend so far ESTIMATED from their worktree's transcripts
+        // The LIVE conductor(s) on this card — a batch item (fase 7) finds its lead's session through sessionCardIds —, with their spend so far ESTIMATED from their worktree's transcripts
         // (lib/vps/session-cost.ts). The ledger only books a session when it ends — without this a conductor
         // checking its own budget mid-story had to guess its spend. Omitted when the card has no conductor.
         const conductors = (await allSessions().catch(() => []))
-          .filter((s) => s.board === board && s.cardId === cardId && s.driver === "conductor");
+          .filter((s) => s.board === board && sessionCardIds(s).includes(cardId) && s.driver === "conductor");
         const sessions = await Promise.all(
           conductors.map(async (s) => {
             const est = await readWorktreeSessionCost(s.worktreePath ?? null).catch(() => null);
@@ -2690,14 +2853,25 @@ export function registerStorymapTools(server: McpServer): void {
     {
       title: "Vocabulário do board",
       description:
-        "Personas (com jobs/pains/gains), sistemas e releases do board — o vocabulário fixo que os cards " +
-        "referenciam. Use para escolher personas/systems válidos ao criar/editar um card.",
+        "Personas, sistemas, releases e FUNCIONALIDADES do board — o vocabulário fixo que os cards referenciam. As personas " +
+        "vêm da seção «Personas» do PRD (o `prompt` é o texto dela lá; o board.yaml é o piso legado). `features` são os " +
+        "`###` da seção «Funcionalidades» do PRD ({id, name}); `featureMode` é `prd` quando há alguma (o Kanban agrupa por " +
+        "elas e `feature` do card é um desses ids) ou `map` (board sem funcionalidades no PRD: o agrupamento é o passo do " +
+        "mapa e `feature` fica vazio). Use para escolher personas/systems/feature válidos ao criar/editar um card.",
       inputSchema: { board: z.string() },
     },
     async ({ board }) => {
       const cfg = await readBoardConfig(board).catch(() => null);
       if (!cfg) return fail(`board não encontrado: ${board}`);
-      return json({ personas: cfg.personas, systems: cfg.systems, releases: cfg.releases });
+      const personas = await boardPersonas(board, cfg).catch(() => cfg.personas);
+      const features = (await boardFeatures(board, cfg).catch(() => [])).map((f) => ({ id: f.id, name: f.name }));
+      return json({
+        personas,
+        systems: cfg.systems,
+        releases: cfg.releases,
+        features,
+        featureMode: features.length ? "prd" : "map",
+      });
     },
   );
 
@@ -2729,7 +2903,22 @@ export function registerStorymapTools(server: McpServer): void {
       if (!card) return fail(`card não encontrado: ${cardId} (board ${board})`);
       try {
         const { path: rel, bytes, warnings } = await writeSidecarByKind(board, cardId, kind, content);
-        return json({ ok: true, board, cardId, kind, path: rel, bytes, ...(warnings?.length ? { avisos: warnings } : {}) });
+        // Fase 6 (6D): o plano de um card CONDUZIDO aterrissou — o serviço chama o crítico do plano já (contexto limpo,
+        // em segundo plano; na Mínima, abre a pergunta do dono). Quem escreveu o plano não lança nem escolhe o crítico.
+        const planned = kind === "plans" && isConducted(card);
+        if (planned) {
+          void import("@/lib/storymap/runner/critics-deps").then((m) => m.startPlanCriticNow(board, cardId)).catch(() => {});
+        }
+        return json({
+          ok: true,
+          board,
+          cardId,
+          kind,
+          path: rel,
+          bytes,
+          ...(planned ? { critico: "o crítico do plano foi chamado; o serviço avisa esta sessão com o veredito — não construa antes dele" } : {}),
+          ...(warnings?.length ? { avisos: warnings } : {}),
+        });
       } catch (err) {
         return fail(err instanceof Error ? err.message : String(err));
       }
@@ -2744,7 +2933,8 @@ export function registerStorymapTools(server: McpServer): void {
       title: "Ler guia de estilo",
       description:
         "Devolve o guia de estilo canônico do board (identidade, princípios, cor, tipografia, " +
-        "espaçamento, forma, movimento, voz, anti-padrões, débito conhecido) + o ponteiro " +
+        "espaçamento, forma, movimento, voz, componentes — as regras de uso de cada componente de UI —, " +
+        "anti-padrões, débito conhecido) + o ponteiro " +
         "(versão/hash) + o relatório de contraste AA recomputado (informativo — o guia é um documento " +
         "fonte-da-verdade, não trava nada). doc:null quando o board ainda não tem guia publicado (nunca " +
         "um erro).",
@@ -2756,6 +2946,31 @@ export function registerStorymapTools(server: McpServer): void {
       const doc = await readStyleGuide(board);
       if (!doc) return json({ board, pointer: cfg.styleGuide ?? null, doc: null, aa: null });
       return json({ board, pointer: cfg.styleGuide ?? null, doc, aa: checkAA(doc) });
+    },
+  );
+
+  // A escrita de um agente no guia (decisão do dono, 06/10). Classe `doc-write`, como `write_doc`: o guia vive
+  // fora do pipeline (sem status, sem trigger, sem coluna). O tom é do dono e a regressão de AA é recusada.
+  defineTool(server,
+    "write_styleguide",
+    {
+      title: "Escrever numa seção do guia de estilo",
+      description:
+        "REESCREVE UMA seção do guia de estilo do board (cria o guia se ainda não existe). Rode `get_styleguide` " +
+        "antes e mande a seção no MESMO formato que ele devolve (ex.: color = {tokens:[{role,value,on,usage}], " +
+        "budgetRules, prose}; components = {items:[{name, rule}], prose}). Seções: identity, principles, color, " +
+        "typography, spacing, shape, motion, components, antiPatterns, debt. NÃO escreve `voice` (o tom de voz é " +
+        "do DONO — proponha na conversa o texto exato). Uma mudança de cor que faça um par reprovar o contraste AA " +
+        "(4.5:1; 3:1 para texto grande) é recusada.",
+      inputSchema: {
+        board: z.string(),
+        section: z.string().describe("a chave da seção (identity, color, typography, components…)"),
+        value: z.unknown().describe("o valor INTEIRO da seção, no formato de get_styleguide"),
+      },
+    },
+    async (a) => {
+      const r = await writeStyleGuideSectionAction({ boardId: a.board, section: a.section, value: a.value });
+      return r.ok ? json({ ok: true, ...r.data }) : fail(r.error);
     },
   );
 
@@ -2978,8 +3193,10 @@ export function registerStorymapTools(server: McpServer): void {
     {
       title: "Criar/editar persona",
       description:
-        "Upsert de uma persona no vocabulário do board (cria ou substitui pelo id). Inclua jobs/pains/gains " +
-        "(VPC) para enriquecer a priorização das stories que a servem.",
+        "Upsert de uma persona no vocabulário LEGADO do board (board.yaml; cria ou substitui pelo id). A fonte " +
+        "das personas agora é a seção «Personas» do PRD, que é do DONO: para mudar o que uma persona É, proponha " +
+        "com propose_change (artifact 'prd', field 'personas'). Use esta tool só para o id/cor/avatar que os " +
+        "cards referenciam.",
       inputSchema: { board: z.string(), persona: z.object(personaShape) },
     },
     async ({ board, persona }) => {
@@ -3060,11 +3277,11 @@ export function registerStorymapTools(server: McpServer): void {
     "propose_change",
     {
       title: "Propor mudança em campo governado do board",
-      description: `Cria um GovernanceDraft para propor alterações nos campos owner:human do board (${GOVERNANCE_ARTIFACTS.join(", ")}) sem tocá-los diretamente. O operador verá a proposta no Inbox (Aprovar / Rejeitar). Use para o PRD, para a escada estratégica LEGADA (positioning, businessMetric, desiredOutcome — hoje absorvida pelo PRD), canvas, canvasTags, releases e personas — NUNCA escreva esses campos diretamente. O 'before' é snapshot automaticamente do canônico atual; você fornece só o 'after'.
+      description: `Cria um GovernanceDraft para propor alterações nos campos owner:human do board (${GOVERNANCE_ARTIFACTS.join(", ")}) sem tocá-los diretamente. O operador verá a proposta no Inbox (Aprovar / Rejeitar). Use para o PRD (inclusive as PERSONAS, que são a seção 'personas' dele), o Business Model Canvas (canvas, canvasTags), releases e a escada estratégica LEGADA (positioning, businessMetric, desiredOutcome — hoje absorvida pelo PRD) — NUNCA escreva esses campos diretamente. O contexto para os agentes (docs/contexto.md: decisões, requisitos, riscos…) NÃO passa por aqui: ele é seu, escreva com write_doc docType 'contexto'. O 'before' é snapshot automaticamente do canônico atual; você fornece só o 'after'.
 
-FORMATO DO PRD: ele é o documento mais alto do board e o único artefato desta lista que NÃO é campo do board.yaml — mora em storymap/boards/<board>/docs/prd.md. Use artifact:'prd' + field:<CHAVE DA SEÇÃO> (obrigatório) + after:<o markdown do CORPO da seção, sem o título — o rótulo é travado>. Rode read_doc com docType 'prd' antes, para pegar as chaves certas e ver o que já está escrito. Se você é um run headless, este é o SEU caminho: escrever o arquivo direto é bloqueado (o PRD é owner:human).
+FORMATO DO PRD: documento de NEGÓCIO do dono em storymap/boards/<board>/docs/prd.md (sete seções: problema, personas, propostaValor, funcionalidades, fluxoUso, metricasSucesso, foraEscopo — nada técnico). Use artifact:'prd' + field:<CHAVE DA SEÇÃO> (obrigatório) + after:<o markdown do CORPO da seção, sem o título — o rótulo é travado>. Rode read_doc com docType 'prd' antes, para pegar as chaves certas e ver o que já está escrito. Se você é um run headless, este é o SEU caminho: escrever o arquivo direto é bloqueado (o PRD é owner:human).
 
-FORMATO DO CANVAS (Lean Canvas): um bloco NÃO é mais um paragrafão — é uma lista de ITENS. Para mudar um bloco use artifact:'canvas' + field:<chave do bloco> (${CANVAS_BLOCK_KEYS.join(", ")}) e after:{"items":[{"id":"i1","text":"…","tags":["<id de canvasTags>"],"group":"Ritmo"}]} — PRESERVE o 'id' dos itens que você mantém (omita em itens novos) e use after:null para limpar o bloco. As TAGS (artifact:'canvasTags', sem field — a lista INTEIRA: [{"id","name","color":"#RRGGBB"}]) são o vocabulário de cores que costura cada item ao seu segmento; um item só pode referenciar uma tag que exista.`,
+FORMATO DO CANVAS (Business Model Canvas, storymap/boards/<board>/docs/business-model-canvas.md): cada bloco é uma lista de ITENS. Para mudar um bloco use artifact:'canvas' + field:<chave do bloco> (${BMC_BLOCK_KEYS.join(", ")}) e after:{"items":[{"text":"…","tags":["<id de canvasTags>"],"group":"Ritmo"}]} — a lista INTEIRA do bloco (rode read_doc docType 'business-model-canvas' antes) — e after:null para limpar o bloco. As TAGS (artifact:'canvasTags', sem field — a lista INTEIRA: [{"id","name","color":"#RRGGBB"}]) são o vocabulário de cores que costura cada item ao seu segmento; um item só pode referenciar uma tag que exista.`,
       inputSchema: {
         board: z.string().describe("Board id (os válidos vêm de list_boards)"),
         reason: z.string().describe("Motivo/contexto da mudança — visível ao operador no cockpit"),
@@ -3074,9 +3291,9 @@ FORMATO DO CANVAS (Lean Canvas): um bloco NÃO é mais um paragrafão — é uma
         }).optional(),
         changes: z.array(z.object({
           artifact: z.enum(GOVERNANCE_ARTIFACTS).describe("Campo governado a alterar"),
-          field: z.string().optional().describe("Sub-campo. Para o PRD: OBRIGATÓRIO, a chave da SEÇÃO (ex. 'posicionamento', 'escopo'). Para canvas: a chave do bloco, ex. 'problem'. Omita para substituir o artefato inteiro — canvasTags é sempre inteiro)"),
+          field: z.string().optional().describe("Sub-campo. Para o PRD: OBRIGATÓRIO, a chave da SEÇÃO (ex. 'personas', 'foraEscopo'). Para canvas: OBRIGATÓRIO, a chave do bloco, ex. 'valuePropositions'. canvasTags é sempre inteiro (sem field)"),
           after: z.any().describe("Valor proposto — o que você quer que vire canônico. PRD: o markdown do CORPO da seção, sem o título (o rótulo é travado). Canvas: {items:[…]} ou null"),
-          label: z.string().optional().describe("Label legível para o operador (ex: 'Canvas · Problema')"),
+          label: z.string().optional().describe("Label legível para o operador (ex: 'Canvas · Proposta de valor')"),
         })).min(1).describe("Mudanças — múltiplas mudanças relacionadas viram 1 decisão (AC6)"),
       },
     },
@@ -3091,6 +3308,13 @@ FORMATO DO CANVAS (Lean Canvas): um bloco NÃO é mais um paragrafão — é uma
           if (c.artifact === "prd" && !isPrdSection(c.field)) {
             throw new Error(
               `Seção desconhecida no PRD: "${c.field ?? "(nenhuma)"}". Uma mudança de PRD precisa de \`field\` com a CHAVE de uma seção. As válidas: ${prdSectionKeys().join(", ")}.`,
+            );
+          }
+          // Um bloco do Lean Canvas antigo (problem, solution…) não existe mais: recusar AQUI faz o agente
+          // corrigir no mesmo turno, em vez de a proposta nascer e morrer na aprovação.
+          if (c.artifact === "canvas" && !isCanvasBlock(c.field)) {
+            throw new Error(
+              `Bloco desconhecido no Business Model Canvas: "${c.field ?? "(nenhum)"}". Uma mudança de canvas precisa de \`field\` com a CHAVE de um bloco. Os válidos: ${BMC_BLOCK_KEYS.join(", ")}.`,
             );
           }
           const before = await readGovernedValue(board, c.artifact, c.field, config);
@@ -3134,42 +3358,51 @@ FORMATO DO CANVAS (Lean Canvas): um bloco NÃO é mais um paragrafão — é uma
     },
   );
 
-  // ── Dual-track OST: ideias (espaço do problema) ────────────────────
+  // ── create_idea: ATALHO da captura (a tela de Ideias saiu) ────────────────────
+  // Continua existindo para os clientes que já a chamam; agora cria um card na Triagem pelo mesmo caminho da
+  // captura (commitProposalAction), e os campos de exploração viram o texto do card (ideaAsTriageCard).
   defineTool(server,
     "create_idea",
     {
-      title: "Criar ideia (documento de exploração)",
+      title: "Registrar ideia (atalho: cria um card na Triagem)",
       description:
-        "Cria uma IDEIA (type:idea) — algo que ainda NÃO foi decidido, de qualquer natureza: uma " +
-        "funcionalidade cogitada, a suspeita de um defeito, uma dúvida técnica, um incômodo de " +
-        "negócio. A régua: sei o que precisa ser feito? → tarefa (create_card). Preciso " +
-        "investigar antes? → ideia. NASCE INERTE fora do pipeline (status nulo, não dispara autorun) " +
-        "e amadurece como DOCUMENTO até virar decisão. As tarefas que a executam nascem DEPOIS com " +
-        "generate_tasks_for_idea (que as liga por 'addresses'). Diferente de create_card(type:'idea'), " +
-        "esta aceita os campos de exploração (candidateSolutions/keyAssumption/successSignal/valueSize).",
+        "ATALHO mantido por compatibilidade: a tela de Ideias saiu, e uma ideia nova entra como um card na TRIAGEM, " +
+        "pelo mesmo caminho da captura (usm_capture apply). O card nasce como user story sem lugar no mapa e descansa " +
+        "na Triagem até alguém aceitá-lo (accept_triage). Os campos de exploração (statement, evidence, " +
+        "candidateSolutions, keyAssumption, successSignal) viram o texto do card. Para um card novo prefira " +
+        "create_card; para texto livre que o agente de triagem classifica, report_issue.",
       inputSchema: {
         board: z.string(),
         title: z.string().optional().describe("o nome da ideia; na ausência dele o statement vira o título"),
-        statement: z.string().optional().describe("a ideia em uma frase (a primeira seção do documento)"),
-        evidence: z.string().optional().describe("o que sustenta a ideia — dados, relatos, código lido, evidência de campo"),
-        candidateSolutions: z.array(z.string()).optional().describe("soluções candidatas (espaço da solução)"),
-        keyAssumption: z.string().optional().describe("premissa mais arriscada a validar antes de apostar"),
-        successSignal: z.string().optional().describe("sinal-líder de que a dor está sendo resolvida"),
-        valueSize: z.object({ reach: z.number().nullable(), impact: z.number().nullable() }).optional().describe("dimensionamento de valor da dor"),
+        statement: z.string().optional().describe("a ideia em uma frase (abre o texto do card)"),
+        evidence: z.string().optional().describe("o que sustenta a ideia — dados, relatos, código lido"),
+        candidateSolutions: z.array(z.string()).optional().describe("caminhos possíveis"),
+        keyAssumption: z.string().optional().describe("a premissa mais arriscada"),
+        successSignal: z.string().optional().describe("como saberíamos que deu certo"),
       },
     },
     async (a) => {
-      const r = await createIdeaAction({
+      const draft = ideaAsTriageCard(a);
+      if (!draft) return fail("Dê um nome à ideia (title ou statement).");
+      const r = await commitProposalAction({
         boardId: a.board,
-        title: a.title,
-        statement: a.statement,
-        evidence: a.evidence,
-        candidateSolutions: a.candidateSolutions,
-        keyAssumption: a.keyAssumption,
-        successSignal: a.successSignal,
-        valueSize: a.valueSize,
+        via: "capture",
+        items: [
+          {
+            tempId: "idea1",
+            type: "story",
+            storyType: "user",
+            title: draft.title,
+            parent: null,
+            ...(draft.body ? { body: draft.body } : {}),
+            rationale: "ideia registrada via MCP (create_idea)",
+          },
+        ],
       });
-      return r.ok ? json({ ok: true, card: r.data ? slim(r.data.card) : null }) : fail(r.error);
+      if (!r.ok) return fail(r.error);
+      const created = (r.data?.created ?? []).map((c) => slim(c));
+      const warnings = r.data?.warnings ?? [];
+      return json({ ok: true, card: created[0] ?? null, ...(warnings.length ? { warnings } : {}) });
     },
   );
 
@@ -3222,13 +3455,16 @@ FORMATO DO CANVAS (Lean Canvas): um bloco NÃO é mais um paragrafão — é uma
     {
       title: "Ler um documento de board",
       description:
-        "Devolve o MARKDOWN de um documento de board (o Lean Canvas e os próximos) — a fonte da verdade dele, " +
-        "exatamente como está em disco, mais as seções que o schema declara e o que estiver violando o " +
-        "esqueleto. Leia ANTES de escrever: as seções têm chaves fixas, e escrever numa chave que você não " +
-        "conferiu é a forma nº1 de errar o lugar. Sem `docType`, lista os documentos que existem.",
+        "Devolve o MARKDOWN de um documento de board — a fonte da verdade dele, mais as seções que o schema " +
+        "declara e o que estiver violando o esqueleto. Os documentos: 'prd' (o produto, do dono: problema, " +
+        "personas, proposta de valor, funcionalidades, fluxo de uso, métricas de sucesso, fora do escopo), " +
+        "'business-model-canvas' (o negócio, do dono: os nove blocos) e 'contexto' (o contexto para os " +
+        "agentes: decisões já tomadas, pronto quando, requisitos, restrições, riscos, glossário…). Leia ANTES " +
+        "de escrever: as seções têm chaves fixas, e escrever numa chave que você não conferiu é a forma nº1 " +
+        "de errar o lugar. Sem `docType`, lista os documentos que existem.",
       inputSchema: {
         board: z.string(),
-        docType: z.string().optional().describe("ex.: lean-canvas. Omita para listar os documentos disponíveis."),
+        docType: z.string().optional().describe("prd | business-model-canvas | contexto. Omita para listar os documentos disponíveis."),
       },
     },
     async (a) => {
@@ -3241,6 +3477,8 @@ FORMATO DO CANVAS (Lean Canvas): um bloco NÃO é mais um paragrafão — é uma
           })),
         });
       }
+      const retired = retiredDocMessage(a.docType);
+      if (retired) return fail(retired);
       const r = await readDocAction({ boardId: a.board, docType: a.docType });
       if (!r.ok) return fail(r.error);
       const d = r.data!;
@@ -3263,10 +3501,15 @@ FORMATO DO CANVAS (Lean Canvas): um bloco NÃO é mais um paragrafão — é uma
         "(eles são travados e a gravação revalida), NÃO cria seção fora do schema e NÃO escreve o documento " +
         "inteiro de uma vez. Rode `read_doc` antes para pegar as chaves de seção certas. Numa seção de itens " +
         "mande `items` (um item = UMA ideia, curta); numa de prosa mande `prose`. `group` é a subdivisão " +
-        "autoral dentro da seção — use a que já existe no documento em vez de inventar uma paralela.",
+        "autoral dentro da seção — use a que já existe no documento em vez de inventar uma paralela. " +
+        "DE QUEM É CADA DOCUMENTO: 'contexto' é dos agentes — escreva livre (uma mudança que toque dinheiro, " +
+        "marca ou dados de pessoas vira pergunta ao dono, não escrita). 'business-model-canvas' e a seção " +
+        "'personas' do 'prd' são do DONO: esta tool RECUSA — proponha com `propose_change` (artifact 'canvas' ou " +
+        "'prd'). As outras seções do 'prd' só a conversa da página Produto escreve (o dono olhando); um run, o " +
+        "tick ou outra tela recebem a recusa e propõem.",
       inputSchema: {
         board: z.string(),
-        docType: z.string().describe("ex.: lean-canvas"),
+        docType: z.string().describe("prd | business-model-canvas | contexto"),
         section: z.string().describe("a CHAVE da seção (de read_doc), não o rótulo"),
         items: z
           .array(
@@ -3282,6 +3525,8 @@ FORMATO DO CANVAS (Lean Canvas): um bloco NÃO é mais um paragrafão — é uma
       },
     },
     async (a) => {
+      const retired = retiredDocMessage(a.docType);
+      if (retired) return fail(retired);
       const r = await writeDocSectionAction({
         boardId: a.board,
         docType: a.docType,
@@ -3345,7 +3590,7 @@ FORMATO DO CANVAS (Lean Canvas): um bloco NÃO é mais um paragrafão — é uma
       title: "Editar ideia (◆ — campos OST)",
       description:
         "Edita os campos de uma IDEIA (type:idea): statement, evidence, status (open/exploring/" +
-        "addressed) e os OST-light (candidateSolutions/keyAssumption/successSignal/valueSize). Patch cirúrgico — " +
+        "addressed) e os OST-light (candidateSolutions/keyAssumption/successSignal). Patch cirúrgico — " +
         "campos omitidos preservam o valor anterior. update_card NÃO edita ideia; use esta.",
       inputSchema: {
         board: z.string(),
@@ -3356,7 +3601,6 @@ FORMATO DO CANVAS (Lean Canvas): um bloco NÃO é mais um paragrafão — é uma
         candidateSolutions: z.array(z.string()).optional(),
         keyAssumption: z.string().nullable().optional(),
         successSignal: z.string().nullable().optional(),
-        valueSize: z.object({ reach: z.number().nullable(), impact: z.number().nullable() }).nullable().optional(),
       },
     },
     async (a) => {
@@ -3369,7 +3613,6 @@ FORMATO DO CANVAS (Lean Canvas): um bloco NÃO é mais um paragrafão — é uma
         candidateSolutions: a.candidateSolutions,
         keyAssumption: a.keyAssumption,
         successSignal: a.successSignal,
-        valueSize: a.valueSize,
       });
       return r.ok ? json({ ok: true, card: r.data ? slim(r.data.card) : null }) : fail(r.error);
     },
@@ -3566,8 +3809,7 @@ FORMATO DO CANVAS (Lean Canvas): um bloco NÃO é mais um paragrafão — é uma
         "de modelo/effort (teto-sob-teto). É o caminho HUMANO para ajustar rota (update_card recusa routing). " +
         "VALIDADO no servidor: só steps marcados `dispensable` podem ser pulados; steps LOAD-BEARING " +
         "(plano-tecnico/desenvolver/revisar-codigo/qa-*) NUNCA — o pedido é recusado com o motivo. Passe o " +
-        "conjunto COMPLETO de skips (substitui o anterior); skips vazio + sem tetos/perfil LIMPA a rota. Pular " +
-        "'priorizar' sem priorityCall trava no gate de prioridade (fail-closed) — o retorno avisa.",
+        "conjunto COMPLETO de skips (substitui o anterior); skips vazio + sem tetos/perfil LIMPA a rota.",
       inputSchema: {
         board: z.string(),
         cardId: z.string(),

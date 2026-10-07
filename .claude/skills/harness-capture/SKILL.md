@@ -45,8 +45,8 @@ container). A human reviews and accepts the items on the **Inbox** queue (accept
 what mints the real cards in Triagem; this skill NEVER creates them).
 
 > Read `storymap/README.md` first — it is the canonical schema/pipeline source, and
-> `board.yaml` is the source of the `personas`/`systems`/`releases` and the existing
-> backbone you reuse. This skill edits ONLY the data files under
+> `board.yaml` is the source of the `personas` ids/`systems`/`releases` and the existing
+> backbone you reuse (who each persona IS lives in the PRD's «Personas» section — `docs/prd.md`). This skill edits ONLY the data files under
 > `storymap/boards/<board>/` (the proposal sidecar + the container `.md`). NEVER touch
 > `packages/storymap-ui/` (UI or data layer) and NEVER product code — capture is
 > planning, there is no code to read or write.
@@ -147,11 +147,11 @@ The refine feedback history lives in the **sidecar** `proposals/<containerId>.js
      `parent`). Propose a NEW step/activity only when the text clearly introduces an area that does
      not exist yet — then use that new item's `tempId` as the `parent` of its stories.
    - **NEVER mint an idea (WS-9 / D15).** Structured capture only proposes `story`/`step`/`activity` —
-     it does NOT create `type: idea` (◆). Raw pain WITHOUT a decided deliverable belongs to the
-     **Ideias bench** (a separate, lighter entry — `create_idea` / the Ideias view), where
-     someone deliberately explores it. So: if the text has a discernible deliverable behind a pain, propose the
+     it does NOT create `type: idea` (◆). Raw pain WITHOUT a decided deliverable belongs to
+     **Triagem** (a separate, lighter entry — `report_issue`, or `create_idea`, which drops a card there), where
+     someone accepts or discards it. So: if the text has a discernible deliverable behind a pain, propose the
      closest story and note the low certainty in `rationale`; if it is *only* pain, do NOT invent a card — put a
-     note in `summary` ("há uma dor crua aqui — registre na bancada de Ideias: «…»"). A story MAY point
+     note in `summary` ("há uma dor crua aqui — registre na Triagem: «…»"). A story MAY point
      `addresses` at an EXISTING open idea, but never create one. (A stray ◆ that slips through is ignored
      at accept — the mint is barred.)
    - **storyType:** `user` by default; `technical` for infra/enabler, `spike` for investigation,
@@ -165,14 +165,14 @@ The refine feedback history lives in the **sidecar** `proposals/<containerId>.js
    - **Ground in vocabulary:** set `personas`/`systems` to RELEVANT ids that EXIST in `board.yaml`
      (the personas' `pains`/`gains` are the lens for what's worth proposing); never invent an id —
      leave the array empty if none fits. Set `release` only to a real release id (or null).
+   - **Funcionalidade:** set `feature` to the PRD funcionalidade id from `get_vocabulary` → `features` (no fit ⇒ leave it empty: «Outros»; never invent one).
    - **Title — names the INTENT/OUTCOME, never the mechanism.** Follow the `storyType`'s
      `titleGuide` (single source: `STORY_TYPE_DEFS` in `frameworks.ts`; mirrored in
      `storymap/frameworks.md` §0): the title names what the user GAINS, not what the dev does.
      For `storyType: user` NEVER start with a dev verb (Criar/Adicionar/Implementar/Refatorar/
      Redesenhar/Remover/Configurar/Ajustar/Simplificar/Mover). ✓ "Ver favoritos no perfil" /
      ✗ "Adicionar aba de favoritos". Even if the source text is phrased as tasks, retitle to the
-     intent. Do NOT write narrative/acceptance/RICE here — that is `harness-enrich`/`harness-prioritize`,
-     downstream.
+     intent. Do NOT write narrative/acceptance here — that is `harness-enrich`, downstream.
    - **Voice:** the board's brand voice — the `voice.lexicon` of its style guide (`storymap/boards/<board>/design/style-guide.md`) and the `brandbook:` its `board.yaml` declares; with neither, write plainly, no slang.
 
 4. **Write the proposal to the sidecar.** Persist `storymap/boards/<board>/proposals/<containerId>.json`
@@ -248,6 +248,6 @@ MUST NOT create real cards (`create_card`/new `cards/*.md`), MUST NOT advance th
 `advance-card`, no move — it PARKS in `capturando`), MUST NOT cascade, MUST NOT rename the `containerId`,
 and MUST NOT touch `packages/storymap-ui/` or product code. On a re-run it MUST preserve the sidecar's
 existing `feedback[]` (oldest-first) and regenerate
-the proposal from ALL of it (not a diff). If you find yourself writing narrative/acceptance/RICE or
+the proposal from ALL of it (not a diff). If you find yourself writing narrative/acceptance or
 minting cards, you have left this skill's scope — enrichment is `harness-enrich`, and card creation is the
 human's accept action on Inbox.

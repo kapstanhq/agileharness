@@ -1,6 +1,7 @@
 "use client";
 
-// face-bus.ts — o que o TURNO sente, do chat para o mascote do topnav.
+// face-bus.ts — o que o TURNO sente, do chat para o mascote do Jido (desde a fase 1, o do COMPOSITOR no rodapé —
+// chat/JidoComposer; o do topnav saiu da barra).
 //
 // O PROBLEMA que ele resolve: o humor do Jido nasce em dois lugares. O REPOUSO (o board vai acordá-lo? um
 // tick está rodando? houve conversa recente?) o topnav lê sozinho, dos próprios polls. Mas o TURNO — está

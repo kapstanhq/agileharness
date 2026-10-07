@@ -10,7 +10,7 @@ import {
 import { coerceStatuses } from "../repo";
 import type { Card, StatusDef } from "../types";
 
-// Minimal Card factory — only the fields resolveCardArgs reads (storyType/rice/tasks/severity)
+// Minimal Card factory — only the fields resolveCardArgs reads (storyType/tasks/severity)
 // matter; the rest are filled to satisfy the type. Overrides win.
 function makeCard(over: Partial<Card> = {}): Card {
   return {
@@ -27,9 +27,6 @@ function makeCard(over: Partial<Card> = {}): Card {
     narrative: { role: null, want: null, soThat: null },
     acceptance: [],
     tasks: [],
-    rice: { reach: null, impact: null, confidence: null, effort: null },
-    kano: null,
-    funnelStage: null,
     findings: [],
     order: 10,
     created: null,
@@ -205,10 +202,9 @@ describe("resolveCardArgs — card complexity routes within the column ceiling",
     ]);
   });
 
-  it("AC2: a big, broad card (rice.effort 3, 5 tasks) keeps the column opus/high", () => {
+  it("AC2: a big, broad card (5 tasks) keeps the column opus/high", () => {
     const card = makeCard({
       storyType: "technical",
-      rice: { reach: null, impact: null, confidence: null, effort: 3 },
       tasks: [
         { id: "a", title: "", done: false },
         { id: "b", title: "", done: false },
@@ -224,7 +220,6 @@ describe("resolveCardArgs — card complexity routes within the column ceiling",
     const sonnetDef = { id: "x", name: "X", model: "sonnet", effort: "high" } as StatusDef;
     const card = makeCard({
       storyType: "technical",
-      rice: { reach: null, impact: null, confidence: null, effort: 5 },
       tasks: Array.from({ length: 6 }, (_, i) => ({ id: String(i), title: "", done: false })),
     });
     expect(resolveCardArgs(card, sonnetDef, DEFAULT_RUNNER_SETTINGS)).toEqual(["--model", "sonnet", "--effort", "high"]);
@@ -233,7 +228,6 @@ describe("resolveCardArgs — card complexity routes within the column ceiling",
   it("AC4: a card with no complexity signal falls through to the column default unchanged", () => {
     const card = makeCard({
       storyType: "user",
-      rice: { reach: null, impact: null, confidence: null, effort: 1 },
       tasks: [{ id: "a", title: "", done: false }],
     });
     expect(resolveCardArgs(card, devDef, DEFAULT_RUNNER_SETTINGS)).toEqual(["--model", "opus", "--effort", "high"]);
@@ -254,7 +248,7 @@ describe("resolveCardArgs — card complexity routes within the column ceiling",
 
   it("SCALES maxTurns by card size (story-ex0050 HALF A): a small card → lean baseline, ceiling = the column maxTurns", () => {
     // story-ex0050 HALF A: the column maxTurns (80) is now the CEILING, not a fixed value. A SMALL
-    // card (chore, no rice.effort, 0 tasks → size score 0) gets the lean baseline (40), well under the
+    // card (chore, 0 tasks → size score 0) gets the lean baseline (40), well under the
     // ceiling. model/effort still route by complexity (chore → sonnet/medium). (The OLD behavior emitted
     // --max-turns 80 verbatim; the lean budget is the new contract.) WS3: mcp flags no longer ride here —
     // they moved to the toolkit seam (resolveCardArgs is model/effort/max-turns only now).
@@ -301,7 +295,6 @@ describe("resolveCardArgs — card complexity routes within the column ceiling",
   it("WS-7 AC1: the mechanical caps survive the size branch (a big card's resolution never spawns opus)", () => {
     const card = makeCard({
       routing: mechanicalRouting,
-      rice: { reach: null, impact: null, confidence: null, effort: 5 },
       tasks: Array.from({ length: 8 }, (_, i) => ({ id: String(i), title: "", done: false })),
     });
     // model/effort are held at the cap; the turn budget DOES scale with the card's size (the caps bound the

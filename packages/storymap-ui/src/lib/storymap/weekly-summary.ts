@@ -23,6 +23,9 @@ export const WEEKLY_PUSH_HOUR = 9;
 
 const DAY_MS = 86_400_000;
 
+/** O prazo da amostra de entrega no Inbox (inbox/contract.ts `REVIEW_TTL_DAYS` — a mesma régua; o teste prende as duas). */
+export const DELIVERY_REVIEW_TTL_DAYS = 7;
+
 // ── o tempo local ──────────────────────────────────────────────────────────────────────────────────────────
 
 const FORMATTERS = new Map<string, Intl.DateTimeFormat>();
@@ -148,6 +151,9 @@ export const DECISION_KIND_LABEL: Record<SystemDecisionKind, string> = {
   "card-intake": "Barrou ou conferiu cards criados por agentes",
   undo: "Desfez decisões (a seu pedido)",
   "board-mode": "Mudou o modo do board",
+  "plan-review": "Revisou planos antes de construir",
+  "diff-review": "Revisou mudanças em testes existentes",
+  "delivery-verify": "Verificou entregas antes de integrar",
 };
 
 export interface WeeklyBoardInput {
@@ -213,6 +219,12 @@ export interface WeeklySummary {
   rollout?: { ready: boolean; line: string };
   /** a linha de tendência da saúde da ferramenta; ausente quando o tick não gravou leitura na semana. */
   health?: WeeklyHealth;
+  /**
+   * Fase 6 — as amostras de ENTREGA que venceram nesta semana sem o dono revisar: passado o prazo, a entrega fica valendo
+   * (inbox/contract.ts `deliveryReviewLiveness`) — e é aqui que isso é dito, em vez de sumir mudo do Inbox. `at` = o dia
+   * em que venceu.
+   */
+  expiredAudits: WeeklyItem[];
 }
 
 export interface WeeklySummaryInput {
@@ -321,6 +333,17 @@ export function buildWeeklySummary(input: WeeklySummaryInput): WeeklySummary {
   }
 
   const health = weeklyHealthTrend(input.health ?? [], week);
+  const expiredAudits: WeeklyItem[] = [];
+  for (const b of input.boards) {
+    for (const c of b.cards) {
+      const audit = c.deliveryAudit;
+      if (!audit || audit.auditedAt) continue;
+      const born = Date.parse(audit.sampledAt);
+      if (!Number.isFinite(born)) continue;
+      const due = new Date(born + DELIVERY_REVIEW_TTL_DAYS * DAY_MS).toISOString();
+      if (inWeek(week, due)) expiredAudits.push(item(b.id, c.id, due));
+    }
+  }
   const byTime = (a: WeeklyItem, b: WeeklyItem) => a.at.localeCompare(b.at);
   return {
     week,
@@ -337,6 +360,7 @@ export function buildWeeklySummary(input: WeeklySummaryInput): WeeklySummary {
     waiting: input.waiting.map((w) => ({ ...w, boardName: nameOf(w.boardId) })),
     ...(input.rollout ? { rollout: input.rollout } : {}),
     ...(health ? { health } : {}),
+    expiredAudits: expiredAudits.sort(byTime),
   };
 }
 

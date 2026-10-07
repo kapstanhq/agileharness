@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { STYLE_SECTIONS, STYLE_SECTION_KEYS, STYLE_SECTION_BY_KEY, styleSectionLabel } from "./style-guide-blocks";
 
 describe("STYLE_SECTIONS registry", () => {
-  it("has exactly the 10 canonical sections from 00-conteudo-do-guia.md, in fill order", () => {
+  it("has exactly the 11 canonical sections (the 10 of 00-conteudo-do-guia.md + Componentes, fase 2), in fill order", () => {
     expect(STYLE_SECTIONS.map((s) => s.key)).toEqual([
       "identity",
       "principles",
@@ -12,6 +12,7 @@ describe("STYLE_SECTIONS registry", () => {
       "shape",
       "motion",
       "voice",
+      "components",
       "antiPatterns",
       "debt",
     ]);

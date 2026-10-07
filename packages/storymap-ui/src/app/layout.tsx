@@ -5,6 +5,7 @@ import { headers } from "next/headers";
 import "./globals.css";
 
 import { PATHNAME_HEADER, shouldMountOverlay } from "@/lib/feedback/overlay-mount";
+import { HOST_LAUNCHER } from "@/lib/feedback/overlay-launcher";
 import { resolvedOwnerTimeZone } from "@/lib/storymap/owner-timezone";
 import { OwnerTimeZoneProvider } from "@/components/OwnerTimeZone";
 import { StaleActionGuard } from "@/components/StaleActionGuard";
@@ -83,7 +84,8 @@ try {
 `;
 
 // Feedback overlay — DOGFOOD: the AgileHarness board gives visual feedback on ITSELF. The vanilla
-// snippet (public/ah-overlay.js) mounts a discreet bottom-left button on every page; unlinked
+// snippet (public/ah-overlay.js) is mounted on every page; its way in is the «Marcar ajuste» item of the gear menu
+// (`launcher: "host"` below — the corner pill only shows while marking); unlinked
 // batches become triage cards on the board this installation declares as its own (selfBoardId();
 // ?ah-card=/?ah-session= override the link).
 // Same-origin + basic_auth → no nonce/CORS. The `theme` maps the overlay to the app's own CSS vars
@@ -110,6 +112,9 @@ const ahFeedbackConfig = (board: string) => ({
   // "Marcar ajuste" — verbo + objeto. O balão de conversa escrito "Feedback" lia como canal de suporte.
   icon: "jido",
   label: "Marcar ajuste",
+  // A porta é o item «Marcar ajuste» da engrenagem (shell/SettingsMenu), não a pílula flutuante: num notebook baixo ela
+  // pousava em cima do card da Triagem. A pílula só aparece durante a marcação, como «Parar» (lib/feedback/overlay-launcher).
+  launcher: HOST_LAUNCHER,
   link: { kind: "none" as const, board },
   producer: "agileharness-board",
   // B11 — o item criado é um CARD: o link é a página dele (o `?focus=` do Inbox acendia o primeiro item de outro).

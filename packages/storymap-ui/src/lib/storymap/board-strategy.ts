@@ -1,7 +1,7 @@
 // 🧭 De ONDE vem o norte de um board — a única resposta, para os cinco lugares que perguntam.
 //
 // Antes eram três strings lidas direto do `board.yaml` em cinco arquivos diferentes, e as cinco
-// leituras já tinham divergido: `priority-context` e `priority-assess` carregavam a MESMA função
+// leituras já tinham divergido: duas delas (módulos já apagados) carregavam a MESMA função
 // `strategyBlock` duplicada (uma com fallback, outra sem), e `smart-capture` renderizava a escada
 // numa ORDEM diferente das outras duas. Nenhuma das divergências foi decidida; todas foram digitadas.
 //
@@ -14,10 +14,14 @@
 
 import { loadDoc } from "./doc/schema-doc-io";
 import { prdDigest } from "./doc/prd-digest";
-import { sectionItems, sectionContent } from "./doc/schema-codec";
+import { projectPersonas } from "./doc/prd-personas";
+import { prdFeatureEntries, type PrdFeature } from "./doc/prd-features";
+import { sectionItems, sectionContent, serializeSchemaDoc } from "./doc/schema-codec";
 import { serializeDocMd } from "./doc/md-codec";
+import { CONTEXTO_DOC_TYPE } from "./doc/schemas/contexto";
 import { PRD_DOC_TYPE } from "./doc/schemas/prd";
-import type { BoardConfig } from "./types";
+import { readBoardConfig } from "./repo";
+import type { Board, BoardConfig, Persona } from "./types";
 
 /**
  * O norte do board, pronto para entrar num prompt. Vazio ⇒ o board não declarou norte nenhum.
@@ -40,32 +44,29 @@ export async function boardStrategy(boardId: string, config?: BoardConfig): Prom
 export { strategyOrAbsence } from "./doc/prd-digest";
 
 /**
- * SÓ o Resultado-alvo do PRD — o vértice ao qual as stories sobem, para a tira acima do mapa.
+ * SÓ as Métricas de sucesso do PRD — o resultado ao qual as stories sobem, numa linha.
  *
- * Separado do digest de propósito: a tira mostra UMA frase, e passar o digest inteiro a obrigaria a
- * recortar por rótulo — um parser de texto sobre algo que já é estrutura. `null` quando a seção está
- * vazia, para a tira poder dizer "ainda não declarado" em vez de mostrar uma linha em branco.
+ * Separado do digest de propósito: quem mostra UMA linha não deveria recortar o digest por rótulo — um
+ * parser de texto sobre algo que já é estrutura. `null` quando a seção está vazia, para quem mostra
+ * poder dizer "ainda não declarado" em vez de uma linha em branco.
  */
 export async function boardDesiredOutcome(boardId: string, config?: BoardConfig): Promise<string | null> {
   const loaded = await loadDoc(boardId, PRD_DOC_TYPE, config).catch(() => undefined);
   if (!loaded) return null;
-  const itens = sectionItems(loaded.doc, "resultadoAlvo")
+  const itens = sectionItems(loaded.doc, "metricasSucesso")
     .map((i) => i.text.trim())
     .filter(Boolean);
   return itens.length ? itens.join(" · ") : null;
 }
 
 /**
- * A SEMENTE do backbone: o recorte do PRD que descreve O QUE construir — jornadas, o escopo desta
- * versão e as capacidades da solução.
+ * A SEMENTE do backbone: o recorte do PRD que descreve O QUE construir — o fluxo de uso e as
+ * funcionalidades.
  *
  * Por que um recorte e não o documento inteiro: a captura propõe activities/steps/stories a partir
- * de texto livre, e mandar as dezesseis seções faria o modelo cunhar card para «Modelo de negócio» e
- * «Glossário» — que descrevem o produto, não o trabalho. O norte já viaja por outro canal (o digest
- * entra no prompt da captura como «Norte do produto»), então repeti-lo aqui só somaria ruído.
- *
- * O «Fora, por ora» do escopo entra DE PROPÓSITO: dizer o que não fazer é o que impede a captura de
- * propor exatamente aquilo — e essa é a proposta que o operador mais gasta tempo recusando à mão.
+ * de texto livre, e mandar as personas ou as métricas faria o modelo cunhar card para o que descreve
+ * o produto, não o trabalho. O norte (com o «Fora do escopo») já viaja por outro canal — o digest
+ * entra no prompt da captura como «Norte do produto» —, então repeti-lo aqui só somaria ruído.
  */
 export async function prdBacklogSeed(boardId: string, config?: BoardConfig): Promise<string> {
   const loaded = await loadDoc(boardId, PRD_DOC_TYPE, config).catch(() => undefined);
@@ -78,9 +79,8 @@ export async function prdBacklogSeed(boardId: string, config?: BoardConfig): Pro
   };
 
   const partes = [
-    ["Jornadas (o percurso de ponta a ponta — é daqui que sai o backbone)", md("jornadas")],
-    ["Escopo", md("escopo")],
-    ["Solução (as capacidades)", md("solucao")],
+    ["Fluxo de uso (o percurso de ponta a ponta — é daqui que sai o backbone)", md("fluxoUso")],
+    ["Funcionalidades", md("funcionalidades")],
   ].filter(([, corpo]) => corpo);
 
   if (!partes.length) return "";
@@ -89,4 +89,59 @@ export async function prdBacklogSeed(boardId: string, config?: BoardConfig): Pro
     "",
     ...partes.flatMap(([titulo, corpo]) => [`## ${titulo}`, "", corpo, ""]),
   ].join("\n").trim();
+}
+
+/**
+ * As PERSONAS do board — a seção «Personas» do PRD, com o `board.yaml` como piso legado (ver
+ * `doc/prd-personas.ts`). É o que o vocabulário do MCP, o motor e o procurador leem no lugar de
+ * `config.personas`.
+ */
+export async function boardPersonas(boardId: string, config?: BoardConfig): Promise<Persona[]> {
+  const resolved = config ?? (await readBoardConfig(boardId).catch(() => undefined));
+  const loaded = await loadDoc(boardId, PRD_DOC_TYPE, resolved).catch(() => undefined);
+  return projectPersonas(loaded?.doc, resolved?.personas ?? []);
+}
+
+/**
+ * As FUNCIONALIDADES do board — os `###` da seção «Funcionalidades» do PRD (ver `doc/prd-features.ts`). Vazio ⇒ o
+ * board não tem funcionalidades no PRD e o agrupamento cai no modo mapa (feature-key.ts). Fase 7.
+ */
+export async function boardFeatures(boardId: string, config?: BoardConfig): Promise<PrdFeature[]> {
+  const resolved = config ?? (await readBoardConfig(boardId).catch(() => undefined));
+  const loaded = await loadDoc(boardId, PRD_DOC_TYPE, resolved).catch(() => undefined);
+  return prdFeatureEntries(loaded?.doc);
+}
+
+/**
+ * O `config` com as personas RESOLVIDAS (as do PRD, com o `board.yaml` como piso) — para quem mostra e escolhe
+ * persona num card (o seletor, as fichas, a criação) e para a captura inteligente (o prompt e o `parseProposal`).
+ * Sem isto, uma persona escrita só no PRD — a que o `get_vocabulary` devolve e os agentes põem nos cards — não podia
+ * ser escolhida, sumia da ficha do card e era descartada pela captura como id desconhecido.
+ * SÓ PARA LER: nunca grave o `board.yaml` a partir deste objeto (as personas do PRD vazariam para o arquivo).
+ */
+export async function withBoardPersonas(boardId: string, config: BoardConfig): Promise<BoardConfig> {
+  return { ...config, personas: await boardPersonas(boardId, config) };
+}
+
+/** {@link withBoardPersonas} para um board inteiro — o que as páginas que abrem card passam aos componentes. */
+export async function boardWithPersonas(board: Board): Promise<Board> {
+  return { ...board, config: await withBoardPersonas(board.config.id, board.config) };
+}
+
+/**
+ * O PRD e o contexto dos agentes, em markdown, um depois do outro — o que os juízes e o procurador
+ * leem (eles leram o `prd.md` cru até o PRD ser dividido em dois). Passa por `loadDoc`, então um PRD
+ * ainda no formato antigo já chega no novo. `null` quando nenhum dos dois arquivos existe: o board não
+ * escreveu nada, e a projeção do `board.yaml` não é texto que justifique um bloco no prompt.
+ */
+export async function readPrdWithContext(boardId: string): Promise<string | null> {
+  const [prd, contexto] = await Promise.all([
+    loadDoc(boardId, PRD_DOC_TYPE).catch(() => undefined),
+    loadDoc(boardId, CONTEXTO_DOC_TYPE).catch(() => undefined),
+  ]);
+  const partes: string[] = [];
+  if (prd?.exists) partes.push(serializeSchemaDoc(prd.doc, prd.schema).trim());
+  // o contexto entra se tiver alguma seção — inclusive o projetado de um PRD antigo ainda não migrado
+  if (contexto?.doc.sections.length) partes.push(serializeSchemaDoc(contexto.doc, contexto.schema).trim());
+  return partes.length ? partes.join("\n\n") : null;
 }

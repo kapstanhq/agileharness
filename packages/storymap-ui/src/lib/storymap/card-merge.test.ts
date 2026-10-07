@@ -75,17 +75,17 @@ describe("mergeCardOnSave", () => {
 describe("mergeCardThreeWay", () => {
   // A baseline card; each side overrides ONLY the fields under test so the divergence is precise.
   const mk = (over: Record<string, unknown> = {}) =>
-    card({ status: "priorizar", title: "Título base", acceptance: ["a1"], ...over });
+    card({ status: "interview", title: "Título base", acceptance: ["a1"], ...over });
   const base = mk();
 
   it("takes a RUN-only field change (a pipeline advance main never touched)", () => {
-    // The run advanced status priorizar → desenvolver; main didn't touch status.
+    // The run advanced status interview → desenvolver; main didn't touch status.
     expect(mergeCardThreeWay(base, mk(), mk({ status: "desenvolver" })).status).toBe("desenvolver");
   });
 
   // WP5-F2 — um move A→C→A em main depois do corte termina igual à base: só o ledger prova que main mexeu.
   it("main voltou o status ao valor da base (A→C→A, o ledger diz): o status de main vence a foto velha do run", () => {
-    expect(mergeCardThreeWay(base, mk(), mk({ status: "desenvolver" }), { mainMovedStatus: true }).status).toBe("priorizar");
+    expect(mergeCardThreeWay(base, mk(), mk({ status: "desenvolver" }), { mainMovedStatus: true }).status).toBe("interview");
     // a marca só vale para o status: o resto do run (pipeline) segue vindo dele
     const merged = mergeCardThreeWay(base, mk(), mk({ status: "desenvolver", reviewedAt: "2026-10-01" }), { mainMovedStatus: true });
     expect(merged.reviewedAt).toBe("2026-10-01");
@@ -108,7 +108,7 @@ describe("mergeCardThreeWay", () => {
   // status do run é a projeção de uma foto antiga. Deixar o run vencer trazia o status do worktree por cima de um
   // move_card do condutor/dono e deixava o arquivo contradizendo o ledger.
   it("card movido em main (MCP) DEPOIS do corte mantém o status de main, mesmo que o run tenha mudado o dele", () => {
-    // base "priorizar"; main foi movido para "pronta" por move_card; o run (foto antiga) avançou para "desenvolver".
+    // base "interview"; main foi movido para "pronta" por move_card; o run (foto antiga) avançou para "desenvolver".
     expect(mergeCardThreeWay(base, mk({ status: "pronta" }), mk({ status: "desenvolver" })).status).toBe("pronta");
   });
 
@@ -420,6 +420,14 @@ describe("mergeCardThreeWay — o estado do dono vence pelo lado da main", () =>
     const merged = mergeCardThreeWay(base, main, run);
     expect(merged.reviewChain).toBeUndefined();
     expect(merged.questions?.[0]).toMatchObject({ id: "q4", status: "answered" });
+  });
+
+  it("a marca de LOTE é do servidor: forjada no worktree não entra; apagada no worktree volta a de main", () => {
+    const mark = { id: "lote-ex9790", lead: "story-ex9791", sessionId: "sess-ex9790", at: "2026-03-02T10:00:00Z" };
+    const forged = mergeCardThreeWay(card({}), card({}), card({ batch: { ...mark, lead: "story-ex9799" } }));
+    expect(forged.batch).toBeUndefined();
+    const erased = mergeCardThreeWay(card({ batch: mark }), card({ batch: mark }), card({}));
+    expect(erased.batch).toEqual(mark);
   });
 });
 

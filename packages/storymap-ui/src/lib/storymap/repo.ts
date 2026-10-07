@@ -16,9 +16,8 @@ import { parseBoardConfig, parseCard } from "./contracts";
 import { isCurrencyCode, isReviewLensId } from "./target-profile";
 import { coerceCanvas as coerceCanvasKernel, coerceCanvasTags as coerceCanvasTagsKernel } from "./canvas";
 import { coerceStyleGuidePointer } from "./style-guide";
-import { coerceWsjf } from "./wsjf";
 import { DEPLOY_STEP_ID, releaseModeOf, withDerivedDeployAutorun } from "./release-policy";
-import { mergeById } from "./gate-core";
+import { canonicalGateId, mergeById } from "./gate-core";
 import { conductorConfigProblem } from "./driver";
 import { laneViewProblems } from "./lanes";
 import {
@@ -26,9 +25,7 @@ import {
   isBugFrequency,
   isDisposition,
   isExperimentStatus,
-  isFunnelStage,
   isImprovementKind,
-  isKanoCategory,
   isIdeaStatus,
   isOwner,
   isRemovalLevel,
@@ -37,6 +34,7 @@ import {
 } from "./frameworks";
 import type {
   Bet,
+  PipelineMode,
   Board,
   BoardConfig,
   BoardDeployConfig,
@@ -47,10 +45,12 @@ import type {
   CardQuestion,
   CardRouting,
   CardTransfer,
+  CardBatchMark,
   ReviewChainMark,
   TransferEvidence,
   CardType,
   ColumnDef,
+  AgentDecides,
   AutonomyPolicy,
   BoardNotificationsConfig,
   BoardViewConfig,
@@ -77,7 +77,6 @@ import type {
   EffortLevel,
   IdeaFields,
   Persona,
-  PriorityCall,
   OrchestratorMode,
   OrchestratorPolicy,
   Refinement,
@@ -85,7 +84,6 @@ import type {
   ReleaseDef,
   RiskClass,
   RiskDisposition,
-  Rice,
   RouteProfile,
   SpecialistDef,
   StatusDef,
@@ -103,6 +101,7 @@ import type {
   DeployFailurePhase,
 } from "./types";
 import {
+  AGENT_DECIDES_KEYS,
   COLUMN_TRIGGER_IDS,
   DEPLOY_FAILURE_PHASES,
   EFFORT_LEVELS,
@@ -125,6 +124,7 @@ import {
   RISK_CLASSES,
   RISK_DISPOSITIONS,
   TRIAGE_VERDICTS,
+  PIPELINE_MODES,
 } from "./types";
 
 async function readDirSafe(dir: string): Promise<string[]> {
@@ -167,23 +167,6 @@ function coerceTasks(raw: unknown): Task[] {
     .filter((t) => t.title);
 }
 
-/** YAML may omit any RICE field; missing → null. effort/0 stays null-equivalent downstream. */
-function coerceRiceNumber(value: unknown): number | null {
-  if (value == null || value === "") return null;
-  const n = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(n) ? n : null;
-}
-
-function coerceRice(raw: unknown): Rice {
-  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
-  return {
-    reach: coerceRiceNumber(r.reach),
-    impact: coerceRiceNumber(r.impact),
-    confidence: coerceRiceNumber(r.confidence),
-    effort: coerceRiceNumber(r.effort),
-  };
-}
-
 /** A narrative clause is null when absent/empty/literal "null". */
 function coerceNarrativeClause(value: unknown): string | null {
   if (value == null) return null;
@@ -201,7 +184,10 @@ function coerceNarrative(raw: unknown): StoryNarrative {
 }
 
 function coerceGate(value: unknown): GateId | undefined {
-  return GATE_IDS.includes(value as GateId) ? (value as GateId) : undefined;
+  // Um gate aposentado (hasPrioritization/hasRice, de um board.yaml que não migrou) é lido como o sucessor — descartá-lo
+  // deixaria o passo SEM gate (gate-core.js `RETIRED_GATE_SUCCESSORS`).
+  const id = canonicalGateId(value);
+  return GATE_IDS.includes(id as GateId) ? (id as GateId) : undefined;
 }
 
 function coerceTrigger(value: unknown): TriggerId | undefined {
@@ -508,6 +494,23 @@ function coerceReviewChain(raw: unknown): ReviewChainMark | undefined {
   return { root, round, ...(o.extra === true ? { extra: true } : {}) };
 }
 
+/**
+ * A marca de LOTE do condutor (fase 7, pipeline-owned) — tolerante: um bloco sem `id`/`lead`/`sessionId`/`at` legível
+ * é descartado (o card simplesmente não está em lote), nunca lança.
+ */
+function coerceBatchMark(raw: unknown): CardBatchMark | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  const str = (v: unknown) => (v != null && String(v).trim() ? String(v).trim() : "");
+  const id = str(o.id);
+  const lead = str(o.lead);
+  const sessionId = str(o.sessionId);
+  const at = o.at instanceof Date ? o.at.toISOString() : str(o.at);
+  if (!id || !lead || !sessionId || !at) return undefined;
+  const planHash = str(o.planHash);
+  return { id, lead, sessionId, at, ...(planHash ? { planHash } : {}) };
+}
+
 function coerceTransferEvidence(e: Record<string, unknown>): TransferEvidence {
   const str = (v: unknown) => (v === null ? null : typeof v === "string" ? v : v != null ? String(v) : undefined);
   const out: TransferEvidence = {};
@@ -581,41 +584,9 @@ function coerceBugReport(raw: unknown): BugReport | null {
   };
 }
 
-/** Coerce a `{reach, impact}` value-size block — null when neither axis is a finite number. */
-function coerceValueSize(raw: unknown): { reach: number | null; impact: number | null } | null {
-  if (!raw || typeof raw !== "object") return null;
-  const r = raw as Record<string, unknown>;
-  const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
-  const reach = num(r.reach);
-  const impact = num(r.impact);
-  if (reach == null && impact == null) return null;
-  return { reach, impact };
-}
-
-/** Prioridade argumentada (reasoning-first) — tolerante: bloco inválido (sem rank/rationale) → null.
- *  Esparso: só retido quando presente no disco. ⚠️ Reconstrói campo-a-campo (igual coerceIdea). */
-function coercePriorityCall(raw: unknown): PriorityCall | null {
-  if (!raw || typeof raw !== "object") return null;
-  const r = raw as Record<string, unknown>;
-  const rank = r.rank;
-  if (rank !== 0 && rank !== 1 && rank !== 2 && rank !== 3) return null;
-  const rationale = r.rationale != null ? String(r.rationale).trim() : "";
-  if (!rationale) return null;
-  const out: PriorityCall = {
-    rank,
-    rationale,
-    source: r.source === "human" ? "human" : "agent",
-    assessedAt: r.assessedAt != null ? String(r.assessedAt) : "",
-  };
-  if (r.riskiestAssumption != null && String(r.riskiestAssumption).trim()) {
-    out.riskiestAssumption = String(r.riskiestAssumption).trim();
-  }
-  // Ordinais WSJF — esparsos e TOLERANTES: um sub-bloco corrompido (ordinal fora da escala) é
-  // descartado, mas o `rank` + `rationale` do call SOBREVIVEM. Perder a razão é degradar; perder o
-  // tier seria destravar um card para fora do gate hasPrioritization.
-  const wsjf = coerceWsjf(r.wsjf);
-  if (wsjf) out.wsjf = wsjf;
-  return out;
+/** O modo do pipeline declarado no board (types.ts `PipelineMode`). */
+function isPipelineMode(v: unknown): v is PipelineMode {
+  return typeof v === "string" && (PIPELINE_MODES as readonly string[]).includes(v);
 }
 
 /** Idea fields — tolerant: a block with no statement coerces to null (treated as absent).
@@ -637,10 +608,6 @@ function coerceIdea(raw: unknown): IdeaFields | null {
   if (candidateSolutions.length) out.candidateSolutions = candidateSolutions;
   if (r.keyAssumption != null && String(r.keyAssumption).trim()) out.keyAssumption = String(r.keyAssumption).trim();
   if (r.successSignal != null && String(r.successSignal).trim()) out.successSignal = String(r.successSignal).trim();
-  const valueSize = coerceValueSize(r.valueSize);
-  if (valueSize) out.valueSize = valueSize;
-  const priorityCall = coercePriorityCall(r.priorityCall);
-  if (priorityCall) out.priorityCall = priorityCall;
   return out;
 }
 
@@ -1031,6 +998,14 @@ export function coerceAutonomy(raw: unknown): AutonomyPolicy | undefined {
   // classes do dono, nunca liga o modo de ninguém.
   if (r.mode != null && !isAutonomyMode(r.mode)) return undefined;
   const out: AutonomyPolicy = isAutonomyMode(r.mode) ? { mode: r.mode } : {};
+  // O PERFIL de autonomia (autonomy-profile.ts): só booleanos de caixas conhecidas — um valor torto (string, número)
+  // cai e a caixa volta à derivação do legado; nunca liga uma caixa por engano de grafia.
+  if (r.agentDecides && typeof r.agentDecides === "object" && !Array.isArray(r.agentDecides)) {
+    const d = r.agentDecides as Record<string, unknown>;
+    const decides: Partial<AgentDecides> = {};
+    for (const k of AGENT_DECIDES_KEYS) if (typeof d[k] === "boolean") decides[k] = d[k] as boolean;
+    if (Object.keys(decides).length) out.agentDecides = decides;
+  }
   const model = coerceModel(r.proxyModel);
   if (model) out.proxyModel = model;
   const rate = Number(r.auditSampleRate);
@@ -1323,6 +1298,8 @@ export function coerceStatuses(raw: unknown): StatusDef[] {
       const trigger = coerceTrigger((s as any).trigger);
       if (trigger) def.trigger = trigger;
       if (typeof (s as any).autorun === "boolean") def.autorun = (s as any).autorun;
+      // O pipeline híbrido (types.ts `stepAutoruns`): o autorun deste passo só vale no modo por colunas.
+      if ((s as any).autorunOnlyInColumns === true) def.autorunOnlyInColumns = true;
       if (typeof (s as any).terminal === "boolean") def.terminal = (s as any).terminal;
       // "no ar" — subconjunto ESTRITO de terminal, lido por deliveredIndex (delivered.ts). Só `true`
       // é significativo: a régua é fail-closed, então ausência já significa "não sei, não afirme".
@@ -1476,6 +1453,11 @@ export function coerceCard(
     // A dangling/invalid serves survives the read (surfaced by the lint), never throws.
     serves:
       data.serves != null && String(data.serves).trim() ? String(data.serves).trim() : undefined,
+    // A funcionalidade do PRD (fase 7, autoral e sparse) — aparada; vazia ⇒ ausente (= «Outros» num board com
+    // funcionalidades no PRD). Um id que não existe mais no PRD sobrevive à leitura (a âncora o religa).
+    feature: data.feature != null && String(data.feature).trim() ? String(data.feature).trim() : undefined,
+    // A marca de lote do condutor (fase 7, pipeline-owned) — sem esta linha a marca gravada pelo servidor sumia na leitura.
+    batch: coerceBatchMark(data.batch),
     // Per-instance routing override (pipeline-owned) — sparse: null when no skip set is persisted.
     routing: coerceRouting(data.routing),
     // The per-story autonomy exception (sparse): only a known mode survives the read.
@@ -1502,14 +1484,12 @@ export function coerceCard(
     narrative: coerceNarrative(data.narrative),
     acceptance: coerceStringArray(data.acceptance),
     tasks: coerceTasks(data.tasks),
-    rice: coerceRice(data.rice),
-    kano: isKanoCategory(data.kano) ? data.kano : null,
-    funnelStage: isFunnelStage(data.funnelStage) ? data.funnelStage : null,
-    // Prioridade argumentada (reasoning-first) — esparso: só retido quando presente no disco.
-    priorityCall: coercePriorityCall(data.priorityCall) ?? undefined,
+    // A priorização (rice/kano/funnelStage/priorityCall) saiu do modelo: a ordem do trabalho é a POSIÇÃO na coluna
+    // (`order`). Um card antigo que ainda carrega essas chaves continua legível — elas são ignoradas aqui e somem na
+    // próxima gravação do card.
     // Triage/intake — optional + lean: only retained when present on disk.
     severity: isBugSeverity(data.severity) ? data.severity : undefined,
-    // Bug priority axes (Fase 2) — optional, only retained when present on disk.
+    // Bug triage metadata — optional, only retained when present on disk (context, never a score).
     frequency: isBugFrequency(data.frequency) ? data.frequency : undefined,
     hasWorkaround: typeof data.hasWorkaround === "boolean" ? data.hasWorkaround : undefined,
     labels: labels.length ? labels : undefined,
@@ -1728,6 +1708,11 @@ export function mergeRawConfig(base: Record<string, unknown> | null, board: Reco
     // pipeline doesn't have. `specialists` is a pipeline-agnostic agent REGISTRY → inherit for all boards
     // (merged by key), harmless when a board's steps reference none.
     routeProfiles: inheritsPipeline ? mergeRawRecord(base.routeProfiles, board.routeProfiles) : board.routeProfiles,
+    // A VISTA em raias também NOMEIA passos (`view.lanes[].statuses`), então segue a mesma porta: o board que herda
+    // a pipeline herda as raias do `_base` (o `view` dele, se declarado, vence INTEIRO — um mapa de raias não se
+    // funde por id); o board de pipeline própria só tem as raias que declarou — senão herdaria um mapa que cita
+    // passos que ele não tem, e o lint de raias alarmaria em toda leitura.
+    view: inheritsPipeline ? (board.view ?? base.view) : board.view,
     specialists: mergeRawRecord(base.specialists, board.specialists),
     // A chave de autonomia herda por CHAVE: o `_base` declara as classes do dono (nunca o modo); um board liga o
     // modo — e pode trocar a lista — sem perder o que não declarou.
@@ -2154,6 +2139,8 @@ async function resolveBoardConfigFromOwnRaw(
     // que os vizinhos (`deploy`, `faceUrl`, `sharedPackages`) documentam: yaml declara, Zod aceita, o
     // coerce (whitelist) descarta. Spread condicional para board sem o bloco não carregar chave fantasma.
     ...(conductor ? { conductor } : {}),
+    // O MODO do pipeline (types.ts `pipelineMode`): só quando declarado — ausente, o modo vem do despacho do condutor.
+    ...(isPipelineMode((parsed as { pipeline?: unknown }).pipeline) ? { pipeline: (parsed as { pipeline: PipelineMode }).pipeline } : {}),
     // A VISTA em raias e a CHAVE DE AUTONOMIA — mesmas razões (whitelist): sem estas linhas o bloco seria
     // declarado, aceito pelo contrato e INERTE. Spread condicional: board sem o bloco não carrega chave fantasma.
     ...(view ? { view } : {}),
@@ -2195,6 +2182,12 @@ async function resolveBoardConfigFromOwnRaw(
   // declarado, aceito pelo contrato e INERTE — o pior modo de falha. Grita; nunca apaga o board por isso.
   const conductorProblem = conductorConfigProblem(config);
   if (conductorProblem) alarmOnce(boardConfigPath(boardId), `[storymap] board "${boardId}": ${conductorProblem}`);
+  // `pipeline: conductor` sem despacho ligado: os passos do meio ficam mudos E ninguém conduz — o card só atravessa.
+  if (config.pipeline === "conductor" && !config.conductor?.enabled)
+    alarmOnce(
+      boardConfigPath(boardId),
+      `[storymap] board "${boardId}": pipeline: conductor, mas o despacho do condutor (conductor.enabled) está desligado — os passos marcados autorunOnlyInColumns não rodam skill nenhuma; ligue o condutor ou declare pipeline: columns`,
+    );
   // E para a vista em raias: status sem raia (ou em duas) é mapa torto — o card cai em "outros" e o dono não
   // sabe por quê. O mesmo texto aparece na própria vista (KanbanBoard), legível para quem declarou.
   for (const problem of laneViewProblems(config)) alarmOnce(boardConfigPath(boardId), `[storymap] board "${boardId}" view.lanes: ${problem}`);
@@ -2351,9 +2344,15 @@ export async function deriveBoardConfigForPersist(
   // A dispatch do condutor é board-local (o `_base` não declara nenhuma): um save de qualquer outra coisa
   // (vocab/canvas/estratégia) não pode apagar a linha do disco — o defeito D15 do kill-switch abaixo.
   if (config.conductor) out.conductor = config.conductor;
-  // A vista em raias e a chave de autonomia: board-locais pelo mesmo motivo — um save de outra coisa não apaga.
-  if (config.view) out.view = config.view;
-  // …mas só o DELTA sobre o `_base`: as classes do dono que o board herdou não são gravadas no board.yaml dele (a
+  // O modo do pipeline: board-local, gravado só quando declarado (ausente = derivado do condutor).
+  if (config.pipeline) out.pipeline = config.pipeline;
+  // A vista em raias: um save de outra coisa não pode apagar a do board — mas a HERDADA do `_base` não é gravada
+  // (o mesmo raciocínio do audit #9: re-inlinar o mapa padrão no board.yaml cortaria a propagação de uma mudança
+  // futura nas raias do `_base`). O board de pipeline própria não herda raias (mergeRawConfig), então a dele é
+  // sempre dele: grava inteira, como os routeProfiles.
+  if (config.view && (optOut || !eq(config.view, coerceBoardView(baseRaw.view)))) out.view = config.view;
+  // A chave de autonomia: board-local pelo mesmo motivo (um save de outra coisa não apaga), mas só o DELTA sobre o
+  // `_base`: as classes do dono que o board herdou não são gravadas no board.yaml dele (a
   // herança continua viva — um `_base` que mude a descrição de uma classe chega a todo board que não a sobrescreveu).
   if (config.autonomy) {
     const baseAutonomy = coerceAutonomy(baseRaw.autonomy);

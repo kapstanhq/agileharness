@@ -24,11 +24,11 @@
 //
 // | Role / task                                        | Model                 | Effort  | Decided by             |
 // |----------------------------------------------------|-----------------------|---------|------------------------|
-// | Implementer — complex card (RICE≥3 AND ≥5 tasks)    | elevated, ≤ column*   | high*   | door 3 (branch 2)      |
+// | Implementer — complex card (≥10 tasks)              | elevated, ≤ column*   | high*   | door 3 (branch 2)      |
 // | Implementer — ordinary card                         | the column pair       | column  | door 3 (branch 3)      |
 // | Implementer — chore / mechanical work               | sonnet*               | medium* | door 3 (branch 1)      |
 // | Conflict resolution / semantic judge (WS-10)        | sonnet                | medium  | door 2 (`mechanical`)  |
-// | Triage / enrich / prioritize (light lane)           | sonnet                | medium  | door 1 (_base columns) |
+// | Triage / enrich (light lane)                        | sonnet                | medium  | door 1 (_base columns) |
 // | QA runner (thin — decides + reads)                  | sonnet                | medium  | door 1 (qa-automatizado)|
 // | Review CONSOLIDATION (the harness-review run itself)    | the column (opus)     | high    | door 1 (revisar-codigo)|
 // | Agent session `implement` (WS-6 spawn)              | the card's own rule   | idem    | door 3 (resolveCardArgs)|
@@ -70,9 +70,7 @@ import type { StoryType, BugSeverity } from "@/lib/storymap/frameworks";
 export interface CardComplexitySignals {
   /** the nature of the work — `chore` forces the cheap tier; null/undefined = unknown */
   storyType: StoryType | null | undefined;
-  /** RICE effort estimate (size proxy); null/undefined = unestimated → treated as 0 */
-  riceEffort: number | null | undefined;
-  /** number of tasks in the breakdown (size proxy) */
+  /** number of tasks in the breakdown — THE size signal (the priority scores and their effort estimate are gone) */
   taskCount: number;
   /** bug triage severity (reserved signal — carried for parity with the card); null = unset */
   severity: BugSeverity | null | undefined;
@@ -109,17 +107,20 @@ function lowerEffort(a: EffortLevel | undefined, b: EffortLevel | undefined): Ef
   return EFFORT_ORDER[a] <= EFFORT_ORDER[b] ? a : b;
 }
 
-// The size branch fires only when BOTH the estimate and the breadth cross the bar — a single
-// big-but-shallow (or small-but-wide) card is not enough to spend Opus.
-const SIZE_RICE_MIN = 3;
-const SIZE_TASKS_MIN = 5;
+// The size branch fires when the breakdown crosses this bar. The size used to ALSO need a RICE effort estimate
+// (effort ≥ 3 AND ≥ 5 tasks), which went away with the prioritization — the task count is the one size signal every
+// planned card carries. Almost no card carried that estimate, so in practice the branch never fired and the score
+// topped out at 0.5 (at 5 tasks). The bar sits at 10 tasks to keep that EFFECTIVE behaviour: a 5-task card still
+// scores 0.5 and stays on the column pair; only a genuinely broad breakdown (≥ 10 tasks) earns opus and the
+// full turn ceiling. Lowering it raises the per-run budget of most planned cards — an owner decision.
+const SIZE_TASKS_MIN = 10;
 
 // ── Per-card maxTurns scaling (story-ex0050 HALF A) ────────────────────────────────────────────
 // The column's `maxTurns` (board.yaml: storymap desenvolver=220, _base=120) is the CEILING, not a
 // fixed value. A FIXED ceiling blew up mid-build for a big card (ex0146 empirically needed ~220),
 // while a SMALL card (a 1-task chore) burning the same 220-turn budget is wasteful AND lets a
 // runaway loop churn turns it never needed. So we scale the EFFECTIVE maxTurns within
-// [LEAN_BASELINE, ceiling] from the card's size (RICE effort + task count): a small card gets a
+// [LEAN_BASELINE, ceiling] from the card's size (its task count): a small card gets a
 // lean budget; a big, broad card reaches the ceiling. costGuard ($ wall-clock) stays the
 // independent backstop — this only bounds the TURN budget, never the cost.
 
@@ -137,10 +138,10 @@ export const MAXTURNS_LEAN_BASELINE = 40;
  *
  * Two properties a consumer must NOT re-derive:
  *   - LEAN TURNS COME FREE — the profile carries no `maxTurns` (hence no schema change): size-neutral
- *     signals (no RICE estimate, no task breakdown) ⇒ {@link cardSizeScore} = 0 ⇒ {@link deriveCardMaxTurns}
+ *     signals (no task breakdown) ⇒ {@link cardSizeScore} = 0 ⇒ {@link deriveCardMaxTurns}
  *     returns exactly {@link MAXTURNS_LEAN_BASELINE} (40), the lean budget the spec asks for, out of the
  *     mechanism that already exists. ⚠ This holds only while the signals ARE size-neutral: spawn a
- *     resolution using the CONFLICTED CARD's own signals (which may carry RICE + 6 tasks) and the size
+ *     resolution using the CONFLICTED CARD's own signals (which may carry 6 tasks) and the size
  *     branch scales the budget back UP — a resolution is not the card's build, so pass it neutral signals.
  *   - IT IS NOT GUARANTEED TO RESOLVE — a board may opt out of the inherited pipeline and own its
  *     `routeProfiles` (repo.ts), so `resolveRouteProfile(MECHANICAL_PROFILE_ID, …)` returning null means
@@ -151,21 +152,13 @@ export const MECHANICAL_PROFILE_ID = "mechanical";
 
 /**
  * The card-size SCORE in [0,1] — how close to the ceiling this card's turn budget should sit.
- * Combines the two size proxies the routing already lifts (RICE effort + task count) so a card that
- * is BOTH high-effort AND broad reaches 1 (the ceiling), while a 1-effort / ≤2-task card sits near 0
- * (the lean baseline). Each proxy saturates at the bar the size-elevation branch uses (effort 3,
- * 5 tasks) so the score is a smooth ramp, not a cliff. Pure — exported for tests.
- *
- * effortFrac: clamp(riceEffort / SIZE_RICE_MIN, 0..1) — 0 at no estimate, 1 at effort ≥ 3.
- * tasksFrac:  clamp(taskCount / SIZE_TASKS_MIN, 0..1) — 0 at no tasks, 1 at ≥ 5 tasks.
- * The two are AVERAGED so a card must be big on BOTH axes to top out (mirrors the AND in the size
- * branch); a card big on only one axis lands mid-range, not at the ceiling.
+ * The size proxy is the task count: clamp(taskCount / SIZE_TASKS_MIN, 0..1) — 0 at no tasks (the lean
+ * baseline), 0.5 at 5 tasks, 1 at ≥ 10 tasks (the ceiling), a smooth ramp in between, saturating at the same bar the
+ * size-elevation branch uses. Pure — exported for tests.
  */
-export function cardSizeScore(signals: Pick<CardComplexitySignals, "riceEffort" | "taskCount">): number {
-  const clamp01 = (n: number) => (n < 0 ? 0 : n > 1 ? 1 : n);
-  const effortFrac = clamp01((signals.riceEffort ?? 0) / SIZE_RICE_MIN);
-  const tasksFrac = clamp01(signals.taskCount / SIZE_TASKS_MIN);
-  return (effortFrac + tasksFrac) / 2;
+export function cardSizeScore(signals: Pick<CardComplexitySignals, "taskCount">): number {
+  const n = signals.taskCount / SIZE_TASKS_MIN;
+  return n < 0 ? 0 : n > 1 ? 1 : n;
 }
 
 /**
@@ -173,8 +166,8 @@ export function cardSizeScore(signals: Pick<CardComplexitySignals, "riceEffort" 
  * `maxTurns` as the CEILING (story-ex0050 HALF A). The result scales within
  * [{@link MAXTURNS_LEAN_BASELINE}, ceiling] by {@link cardSizeScore}:
  *
- *   - a SMALL card (effort ≤1, ≤2 tasks → score ≈ 0)         → ≈ the lean baseline (AC2);
- *   - a BIG card (effort ≥3 AND ≥5 tasks → score = 1)        → the ceiling (AC1, e.g. 220);
+ *   - a SMALL card (no tasks → score 0)                       → the lean baseline (AC2);
+ *   - a BIG card (≥10 tasks → score = 1)                      → the ceiling (AC1, e.g. 220);
  *   - anything in between                                     → linearly interpolated.
  *
  * Robustness rails:
@@ -190,7 +183,7 @@ export function cardSizeScore(signals: Pick<CardComplexitySignals, "riceEffort" 
  * needed. Pure — exported for tests.
  */
 export function deriveCardMaxTurns(
-  signals: Pick<CardComplexitySignals, "riceEffort" | "taskCount">,
+  signals: Pick<CardComplexitySignals, "taskCount">,
   ceiling: number | undefined,
 ): number | undefined {
   // No configured ceiling → leave maxTurns unset (CLI default); inventing a value here would emit a
@@ -214,7 +207,7 @@ export function deriveCardMaxTurns(
  *   1. `storyType === "chore"` → force DOWN to sonnet/medium (a chore is cheap by definition,
  *      regardless of its size — this branch beats the size branch). Still capped; `sonnet` is the
  *      lowest tier there is, so a cap can no longer pull a chore BELOW the floor.
- *   2. `riceEffort >= 3` AND `taskCount >= 5` → elevate to opus/high, capped by the column.
+ *   2. `taskCount >= 10` ({@link SIZE_TASKS_MIN}) → elevate to opus/high, capped by the column.
  *   3. otherwise → the column pair verbatim (AC4): an undefined pair yields undefined/undefined,
  *      letting the CLI apply its own default downstream.
  *
@@ -242,7 +235,7 @@ export function deriveCardModelEffort(
     return { model: capModel("sonnet", modelCeil), effort: capEffort("medium", effortCeil) };
   }
   // 2 — size elevation: a big, broad change earns Opus (within the ceiling).
-  if ((signals.riceEffort ?? 0) >= SIZE_RICE_MIN && signals.taskCount >= SIZE_TASKS_MIN) {
+  if (signals.taskCount >= SIZE_TASKS_MIN) {
     return { model: capModel("opus", modelCeil), effort: capEffort("high", effortCeil) };
   }
   // 3 — no explicit signal: the effective ceiling (the column pair, tightened by any card cap).

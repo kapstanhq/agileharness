@@ -1,7 +1,7 @@
 // The conductor's spend in the card's ledger — so cardBudgetUSD (which sums the ledger) finally sees it.
 
 import { describe, expect, it } from "vitest";
-import { isRecordableSession, recordSessionSpend, sessionTelemetryId, type SessionTelemetryDeps } from "./session-telemetry";
+import { batchItemTelemetryId, isRecordableSession, recordSessionSpend, sessionSpendCards, sessionTelemetryId, type SessionTelemetryDeps } from "./session-telemetry";
 import { roleOf, type TelemetryRecord } from "./telemetry";
 import type { AgentSession } from "./session-worktree";
 import type { SessionCostEstimate } from "@/lib/vps/session-cost";
@@ -132,5 +132,54 @@ describe("discardSessionWorktree — onSessionEnd roda com a linha AINDA no regi
     expect(res.ok).toBe(true);
     expect(seen).toEqual(["sess-1:1"]);
     expect(saved).toEqual([]); // descartada mesmo com o gancho lançando
+  });
+
+  // A passagem ao merge train é DECLARADA no descarte (conductor-handoff.ts): o gancho precisa receber a marca — e o
+  // descarte comum (estacionar, terminar) chega SEM ela, senão um estacionado voltaria à frente da fila pela passagem.
+  it("a passagem ao train declarada chega ao gancho (`handoff: true`); o descarte comum chega com `handoff: false`", async () => {
+    const { discardSessionWorktree } = await import("./session-worktree");
+    const seen: Array<boolean | undefined> = [];
+    for (const handoff of [true, undefined]) {
+      let saved: AgentSession[] = [{ ...conductor, adopted: true, worktreePath: undefined }];
+      const deps = {
+        store: { load: async () => saved.map((s) => ({ ...s })), persist: async (s: AgentSession[]) => void (saved = s) },
+        exec: (async () => {
+          throw new Error("git inesperado");
+        }) as never,
+        fs: {} as never,
+        repoRoot: "/repo",
+        ensureRunBase: async () => "base",
+        enqueueMerge: async () => {},
+        liveRunIds: async () => [],
+        onSessionEnd: async (_s: AgentSession, end?: { handoff?: boolean }) => void seen.push(end?.handoff),
+      };
+      expect((await discardSessionWorktree(deps, { sessionId: "sess-1", ...(handoff ? { handoff } : {}) })).ok).toBe(true);
+    }
+    expect(seen).toEqual([true, false]);
+  });
+});
+
+describe("fase 7 — a sessão de LOTE grava uma linha por card, com a parte de cada um", () => {
+  const batchSession: AgentSession = {
+    ...conductor,
+    batch: { id: "lote-sess-1", featureKey: "f1", cardIds: ["story-ex9402", "story-ex9403"], dropped: [{ cardId: "story-ex9403", reason: "falhou", at: "x" }] },
+  };
+
+  it("custo/N por card (o item que saiu também gastou), soma igual ao custo real, o líder com o id de sempre", async () => {
+    const d = deps();
+    expect(sessionSpendCards(batchSession)).toEqual(["c", "story-ex9402", "story-ex9403"]);
+    expect(await recordSessionSpend(d, batchSession)).toBe("recorded");
+    expect(d.records.map((r) => [r.cardId, r.id])).toEqual([
+      ["c", sessionTelemetryId("sess-1")],
+      ["story-ex9402", batchItemTelemetryId("sess-1", "story-ex9402")],
+      ["story-ex9403", batchItemTelemetryId("sess-1", "story-ex9403")],
+    ]);
+    expect(d.records.reduce((s, r) => s + (r.costUSD ?? 0), 0)).toBeCloseTo(3.21, 4);
+    expect(d.records.reduce((s, r) => s + (r.turns ?? 0), 0)).toBe(12);
+    expect(d.records.reduce((s, r) => s + (r.inputTokens ?? 0), 0)).toBe(1000);
+    // idempotente: a segunda porta não grava de novo nem relê o transcript
+    const reads = d.reads;
+    expect(await recordSessionSpend(d, batchSession)).toBe("already");
+    expect(d.reads).toBe(reads);
   });
 });

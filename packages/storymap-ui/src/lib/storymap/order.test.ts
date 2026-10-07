@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { byOrder, byUpdatedDesc, midpoint, ORDER_STEP } from "./order";
+import { byOrder, byUpdatedDesc, midpoint, ORDER_STEP, placementOrder } from "./order";
 import type { Card } from "./types";
 
 // Sparse ordering for drag-and-drop: a single move rewrites only one card file.
@@ -106,5 +106,41 @@ describe("byUpdatedDesc — recency comparator (most-recent on top)", () => {
       .sort(byUpdatedDesc)
       .map((x) => x.id);
     expect(sorted).toEqual(["c", "a", "b"]);
+  });
+});
+
+// A ORDEM DO TRABALHO é a posição na coluna: «Fazer antes» leva ao topo, «Pode esperar» ao fim, e só o card movido é
+// regravado (nenhuma renumeração da coluna).
+describe("placementOrder — «Fazer antes» / «Pode esperar»", () => {
+  const cards = [
+    { id: "story-ex9001", status: "pronta", order: 10 },
+    { id: "story-ex9002", status: "pronta", order: 20 },
+    { id: "story-ex9003", status: "pronta", order: 30 },
+    { id: "story-ex9004", status: "triage", order: -50 }, // mesma raia, outro status
+    { id: "story-ex9005", status: "desenvolver", order: -900 }, // outra coluna — não conta
+  ];
+
+  it("topo = menor order dos OUTROS da coluna menos o passo; fim = maior mais o passo", () => {
+    expect(placementOrder(cards, ["pronta"], "story-ex9003", "top")).toBe(10 - ORDER_STEP);
+    expect(placementOrder(cards, ["pronta"], "story-ex9001", "bottom")).toBe(30 + ORDER_STEP);
+  });
+
+  it("a coluna é o conjunto de status passado (a raia inteira quando o board declara raias)", () => {
+    expect(placementOrder(cards, ["triage", "pronta"], "story-ex9002", "top")).toBe(-50 - ORDER_STEP);
+  });
+
+  it("já no topo / já no fim / sozinho na coluna / card inexistente ⇒ null (nada a gravar)", () => {
+    expect(placementOrder(cards, ["pronta"], "story-ex9001", "top")).toBeNull();
+    expect(placementOrder(cards, ["pronta"], "story-ex9003", "bottom")).toBeNull();
+    expect(placementOrder(cards, ["desenvolver"], "story-ex9005", "top")).toBeNull();
+    expect(placementOrder(cards, ["pronta"], "story-ex9999", "top")).toBeNull();
+  });
+
+  it("um empate de order (dado antigo) ainda move: o card vai para ANTES do empate", () => {
+    const tie = [
+      { id: "story-ex9011", status: "pronta", order: 10 },
+      { id: "story-ex9012", status: "pronta", order: 10 },
+    ];
+    expect(placementOrder(tie, ["pronta"], "story-ex9012", "top")).toBe(0);
   });
 });

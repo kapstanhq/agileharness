@@ -217,7 +217,11 @@ export function discoverClaudeSpawnSites(root = "src"): Map<string, SourceAnalys
  */
 const CLAUDE_SPAWN_SURFACES: Record<string, string> = {
   "src/lib/storymap/runner/engine.ts": "run de autorun — `claude -p` por card; o coração do sistema",
-  "src/lib/storymap/runner/orchestrator-spawn.ts": "tick do copiloto/orquestrador por board",
+  // FASE 6 — a SENTINELA: sessão NOVA e enxuta (Sonnet) por causa nova de máquina quebrada; env saneado e sem liberação
+  // da trava dura, MCP só por arquivo (ro em Mínima, o escopado em Máxima), teto por despertar e por dia.
+  "src/lib/storymap/runner/sentinel-spawn.ts": "Sentinela — diagnóstico (Mínima) ou conserto sob a trava dura (Máxima), uma sessão por causa",
+  // FASE 7 — a ÂNCORA: sessão enxuta (Sonnet), nenhuma tool nativa, MCP só pelo handle por execução (revogado no fim).
+  "src/lib/storymap/runner/anchor-spawn.ts": "Âncora — liga cards às funcionalidades do PRD; MCP só por handle anchor:<board>",
   "src/lib/storymap/runner/peer-review-spawn.ts": "revisor par — chokepoint MENOS todo tier MCP (ele não usa MCP)",
   // lanes-ultra: o PROXY do modo ultra responde, no lugar do dono, as perguntas proxiáveis (entrevista/escolha de
   // tela) de uma story ultra. Nasce SEM humano no laço (a pergunta de um agente o dispara), por isso a mesma forma
@@ -226,6 +230,9 @@ const CLAUDE_SPAWN_SURFACES: Record<string, string> = {
   // política só-negócio: o REVISOR DE SEGURANÇA INDEPENDENTE que produz a prova que o deploy pediu — nasce sem humano no
   // laço (o settle de um deploy `needs-proof` o dispara), na forma do proxy: tempdir, zero MCP, postura, teto de custo.
   "src/lib/storymap/runner/security-review-spawn.ts": "revisor de segurança da prova de deploy — chokepoint MENOS todo tier MCP (ele não usa MCP)",
+  // FASE 6 — os CRÍTICOS lançados pelo serviço (crítico do plano, revisor do diff, verificador da entrega): nascem sem
+  // humano no laço, na forma do revisor de segurança — tempdir, zero MCP, postura contida, teto de custo, falha fechada.
+  "src/lib/storymap/runner/critics-spawn.ts": "críticos do serviço (plano, diff, entrega) — chokepoint MENOS todo tier MCP (eles não usam MCP)",
   "src/lib/storymap/runner/resolution-judge-spawn.ts": "juiz LLM de conflito do merge train",
   "src/lib/storymap/runner/deploy-agent-spawn.ts": "agente de deploy (recuperação da face)",
   "src/lib/storymap/copilot/agent-session.ts": "sessão de chat do copiloto (Jido) — o dono conversa por aqui",

@@ -33,10 +33,11 @@ and remembering what actually shipped.
 
 AgileHarness closes it by putting **the product itself in your repository**, next to the code, and
 giving every column of the board a **precondition an agent has to satisfy before the card can
-move**. At the top of it sits a **PRD** — a real one, sixteen sections, three of them written for
-the agent rather than the reader — and every step inherits it. The board is not a queue you hand to
-agents. It's a contract that refuses work that isn't ready — and it keeps enforcing it while you're
-asleep.
+move**. At the top of it sits a **PRD** — a business document in seven sections, with a companion
+file of context written for the agents — and every step inherits it. The board is not a queue you
+hand to agents. It's a contract that refuses work that isn't ready — and it keeps enforcing it while
+you're asleep. What still needs *you* lands in one **Inbox**, written in plain words, where every
+answer is one click.
 
 > **It runs on the Claude Code CLI, and that is not a detail.** The engine spawns the `claude`
 > binary for every step that works. There is no provider abstraction — the CLI is proprietary, the
@@ -47,7 +48,7 @@ asleep.
 ```mermaid
 flowchart LR
   B["📥 Backlog<br/><i>triage · capture</i>"]
-  D["🔍 Discovery<br/><i>grill · enrich · prioritize</i>"]
+  D["🔍 Discovery<br/><i>grill · enrich · interview</i>"]
   P["📐 Prepare<br/><i>UX · UI · tech plan</i>"]
   C["🔨 Build<br/><i>develop · review · QA</i>"]
   S["🚚 Delivery<br/><i>merge · stage · release</i>"]
@@ -65,12 +66,13 @@ Every arrow with a name on it is a **gate**: a fail-closed check, evaluated from
 own data. `hasQaPassed` is not a checkbox someone ticks — it's a field a QA run wrote,
 with the commit it validated. A card that skips a step gets stopped by the next one.
 
-![The board — six stages, the steps inside each one, and per-card actions](./docs/screenshots/02-kanban.png)
+![The board — six stages, the steps inside each one, and one card per feature](./docs/screenshots/02-kanban.png)
 
-<sub>The demo board that ships with the repository: a fictional bookstore. Each stage shows its inner
-steps as a track of dots, and a card carries the action it is waiting for — <i>Avançar → Dúvidas</i>
-(advance), <i>Responder 1 pergunta</i> (a question an agent raised), <i>Aprovar entrega</i> (a human
-gate). <b>The interface is in Portuguese</b> — see <a href="#project-status">Project status</a>.</sub>
+<sub>The demo board that ships with the repository: a fictional bookstore. Each stage shows its items as a
+grid of dots over its inner steps (orange: waiting on you), and each card is one feature of the PRD with the
+item it is on — <i>Agora</i> (now), <i>Próximo</i> (next) or <i>Precisa de você</i> (needs you, with the
+question and a <i>Responder</i> button). The board's agent waits in the composer at the bottom.
+<b>The interface is in Portuguese</b> — see <a href="#project-status">Project status</a>.</sub>
 
 ## Quickstart
 
@@ -90,7 +92,7 @@ can without asking** and stops only for decisions that are yours:
 
 - **A repository, or an idea?** Either way it writes the **PRD first**, because everything else
   descends from it. An idea gets interviewed into one — one question at a time, drafting rather
-  than interrogating — and the Lean Canvas, the story map and the first backlog come out of it. An
+  than interrogating — and the Business Model Canvas and the first backlog come out of it. An
   existing project gets its PRD proposed from what the code already ships, or imports one you
   already wrote. No code required to start.
 - **Local, or a VPS?** It explains what a VPS is, what it costs and why it matters *here* before
@@ -127,8 +129,8 @@ bun run build          # ~4 minutes: ~28 App Router pages. It did not hang.
 bun run start
 ```
 
-Open **http://127.0.0.1:3008** and pick the `demo` board — a fictional bookstore mapped as
-activities → steps → stories. It ships **disarmed**: no column fires an agent. An example should
+Open **http://127.0.0.1:3008** and pick the `demo` board — a fictional bookstore, its stories
+grouped by feature. It ships **disarmed**: no column fires an agent. An example should
 never spend the tokens of someone who just cloned a repository.
 
 The host measurement is available on its own, with no agent involved:
@@ -255,30 +257,70 @@ node dist/ah-server.mjs --generate-mcp-token
 
 ## Features
 
-**A PRD that agents actually read.** The board's highest document — sixteen sections, six required,
-in your repo at `storymap/boards/<board>/docs/prd.md`. Positioning, the business metric and the
-target outcome are sections of it, and everything below descends from it: the Lean Canvas is its
-one-page compression, the story backbone comes out of its **journeys**, the personas out of its
-**audience**. Three sections exist for the agent rather than the reader — **decisions already
-made** (an agent that doesn't know a decision was taken will take its own), **journeys** (what
-turns free text into a map instead of a flat list), and **done when** (verification criteria —
-"it works" is not one). What reaches a prompt is a capped digest, not the whole document; an agent
-that needs the rest calls `read_doc`. The file is **human-owned**: an unattended run that
+**A PRD that agents actually read.** The board's highest document — seven business sections
+(problem, personas, value proposition, features, usage flow, success metrics, out of scope), no
+technology, in your repo at `storymap/boards/<board>/docs/prd.md`. Everything below descends from
+it: the first backlog comes out of its **features** and **usage flow**, and the personas every agent
+writes for are its **personas** section. What only the agents need lives beside it, in
+`docs/contexto.md` — **decisions already made** (an agent that doesn't know a decision was taken
+will take its own), **done when** (verification criteria — "it works" is not one), requirements,
+constraints, risks — which the agents read and keep up to date themselves. What reaches a prompt is
+a capped digest, not the whole document; an agent that needs the rest calls `read_doc`. The file is **human-owned**: an unattended run that
 edits it directly is refused, and the refusal names the proposal path — a draft, with a diff, for
 someone to approve. The chat on the screen writes it directly, because there a human is already
 reading every word.
 
-**Story mapping, not a task list.** Activities → steps → stories, the Jeff Patton model, with
-releases as horizontal slices. Delivery work (technical, bug, chore, spike) attaches to the
-map node it *serves*, so infrastructure work never floats free of the user value it enables.
+**Four groups, one file each.** The navigation is four groups, and each one is a single page over
+a single Markdown file of the board: **Business** is the Business Model Canvas (Osterwalder's nine
+blocks, `docs/business-model-canvas.md`), **Product** is the PRD (`docs/prd.md`), **Design** is the
+style guide (`design/style-guide.md`) and **Software** is the Kanban, over the cards. A page reads its
+file, edits it in place with one Edit/Save button, and the composer at the bottom talks to that
+document's assistant. Nothing else sits in the navigation: what needs you is in the Inbox, the
+machine is behind the gear, and the rest is a request to the chat.
 
-**Product frameworks built in.** RICE, KANO, the AAARRR funnel and anchored WSJF are card
-fields the prioritization skill fills and the board sorts by. Ideas live in a separate
-opportunity space and link to the stories that address them; a Lean Canvas and a persona /
-system vocabulary give agents the shared nouns.
+**Features, not a task list.** Stories group under the feature they belong to (the activity → step →
+story model underneath), and delivery work (technical, bug, chore, spike) attaches to the node it
+*serves*, so infrastructure work never floats free of the user value it enables.
 
-**Gates.** Nineteen named, declarative preconditions, evaluated from the card's own data —
-`hasAcceptance`, `hasRice`, `hasPrioritization`, `hasWireframe`, `hasPlacement`, `hasTechPlan`,
+**No scoring, just a position.** There is no prioritization step and no priority score: the order
+of the work is the card's position in its Kanban column — the card on top goes first, and the card
+menu's «Fazer antes» / «Pode esperar» move it to the top or the bottom. The conductor and
+`suggest_work` read the same position; in the conductor's queue only facts of the card (a bug's
+severity, a security or personal-data label) jump ahead. A raw pain enters the Triagem as an item to triage; a Business Model Canvas (nine blocks, `docs/business-model-canvas.md`) and the PRD's personas
+give agents the shared nouns.
+
+**An Inbox that asks in plain words.** Every item says what happened, what the agent needs from you
+and what your options are — and each option is one click: no confirmation dialog, no form before the
+button, a receipt with *Undo* afterwards. Questions, delivery approvals, design choices, publications
+held back, a quota lock, a red health signal: each arrives with the action that unblocks it. What the
+agents are handling on their own is one collapsed line at the end — "the agents are taking care of
+(N)" — and the phone rings only for what is critical.
+
+**Autonomy in one control.** One panel, reached from the top bar and from the gear, with two ready
+modes. **Mínima**: the agents work and stop at every decision — the plan, the screen, the delivery,
+publishing, the deploy. **Máxima**: the agents decide the technical, approve, publish and deploy;
+you decide only what is yours. Between them, checkboxes make it granular (approve the plan, pick the
+screen, approve the delivery, publish, deploy, go past a card's spending ceiling, let Jido act on the
+board, let the Sentinel repair the machine on its own). In Mínima the Sentinel only diagnoses and the
+Inbox shows what it found; in Máxima it repairs, under the host's hard lock, with every command recorded.
+An independent plan critic gives the «go» to build when the spec box is on, and a reviewer of changes to
+existing tests judges them on a business-only board. Two things are **outside any box**: the host's hard
+lock, and the decisions only the owner takes — money and pricing, speaking for the brand, the PRD and
+its goals, people's data. No mode switches those off.
+
+**Funcionalidades and batches.** The Kanban groups items by the **funcionalidades** written in the PRD
+(one `###` each); an item that fits none sits in «Outros (fora do PRD)». An anchor job (Sonnet, a few cards
+per run, gated by the board's pace) links existing cards to them and asks you only about the unclear ones;
+with three or more similar items left in «Outros» it proposes a new funcionalidade for you to approve. The
+card's title opens the funcionalidade's page — the PRD description, what is being done now, what is next,
+what needs you and, collapsed, what is done with each delivery's proof — and «Pedir item novo» opens the
+chat on it. The conductor takes a new story alone, but may carry several fixes or chores of the SAME
+funcionalidade in one session (US$ 10 per item, US$ 30 at most), with one plan stop and one delivery stop
+that list every item; an item that fails leaves the batch and goes back to the queue alone. Two
+conductors never work on the same funcionalidade at once.
+
+**Gates.** Seventeen named, declarative preconditions, evaluated from the card's own data —
+`hasAcceptance`, `hasRefinement`, `hasWireframe`, `hasPlacement`, `hasTechPlan`,
 `hasTasks`, `hasBuildEvidence`, `hasCriteriaSpecs`, `hasNoBlockers`, `hasQaPassed`, `hasStaged`,
 `hasReleased`, `hasDeployProof` and the reentry briefs. Fail-closed: a gate that cannot measure
 refuses rather than passes.
@@ -304,10 +346,10 @@ hand an agent the pipeline contract before its first call. The acceptance criter
 tool is that *an agent with nothing but MCP and [`AGENTS.md`](./AGENTS.md) can register an
 app, arm a board, create a card and watch it cross a column* — with no human in the loop.
 
-**An operator's cockpit.** A fleet view of live sessions with their claims and worktrees, a
-per-run token and cost ledger, terminal attach over WebSocket, a publish queue with an idle
-window, and an inbox where the things that actually need a human — approvals, open questions,
-parked conflicts — land in one place.
+**The machine, behind the gear.** A fleet view of live sessions with their claims and worktrees, a
+per-run token and cost ledger (the cost also shows on each card and in the quota ring), terminal
+attach over WebSocket, a publish queue with an idle window, notifications, the trash, and «Marcar
+ajuste» — point at something on the running interface and it becomes an item in the Triagem.
 
 ## How it compares
 
@@ -321,7 +363,7 @@ Three families of tools live near this one, and all three are good at what they 
 | **Where state lives** | in the spec files | app database | dispatcher DB | **markdown in your repo**, under git |
 | **What stops bad work** | your review of the spec | you, at PR review | retries, circuit breakers | **gates** — declarative, fail-closed |
 | **What a column does** | — | holds a card | dispatches a worker | **runs a skill** |
-| **Product context** | — | — | — | **a PRD at the top** · RICE · KANO · AAARRR · WSJF · personas · opportunity tree |
+| **Product context** | — | — | — | **a PRD at the top** · Business Model Canvas · personas · opportunity tree |
 | **Parallel work** | — | worktree per agent | concurrency limits | worktree per session + **merge train** with a suite gate |
 | **Blast radius** | your shell | your shell | your shell | per-run jail · risk matrix with never-auto classes |
 
@@ -336,71 +378,55 @@ code, and agents are the ones moving them?**
 
 ## What it looks like
 
-Every shot below is the demo board — a fictional bookstore — on a real instance, in dark theme.
+Every shot below is the demo board — a fictional bookstore — on a real instance.
 
-### The map: three levels, opened one at a time
-
-The outline opens to the depth you ask for, so the same page answers "what is the shape of this
-product?" and "what exactly is left in this step?".
-
-| Activities | Steps | Stories |
-|---|---|---|
-| [![](./docs/screenshots/03-storymap-activities.png)](./docs/screenshots/03-storymap-activities.png) | [![](./docs/screenshots/04-storymap-steps.png)](./docs/screenshots/04-storymap-steps.png) | [![](./docs/screenshots/05-storymap-stories.png)](./docs/screenshots/05-storymap-stories.png) |
-| 8 activities, each with its step and story counts | the journey's 24 steps, with per-step progress | every story, with the release it belongs to |
-
-### The board and the home
+### The board
 
 | | |
 |---|---|
-| [![](./docs/screenshots/02-kanban.png)](./docs/screenshots/02-kanban.png) | [![](./docs/screenshots/01-home.png)](./docs/screenshots/01-home.png) |
-| **Kanban.** Six stages; the dots under each are its inner steps. A card shows the one action it waits on. | **Home.** Inbox, live terminals, a Kanban preview — and the board's agent offering to answer what it can. |
+| [![](./docs/screenshots/02-kanban.png)](./docs/screenshots/02-kanban.png) | [![](./docs/screenshots/03-feature-page.png)](./docs/screenshots/03-feature-page.png) |
+| **Kanban.** The home of a board: six stages, one card per PRD feature, the item it is on and what it needs from you. | **A feature.** Its PRD text, then every item that serves it: now, needs you, next, done — and a button to ask for a new one. |
+| [![](./docs/screenshots/16-autonomy.png)](./docs/screenshots/16-autonomy.png) | [![](./docs/screenshots/17-chat.png)](./docs/screenshots/17-chat.png) |
+| **Autonomy.** From the top bar: minimum, maximum, or box by box — what agents may do on their own. | **The board's agent.** The composer docked at the bottom of every screen opens the conversation over the page. |
 
-### Strategy: the PRD at the top, everything else derived from it
+[![The Kanban on a phone](./docs/screenshots/02b-kanban-phone.png)](./docs/screenshots/02b-kanban-phone.png)
 
-[![The PRD — the board's highest document, with its own chat](./docs/screenshots/07-prd.png)](./docs/screenshots/07-prd.png)
+<sub><b>On a phone.</b> The same Kanban at 390 px: the stages scroll sideways, the composer stays at the bottom.</sub>
 
-<sub><b>The PRD.</b> Sixteen sections, six required, rendered as a document you can edit in place.
-The rail on the right is the document's own chat, and the dropdown picks the <b>technique</b> — what
-changes is the agent's <i>method</i>, not its powers: <i>interview</i> (one question at a time, and it
-writes down what it learned), <i>sharpen</i>, <i>coherence</i> (do scope, objectives and problem tell the
-same story?), <i>skepticism</i> (the assumption that cancels everything if false) and <b>ready for an
-agent</b> — read this as the agent who will build from it: where would you have to guess?
-<i>Generate map</i>, in the toolbar, seeds the capture with the journeys and scope so the backbone comes
-out of the document instead of out of a blank page.</sub>
+### Three documents: Business, Product, Design
 
-| Markdown is the source | Lean Canvas — board |
+The navigation has four groups, and three of them are one page each, over one Markdown file of the board. Each page
+reads the file, edits it in place and talks to its own assistant in the composer at the bottom. The fourth group,
+Software, is the Kanban.
+
+[![The PRD — the board's highest document, with its own assistant](./docs/screenshots/07-prd.png)](./docs/screenshots/07-prd.png)
+
+<sub><b>Product: the PRD.</b> A business document, with no technology in it: problem, personas, value proposition,
+features, the main flow of use, success metrics and what is out of scope. Every card and every run inherits
+it as context. The personas are the owner's: an agent proposes a change, and it lands in the Inbox for approval. The
+technical context (decisions already made, done-when, requirements, risks, glossary) lives beside it in
+<code>docs/contexto.md</code>, which the agents keep and the engine reads. The composer's assistant interviews, sharpens
+and checks coherence; <i>ready for an agent</i> reads the PRD as the agent who will build from it.</sub>
+
+| Business: the Business Model Canvas | Design: the style guide |
 |---|---|
-| [![](./docs/screenshots/07b-prd-markdown.png)](./docs/screenshots/07b-prd-markdown.png) | [![](./docs/screenshots/06-lean-canvas-board.png)](./docs/screenshots/06-lean-canvas-board.png) |
-| **The same document, as its source.** Not an export — the file on disk, editable here, under git with everything else. Four views of one text: document, source, table, board. | **Lean Canvas.** The PRD's one-page compression, derived from it rather than written beside it. The grid keeps the canonical reading order. |
-
-| Lean Canvas — table | Ideas |
-|---|---|
-| [![](./docs/screenshots/08-lean-canvas-table.png)](./docs/screenshots/08-lean-canvas-table.png) | [![](./docs/screenshots/10-ideas.png)](./docs/screenshots/10-ideas.png) |
-| **The same canvas, as a table.** What you scan when you want the content rather than the shape. | **Ideas.** The opportunity space, kept separate from the backlog. A story links to the pain it addresses. |
-
-| | |
-|---|---|
-| [![](./docs/screenshots/11-prioritization.png)](./docs/screenshots/11-prioritization.png) | [![](./docs/screenshots/13-vocabulary.png)](./docs/screenshots/13-vocabulary.png) |
-| **Prioritization.** RICE, KANO and the funnel as sortable card data — not a spreadsheet beside the repo. | **Vocabulary.** Personas and systems as declared nouns, so an agent grounds a story in the same words you do. |
+| [![](./docs/screenshots/06-business-model-canvas.png)](./docs/screenshots/06-business-model-canvas.png) | [![](./docs/screenshots/14-style-guide.png)](./docs/screenshots/14-style-guide.png) |
+| **Business Model Canvas.** Osterwalder's nine blocks in the classic grid, a list on a phone. It is the owner's: an agent proposes a change per block, and it lands in the Inbox. | **Style guide.** Tone, colours (each pair checked for AA contrast), typography, aesthetics and components. The tone is the owner's; the assistant keeps the rest. |
 
 ### One card, from question to proof
 
 | | |
 |---|---|
-| [![](./docs/screenshots/20-card-document.png)](./docs/screenshots/20-card-document.png) | [![](./docs/screenshots/21-questions-queue.png)](./docs/screenshots/21-questions-queue.png) |
-| **The card as a document.** Narrative, criteria, tasks, findings, design and history in one scroll. | **The questions queue.** Every open question across the board — answer it, or let the agent research the ones that are facts. |
+| [![](./docs/screenshots/20-card-document.png)](./docs/screenshots/20-card-document.png) | [![](./docs/screenshots/15-inbox.png)](./docs/screenshots/15-inbox.png) |
+| **The card as a document.** Narrative, criteria, tasks, findings, design and history in one scroll. | **Inbox.** One place for everything that needs a human — approvals, questions, parked conflicts — answered in place. |
 
 | | |
 |---|---|
-| [![](./docs/screenshots/15-inbox.png)](./docs/screenshots/15-inbox.png) | [![](./docs/screenshots/23-feedback-overlay.png)](./docs/screenshots/23-feedback-overlay.png) |
-| **Inbox.** One place for everything that needs a human: approvals, questions, parked conflicts. | **Feedback by clicking.** Pick an element or draw a region on the running interface; it becomes a card, a refinement, or a paste into a live agent session. |
+| [![](./docs/screenshots/23-feedback-overlay.png)](./docs/screenshots/23-feedback-overlay.png) | |
+| **Feedback by clicking.** Pick an element or draw a region on the running interface; it becomes a card, a refinement, or a paste into a live agent session. | |
 
-### Design
-
-| | |
-|---|---|
-| [![](./docs/screenshots/14-style-guide.png)](./docs/screenshots/14-style-guide.png) | [![](./docs/screenshots/12-product.png)](./docs/screenshots/12-product.png) |
-| **Style guide.** A published source-of-truth document, audited for AA contrast. | **Product view.** The delivery lane beside the map it serves. |
+The full list of what changed since the previous navigation — every screen and function, what happened to it and
+where it went — is in [`docs/scamper-decisions.md`](./docs/scamper-decisions.md) (in Portuguese).
 
 ## Security
 
@@ -454,11 +480,12 @@ is the attack.
 | | |
 |---|---|
 | [`docs/how-it-works.md`](./docs/how-it-works.md) | why it exists, how much it drives, and the techniques |
+| [`docs/scamper-decisions.md`](./docs/scamper-decisions.md) | every screen and function of the old navigation, and where it went (Portuguese) |
 | [`AGENTS.md`](./AGENTS.md) | the short route, for agents |
 | [`SECURITY.md`](./SECURITY.md) | what's in scope, and how to report privately |
 | [`CONTRIBUTING.md`](./CONTRIBUTING.md) | how to run it, what CI enforces, and why there is no CLA |
 | [`storymap/README.md`](./storymap/README.md) | the canonical schema: cards, gates, pipeline |
-| [`storymap/frameworks.md`](./storymap/frameworks.md) | the built-in product frameworks (RICE, KANO, funnel) |
+| [`storymap/frameworks.md`](./storymap/frameworks.md) | the story types (`storyType`), how to write the narrative, and the triage routing |
 | [`storymap/settings.yaml`](./storymap/settings.yaml) | every configuration key, commented |
 
 <a id="project-status"></a>

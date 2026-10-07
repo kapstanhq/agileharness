@@ -8,7 +8,7 @@ import { registerDevTools } from "./dev-tools";
 import { ONBOARDING_GUIDE, MCP_INSTRUCTIONS, registerOnboarding } from "./onboarding";
 import { registerResources } from "./resources";
 import { GOVERNANCE_ARTIFACTS } from "@/lib/storymap/types";
-import { CANVAS_BLOCK_KEYS } from "@/lib/storymap/canvas-blocks";
+import { BMC_BLOCK_KEYS } from "@/lib/storymap/doc/schemas/business-model-canvas";
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────
 // story-ex0084 (t4) — O PINO DA SUPERFÍCIE DE INSTRUÇÃO DO MCP (anti tool-poisoning).
@@ -61,7 +61,9 @@ const RESOURCE_SOURCES = new Map(RESOURCE_MODULES.map((f) => [f, read(`./${f}`)]
  */
 const INTERPOLACOES_PERMITIDAS: Record<string, () => string> = {
   'GOVERNANCE_ARTIFACTS.join(", ")': () => GOVERNANCE_ARTIFACTS.join(", "),
-  'CANVAS_BLOCK_KEYS.join(", ")': () => CANVAS_BLOCK_KEYS.join(", "),
+  // TROCA, não acréscimo: o Lean Canvas saiu (fase 2) e as chaves do canvas passaram a ser as do BMC —
+  // ainda constante de código (o schema), recomputada aqui do import.
+  'BMC_BLOCK_KEYS.join(", ")': () => BMC_BLOCK_KEYS.join(", "),
   // ── SAIU DAQUI: `DEPLOY_PKGS.join(", ")` ──────────────────────────────────────────
   //
   // A allowlist admitia essa expressão por uma razão que DEIXOU DE VALER: a lista de apps deployáveis
@@ -342,7 +344,7 @@ describe("story-ex0084 — o pino de proveniência da superfície de instrução
     // configuração, um elemento com espaço/pontuação/quebra de linha (ou seja, uma frase que o
     // modelo leria como ordem) reprova aqui. A peneira é a FORMA, não a origem.
     const SLUG = /^[A-Za-z][A-Za-z0-9_-]{0,40}$/;
-    for (const [nome, itens] of Object.entries({ GOVERNANCE_ARTIFACTS, CANVAS_BLOCK_KEYS })) {
+    for (const [nome, itens] of Object.entries({ GOVERNANCE_ARTIFACTS, BMC_BLOCK_KEYS })) {
       expect(itens.length, `${nome} vazio`).toBeGreaterThan(0);
       for (const item of itens) expect(item, `${nome} → ${JSON.stringify(item)}`).toMatch(SLUG);
     }

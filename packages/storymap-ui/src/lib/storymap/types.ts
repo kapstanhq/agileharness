@@ -11,14 +11,11 @@
 import type { WireframeNode } from "./wireframe-dsl";
 import type { FlowGraph } from "./flow-graph";
 import type { StyleGuidePointer } from "./style-guide";
-import type { WsjfCall } from "./wsjf";
 import type { PushEventKind } from "@/lib/notifications/push-policy";
 import type { TargetProfile } from "./target-profile";
 import type { DeployPolicyDecl } from "./deploy-policy";
 import type { VpsSettings } from "./vps-settings";
 import type {
-  KanoCategory,
-  FunnelStage,
   StoryType,
   ImprovementKind,
   BugSeverity,
@@ -48,18 +45,6 @@ export interface Task {
   id: string;
   title: string;
   done: boolean;
-}
-
-/**
- * RICE prioritization inputs (Reach, Impact, Confidence, Effort).
- * Each is null until filled. The score is DERIVED (see lib/storymap/rice.ts),
- * never persisted.
- */
-export interface Rice {
-  reach: number | null;
-  impact: number | null;
-  confidence: number | null;
-  effort: number | null;
 }
 
 /**
@@ -157,8 +142,6 @@ export interface CardRouting {
  * picks one by the classification it already does (storyType + hasUiSurface) and STAMPS the card's
  * {@link CardRouting} from it (`profile` + `skips` + `modelCap`/`effortCap`). The profile is authoring
  * sugar — the persisted card carries the resolved skips/caps, so the kernel never reads the profile.
- * A profile that skips `priorizar` obliges the enrich writer to also stamp a minimal `priorityCall` in the
- * SAME run (coherence rule — the gate stays fail-closed).
  */
 export interface RouteProfile {
   /** dispensable step ids this profile bypasses (on top of the static skipForTypes). Empty = none. */
@@ -440,12 +423,6 @@ export interface IdeaFields {
   keyAssumption?: string | null;
   /** the leading signal that tells us the pain is being addressed (the outcome to watch) */
   successSignal?: string | null;
-  /** value sizing of the pain (dual-track: stories inherit this instead of carrying their own reach/impact).
-   * LEGADO: substituído pela prioridade argumentada (`priorityCall`); mantido para cards que ainda o têm. */
-  valueSize?: { reach: number | null; impact: number | null } | null;
-  /** prioridade argumentada da dor (reasoning-first) — o sinal primário que substitui o alcance×impacto.
-   * As stories que endereçam esta dor herdam este tier quando não têm o seu próprio. */
-  priorityCall?: PriorityCall | null;
 }
 
 /**
@@ -461,36 +438,6 @@ export interface Bet {
   riskiestAssumption: string | null;
   /** where the experiment cycle is */
   experimentStatus: ExperimentStatus;
-}
-
-/**
- * Prioridade ARGUMENTADA (reasoning-first) — o sinal PRIMÁRIO de prioridade, em ideias E stories.
- * Em vez de números de alcance/RICE inventados (precisão falsa num produto pré-escala), o agente OU o
- * humano atribui um TIER defendido por um argumento curto, raciocinando sobre o card + as irmãs + o
- * posicionamento/resultado-alvo do board. Quando presente, VENCE o WSJF legado em `priorityTier()`; o
- * WSJF segue como fallback para cards sem o bloco. Esparso/opcional → cards legados não o têm.
- */
-export interface PriorityCall {
-  /** tier na MESMA escala da régua do kanban: 0 Baixa · 1 Média · 2 Alta · 3 Crítica */
-  rank: 0 | 1 | 2 | 3;
-  /** o porquê — "por que agora / por que antes de X", 1–3 frases */
-  rationale: string;
-  /** a suposição mais arriscada a derrubar primeiro (Lean). null/omitido = não declarada */
-  riskiestAssumption?: string | null;
-  /** quem atribuiu: "agent" (avaliação) ou "human" (override — manda sobre o agente) */
-  source: "agent" | "human";
-  /** ISO timestamp da avaliação */
-  assessedAt: string;
-  /**
-   * Os ORDINAIS WSJF que sustentam o `rank` (ver lib/storymap/wsjf.ts). Sub-bloco ADITIVO e opcional:
-   * os calls legados (só rank + rationale) seguem válidos e não precisam de migração — para eles
-   * `wsjfRatio` devolve null e a ordem cai no `rank`.
-   *
-   * `rank` continua GRAVADO mesmo sendo derivável do wsjf, e isso é deliberado: o gate isomórfico
-   * (gate-core.js) e o `suggest_work` leem o YAML cru e não podem calcular uma razão. O teste que
-   * amarra os dois é a invariante `rank === wsjfTier(wsjfRatio(wsjf))`.
-   */
-  wsjf?: WsjfCall | null;
 }
 
 /**
@@ -583,6 +530,19 @@ export interface Card {
    */
   serves?: string | null;
   /**
+   * A FUNCIONALIDADE DO PRD a que o item pertence (fase 7): o id (slug do `###` da seção «Funcionalidades» do PRD —
+   * doc/prd-features.ts). AUTORAL e sparse: agentes e o dono a escrevem; nenhum gate a lê e NÃO é campo do pipeline.
+   * Não confundir com `serves`/`parent` (ids de CARD, lidos pelo gate de lugar e pelo mapa). Ausente ou desconhecida ⇒
+   * o grupo «Outros (fora do PRD)» num board com funcionalidades no PRD (feature-key.ts).
+   */
+  feature?: string | null;
+  /**
+   * O LOTE do condutor de que este card faz parte (fase 7 — correções/manutenções da MESMA funcionalidade numa sessão
+   * só). CAMPO DO PIPELINE: só o servidor o grava (`claim_batch` / `batch_drop`); o `update_card` recusa. Sparse —
+   * ausente em todo card fora de lote. Ver {@link CardBatchMark}.
+   */
+  batch?: CardBatchMark;
+  /**
    * PER-INSTANCE pipeline routing override (sparse; PIPELINE-OWNED — set by the deterministic skip
    * router or `harness-refine`, NEVER the drawer). Holds the steps THIS card instance skips in the build
    * cascade, so the PURE kernel reads a precomputed verdict (it never calls an LLM). It is the seam
@@ -666,24 +626,12 @@ export interface Card {
   personas: string[];
   systems: string[];
   links: CardLink[];
-  /** Agile narrative (Connextra / enabler variant); part of the hasRefinement gate (priorizar entry). Stories only. */
+  /** Agile narrative (Connextra / enabler variant); part of the hasRefinement gate (`pronta` entry). Stories only. */
   narrative: StoryNarrative;
-  /** acceptance criteria (part of the hasRefinement gate, priorizar entry); filled by the harness-enrich automation */
+  /** acceptance criteria (part of the hasRefinement gate, `pronta` entry); filled by the harness-enrich automation */
   acceptance: string[];
   /** work breakdown (hasTasks gate, desenvolver entry); filled by the harness-plan automation in the same run as the plan */
   tasks: Task[];
-  /** RICE inputs (part of the `pronta` gate); the score is derived, not stored */
-  rice: Rice;
-  /** KANO category — satisfaction shape (part of the `pronta` gate). null = unset */
-  kano: KanoCategory | null;
-  /** AAARRR funnel stage — business objective (part of the `pronta` gate). null = unset */
-  funnelStage: FunnelStage | null;
-  /**
-   * Prioridade ARGUMENTADA (reasoning-first) — o sinal PRIMÁRIO de prioridade. Quando presente, vence o
-   * WSJF derivado de RICE/severidade em `priorityTier()` e satisfaz o gate `hasPrioritization` (ninguém é
-   * forçado a inventar alcance). Esparso: omitido em cards que ainda não foram avaliados. Ver {@link PriorityCall}.
-   */
-  priorityCall?: PriorityCall | null;
   // --- Triage / intake ---------------------------------------------
   /**
    * Triage severity — FIRST-CLASS, distinct from `bugReport.severity` (which only
@@ -692,16 +640,13 @@ export interface Card {
    */
   severity?: BugSeverity | null;
   /**
-   * Bug PRIORITY axis (type-aware prioritization, Fase 2) — how OFTEN the defect
-   * bites. Paired with `severity` (how bad) and `hasWorkaround` to compute the
-   * `bug` kind's WSJF `priorityScore` (see lib/storymap/priority.ts). First-class so
-   * a triage-born bug carries it without a `bugReport`. null/undefined = unset.
+   * Triage metadata of a bug — how OFTEN the defect bites (context for whoever fixes it; the work ORDER is the
+   * card's position in its column, never a score). First-class so a triage-born bug carries it without a
+   * `bugReport`. null/undefined = unset.
    */
   frequency?: BugFrequency | null;
   /**
-   * Bug PRIORITY axis (Fase 2) — is there a workaround? `true` lowers the Cost of
-   * Delay (less urgent); `false`/unset = no workaround (worst case). Feeds the `bug`
-   * WSJF `priorityScore`. null/undefined = unset (treated as no workaround).
+   * Triage metadata of a bug — is there a workaround? Context only (never a score). null/undefined = unset.
    */
   hasWorkaround?: boolean | null;
   /** Free-form classification labels (area, regression, needs-info…), orthogonal to
@@ -798,7 +743,7 @@ export interface Card {
    * surface must pass the VISUAL QA sweep regardless of storyType (so a `bug` fixing a visual
    * regression can't ship unproven, and a UI-less `user` story isn't forced into a pointless visual
    * QA). SPARSE: when absent the gate falls back to `storyType === "user"` — zero-migration parity
-   * with the old user-only rule. Written by /harness-enrich (frontmatter-direct, like priorityCall) and
+   * with the old user-only rule. Written by /harness-enrich (frontmatter-direct) and
    * the regression flip — never the drawer; pipeline-owned (card-merge.ts) so a Save can't clobber it.
    */
   hasUiSurface?: boolean;
@@ -1048,8 +993,6 @@ export const GATE_IDS = [
   "hasAcceptance",
   "hasRefinement",
   "hasTasks",
-  "hasRice",
-  "hasPrioritization",
   "hasTechPlan", // techPlanReady set by harness-plan (plano-tecnico); not an entry gate after the Plano&Tarefas merge — desenvolver gates on hasTasks
   "hasWireframe", // com-design: harness-ux picked a wireframe option
   "hasCriteriaSpecs", // revisar-codigo (2c): every UI-observable acceptance criterion has an authored spec (shift-left; default-satisfied on absent)
@@ -1087,7 +1030,6 @@ export const TRIGGER_IDS = [
   "harness-grill", // grill: ask the human context questions (human-in-the-loop; does NOT advance)
   "harness-interview", // interview: simulate 3 persona interviews (1 critical lens) — discovery for user stories
   "harness-tasks",
-  "harness-prioritize",
   "harness-plan", // plano-tecnico: write the technical plan sidecar
   "harness-ux", // design-ux: generate low-fi wireframe options
   "harness-ui", // design-ui: spec the main components/screens from the chosen wireframe
@@ -1185,11 +1127,12 @@ export const QUESTION_MODES: QuestionMode[] = ["single", "multi"];
  * library, approach, a trade-off the PRD's main goal settles), `owner` (a BUSINESS decision of the owner — the
  * question names the class in `ownerClass`: brand voice, PRD & goals, people's data…) and `money` (new spend,
  * vendor, price — ALWAYS the owner's, in every mode). In business-only mode (`ultra`) every category but
- * `owner`/`money` is the proxy's. Absent ⇒ uncategorized: the owner's until the classifier judges it
- * (`CardQuestion.classified`).
+ * `owner`/`money` is the proxy's — within the board's autonomy profile (autonomy-profile.ts). `guardrail` (mudar um
+ * TESTE EXISTENTE, afrouxar uma guarda) vai a um REVISOR DE DIFF independente, nunca ao procurador. Absent ⇒
+ * uncategorized: the owner's until the classifier judges it (`CardQuestion.classified`).
  */
-export type QuestionCategory = "interview" | "ui-choice" | "delivery" | "technical" | "owner" | "money";
-export const QUESTION_CATEGORIES: QuestionCategory[] = ["interview", "ui-choice", "delivery", "technical", "owner", "money"];
+export type QuestionCategory = "interview" | "ui-choice" | "delivery" | "technical" | "owner" | "money" | "guardrail";
+export const QUESTION_CATEGORIES: QuestionCategory[] = ["interview", "ui-choice", "delivery", "technical", "owner", "money", "guardrail"];
 
 /**
  * The CLASSIFIER's verdict on a question the asker left uncategorized (question-classifier.ts — a cheap model call;
@@ -1608,7 +1551,6 @@ export interface StatusCore extends NamedColor {
   short?: string;
   /**
    * Terminal/done state — the END of the delivery pipeline (e.g. `concluida`).
-   * The prioritization "Em aberto" (open) scope hides cards in a terminal status.
    * Flagged EXPLICITLY in board.yaml because the terminal column is NOT guaranteed
    * to be `statuses[length-1]`: the pipeline carries a `refinar` re-entry column
    * near the tail, so a positional `statuses[length-1]` heuristic is unreliable.
@@ -1620,7 +1562,7 @@ export interface StatusCore extends NamedColor {
    * `duplicado`, `cancelado` and `capturado` are terminal and NOT delivered.
    *
    * Read by `deliveredIndex` (lib/storymap/delivered.ts) to describe what the product ALREADY DOES —
-   * the context that keeps prioritization from re-proposing what exists. FAIL-CLOSED by design: a
+   * the context that keeps capture and planning from re-proposing what exists. FAIL-CLOSED by design: a
    * board that doesn't declare it gets an EMPTY index and the section is omitted from the prompt,
    * because a signal that can lie about what shipped is worse than no signal. Never inferred from
    * `terminal` or from column position — both would classify a CANCELLED card as a live capability.
@@ -1655,7 +1597,7 @@ export interface StatusCore extends NamedColor {
    * WS4 — DECLARATIVE dispensability: when true, this step MAY be bypassed by a card's per-instance
    * `routing.skips` (a named RouteProfile's skip list) OR the reopen heuristic. Makes explicit what was a
    * heuristic (skipForTypes + column + hardcoded ids in skip-routing.ts): `_base` marks it on the discovery
-   * interview, the design block, `ready`, and `priorizar`. It is a routing FACET only — it NEVER weakens a
+   * interview, the design block and `ready`. It is a routing FACET only — it NEVER weakens a
    * gate, and it can NEVER apply to a LOAD_BEARING step (plano-tecnico/desenvolver/revisar-codigo/qa-*): the
    * kernel guard + a lint reject `dispensable:true` there. Absent/false = only the legacy fallback decides.
    */
@@ -1708,6 +1650,14 @@ export interface StatusPipeline {
    * means manual: the card stops here. See trigger-runner-channel.ts.
    */
   autorun?: boolean;
+  /**
+   * O PIPELINE HÍBRIDO: o `autorun` deste passo só vale no modo POR COLUNAS (`BoardConfig.pipeline: columns`). Num
+   * board com condutor (o padrão — {@link pipelineMode}), quem faz o trabalho do meio do fluxo é a sessão do condutor:
+   * a skill deste passo não dispara sozinha (continua disponível como comando manual), e um card que NÃO é conduzido
+   * apenas atravessa o passo, como numa passagem sem skill (o gate do próximo continua valendo). O `_base` marca as
+   * colunas intermediárias que o condutor dispensa. Absent/false = o `autorun` vale nos dois modos.
+   */
+  autorunOnlyInColumns?: boolean;
   /**
    * Fase 4b/4c (B3) — EFEITO ao ENTRAR no step, declarativo: substitui os booleanos ad-hoc
    * promotesStage/deploysBoard por UM eixo extensível. moveCardAction despacha por um map único
@@ -1965,7 +1915,7 @@ export interface ColumnDef extends NamedColor {
    * Session threading — "one agent, many hats". When true, consecutive AUTORUN steps of
    * THIS column reuse ONE `claude` session: the next step spawns with `--resume
    * <prevSessionId>` instead of a fresh one, so the agent carries its context + reasoning
-   * across the theme's hats (e.g. Discovery: Especificar → Entrevista → Estimar) and the
+   * across the theme's hats (e.g. Discovery: Especificar → Entrevista) and the
    * warm prompt-cache makes the continuation cheap. Read ONLY by the side-effectful cascade
    * shell (evaluateAutorunOnEntry), never by the pure routing/gate kernel. Only honored for
    * back-to-back same-model NON-code steps; a human gate between steps breaks the chain
@@ -1974,7 +1924,7 @@ export interface ColumnDef extends NamedColor {
   threadSession?: boolean;
   /**
    * A FERRAMENTA que aprofunda esta fase — o id de uma view do board (`BoardView`). Quando presente,
-   * o cabeçalho da coluna no Kanban ganha uma porta para ela ("Ver na Esteira →"), com o ícone e o
+   * o cabeçalho da coluna no Kanban ganha uma porta para ela (ex.: a coluna Entrega abre o Inbox), com o ícone e o
    * rótulo que a própria view já publica em `nav/nav-groups`.
    *
    * Existe porque a pergunta nasce OLHANDO A COLUNA: quem vê 3 cards parados em Entrega quer saber
@@ -2186,6 +2136,14 @@ export interface BoardConfig {
    */
   conductor?: ConductorPolicy;
   /**
+   * COMO o board anda ({@link PipelineMode}): `conductor` — um condutor carrega cada story de ponta a ponta e os
+   * passos marcados `autorunOnlyInColumns` não disparam skill; `columns` — o modo por colunas, em que esses passos
+   * (os que também têm `autorun: true` — no `_base`, Entrevista, Jornada e Telas) rodam a sua skill na cascata; os
+   * passos `autorun: false` param nos dois modos. Ausente ⇒ `conductor` quando o despacho do condutor está ligado, senão `columns` (um
+   * board sem condutor nunca fica com passos mudos). Resolva sempre por {@link pipelineMode}.
+   */
+  pipeline?: PipelineMode;
+  /**
    * How the Kanban PRESENTS the pipeline ({@link BoardViewConfig}). `view.lanes` folds the statuses into a few
    * LANES (a view — no card moves, no status changes): each card sits in the lane that declares its status and
    * carries the real status as a tag. Absent ⇒ the legacy Kanban, byte-identical.
@@ -2220,8 +2178,8 @@ export interface BoardConfig {
    */
   desiredOutcome?: string | null;
   /**
-   * 🟨 Lean Canvas (Ash Maurya) — block key → the block's ITEMS. An open record: the block keys carry
-   * the meaning (problem/solution/…, declared in canvas-blocks.ts). A legacy flat string value is
+   * 🟨 Lean Canvas ANTIGO (Ash Maurya) — block key → the block's ITEMS. Desde a fase 2 é só a FONTE da migração
+   * para o Business Model Canvas (`docs/business-model-canvas.md`); nada mais o escreve. A legacy flat string value is
    * PROMOTED to a single item on read (coerceCanvas), so a board that never migrated still renders.
    * owner:human — change via propose_change / the bench (governance).
    */
@@ -2384,6 +2342,29 @@ export const CONDUCTOR_DEFAULT_MAX_SESSIONS = 2;
  * headless run would get is the wrong ruler). The dispatch obeys the same switches as autorun (the live
  * master switch and the board's `autorunDisabled`) and the fleet's admission (cap + resource probe).
  */
+/** Como o board anda — ver {@link BoardConfig.pipeline}. */
+export type PipelineMode = "conductor" | "columns";
+export const PIPELINE_MODES: readonly PipelineMode[] = ["conductor", "columns"];
+
+/**
+ * PURA — o modo EFETIVO do board: o declarado em `pipeline`, senão `conductor` quando o despacho do condutor está
+ * ligado, senão `columns`. Um board que declara `conductor` sem despacho ligado fica em `conductor` (foi pedido) —
+ * o alarme de config (repo.ts) avisa que os passos do meio ficam sem ninguém.
+ */
+export function pipelineMode(config: Pick<BoardConfig, "pipeline" | "conductor">): PipelineMode {
+  if (config.pipeline === "conductor" || config.pipeline === "columns") return config.pipeline;
+  return config.conductor?.enabled ? "conductor" : "columns";
+}
+
+/**
+ * PURA — este passo dispara a sua skill sozinho NESTE board? `autorun: true` e, num board com condutor, não ser um
+ * passo `autorunOnlyInColumns`. O único lugar que responde isso: a cascata, o vigia de parado e as telas leem daqui.
+ */
+export function stepAutoruns(status: Pick<StatusDef, "autorun" | "autorunOnlyInColumns">, config: Pick<BoardConfig, "pipeline" | "conductor">): boolean {
+  if (status.autorun !== true) return false;
+  return !(status.autorunOnlyInColumns === true && pipelineMode(config) === "conductor");
+}
+
 export interface ConductorPolicy {
   enabled: boolean;
   /**
@@ -2427,7 +2408,40 @@ export function isAutonomyMode(v: unknown): v is AutonomyMode {
   return typeof v === "string" && (AUTONOMY_MODES as string[]).includes(v);
 }
 
+/**
+ * As CAIXAS do controle de autonomia (autonomy-profile.ts) — cada uma, «os agentes podem fazer isto sozinhos»:
+ *   spec        o crítico aprova o plano e o procurador responde as dúvidas da especificação (entrevista, técnica);
+ *   design      escolher a tela entre as variantes desenhadas;
+ *   delivery    atravessar «Aprovar entrega» (com a prova da entrega escrita) — travado em código quando desligado;
+ *   publish     publicar o que foi aprovado (`release.mode: auto`);
+ *   deploy      fazer deploy em produção (`orchestrator.riskMatrix.deploy: auto`);
+ *   spendRaise  passar do teto de gasto de IA de um card, dentro do ritmo da cota e do teto por tipo de card;
+ *   copilot     o Jido agir no board — sozinho e quando pedido (`orchestrator.mode: autonomous`; desligado, o chat só lê);
+ *   sentinel    a Sentinela consertar a máquina sozinha — EM BREVE (fase 6): nada a lê ainda; fora dos presets.
+ * Nada aqui alcança as decisões que são sempre do dono (dinheiro, marca, PRD, dados de pessoas, a trava do servidor).
+ */
+export type AgentDecidesKey = "spec" | "design" | "delivery" | "publish" | "deploy" | "spendRaise" | "copilot" | "sentinel";
+export const AGENT_DECIDES_KEYS: readonly AgentDecidesKey[] = ["spec", "design", "delivery", "publish", "deploy", "spendRaise", "copilot", "sentinel"];
+export type AgentDecides = Record<AgentDecidesKey, boolean>;
+
 /** One sampled audit of an autonomous delivery ({@link Card.deliveryAudit}). */
+/**
+ * A marca de LOTE do condutor ({@link Card.batch}) — gravada pelo servidor no líder e em cada item do lote.
+ *   • `id`        — o id do lote (o mesmo em todos os cards dele);
+ *   • `lead`      — o card líder (o que a sessão abriu; plano e aprovação moram nele);
+ *   • `sessionId` — a sessão do condutor que segura o lote;
+ *   • `at`        — quando o card entrou no lote (ISO);
+ *   • `planHash`  — o assunto do plano do lote CONGELADO quando o plano foi submetido (a parada da Mínima é uma só, e
+ *                   um `batch_drop` depois disso não muda o hash — o dono nunca é perguntado duas vezes).
+ */
+export interface CardBatchMark {
+  id: string;
+  lead: string;
+  sessionId: string;
+  at: string;
+  planHash?: string;
+}
+
 /** A marca de rodada de conserto de revisão ({@link Card.reviewChain}). */
 export interface ReviewChainMark {
   /** a raiz da cadeia: `<board>/<cardId>` do card revisado de onde a cadeia começou. */
@@ -2603,6 +2617,14 @@ export interface BusinessClassMark {
  */
 export interface AutonomyPolicy {
   mode?: AutonomyMode;
+  /**
+   * O PERFIL de autonomia (autonomy-profile.ts) — o que os agentes decidem sozinhos neste board, caixa a caixa. É a
+   * fonte da verdade do controle único «Autonomia» (Mínima / Máxima / Personalizada). Ausente ⇒ o perfil é DERIVADO
+   * das chaves de antes (`mode`, `release.mode`, `orchestrator`, `autorun.budgetRaise`), então nenhum board muda de
+   * comportamento na troca. Uma chave ausente dentro do bloco cai na mesma derivação. Escritor único:
+   * `setBoardAutonomyAction` (só a sessão do operador), que mantém as chaves antigas coerentes na mesma escrita.
+   */
+  agentDecides?: Partial<AgentDecides>;
   proxyModel?: ModelTier;
   /** the share of autonomous USER-VISIBLE deliveries (screens, texts) — and of proxy answers — sampled for the owner. */
   auditSampleRate?: number;
@@ -2898,7 +2920,7 @@ export interface RunnerSettings {
      */
     surfaceMaxBudgetUSD?: { peerReview?: number; resolutionJudge?: number; deployAgent?: number; smartCapture?: number; proxy?: number; securityReview?: number; technicalAudit?: number };
     timeouts: {
-      /** watchdog for fast skills (enrich/tasks/prioritize), ms */
+      /** watchdog for fast skills (enrich/tasks), ms */
       fastMs: number;
       /** watchdog for code skills (harness-do/harness-review), ms; null = off */
       doMs: number | null;
@@ -3294,7 +3316,7 @@ export interface RunnerSettings {
     /**
      * A RE-MEDIÇÃO AUTOMÁTICA dos pedidos de autorização do dono que envelheceram (runner/auto-rerequest.ts): no máximo
      * uma por pacote a cada N minutos. Ausente ⇒ 15 min (`AUTO_REREQUEST_EVERY_MIN_DEFAULT`); 0 ⇒ desligada (o pedido velho
-     * só é refeito pelo botão da Esteira ou pelo clique recusado do dono).
+     * só é refeito pelo «Refazer o pedido agora» do Inbox ou pelo clique recusado do dono).
      */
     autoRerequestEveryMinutes?: number;
     /**

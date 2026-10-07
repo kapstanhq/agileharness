@@ -8,19 +8,19 @@ import type { BoardConfig, Card, StatusDef } from "@/lib/storymap/types";
 
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
 
-const priorizar: StatusDef = { id: "priorizar", name: "Priorizar", dispensable: true };
+const opcional: StatusDef = { id: "opcional", name: "Opcional", dispensable: true };
 const designUx: StatusDef = { id: "design-ux", name: "Design UX", dispensable: true };
 const desenvolver: StatusDef = { id: "desenvolver", name: "Desenvolver" }; // load-bearing (prefix)
 const board: BoardConfig = {
   id: "b",
   name: "B",
-  statuses: [priorizar, designUx, desenvolver],
+  statuses: [opcional, designUx, desenvolver],
   releases: [],
   personas: [],
   systems: [],
   linkTypes: [],
   routeProfiles: {
-    express: { skips: ["priorizar", "design-ux"], modelCap: "sonnet", effortCap: "low", description: "trivial" },
+    express: { skips: ["opcional", "design-ux"], modelCap: "sonnet", effortCap: "low", description: "trivial" },
     bad: { skips: ["desenvolver"] }, // a profile that names a load-bearing step (must be rejected on merge)
   },
 };
@@ -61,7 +61,7 @@ describe("setCardRouteAction — profile materialization (4.2)", () => {
     const res = await setCardRouteAction({ boardId: "b", cardId: "story-x", profile: "express" });
     expect(res.ok).toBe(true);
     const r = res.ok ? res.data?.card.routing ?? null : null;
-    expect(r?.skips.sort()).toEqual(["design-ux", "priorizar"]);
+    expect(r?.skips.sort()).toEqual(["design-ux", "opcional"]);
     expect(r?.modelCap).toBe("sonnet");
     expect(r?.effortCap).toBe("low");
     expect(r?.profile).toBe("express");
@@ -76,9 +76,9 @@ describe("setCardRouteAction — profile materialization (4.2)", () => {
   });
 
   it("unions explicit skips with a real profile (both present, deduped)", async () => {
-    const res = await setCardRouteAction({ boardId: "b", cardId: "story-x", profile: "express", skips: ["priorizar"] });
+    const res = await setCardRouteAction({ boardId: "b", cardId: "story-x", profile: "express", skips: ["opcional"] });
     const r = res.ok ? res.data?.card.routing ?? null : null;
-    expect(r?.skips.sort()).toEqual(["design-ux", "priorizar"]); // priorizar not duplicated
+    expect(r?.skips.sort()).toEqual(["design-ux", "opcional"]); // opcional not duplicated
   });
 
   it("REJECTS a profile whose materialized skips include a load-bearing step", async () => {
@@ -94,14 +94,15 @@ describe("setCardRouteAction — profile materialization (4.2)", () => {
   });
 
   it("empty route (no skips/profile/caps) CLEARS the routing", async () => {
-    cardOnDisk = { ...cardOnDisk, routing: { skips: ["priorizar"], decidedBy: "human", decidedAt: "2026-07-10" } };
+    cardOnDisk = { ...cardOnDisk, routing: { skips: ["opcional"], decidedBy: "human", decidedAt: "2026-07-10" } };
     const res = await setCardRouteAction({ boardId: "b", cardId: "story-x" });
     expect(res.ok && res.data?.card.routing).toBeNull();
   });
 
-  it("materialized skips including priorizar without priorityCall returns the non-fatal note", async () => {
-    cardOnDisk = coerceCard("story-x", { type: "story", status: "plano-tecnico" }, ""); // no priorityCall
+  it("a priorização saiu: pular um passo dispensável não gera aviso de prioridade (sem `note`)", async () => {
+    cardOnDisk = coerceCard("story-x", { type: "story", status: "plano-tecnico" }, "");
     const res = await setCardRouteAction({ boardId: "b", cardId: "story-x", profile: "express" });
-    expect(res.ok && res.data?.note).toMatch(/priorizar/);
+    expect(res.ok).toBe(true);
+    expect(res.ok && res.data && "note" in res.data).toBe(false);
   });
 });

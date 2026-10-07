@@ -3,7 +3,7 @@ id: story-lista-criar
 type: story
 title: Criar uma lista pública
 storyType: user
-status: priorizar
+status: pronta
 parent: step-lista
 release: r2
 personas:

@@ -25,7 +25,8 @@
 // decides WHETHER it may, and it errs toward the owner every time.
 
 import { hasOpenQuestions, openQuestions } from "./questions";
-import { ownerClassLabel } from "./owner-classes";
+import { ownerClassLabel, ownerClassesOf } from "./owner-classes";
+import { AUTONOMY_BOXES, boardAutonomyMode, decisionKeyOfCategory, storyDecides } from "./autonomy-profile";
 import { AUTONOMY_DEFAULT_AUDIT_SAMPLE_RATE, AUTONOMY_DEFAULT_TECHNICAL_AUDIT_RATE } from "./types";
 import type { AutonomyMode, BoardConfig, Card, CardQuestion, ModelTier, QuestionCategory } from "./types";
 
@@ -37,13 +38,17 @@ export interface EffectiveAutonomy {
   source: AutonomySource;
 }
 
-/** The mode a story runs in: its own exception, else the board's key, else `human`. PURE. */
+/**
+ * The mode a story runs in: its own exception, else the board's key, else `human`. PURE. The board's key is the one
+ * the autonomy PROFILE implies when the board declares it (autonomy-profile.ts `boardAutonomyMode`: any story box on ⇒
+ * `ultra`), else the declared `autonomy.mode` — so a hand-edited `mode` can never disagree with the profile.
+ */
 export function effectiveAutonomy(
   card: Pick<Card, "autonomyMode"> | null | undefined,
   config: Pick<BoardConfig, "autonomy"> | null | undefined,
 ): EffectiveAutonomy {
   if (card?.autonomyMode) return { mode: card.autonomyMode, source: "card" };
-  if (config?.autonomy?.mode) return { mode: config.autonomy.mode, source: "board" };
+  if (config?.autonomy?.agentDecides || config?.autonomy?.mode) return { mode: boardAutonomyMode(config), source: "board" };
   return { mode: "human", source: "default" };
 }
 
@@ -66,8 +71,9 @@ export function proxySettings(config: Pick<BoardConfig, "autonomy"> | null | und
 }
 
 /** The categories a proxy may answer in ultra mode — BUSINESS-ONLY since plan v4 (decision-class.ts): every
- *  technical category. `owner` and `money` are the owner's in every mode; an UNCATEGORIZED question is the owner's
- *  until the classifier judges it (question-classifier.ts). */
+ *  technical category, each within the board's profile box (autonomy-profile.ts `decisionKeyOfCategory`). `owner` and
+ *  `money` are the owner's in every mode; `guardrail` goes to a diff reviewer; an UNCATEGORIZED question is the
+ *  owner's until the classifier judges it (question-classifier.ts). */
 export const PROXIABLE_CATEGORIES: readonly QuestionCategory[] = ["interview", "ui-choice", "technical", "delivery"];
 
 /** The category a question EFFECTIVELY has: the asker's, else the classifier's verdict, else none. PURE. */
@@ -126,12 +132,96 @@ export function relaxedMoneyFloorMatch(q: Pick<CardQuestion, "category" | "text"
 }
 
 /**
- * Is this question a decision of the OWNER — the money floor ({@link isOwnerOnlyQuestion}) OR a business category
- * (`owner`, declared by the asker or judged by the classifier)? The one reader every agent-facing door uses: the
- * proxy never takes it, the copiloto never answers it (`answer_question` refuses), and the Inbox marks it. PURE.
+ * O piso da MARCA — tão literal quanto o de dinheiro: falar em nome da marca FORA do produto (redes sociais, e-mail ou
+ * push em massa, imprensa). Só empurra para o dono, e só num board que declara a classe `brand-voice` (o default
+ * declara). O texto de DENTRO do produto (telas, botões) não casa: é do guia de marca, não do dono.
  */
-export function isOwnerDecisionQuestion(q: Pick<CardQuestion, "category" | "text" | "context" | "classified">): boolean {
-  return isOwnerOnlyQuestion(q) || effectiveQuestionCategory(q) === "owner";
+const BRAND_TERMS =
+  /\b(redes sociais|social media|instagram|tiktok|linkedin|facebook|newsletter|e-?mail (em massa|marketing|para (todos|toda a base|muitos))|mass e-?mails?|push (em massa|para (todos|toda a base|muitos))|imprensa|press release)\b/i;
+
+/** A classe que a marca aponta (owner-classes.ts). */
+const BRAND_CLASS = "brand-voice";
+
+/**
+ * O PISO de uma pergunta: a classe do dono que ela toca pelos sinais literais — dinheiro (`money`: a categoria, o
+ * marcador `[humano]`, as palavras de dinheiro) e marca (`brand-voice`, quando o board declara a classe), ou null.
+ * Vale MESMO com uma categoria declarada pelo autor: nesse caso lê só o TEXTO (o sujeito da decisão); sem categoria, o
+ * texto e o contexto. Só empurra para o dono, nunca tira dele. PURA.
+ */
+export function ownerFloorClass(
+  q: Pick<CardQuestion, "category" | "text" | "context">,
+  config?: Pick<BoardConfig, "autonomy"> | null,
+): string | null {
+  if (isOwnerOnlyQuestion(q)) return "money";
+  if (!ownerClassesOf(config).some((c) => c.id === BRAND_CLASS)) return null;
+  return BRAND_TERMS.test(q.category ? (q.text ?? "") : `${q.text ?? ""}\n${q.context ?? ""}`) ? BRAND_CLASS : null;
+}
+
+/**
+ * Is this question a decision of the OWNER — the floor ({@link ownerFloorClass}: money, `[humano]`, brand) OR a business
+ * category (`owner`, declared by the asker or judged by the classifier)? The one reader every agent-facing door uses:
+ * the proxy never takes it, the copiloto never answers it (`answer_question` refuses), and the Inbox marks it. PURE.
+ */
+export function isOwnerDecisionQuestion(
+  q: Pick<CardQuestion, "category" | "text" | "context" | "classified">,
+  config?: Pick<BoardConfig, "autonomy"> | null,
+): boolean {
+  return ownerFloorClass(q, config) !== null || effectiveQuestionCategory(q) === "owner";
+}
+
+/** Quem respondeu é o DONO? (a resposta pela UI não carimba autor — ausente é humano). */
+export function answeredByOwner(q: Pick<CardQuestion, "status" | "answeredBy">): boolean {
+  if (q.status !== "answered") return false;
+  const by = q.answeredBy?.trim();
+  return !by || by === "human" || by === "operator" || by.startsWith("human:");
+}
+
+/**
+ * Por que um AGENTE (o copiloto, o condutor, qualquer token de MCP) não pode responder esta pergunta — ou null. PURA.
+ *   · a resposta do DONO nunca é sobrescrita por um agente (nem «corrigida»);
+ *   · a pergunta que o dono REABRIU numa auditoria, ou que o procurador devolveu, é dele para sempre;
+ *   · a decisão do dono (o piso, a categoria `owner`) espera o dono;
+ *   · mudar um teste existente (`guardrail`) também: a regra é um revisor de diff independente, nunca quem perguntou —
+ *     e esse revisor ainda não existe, então é do dono (decision-class.ts GUARDRAIL_REASON);
+ *   · com `card` (o chamador é um agente ESCOPADO — mcp/actor.ts isScopedActor): a caixa do perfil que governa a
+ *     categoria (entrevista/técnica ⇒ `spec`, tela ⇒ `design`, entrega ⇒ `delivery`) desligada para esta story ⇒ a
+ *     decisão espera o dono. Sem isso as caixas paravam o procurador, mas não o copiloto nem o condutor.
+ */
+export function agentAnswerRefusal(
+  q: Pick<CardQuestion, "status" | "answeredBy" | "category" | "text" | "context" | "classified" | "proxy">,
+  config?: Pick<BoardConfig, "autonomy"> | null,
+  card?: Pick<Card, "autonomyMode"> | null,
+): string | null {
+  if (answeredByOwner(q)) return "o dono já respondeu esta pergunta — um agente não sobrescreve a resposta dele";
+  if (q.proxy?.auditOutcome === "reopened") return "o dono reabriu esta pergunta numa auditoria — agora ela é dele, para sempre";
+  if (q.proxy?.declined) return "o procurador devolveu esta pergunta ao dono — ela é dele, para sempre";
+  if (q.status !== "open") return null;
+  if (isOwnerDecisionQuestion(q, config)) return "decisão só do dono (dinheiro, marca, [humano] ou uma classe de negócio)";
+  const category = effectiveQuestionCategory(q);
+  if (category === "guardrail") return "mudar um teste existente é do revisor de diff independente (lançado pelo serviço) ou do dono — nenhum agente a responde";
+  const key = card ? decisionKeyOfCategory(category) : null;
+  if (card && key && !storyDecides(card, config, key)) {
+    const box = AUTONOMY_BOXES.find((b) => b.key === key)?.label ?? key;
+    return `a autonomia deste board deixa esta decisão com o dono («${box}» desligada)`;
+  }
+  return null;
+}
+
+/**
+ * Um AGENTE (o Jido, a frota) pode pegar uma pergunta desta categoria nesta story? A mesma régua da recusa do
+ * `answer_question` (agentAnswerRefusal), reduzida ao que o item do Inbox carrega: `guardrail` nunca; e a categoria cuja
+ * caixa do perfil está desligada também não. Quem lê: o Inbox (o Jido «pega» a pergunta e ela sai de Decidir) e o tick
+ * (que acordaria para uma pergunta que a tool recusaria) — sem isto a pergunta sumia do dono para um agente que não pode
+ * respondê-la. PURA.
+ */
+export function agentMayTakeQuestion(
+  category: QuestionCategory | undefined,
+  card: Pick<Card, "autonomyMode"> | null | undefined,
+  config: Pick<BoardConfig, "autonomy"> | null | undefined,
+): boolean {
+  if (category === "guardrail") return false;
+  const key = decisionKeyOfCategory(category);
+  return !key || storyDecides(card, config, key);
 }
 
 /**
@@ -146,10 +236,16 @@ export function defaultQuestionCategory(q: Pick<CardQuestion, "text" | "context"
   return isOwnerOnlyQuestion({ text: q.text, context: q.context }) ? "money" : undefined;
 }
 
-/** Why a question is not the proxy's — or null when it is. PURE (the dispatcher logs it; tests pin it). */
+/**
+ * Why a question is not the proxy's — or null when it is. PURE (the dispatcher logs it; tests pin it). The proxy has
+ * a SCOPE: the board's autonomy profile (autonomy-profile.ts) — entrevista/técnica só com a caixa `spec`, escolha de
+ * tela só com `design`, entrega só com `delivery` (a exceção do card sobrepõe as três). Nada do dono entra no escopo:
+ * o piso (dinheiro, marca, `[humano]`), a categoria `owner`, o card que toca uma classe do dono, a pergunta que o dono
+ * reabriu ou que o procurador já devolveu, e a `guardrail` (mudar teste existente vai ao revisor de diff).
+ */
 export function proxyRefusal(
   q: Pick<CardQuestion, "status" | "category" | "text" | "context" | "proxy" | "ownerClass" | "classified">,
-  card: Pick<Card, "autonomyMode" | "ownerReviewsUi">,
+  card: Pick<Card, "autonomyMode" | "ownerReviewsUi"> & Partial<Pick<Card, "businessClasses">>,
   config: Pick<BoardConfig, "autonomy">,
 ): string | null {
   if (q.status !== "open") return "pergunta já respondida";
@@ -159,38 +255,53 @@ export function proxyRefusal(
   if (q.proxy?.auditOutcome === "reopened") return "o dono reabriu a resposta do proxy — agora é dele";
   // The proxy already handed it back (declined, or failed on it past the cap): it is the owner's for good.
   if (q.proxy?.declined) return "o proxy devolveu esta pergunta ao dono";
-  if (isOwnerOnlyQuestion(q)) return "decisão de dinheiro/só do dono — nunca vai ao proxy";
+  const floor = ownerFloorClass(q, config);
+  if (floor === "money") return "decisão de dinheiro/só do dono — nunca vai ao proxy";
+  if (floor) return `decisão do dono («${ownerClassLabel(floor, config)}») — nunca vai ao proxy`;
   const category = effectiveQuestionCategory(q);
   if (category === "owner") {
     const cls = q.ownerClass ?? q.classified?.ownerClass;
     return `decisão de negócio do dono${cls ? ` («${ownerClassLabel(cls, config)}»)` : ""} — nunca vai ao proxy`;
   }
+  // O card TOCA uma classe do dono (a marca de um juiz): o procurador não decide nada nele — erra para o dono.
+  const touched = card.businessClasses?.ids.find((id) => id.trim());
+  if (touched) return `o card toca «${ownerClassLabel(touched, config)}» — as perguntas dele são do dono`;
   if (!category) return "pergunta sem categoria — é do dono até o classificador julgá-la (técnica vai ao proxy)";
+  if (category === "guardrail") return "mudar teste existente vai ao revisor de diff independente (reprovado ou em modo humano, ao dono) — nunca ao procurador";
   // «Quero ver as opções de tela» (card-opt-ins.ts): a escolha de tela DESTE card o dono pediu para fazer.
   if (category === "ui-choice" && card.ownerReviewsUi) return "o dono pediu para ver as opções de tela deste card — a escolha é dele";
   if (!PROXIABLE_CATEGORIES.includes(category)) return `categoria '${category}' não é do proxy`;
+  // O ESCOPO: a caixa do perfil que governa esta categoria precisa estar ligada para esta story.
+  const key = decisionKeyOfCategory(category);
+  if (key && !storyDecides(card, config, key)) {
+    const box = AUTONOMY_BOXES.find((b) => b.key === key)?.label ?? key;
+    return `a autonomia do board deixa «${box}» com o dono`;
+  }
   return null;
 }
 
 /** May the proxy answer this question now? PURE. */
 export function isProxiableQuestion(
   q: Pick<CardQuestion, "status" | "category" | "text" | "context" | "proxy" | "ownerClass" | "classified">,
-  card: Pick<Card, "autonomyMode" | "ownerReviewsUi">,
+  card: Pick<Card, "autonomyMode" | "ownerReviewsUi"> & Partial<Pick<Card, "businessClasses">>,
   config: Pick<BoardConfig, "autonomy">,
 ): boolean {
   return proxyRefusal(q, card, config) === null;
 }
 
 /** The card's open questions the proxy may answer (empty when the story is human or none qualify). PURE. */
-export function proxiableQuestions(card: Pick<Card, "autonomyMode" | "questions" | "ownerReviewsUi">, config: Pick<BoardConfig, "autonomy">): CardQuestion[] {
+export function proxiableQuestions(
+  card: Pick<Card, "autonomyMode" | "questions" | "ownerReviewsUi"> & Partial<Pick<Card, "businessClasses">>,
+  config: Pick<BoardConfig, "autonomy">,
+): CardQuestion[] {
   if (!hasOpenQuestions(card)) return [];
   if (effectiveAutonomy(card, config).mode !== "ultra") return [];
   return openQuestions(card).filter((q) => isProxiableQuestion(q, card, config));
 }
 
 /** The card's open questions only the owner may answer (money / marked / a business class) — the owner-only queue. */
-export function ownerOnlyOpenQuestions(card: Pick<Card, "questions">): CardQuestion[] {
-  return openQuestions(card).filter((q) => isOwnerDecisionQuestion(q));
+export function ownerOnlyOpenQuestions(card: Pick<Card, "questions">, config?: Pick<BoardConfig, "autonomy"> | null): CardQuestion[] {
+  return openQuestions(card).filter((q) => isOwnerDecisionQuestion(q, config));
 }
 
 /** Below this confidence a proxy answer ALWAYS goes on the audit list, sampled or not. */
@@ -242,7 +353,7 @@ export interface ProxyAnswerInput {
  * none did — the caller skips the write). PURE.
  */
 export function applyProxyAnswers(
-  card: Pick<Card, "autonomyMode" | "questions" | "ownerReviewsUi">,
+  card: Pick<Card, "autonomyMode" | "questions" | "ownerReviewsUi"> & Partial<Pick<Card, "businessClasses">>,
   config: Pick<BoardConfig, "autonomy">,
   board: string,
   cardId: string,

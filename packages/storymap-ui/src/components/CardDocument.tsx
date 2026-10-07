@@ -49,6 +49,7 @@ import { CardRetirement } from "./CardRetirement";
 import { CardStageHistory, CardHopTimeline } from "./CardStageHistory";
 import { CardQuickActions, useRunnerSnapshot } from "./RunnerStatusProvider";
 import { CardLiveStatusLine } from "./CardLiveStatus";
+import { digestEntries } from "@/lib/storymap/doc/digest-entries";
 
 export function CardDocument({
   boardId,
@@ -105,7 +106,9 @@ export function CardDocument({
     // transparency the old CardStrategicContext "Run" row carried (what the next autorun spends).
     const step = card.status ? config.statuses.find((s) => s.id === card.status) : undefined;
     return {
-      norte: strategy.split("\n").filter((l) => l.trim()),
+      // Uma entrada por SEÇÃO do digest — não por linha: a prosa de uma seção pode ter quebras próprias, e cortá-la
+      // nelas partia uma frase (e o par de um `código`/**negrito**) em vários parágrafos curtos.
+      norte: digestEntries(strategy),
       idea: idea
         ? {
             statement: idea.idea?.statement?.trim() || idea.title,
@@ -152,7 +155,9 @@ export function CardDocument({
           </div>
         </div>
       ) : (
-        <article className="pb-2">
+        // `overflow-wrap:anywhere` no código EM LINHA (fora de <pre>): um token longo (caminho, URL, id) quebra dentro da
+        // frase em vez de empurrar a coluna — e o bloco de código segue rolando na horizontal, como deve.
+        <article className="pb-2 [&_:not(pre)>code]:[overflow-wrap:anywhere]">
           {blocks.map((b, i) => {
             // The stateful singleton blocks (wireframe/blockers) get a STABLE key by kind so an async
             // sidecar load (which inserts the wireframe/notas blocks mid-list) doesn't remount them

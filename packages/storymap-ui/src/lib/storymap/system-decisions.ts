@@ -61,6 +61,12 @@ export type SystemDecisionKind =
   | "card-intake"
   /** o operador ligou ou desligou o modo «só organização» de um board (pela tela; nunca um agente). */
   | "board-mode"
+  /** fase 6 (6D) — o CRÍTICO DO PLANO (contexto limpo, lançado pelo serviço) aprovou/reprovou um plano (runner/critics.ts). */
+  | "plan-review"
+  /** fase 6 (6D) — o REVISOR DO DIFF respondeu (ou devolveu ao dono) uma mudança de teste existente (`guardrail`). */
+  | "diff-review"
+  /** fase 6 (6D) — o VERIFICADOR DA ENTREGA, lançado pelo serviço antes de `revisao→merge`, aprovou/reprovou a entrega. */
+  | "delivery-verify"
   | "undo";
 
 /** Como desfazer, quando dá. Cada variante é UMA ação com pré-condição (undoRefusal). */
@@ -192,18 +198,29 @@ export function recoveryFixCardEntry(
   };
 }
 
-/** Uma entrega que chegou ao ar sem o dono aprovar (o condutor pulou «Aprovar entrega» com a prova). PURA. */
-export function deliverySkipEntry(board: string, card: Card, opts: EntryOpts): SystemDecision {
+/** Quem certificou uma entrega que não tinha o verificador independente: o próprio agente que a fez. */
+export const SELF_CERTIFIED_AGENT = "auto-certificada";
+
+/**
+ * Uma entrega que chegou ao ar sem o dono aprovar (o condutor pulou «Aprovar entrega» com a prova). PURA.
+ * `verified` = o veredito do VERIFICADOR independente que o serviço lançou antes de `revisao→merge` (runner/critics.ts)
+ * para ESTA mudança. Só com ele o registro diz `verifier`; sem ele a entrega é `auto-certificada` — a prova é do próprio
+ * agente que a fez (antes o registro dizia «o verificador independente aprovou» sem que nenhum verificador tivesse rodado).
+ */
+export function deliverySkipEntry(board: string, card: Card, opts: EntryOpts & { verified?: { runId?: string; model?: string } | null }): SystemDecision {
+  const verified = opts.verified ?? null;
   return {
     v: 1,
     id: opts.id,
     at: opts.at,
     board,
     cardId: card.id,
-    agent: "verifier",
+    agent: verified ? "verifier" : SELF_CERTIFIED_AGENT,
     kind: "delivery-skip",
-    what: `Entregou «${card.title}» sem parar em «Aprovar entrega»`,
-    why: "o verificador independente aprovou pela prova; uma amostra volta para você",
+    what: `Entregou «${card.title}» sem parar em «Aprovar entrega»${verified ? "" : " (auto-certificada)"}`,
+    why: verified
+      ? `o verificador independente (contexto limpo, lançado pelo serviço${verified.model ? `, ${verified.model}` : ""}) conferiu esta mudança contra os critérios e a prova; uma amostra volta para você`
+      : "nenhum verificador independente rodou nesta entrega — a prova é do próprio agente que a fez; uma amostra volta para você",
     ...(card.status ? { undo: { kind: "reopen-card" as const, cardId: card.id, deliveredIn: card.status } } : {}),
   };
 }
@@ -252,6 +269,10 @@ export function agentLabel(agent: string): string {
     "harness-conductor": "Agente",
     jido: "Jido",
     verifier: "Verificador",
+    // fase 6 (6D) — os críticos que o serviço lança (runner/critics.ts) e a entrega sem verificador
+    "plan-critic": "Crítico do plano",
+    "diff-reviewer": "Revisor do diff",
+    "auto-certificada": "Auto-certificada (sem verificador)",
     // o produtor da prova de deploy (runner/deploy-proof-producer.ts `PRODUCER_AGENT`): republica e abre consertos
     "deploy-proof": "Produtor da prova de deploy",
     // quem mudou um card de board por uma tool (card-transfer.ts) — um agente, sem o nível do token no texto do dono

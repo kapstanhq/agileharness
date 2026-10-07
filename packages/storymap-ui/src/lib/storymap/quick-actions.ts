@@ -4,7 +4,7 @@
 //  1. QuickAction / QuickActionInvoke — the SERIALIZABLE action a compact button fires, mapping 1:1 to a server
 //     action that ALREADY exists; the client dispatcher (QuickActionButton → quick-action-run) is the only thing
 //     that runs it.
-//  2. blockedTargets — the pure decision the MoveToPopover tooltip (D11) consumes.
+//  2. blockedTargets — the pure decision behind a «why can't I move here» tooltip (D11).
 //
 // O registry por kind do Inbox (QUICK_ACTIONS_OF) saiu na onda 2: o que cada item oferece — o rótulo, a
 // consequência, a pré-condição — mora no modelo do item (inbox/decision.ts), e onde o Kanban ou o /processes mostram
@@ -133,7 +133,7 @@ export function buildEscalateAction(ref: EscalationRef, label = "Pedir ao Jido")
   };
 }
 
-/** D11 — the destinations the MoveToPopover OMITS today, with the WHY (a pre-explanatory tooltip). Exact
+/** D11 — the destinations a move menu OMITS, with the WHY (a pre-explanatory tooltip). Exact
  *  complement of moveTargets over the SAME isomorphic checkGate: every status ≠ current whose gate FAILS. */
 export interface BlockedTarget {
   status: StatusDef;
@@ -190,7 +190,6 @@ export function optionAsQuickAction(o: DecisionOption | null | undefined): Quick
     label: o.label,
     tone: o.tone,
     description: o.consequence,
-    ...(o.confirm ? { confirm: o.confirm } : {}),
     ...(o.disabled ? { disabled: o.disabled.reason } : {}),
     auditCls: o.auditCls,
     invoke: o.invoke as QuickActionInvoke,

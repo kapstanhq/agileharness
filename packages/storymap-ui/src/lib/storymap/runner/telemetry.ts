@@ -187,6 +187,12 @@ export interface CardMetrics {
   totalCostUSD: number;
   /** mean turns across runs that reported turns, or null when none did. */
   avgTurns: number | null;
+  /** soma dos turnos dos runs que os relataram; null quando nenhum relatou. */
+  totalTurns?: number | null;
+  /** soma dos tokens (entrada + cache + saída) dos runs que relataram uso; null quando nenhum relatou. */
+  totalTokens?: number | null;
+  /** soma das durações conhecidas (ms) — o tempo de agente gasto no card; null quando nenhum run a tem. */
+  totalDurationMs?: number | null;
   /** epoch ms of the most-recent COLUMN run (role `run` — {@link latestRunRecord}), or null when none. */
   lastRunAt: number | null;
   /** outcome of the most-recent COLUMN run (role `run`), or null when none. A proxy/session/steward record never
@@ -324,6 +330,8 @@ export class TelemetryStore implements TelemetryPort {
     for (const [cardId, { runs }] of byCard) {
       const cardCost = runs.reduce((acc, r) => acc + (r.costUSD ?? 0), 0);
       const turns = runs.map((r) => r.turns).filter((t): t is number => t != null);
+      const tokenRuns = runs.filter((r) => r.inputTokens != null || r.outputTokens != null);
+      const timed = runs.map((r) => r.durationMs).filter((d): d is number => d != null);
       // Cost and turns count EVERY role (it is all spend on the card); the "last run" verdict — the one the TRAVADO
       // lane reads — is the latest COLUMN run only. Before, a proxy answer or a conductor session booked after a
       // failed run became the card's "last run" and the stalled card vanished from the lane.
@@ -333,6 +341,9 @@ export class TelemetryStore implements TelemetryPort {
         totalRuns: runs.length,
         totalCostUSD: cardCost,
         avgTurns: turns.length ? turns.reduce((a, b) => a + b, 0) / turns.length : null,
+        totalTurns: turns.length ? turns.reduce((a, b) => a + b, 0) : null,
+        totalTokens: tokenRuns.length ? tokenRuns.reduce((a, r) => a + (r.inputTokens ?? 0) + (r.outputTokens ?? 0), 0) : null,
+        totalDurationMs: timed.length ? timed.reduce((a, b) => a + b, 0) : null,
         lastRunAt: latest?.startedAt ?? null,
         lastStatus: latest?.status ?? null,
         lastAdvanced: latest?.advanced ?? false,

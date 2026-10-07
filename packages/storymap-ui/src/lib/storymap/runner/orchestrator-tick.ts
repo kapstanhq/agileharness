@@ -7,6 +7,11 @@
 // temporal demand fired) AND the board is `autonomous` AND no paired human holds the lease AND the daily
 // budget isn't spent. Every gate that fails SKIPS the spawn — so an idle board costs nothing. OFF by default
 // (settings.orchestrator.enabled=false ⇒ the whole tick is a no-op), byte-identical to no Jido.
+//
+// FASE 6 — o Jido foi separado em Sentinela + Chat. O tique não retoma mais a conversa do chat: o seu `spawn` entrega o
+// board à SENTINELA (sentinel-run.ts), que só abre sessão para uma causa NOVA. E a Sentinela está SEMPRE ligada: a
+// varredura dela (`sentinel`) roda no começo de todo tique, para TODO board, antes do gate de `enabled` (que é o do
+// copiloto). Um board sem causa nova custa $0.
 
 import type { OrchestratorMode } from "@/lib/storymap/types";
 
@@ -34,6 +39,9 @@ export interface ActiveBoard {
 export interface OrchestratorTickDeps {
   /** settings.orchestrator.enabled — re-read each tick so a settings toggle takes effect without a restart. */
   enabled: boolean;
+  /** FASE 6 — a varredura da SENTINELA (todos os boards + o host), antes de qualquer gate do copiloto. Best-effort: a
+   *  impl nunca lança, e uma falha nunca troca o resultado do tique. Ausente ⇒ sem Sentinela (testes do contrato antigo). */
+  sentinel?: () => Promise<void>;
   /** boards whose orchestrator.mode is `paired` or `autonomous` (mode:off already excluded). */
   activeBoards: () => Promise<ActiveBoard[]> | ActiveBoard[];
   /** a paired human session currently holds the board's lease → the autonomous tick stands down. */
@@ -98,6 +106,8 @@ export interface OrchestratorTickDeps {
  * timer keeps going). Returns a per-board status list. Pure control-flow — unit-tested directly.
  */
 export async function runOrchestratorTick(deps: OrchestratorTickDeps): Promise<OrchestratorTickStatus[]> {
+  // a Sentinela é sempre ligada — não depende do copiloto estar ligado
+  await deps.sentinel?.().catch(() => {});
   if (!deps.enabled) return [];
   const boards = await deps.activeBoards();
   const out: OrchestratorTickStatus[] = [];

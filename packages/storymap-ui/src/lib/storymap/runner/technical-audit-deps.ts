@@ -43,8 +43,9 @@ async function git(args: string[]): Promise<string> {
   return String(r.stdout ?? "");
 }
 
-/** A mudança do card em texto, do checkout do alvo, só leitura: o diff base..head e os arquivos tocados no head. */
-async function materialize(range: CommitRange): Promise<ReviewMaterial | { error: string }> {
+/** A mudança do card em texto, do checkout do alvo, só leitura: o diff base..head e os arquivos tocados no head.
+ *  Exportada para os críticos lançados pelo serviço (critics-deps.ts), que leem a mesma mudança. */
+export async function materialize(range: CommitRange): Promise<ReviewMaterial | { error: string }> {
   try {
     const diff = await git(["diff", "--no-color", range.base, range.head]);
     const names = (await git(["diff", "--name-only", range.base, range.head])).split("\n").map((l) => l.trim()).filter(Boolean);

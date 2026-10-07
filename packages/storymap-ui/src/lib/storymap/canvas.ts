@@ -313,35 +313,6 @@ export function stripTagFromCanvas(canvas: CanvasMap | null | undefined, tagId: 
   return changed;
 }
 
-/**
- * THE REFERENTIAL INVARIANT: an item may only wear a tag that EXISTS in the vocabulary.
- *
- * The hand path keeps it by construction (deleting a tag strips it from every item in the same atomic
- * proposal). The AGENT path cannot be trusted to: it may drop a tag and leave the refs behind, and the
- * operator can approve a block change while REJECTING the tag change that would have created the tag
- * it references. So the invariant is enforced at the WRITE CHOKEPOINT, over the final vocabulary —
- * whatever the caller believed. Returns only the blocks it had to repair.
- */
-export function stripUnknownTagRefs(canvas: CanvasMap, tags: readonly CanvasTag[]): CanvasMap {
-  const known = new Set(tags.map((t) => t.id));
-  const repaired: CanvasMap = {};
-  for (const [key, block] of Object.entries(canvas)) {
-    if (!block) continue;
-    if (!block.items.some((i) => i.tags?.some((t) => !known.has(t)))) continue;
-    repaired[key] = {
-      items: block.items.map((item) => {
-        if (!item.tags?.some((t) => !known.has(t))) return item;
-        const kept = item.tags.filter((t) => known.has(t));
-        const next: CanvasItem = { ...item };
-        if (kept.length > 0) next.tags = kept;
-        else delete next.tags;
-        return next;
-      }),
-    };
-  }
-  return repaired;
-}
-
 /** Upsert an item into a block (by id), preserving order; a new item is appended. */
 export function upsertItem(block: CanvasBlock | null | undefined, item: CanvasItem): CanvasBlock {
   const items = block?.items ?? [];

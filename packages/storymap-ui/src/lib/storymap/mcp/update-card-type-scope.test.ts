@@ -39,9 +39,6 @@ const card = (over: Partial<Card> = {}): Card =>
     narrative: { role: null, want: null, soThat: null },
     acceptance: [],
     tasks: [],
-    rice: { reach: null, impact: null, confidence: null, effort: null },
-    kano: null,
-    funnelStage: null,
     findings: [],
     ...over,
   }) as Card;

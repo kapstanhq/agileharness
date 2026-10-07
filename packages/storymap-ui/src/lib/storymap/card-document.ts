@@ -13,12 +13,11 @@
 // plain string (for "copiar como markdown" + the tests), so the two projections never
 // drift: the rendered drawer ≡ the markdown ≡ the source of truth.
 
-import { formatRiceScore, riceScore } from "./rice";
-import { KANO_BY_ID, FUNNEL_BY_ID, STORY_TYPE_BY_ID, narrativeSentence } from "./frameworks";
+import { STORY_TYPE_BY_ID, narrativeSentence } from "./frameworks";
 import { runStatusLabel, type StepRollup } from "./step-rollup";
 import { isMechanismBlockerId } from "./runner/findings";
 import { canvasWideFeedback, hasCanvasContent, JOURNEY_FEEDBACK_ID, orderedCanvasArtifacts } from "./design-canvas";
-import type { Card, DesignArtifact, Finding, Rice, WireframeDoc, WireframeOption } from "./types";
+import type { Card, DesignArtifact, Finding, WireframeDoc, WireframeOption } from "./types";
 
 /** The effective run policy of the card's CURRENT status (skill + spawn knobs), resolved from its StatusDef. */
 export interface CardDocRunPolicy {
@@ -73,8 +72,6 @@ export type CardDocBlock =
   | { kind: "stage-history"; rollups: StepRollup[] };
 
 // ── formatting helpers (pure) ────────────────────────────────────────────────
-
-const num = (v: number | null): string => (v == null ? "—" : String(v));
 
 /** Escape a value used INSIDE a markdown paragraph so it can't accidentally start a block. */
 function inlineText(s: string): string {
@@ -164,20 +161,6 @@ function notasProse(ctx: CardDocContext): string {
   const plan = (ctx.plan ?? "").trim().replace(/^#\s[^\n]*\n+/, "").trim();
   if (!plan) return "";
   return `## Notas de execução\n\n${plan}`;
-}
-
-/** Priorização as ONE compact meta line: RICE score + inputs · KANO · funil. */
-function prioritizationProse(card: Card): string {
-  const bits: string[] = [];
-  const score = formatRiceScore(riceScore(card.rice));
-  if (score != null) {
-    const r: Rice = card.rice;
-    bits.push(`**RICE ${score}** (R ${num(r.reach)} · I ${num(r.impact)} · C ${num(r.confidence)} · E ${num(r.effort)})`);
-  }
-  if (card.kano) bits.push(`KANO: ${KANO_BY_ID[card.kano]?.name ?? card.kano}`);
-  if (card.funnelStage) bits.push(`Funil: ${FUNNEL_BY_ID[card.funnelStage]?.name ?? card.funnelStage}`);
-  if (!bits.length) return "";
-  return `## Priorização\n\n${bits.join(" · ")}`;
 }
 
 /** Locale-aware date-time for a history row (pt-BR dd/mm hh:mm). Pure (React-free). */
@@ -345,7 +328,8 @@ export function splitFindingsBySeverity(
 /**
  * Assemble the canonical document blocks for a card. Order (report §5):
  *   1. Título + narrativa  2. (contexto estratégico)  3. Critérios de aceite  + corpo livre
- *   4. Jornada + Telas (figuras)  5. Notas de execução  6. Bloqueios  7. Priorização  8. Histórico
+ *   4. Jornada + Telas (figuras)  5. Notas de execução  6. Bloqueios  7. Histórico
+ * (A antiga seção 7 «Priorização» — RICE/KANO/funil — saiu na fase 5: a ordem do trabalho é a posição na coluna.)
  * Empty sections are omitted (a faithful, complete projection of what EXISTS — nothing hidden,
  * nothing padded). The wireframe/blockers blocks are emitted only when they carry content.
  */
@@ -373,11 +357,7 @@ export function composeCardDocument(card: Card, ctx: CardDocContext): CardDocBlo
     blocks.push({ kind: "blockers", findings: card.findings ?? [] });
   }
 
-  // 7 — prioritization (prose).
-  const prioritization = prioritizationProse(card);
-  if (prioritization.trim()) blocks.push({ kind: "prose", md: prioritization });
-
-  // 8 — per-step execution history (interactive table). Only when a step ran or one is in flight,
+  // 7 — per-step execution history (interactive table). Only when a step ran or one is in flight,
   //     so a never-run card shows no empty section (mirrors the old historyProse "" short-circuit).
   if (ctx.rollups.some((r) => r.runs > 0 || r.live)) {
     blocks.push({ kind: "stage-history", rollups: ctx.rollups });

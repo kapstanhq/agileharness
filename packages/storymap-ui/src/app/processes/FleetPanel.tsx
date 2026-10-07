@@ -231,7 +231,7 @@ function FleetRowItem({
           </>
         )}
         {row.branch && (
-          <span className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100">
+          <span className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100 nohover:opacity-100">
             <GitBranch className="h-3 w-3" />
             <span className="font-mono">{row.branch}</span>
           </span>

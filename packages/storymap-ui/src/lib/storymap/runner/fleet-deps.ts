@@ -13,6 +13,7 @@ import {
   allSessions,
   defaultSessionWorktreeDeps,
   reconcileFleet,
+  sessionCardIds,
   sessionWorkSettled,
   type FleetReconcileResult,
   type SessionWorktreeDeps,
@@ -42,8 +43,10 @@ import {
 import { listBoards, readBoardConfig, readCard, readCards } from "@/lib/storymap/repo";
 import { resolveCardRoute } from "./config";
 import { getCapacityGovernor } from "./capacity-service";
+import { batchHandoffDeps, clearBatchMarksNow, conductorBatchDeps, releaseBatchItemsNow } from "./conductor-batch-deps";
 import { resolvedClaudeBin } from "./claude-bin";
-import { hostNeedsRootBypass, pollSessionAlive, spawnWorkSession, type SessionSpawnDeps } from "./session-spawn";
+import { loadContextPack } from "@/lib/storymap/context-pack";
+import { CONDUCTOR_SKILL_REF_DIR, hostNeedsRootBypass, pollSessionAlive, removeSessionArtifacts, spawnWorkSession, type SessionSpawnDeps } from "./session-spawn";
 import { isSessionAlive } from "./session-liveness";
 import { upsertFindingIfChanged } from "./findings";
 import { currentTerminalAttention } from "@/lib/terminal/attention-watch";
@@ -69,12 +72,20 @@ import {
   type ConductorPumpReport,
   type QueuedCardMiss,
 } from "./conductor";
+import {
+  CONDUCTOR_HANDOFF_FINDING_ID,
+  diskConductorHandoffStore,
+  recordConductorHandoff,
+  settleConductorHandoffs,
+  settleThenPump,
+  type ConductorHandoffReport,
+} from "./conductor-handoff";
 import { updateCardOnDisk } from "@/lib/storymap/write";
 import { readWorktreeSessionCost } from "@/lib/vps/session-cost";
 import { recordSessionSpend, type SessionTelemetryDeps } from "./session-telemetry";
 import { getTelemetryStore } from "./telemetry";
 import type { AgentSession } from "./session-worktree";
-import { resolveConductorPolicy, withDriver, withoutDriver } from "@/lib/storymap/driver";
+import { resolveConductorPolicy, withDriver, withoutDriver, withTypeModelCap } from "@/lib/storymap/driver";
 import { maybeSweepProxy } from "./proxy-deps";
 import { maybeSweepTriageJudge } from "./triage-judge-deps";
 import { maybeSweepDeployProofs } from "./deploy-proof-deps";
@@ -128,12 +139,24 @@ export function defaultSessionDeps(): SessionWorktreeDeps {
     // The session is LEAVING the registry (worktree_discard): the last moment the service still knows its tree,
     // so a conductor's spend is booked here (session-telemetry.ts), and its conductor slot is re-offered to the
     // queue right away instead of on the next fleet tick.
-    onSessionEnd: async (s) => {
+    onSessionEnd: async (s, end) => {
       await recordSessionSpend(sessionTelemetryDeps(), s).catch((err) =>
         console.error("[session-cost] registro no descarte falhou:", err instanceof Error ? err.message : err),
       );
-      if (s.driver === "conductor") void pumpConductorsNow().catch(() => {});
+      // A PASSAGEM AO TRAIN (conductor-handoff.ts): o condutor DECLARA que encerra depois de submeter
+      // (`worktree_discard({…, handoff: true})`), e o veredito do train chega sem ninguém esperando. Gravada aqui, ela é
+      // decidida pelo tick da frota quando o train decidir. Pela declaração, e não pelo `driver` da linha: o condutor
+      // aberto à mão não tem driver no registro, e o estacionado não é passagem.
+      if (end?.handoff) {
+        await mq
+          .allRunIds() // garante a fila carregada antes de ler o snapshot
+          .then(() => recordConductorHandoff(diskConductorHandoffStore(), s, end, mq.getSnapshot().entries))
+          .catch((err) => console.error("[conductor-handoff] registro no descarte falhou:", err instanceof Error ? err.message : err));
+      }
+      if (s.driver === "conductor" || end?.handoff) void pumpConductorsNow().catch(() => {});
     },
+    // o token MCP e o pacote de contexto da sessão saem com ela (session-spawn.ts removeSessionArtifacts)
+    removeSessionFiles: (sessionId) => removeSessionArtifacts(fsp, runnerStateDir(), sessionId),
   };
 }
 
@@ -177,7 +200,11 @@ export async function reconcileFleetNow(): Promise<FleetReconcileResult> {
   void bookEndedSessions(res).catch((err) =>
     console.error("[session-cost] registro dos óbitos falhou:", err instanceof Error ? err.message : err),
   );
-  void pumpConductorsNow().catch((err) => console.error("[conductor] pump falhou:", err instanceof Error ? err.message : err));
+  // Antes do pump, as PASSAGENS ao train com veredito (conductor-handoff.ts): o card cujo condutor encerrou depois de
+  // submeter volta para a frente da fila — e o pump logo depois já o despacha, na mesma passada.
+  void settleThenPump(settleConductorHandoffsNow, pumpConductorsNow).catch((err) =>
+    console.error("[conductor] pump falhou:", err instanceof Error ? err.message : err),
+  );
   // O condutor cuja story ACABOU (No ar, arquivado, lixeira, sem driver) já não ocupa vaga no pump acima; aqui ele é
   // encerrado — depois da carência e só com o trabalho integrado (conductor.ts, endFinishedConductors).
   void endFinishedConductorsNow().catch((err) => console.error("[conductor] encerramento falhou:", err instanceof Error ? err.message : err));
@@ -193,6 +220,11 @@ export async function reconcileFleetNow(): Promise<FleetReconcileResult> {
   void maybeSweepDeployProofs().catch((err) => console.error("[deploy-proof] varredura falhou:", err instanceof Error ? err.message : err));
   // A rede de segurança do AUDITOR TÉCNICO (grill 2, D): a entrega técnica sorteada que um restart interrompeu.
   void maybeSweepTechnicalAudits().catch((err) => console.error("[technical-audit] varredura falhou:", err instanceof Error ? err.message : err));
+  // Fase 6 (6D) — os CRÍTICOS lançados pelo serviço (critics-deps.ts): o pedido que esperava a vez ou falhou, e a pergunta
+  // `guardrail` (teste existente) aberta que o revisor do diff ainda não leu. No máximo a cada 5 min.
+  void import("./critics-deps")
+    .then((m) => m.maybeSweepCritics())
+    .catch((err) => console.error("[critics] varredura falhou:", err instanceof Error ? err.message : err));
   // O RELÓGIO do disjuntor da publicação (publish-retry.ts): card que espera em «Liberar» com o recuo vencido é reavaliado
   // pela cascata — ela é movida a evento e, sem este aviso, a espera nunca acabaria.
   void import("./publish-retry")
@@ -305,6 +337,14 @@ export const sessionSpawnDeps = (): SessionSpawnDeps => {
     port: SERVICE_PORT,
     // O governador de capacidade: a sessão aberta pela AUTOMAÇÃO (o copiloto) passa pela janela da conta.
     admission: (initiator) => getCapacityGovernor().admission(initiator),
+    // O PACOTE DE CONTEXTO do condutor (context-pack.ts): montado por código a cada spawn/reciclagem, entregue no prompt de
+    // sistema. Só a sessão de condutor o pede (session-spawn.ts `conductorPackFor`).
+    contextPack: (board, cardId) => loadContextPack(board, cardId),
+    // …e só quando o worktree carrega a skill DIVIDIDA: com a monolítica antiga o pacote só somaria tokens.
+    hasSplitConductorSkill: async (cwd) => {
+      const st = await fsp.stat(path.join(cwd, CONDUCTOR_SKILL_REF_DIR)).catch(() => null);
+      return !!st?.isDirectory();
+    },
   };
 };
 
@@ -315,6 +355,8 @@ export const sessionSpawnDeps = (): SessionSpawnDeps => {
 export function defaultConductorDeps(): ConductorDeps {
   const today = () => new Date().toISOString().slice(0, 10);
   return {
+    // fase 7: a funcionalidade de cada card e as entregas ainda no train (nunca dois condutores na mesma funcionalidade)
+    ...conductorBatchDeps(),
     queue: diskConductorQueueStore(),
     sessions: () => allSessions(),
     liveTmux: async () => {
@@ -335,6 +377,12 @@ export function defaultConductorDeps(): ConductorDeps {
       await updateCardOnDisk(board, cardId, (card) => {
         const routing = withoutDriver(card);
         return routing === undefined ? null : { ...card, routing };
+      });
+    },
+    stampModelCap: async (board, cardId) => {
+      await updateCardOnDisk(board, cardId, (card) => {
+        const routing = withTypeModelCap(card, today());
+        return routing ? { ...card, routing } : null; // null ⇒ teto escolhido por alguém, ou carimbo já certo
       });
     },
     stampDispatchFailure: async (board, cardId, detail) => {
@@ -389,7 +437,40 @@ export function defaultConductorDeps(): ConductorDeps {
       console.error(`[conductor] ALERTA: ${entry.board}/${entry.cardId} sumiu do disco com a fila esperando — registrado como card-missing`);
       await appendSystemDecision(cardMissingDecision(entry, miss, new Date().toISOString(), newSystemDecisionId()));
     },
+    // Fase 6 (6D): o card que espera OUTRA história fica na fila com o driver até ela chegar.
+    dependencyHold: (board, card, config) => cardDependencyWait(board, card, config),
+    // Fase 6: a reserva do dono — um card de sinal não toma as vagas do PRD e dos pedidos do dono.
+    signalSlotHold: async (board, card, liveCardIds, maxSessions, ownerWorkQueued) => {
+      const [{ readSignalsSettings }, { conductorSlotAllowsSignal }] = await Promise.all([import("./signals-deps"), import("./signals")]);
+      const cards = await readCards(board);
+      const runningSignal = cards.filter((c) => liveCardIds.includes(c.id) && c.labels?.includes("sinal")).length;
+      const { reserveOwnerPct } = readSignalsSettings();
+      // um erro grave em produção (gravidade high/blocker) passa na frente do trabalho do dono (dono, 07/10)
+      const urgent = ["high", "blocker"].includes(card.severity ?? card.bugReport?.severity ?? "");
+      return conductorSlotAllowsSignal({ runningSignal, slots: maxSessions, reserveOwnerPct, ownerWorkQueued, urgent })
+        ? null
+        : runningSignal > 0
+          ? `reserva do dono: ${runningSignal} card(s) de sinal já usam a fatia deles (${reserveOwnerPct}% das vagas ficam para o PRD e os pedidos do dono)`
+          : `reserva do dono: com ${maxSessions} vaga(s) a fatia dos sinais é zero e há trabalho do dono na fila (${reserveOwnerPct}% das vagas ficam para o PRD e os pedidos dele)`;
+    },
+    // Fase 6 (6D): o card que o pump devolve ao fluxo (reabertura pendente) é reavaliado já — a skill da reabertura roda.
+    reevaluateEntry: async (board, cardId) => {
+      const { evaluateAutorunOnEntry } = await import("@/lib/notifications/server/channels/autorun-eval");
+      await evaluateAutorunOnEntry(board, cardId);
+    },
   };
+}
+
+/**
+ * Fase 6 (6D) — o card espera OUTRA história? A régua da cascata (cascade-decision.ts `dependencyWait`: um `depends-on`
+ * para um card do board que não terminou, um bloqueio `blocked-by-*` aberto). O board só é lido quando o card declara um
+ * `depends-on`. O motivo, ou null. Uma leitura que falha não segura (fail-open: o comportamento de antes).
+ */
+export async function cardDependencyWait(board: string, card: Card, config: BoardConfig | null): Promise<string | null> {
+  if (!config) return null;
+  const { dependencyWait } = await import("@/lib/notifications/server/channels/cascade-decision");
+  const cards = card.links?.some((l) => l.rel === "depends-on") ? await readCards(board).catch(() => [] as Card[]) : [];
+  return dependencyWait(card, new Map(cards.map((c) => [c.id, c] as const)), config);
 }
 
 /**
@@ -472,6 +553,11 @@ export async function explainMissingCard(board: string, cardId: string): Promise
   if (code === "exists") return { kind: "unreadable", detail: "o arquivo existe mas não foi lido (recusado pelo chokepoint ou ilegível)" };
   if (code !== "ENOENT" && code !== "ENOTDIR") return { kind: "unreadable", detail: `stat do card falhou (${code})` };
   if (await fsp.access(trashedCardPath(board, cardId)).then(() => true, () => false)) return { kind: "trashed" };
+  // Fase 6 (6D): o card MUDOU DE BOARD (transfer_card) — ele existe em outro board do alvo. Não é um card sumido.
+  for (const b of await listBoards().catch(() => [])) {
+    if (b.id === board) continue;
+    if (await fsp.access(cardPath(b.id, cardId)).then(() => true, () => false)) return { kind: "transferred", toBoard: b.id };
+  }
   const last = (await readTransitions({ board, cardId })).at(-1);
   return { kind: "missing", lastHop: last ? { from: last.from, to: last.to, at: last.at } : null };
 }
@@ -513,6 +599,43 @@ export function pumpConductorsNow(): Promise<ConductorPumpReport> {
   return pumpConductorQueue(defaultConductorDeps());
 }
 
+/** Uma passada de ASSENTAMENTO das passagens ao train (conductor-handoff.ts), com as deps de produção. */
+export function settleConductorHandoffsNow(): Promise<ConductorHandoffReport> {
+  const base = defaultConductorDeps();
+  const mq = getMergeQueue();
+  return settleConductorHandoffs({
+    // fase 7: o intervalo de commits de cada item no `done` e a divisão do lote na segunda devolução
+    ...batchHandoffDeps(),
+    store: diskConductorHandoffStore(),
+    // `allRunIds` garante a fila CARREGADA antes do snapshot (getSnapshot sozinho não carrega)
+    entries: async () => {
+      await mq.allRunIds();
+      return mq.getSnapshot().entries;
+    },
+    readCard: base.readCard,
+    readBoardConfig: base.readBoardConfig,
+    sessions: base.sessions,
+    liveTmux: base.liveTmux,
+    heartbeatAlive: base.heartbeatAlive,
+    queued: async (board, cardId) => (await base.queue.load()).some((e) => e.board === board && e.cardId === cardId),
+    // sem re-carimbar o driver: o operador que o limpou entre a leitura e a readmissão decide
+    readmit: async (board, cardId, handoff) => (await admitConductorCard(base, board, cardId, { resume: true, requireDriver: true, handoff })).queued,
+    giveUp: async (board, cardId, detail) => {
+      await updateCardOnDisk(board, cardId, (card) => {
+        const findings = upsertFindingIfChanged(card.findings ?? [], {
+          id: CONDUCTOR_HANDOFF_FINDING_ID,
+          lens: "general",
+          severity: "high",
+          title: "o merge train devolveu a submissão do condutor vezes demais",
+          detail,
+          status: "open",
+        });
+        return findings ? { ...card, findings } : null;
+      });
+    },
+  });
+}
+
 /** The end pass's grace clock — one per PROCESS (Symbol.for: the instrumentation and route bundles share it). */
 const CONDUCTOR_END_STATE_KEY = Symbol.for("agileharness.conductor.endState");
 
@@ -537,9 +660,15 @@ export function defaultConductorEndDeps(): ConductorEndDeps {
     kill: async (s) => {
       if (s.tmuxSession) await killSession(s.tmuxSession);
     },
+    // fase 7: a sessão que termina solta o claim de TODOS os seus cards (o líder e os itens do lote)
     releaseClaims: async (s) => {
-      if (s.board && s.cardId) await getCardClaims().release(s.board, s.cardId, sessionClaimActor(s.agentId));
+      if (!s.board) return;
+      for (const cardId of sessionCardIds(s)) await getCardClaims().release(s.board, cardId, sessionClaimActor(s.agentId));
     },
+    // fase 7: o LÍDER do lote saiu (lixeira, adiado, sem driver) — os itens abertos voltam à fila normal
+    releaseBatchItems: releaseBatchItemsNow,
+    // fase 7: a sessão do lote acabou — a marca do lote sai dos cards dela
+    clearBatchMarks: clearBatchMarksNow,
     state: (store[CONDUCTOR_END_STATE_KEY] ??= new Map()),
   };
 }

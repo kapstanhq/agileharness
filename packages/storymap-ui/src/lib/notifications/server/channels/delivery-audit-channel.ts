@@ -32,6 +32,11 @@ export interface DeliveryAuditDeps {
   recordDecision?(e: SystemDecision): Promise<void>;
   /** grill 2 (D) — a entrega técnica sorteada vai ao auditor independente (a fila durável dele; fire-and-forget). */
   startTechnicalAudit?(pending: TechnicalAuditPending): Promise<unknown>;
+  /**
+   * fase 6 (6D) — o veredito APROVADO do verificador independente para ESTA mudança do card (runner/critics.ts), ou null.
+   * Só com ele o registro diz `verifier`; sem ele (ou sem esta dep) a entrega é registrada como `auto-certificada`.
+   */
+  verifiedDelivery?(board: string, card: Card): Promise<{ runId?: string; model?: string } | null>;
   today?(): string;
   log?(line: string): void;
 }
@@ -51,7 +56,9 @@ export async function auditDeliveryArrival(deps: DeliveryAuditDeps, event: Agile
     // Toda entrega autônoma em só-negócio entra no registro do que o sistema decidiu em nome do dono — amostrada ou
     // não (a amostra é só o que volta para ele auditar). O «Desfazer» dela é reabrir.
     if (deps.recordDecision && isAutonomousUltraDelivery({ card, config, transitions })) {
-      await deps.recordDecision(deliverySkipEntry(event.boardId, card, { at: new Date().toISOString(), id: newSystemDecisionId() })).catch(() => {});
+      // «verificador» só quando ele rodou e aprovou esta mudança; senão, «auto-certificada» (system-decisions.ts).
+      const verified = (await deps.verifiedDelivery?.(event.boardId, card).catch(() => null)) ?? null;
+      await deps.recordDecision(deliverySkipEntry(event.boardId, card, { at: new Date().toISOString(), id: newSystemDecisionId(), verified })).catch(() => {});
     }
     const first = deliveryAuditDecision({ board: event.boardId, card, config, transitions });
     if (!first.sample) return false;

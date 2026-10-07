@@ -1,6 +1,6 @@
 // O ESTADO ATUAL DA APLICAÇÃO, derivado do próprio board. Puro, zero IO, zero LLM, zero MCP.
 //
-// Priorizar sem saber o que o produto JÁ FAZ produz duas patologias: repropõe o que existe, e afunda o
+// Decidir o que vem a seguir sem saber o que o produto JÁ FAZ produz duas patologias: repropõe o que existe, e afunda o
 // card que destrava algo já construído. O material para evitar isso já está no board e ninguém lia: as
 // stories em status ENTREGUE são, coletivamente, a especificação do que está no ar — foi o próprio
 // Operador quem apontou ("podemos usar os títulos dos cards existentes, que são as specs").
@@ -44,7 +44,7 @@ export interface DeliveredIndex {
  *
  * O custo cresce com o número de âncoras (uma linha por nó do mapa), não com o de stories, e a dobra leva
  * dezenas de milissegundos. Cabe folgado no orçamento de UMA chamada, e diz o que o produto
- * FAZ — que é mais útil para priorizar do que saber quais arquivos existem.
+ * FAZ — que é mais útil para decidir o que vem a seguir do que saber quais arquivos existem.
  */
 export function deliveredIndex(cards: Card[], config: BoardConfig): DeliveredIndex {
   const live = deliveredStatusIds(config);

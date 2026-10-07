@@ -585,6 +585,29 @@ export class LockedExecService {
   }
 
   /**
+   * O MOTIVO do dono, depois do «Não rodar» de um clique (fase 3: o Inbox recusa com o motivo padrão e o recibo oferece
+   * «Adicionar um motivo»). Só sobre um pedido JÁ recusado — nunca muda a decisão, só a explica: o motivo da pessoa
+   * substitui o padrão no registro, vai à auditoria e o agente do card é avisado de novo, com as palavras dela.
+   */
+  async explainRejection(input: { id: string; caller: string | null; reason: string }): Promise<ServiceResult<LockedExecRecord>> {
+    const may = mayDecideLockedExec(input.caller);
+    if (!may.ok) return { ok: false, why: may.why };
+    const reason = String(input.reason ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 600);
+    if (!reason) return { ok: false, why: "escreva o motivo" };
+    const out = await this.serial(async (): Promise<ServiceResult<LockedExecRecord>> => {
+      const r = await this.get(String(input.id ?? ""));
+      if (!r) return { ok: false, why: "pedido não encontrado" };
+      if (r.status !== "rejected") return { ok: false, why: `só dá para explicar um pedido recusado (este está «${r.status}»)` };
+      const next: LockedExecRecord = { ...r, rejectReason: reason };
+      await this.write(next);
+      await this.audit({ action: "reject-reason", id: r.id, by: input.caller, reason });
+      return { ok: true, value: next };
+    });
+    if (out.ok) this.d.wake(out.value.board, out.value.cardId, `continuar — o dono explicou por que não aprovou o pedido ${out.value.id}: «${reason}». Leve isso em conta antes de seguir.`);
+    return out;
+  }
+
+  /**
    * O dono manda DESFAZER um comando que deu certo. Antes de aceitar: o pedido no disco ainda é o que ele aprovou, o
    * desfazer ainda é aceitável pela trava e o programa dele é o mesmo. Roda uma vez, fora da action.
    */

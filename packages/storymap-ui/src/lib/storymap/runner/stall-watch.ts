@@ -40,7 +40,8 @@ import { ownerDecisionsOnCard } from "@/lib/storymap/owner-waiting";
 import { openQuestions } from "@/lib/storymap/questions";
 import { publishesItself, releaseModeOf } from "@/lib/storymap/release-policy";
 import type { SystemDecision } from "@/lib/storymap/system-decisions";
-import type { BoardConfig, Card, EntryEffect, Finding } from "@/lib/storymap/types";
+import { stepAutoruns, type BoardConfig, type Card, type EntryEffect, type Finding } from "@/lib/storymap/types";
+import { triggerForCard } from "@/lib/storymap/skip-routing";
 import { newSystemDecisionId } from "./decision-log";
 
 /** `autorun.stall` do settings: quanto tempo sem dono vira «parado» e quantas vezes o sistema refaz o passo. */
@@ -146,7 +147,7 @@ export function classifyStall(card: Card, config: BoardConfig, facts: StallFacts
     // Passo de PASSAGEM: a cascata o atravessa sozinha na entrada. Parado ali, ou um evento se perdeu, ou o que o
     // segurava (um gate, a espera do dono) caiu depois — reavaliar é a MESMA decisão da entrada, com todas as travas.
     // A espera pelo dono e o disjuntor da publicação já têm o seu sinal: aí a cascata parou de propósito.
-    if (isPassageStep(def)) return facts.ownerHeld || facts.breakerHeld ? null : { subject: { kind: "passage", ...step }, autoRetry: true };
+    if (isPassageStep(def, config, card)) return facts.ownerHeld || facts.breakerHeld ? null : { subject: { kind: "passage", ...step }, autoRetry: true };
     return null; // passo de humano ou de skill de coluna: fila, não travamento
   }
   if (card.deployFiredAt) return null; // publicação em voo — o `deploy-unsettled` cuida do prazo dela
@@ -229,16 +230,31 @@ export interface StallReport {
 const keyOf = (board: string, cardId: string, status: string) => `${board}/${cardId}@${status}`;
 const upsert = (rows: StallRow[], row: StallRow) => [...rows.filter((r) => r.key !== row.key), row].slice(-LEDGER_MAX_ROWS);
 
-/** Um passo que a cascata só ATRAVESSA: autorun ligado, sem skill de coluna e sem efeito de entrada. PURA. */
-export function isPassageStep(def: Pick<BoardConfig["statuses"][number], "autorun" | "trigger" | "onEnter" | "terminal">): boolean {
-  return def.autorun === true && !def.trigger && !def.onEnter && !def.terminal;
+/**
+ * Um passo que a cascata só ATRAVESSA: autorun ligado, sem efeito de entrada e sem skill de coluna QUE RODE NESTE BOARD.
+ * Com o `config`, o pipeline híbrido conta (types.ts `stepAutoruns`): num board com condutor, um passo
+ * `autorunOnlyInColumns` (Entrevista, Jornada, Telas…) não roda a sua skill — a cascata só o atravessa —, então um card
+ * não conduzido parado ali (o gate do próximo passo falhou, a entrada se perdeu, o card já estava ali quando o board
+ * passou ao condutor) é do sistema, não «fila da skill»: sem isto ele ficava ali para sempre, sem aviso. A exceção é o
+ * card reaberto que roda ali a skill dedicada (refino/correção — `triggerForCard`): esse é fila de skill. Sem o
+ * `config`, só o passo sem skill nenhuma. PURA.
+ */
+export function isPassageStep(
+  def: Pick<BoardConfig["statuses"][number], "autorun" | "autorunOnlyInColumns" | "trigger" | "onEnter" | "terminal">,
+  config?: Pick<BoardConfig, "pipeline" | "conductor">,
+  card?: Pick<Card, "mode" | "reopenPending">,
+): boolean {
+  if (def.autorun !== true || def.onEnter || def.terminal) return false;
+  if (!def.trigger) return true;
+  if (!config || stepAutoruns(def, config)) return false;
+  return !card || triggerForCard(card, def.trigger) === def.trigger;
 }
 
 /** Só card não terminal em passo do sistema entra na conta — o resto nem custa uma leitura de fatos. PURA. */
 export function isStallCandidate(card: Card, config: BoardConfig): boolean {
   const def = config.statuses.find((s) => s.id === card.status);
   if (!def || def.terminal) return false;
-  return isConducted(card) || !!def.onEnter || isPassageStep(def) || isConductorOrphan(card, config);
+  return isConducted(card) || !!def.onEnter || isPassageStep(def, config, card) || isConductorOrphan(card, config);
 }
 
 /** O texto do finding, já em linguagem de dono (o Inbox o mostra como está). PURO. */

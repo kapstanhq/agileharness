@@ -10,8 +10,8 @@ import { revalidatePath } from "next/cache";
 import { requireSession } from "@/lib/auth/action-guard";
 import { resolveActionCaller } from "@/lib/auth/action-guard";
 import { readBoardConfig } from "@/lib/storymap/repo";
-import { writeBoardConfig } from "@/lib/storymap/write";
-import type { BoardConfig } from "@/lib/storymap/types";
+import { patchBoardConfigScalars, updateBoardConfigOnDisk, writeBoardConfig } from "@/lib/storymap/write";
+import { CONDUCTOR_DEFAULT_MAX_SESSIONS, type BoardConfig } from "@/lib/storymap/types";
 import { appendSystemDecision, newSystemDecisionId } from "@/lib/storymap/runner/decision-log";
 import { isScopedActor } from "@/lib/storymap/mcp/actor";
 import { setBoardAutorun } from "@/lib/storymap/board-registry";
@@ -148,6 +148,63 @@ export async function setBoardScopeAction(input: {
   }
 }
 
+/** As vagas de condutor que a tela oferece (o dono escolhe 1 ou 2; o teto existe para um clique torto não abrir 50). */
+const CONDUCTOR_SLOTS_MAX = 4;
+
+/**
+ * Quantos CONDUTORES o board leva ao mesmo tempo (`conductor.maxSessions` no board.yaml) — o «Condutores ao mesmo tempo»
+ * do ritmo, na 2ª barra do Kanban. Cada vaga é uma sessão longa que gasta cota, então é chave do OPERADOR, como o modo
+ * «só organização»: só a sessão do navegador muda; um agente pelo MCP e o próprio serviço são recusados, e não há tool
+ * MCP que chame esta action. Grava pelo read-modify-write atômico da config (o resto do board.yaml fica como está) e só
+ * num board que JÁ usa condutor — ligar o condutor é outra decisão, que não cabe num botão de vagas. Diminuir não
+ * derruba ninguém: a sessão a mais termina o card dela e a vaga não volta a abrir.
+ */
+export async function setConductorSlotsAction(input: { boardId: string; slots: number }): Promise<Result<{ slots: number; message: string }>> {
+  await requireSession("setConductorSlotsAction");
+  try {
+    const caller = await resolveActionCaller();
+    if (caller !== "operator-session") {
+      return { ok: false, error: "Quantos condutores o board leva é uma decisão do operador: só muda pela tela, com a sua sessão." };
+    }
+    const slots = Number(input.slots);
+    if (!Number.isInteger(slots) || slots < 1 || slots > CONDUCTOR_SLOTS_MAX) {
+      return { ok: false, error: `Escolha de 1 a ${CONDUCTOR_SLOTS_MAX} condutores.` };
+    }
+    const before = await readBoardConfig(input.boardId).catch(() => null);
+    if (!before) return { ok: false, error: "Este board não existe ou não pôde ser lido." };
+    if (!before.conductor) return { ok: false, error: "Este board não usa condutores: não há vagas para ajustar." };
+    // o que a gravação viu (um objeto: o TypeScript não acompanha `let` atribuído dentro do callback)
+    const seen: { from: number | null } = { from: null };
+    const written = await updateBoardConfigOnDisk(input.boardId, (cur) => {
+      if (!cur.conductor) return null;
+      seen.from = cur.conductor.maxSessions ?? CONDUCTOR_DEFAULT_MAX_SESSIONS;
+      // compara com o valor EM VIGOR (sem `maxSessions`, o padrão): pedir o padrão não regrava nem deixa trilha
+      if (seen.from === slots) return null;
+      return { ...cur, conductor: { ...cur.conductor, maxSessions: slots } };
+    });
+    if (!written) {
+      if (seen.from === null) return { ok: false, error: "Este board não usa condutores: não há vagas para ajustar." };
+      return { ok: true, data: { slots, message: `O board já levava ${slots} ${slots === 1 ? "condutor" : "condutores"} por vez.` } };
+    }
+    void appendAgentAction({
+      actor: "human:board-header",
+      board: input.boardId,
+      tool: "setConductorSlotsAction",
+      cls: "write-board",
+      disposition: "auto",
+      outcome: "executed",
+      note: `condutores=${seen.from ?? "?"}→${slots}`,
+    });
+    revalidatePath(`/board/${input.boardId}`);
+    const message = slots === 1
+      ? "Agora 1 condutor por vez; se houver outro rodando, ele termina o card dele e a vaga não reabre."
+      : `Agora até ${slots} condutores em paralelo.`;
+    return { ok: true, data: { slots, message } };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /**
  * Liga ou desliga o modo «só organização» do board (organize-only.ts) — o botão do OPERADOR no painel do ritmo. É chave
  * de GOVERNANÇA: só a sessão do operador no navegador muda; um agente pelo MCP (mesmo com o token `full`) e o próprio
@@ -166,10 +223,15 @@ export async function setOrganizeOnlyAction(input: { boardId: string; on: boolea
     if (!config) return { ok: false, error: "Este board não existe ou não pôde ser lido." };
     const already = config.organizeOnly === true;
     if (already !== input.on) {
-      const next: BoardConfig = { ...config };
-      if (input.on) next.organizeOnly = true;
-      else delete next.organizeOnly;
-      await writeBoardConfig(input.boardId, next);
+      // Toggle de UMA chave: gravado no lugar (comentários do board.yaml intactos — quick-fix yaml-comments).
+      // Desligar REMOVE a linha (sem chave fantasma). Se a edição no lugar não se prova, cai no caminho completo de antes.
+      const patch = input.on ? { path: ["organizeOnly"], value: true } : { path: ["organizeOnly"], delete: true as const };
+      if (!(await patchBoardConfigScalars(input.boardId, [patch]))) {
+        const next: BoardConfig = { ...config };
+        if (input.on) next.organizeOnly = true;
+        else delete next.organizeOnly;
+        await writeBoardConfig(input.boardId, next);
+      }
       // a varredura (a mesma do tick de recuperação): para o que estiver em voo e retém, ou devolve o retido. Em segundo
       // plano — o clique não espera os runs pararem; nunca lança.
       void (async () => {

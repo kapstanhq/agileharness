@@ -100,14 +100,36 @@ export function useHoverPopover() {
   const ref = useRef<HTMLDivElement>(null);
   // Identidade estável do "fecha este" — é a chave do registry.
   const close = useRef(() => setOpen(false)).current;
+  // Aberto pelo HOVER (e ainda não confirmado por um clique)? O clique que vem logo depois do hover não pode fechar o
+  // que o hover acabou de abrir — no computador o painel piscava; no toque (o hover emulado chega antes do clique) ele
+  // nem abria, e as ações do «…» da página do card ficavam inalcançáveis a 390.
+  const openedByHover = useRef(false);
   const openNow = () => {
     if (timer.current) clearTimeout(timer.current);
+    openedByHover.current = true;
     setOpen(true);
   };
   const closeSoon = () => {
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(close, 140);
   };
+  /** Hover de verdade: só o MOUSE abre e fecha por passar por cima (toque e caneta usam o clique). */
+  const hoverOpen = (e: ReactPointerEvent) => {
+    if (e.pointerType === "mouse") openNow();
+  };
+  const hoverClose = (e: ReactPointerEvent) => {
+    if (e.pointerType === "mouse") closeSoon();
+  };
+  /** O clique do gatilho: confirma o painel que o hover abriu; senão alterna. */
+  const toggle = () => {
+    if (timer.current) clearTimeout(timer.current);
+    const keep = openedByHover.current;
+    openedByHover.current = false;
+    setOpen((o) => (o && keep ? true : !o));
+  };
+  useEffect(() => {
+    if (!open) openedByHover.current = false;
+  }, [open]);
   useEscape(open, close);
   useExclusiveNavPopover(open, close);
   // A carência pendente não pode sobreviver ao desmonte: ela chamaria `setOpen` num componente morto.
@@ -122,7 +144,7 @@ export function useHoverPopover() {
     window.addEventListener("pointerdown", onDown);
     return () => window.removeEventListener("pointerdown", onDown);
   }, [open, close]);
-  return { open, setOpen, openNow, closeSoon, ref };
+  return { open, setOpen, openNow, closeSoon, hoverOpen, hoverClose, toggle, ref };
 }
 
 /** De que lado do gatilho o painel ancora — e onde, portanto, a setinha aponta. */
@@ -224,11 +246,6 @@ export function NavPopoverTitle({ children, meta }: { children: ReactNode; meta?
 /** O estado vazio de um popover — mesma voz em todos ("Nada precisa de você neste board agora."). */
 export function NavPopoverEmpty({ children }: { children: ReactNode }) {
   return <p className={cn("py-2 text-[12px] text-fg-subtle", POPOVER_GUTTER)}>{children}</p>;
-}
-
-/** Um bloco de conteúdo estático (medidores, notas) na coluna do painel. */
-export function NavPopoverBlock({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cn("flex flex-col gap-2 py-1", POPOVER_GUTTER, className)}>{children}</div>;
 }
 
 /**

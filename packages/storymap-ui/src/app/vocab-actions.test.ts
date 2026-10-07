@@ -13,7 +13,7 @@ vi.mock("@/lib/storymap/write", () => ({ updateBoardConfigOnDisk: vi.fn() }));
 
 import { readBoardConfig, readCards } from "@/lib/storymap/repo";
 import { updateBoardConfigOnDisk } from "@/lib/storymap/write";
-import { appendToVocabAction, vocabChatContextAction } from "./vocab-actions";
+import { appendToVocabAction } from "./vocab-actions";
 import type { BoardConfig } from "@/lib/storymap/types";
 
 const base = (): BoardConfig => ({
@@ -150,27 +150,5 @@ describe("appendToVocabAction", () => {
     expect(p.color).toBe("#b5651d");
     // e não mexe na OUTRA linha
     expect(persisted().personas.find((x) => x.id === "legado")!.prompt).toBeUndefined();
-  });
-});
-
-describe("vocabChatContextAction", () => {
-  it("descreve as duas metades, marca quem está sem tipo e quem está em branco", async () => {
-    const ctx = await vocabChatContextAction("storymap");
-    expect(ctx).toContain("## Personas (2)");
-    expect(ctx).toContain("## Sistemas (1)");
-    expect(ctx).toContain("SEM TIPO declarado"); // a persona `leitor` não tem kind
-    expect(ctx).toContain("VAZIO"); // o sistema `vitrine` não tem prompt
-  });
-
-  it("com FOCO, o prompt daquela linha vai INTEIRO e o resto continua listado", async () => {
-    const ctx = await vocabChatContextAction("storymap", { kind: "persona", id: "leitor" });
-    expect(ctx).toContain("Persona em foco: `leitor`");
-    expect(ctx).toContain("Compra três livros por mês");
-    expect(ctx).toContain("## Sistemas (1)"); // a comparação com as outras não se perde
-  });
-
-  it("é à prova de falha: um erro de leitura vira um bloco de aviso, não uma exceção", async () => {
-    vi.mocked(readBoardConfig).mockRejectedValue(new Error("board.yaml torto"));
-    await expect(vocabChatContextAction("storymap")).resolves.toContain("board.yaml torto");
   });
 });

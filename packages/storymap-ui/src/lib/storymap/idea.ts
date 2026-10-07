@@ -1,8 +1,6 @@
 // OST edge helpers — traceability between stories and the pains they address.
 // The `addresses` linkType (story → idea) is declared in _base/board.yaml.
 
-import { IDEA_STATUSES, IDEA_TERMINAL_STATUS_IDS, type IdeaStatus } from "./frameworks";
-import { ideaTs } from "./idea-recency";
 import type { Card, CardLink, IdeaFields } from "./types";
 
 /** The canonical rel id for the story→idea traceability edge. */
@@ -34,8 +32,8 @@ export function getAddressedIdea(card: Card, pool: Card[]): Card | null {
 
 /**
  * The rollup of an idea: every story in the pool that `addresses` it (solution-space cards pointing
- * UP at this problem-space card). The inverse of {@link getAddressedIdea}; powers the Ideias
- * bench's "N stories endereçando" count + traceability. Pure.
+ * UP at this problem-space card). The inverse of {@link getAddressedIdea}; powers the
+ * "N stories endereçando" count + traceability. Pure.
  */
 export function cardsAddressing(idea: Card, pool: Card[]): Card[] {
   return pool.filter(
@@ -43,57 +41,36 @@ export function cardsAddressing(idea: Card, pool: Card[]): Card[] {
   );
 }
 
-/**
- * O AGRUPAMENTO da bancada de Ideias — por estado de EXPLORAÇÃO, na ordem do ciclo de vida
- * (Nova → Explorando → Decidida → Descartada).
- *
- * Antes a lista agrupava por RECÊNCIA (esta semana / este mês / antigas), e essa é outra pergunta:
- * recência responde "no que eu mexi", exploração responde "o que eu ainda não decidi" — e é esta que
- * a tela existe para responder (uma Ideia amadurece como documento ATÉ virar decisão).
- * Como efeito colateral bom, o agrupamento deixa de depender de fuso horário: a dança
- * `now === null` que existia só para não quebrar a hidratação morre com o agrupamento por data.
- *
- * Três garantias que o fazem degradar bem numa bancada pequena — hoje os boards têm 1 a 3 ideias, e
- * cabeçalho para grupo de um item é enfeite:
- *   • grupos vazios não saem;
- *   • com UM grupo não-vazio, `label` vem `null` (o chamador não desenha cabeçalho) — a tela volta a
- *     ser exatamente a lista plana de antes, e ganha os cabeçalhos sozinha quando o backlog cresce;
- *   • os ENCERRADOS (`IDEA_TERMINAL_STATUS_IDS`) vêm marcados `terminal`, para o chamador colapsá-los
- *     no fim — separados, nunca fundidos num "Encerradas", que esconderia QUAL desfecho.
- *
- * Ideia sem `status` cai em "open" — o mesmo default de `repo.ts` na leitura e de `IdeaBlock` no
- * pontinho da linha, para o grupo e o ponto nunca discordarem. Pura.
- */
-export function groupIdeasByStatus(ideas: Card[]): IdeaStatusGroup[] {
-  const byStatus = new Map<IdeaStatus, Card[]>();
-  for (const idea of ideas) {
-    const status = idea.idea?.status ?? "open";
-    const bucket = byStatus.get(status);
-    if (bucket) bucket.push(idea);
-    else byStatus.set(status, [idea]);
-  }
-  const groups = IDEA_STATUSES.filter((s) => (byStatus.get(s.id)?.length ?? 0) > 0).map((s) => ({
-    key: s.id,
-    label: s.name as string | null,
-    hint: s.short,
-    color: s.color,
-    terminal: IDEA_TERMINAL_STATUS_IDS.includes(s.id),
-    // Dentro do grupo, o mais recente no topo — `ideaTs` segue sendo a régua de "quando chegou".
-    items: [...(byStatus.get(s.id) ?? [])].sort((a, b) => ideaTs(b) - ideaTs(a)),
-  }));
-  if (groups.length === 1) return [{ ...groups[0], label: null }];
-  return groups;
+/** O que o `create_idea` do MCP recebe — os campos de exploração de uma ideia, todos opcionais. */
+export interface IdeaCaptureInput {
+  title?: string;
+  statement?: string;
+  evidence?: string;
+  candidateSolutions?: string[];
+  keyAssumption?: string;
+  successSignal?: string;
 }
 
-export interface IdeaStatusGroup {
-  key: IdeaStatus;
-  /** `null` quando não há o que distinguir (um grupo só) — o chamador omite o cabeçalho. */
-  label: string | null;
-  hint: string;
-  color: string;
-  /** Exploração ENCERRADA (decidida/descartada) — o chamador colapsa. */
-  terminal: boolean;
-  items: Card[];
+/**
+ * O `create_idea` virou ATALHO da captura: a tela de Ideias saiu e uma ideia nova entra como card da Triagem, igual a
+ * qualquer captura. Esta função monta o título e o texto do card a partir dos campos de exploração (o enunciado abre o
+ * texto; o resto vira seções curtas). Sem título nem enunciado ⇒ `null` (o chamador recusa). Pura.
+ */
+export function ideaAsTriageCard(input: IdeaCaptureInput): { title: string; body: string } | null {
+  const statement = input.statement?.trim() ?? "";
+  const title = input.title?.trim() || statement;
+  if (!title) return null;
+  const sections: string[] = [];
+  if (statement && statement !== title) sections.push(statement);
+  const evidence = input.evidence?.trim();
+  if (evidence) sections.push(`**O que sustenta:** ${evidence}`);
+  const paths = (input.candidateSolutions ?? []).map((s) => s.trim()).filter(Boolean);
+  if (paths.length) sections.push(["**Caminhos possíveis:**", ...paths.map((p) => `- ${p}`)].join("\n"));
+  const assumption = input.keyAssumption?.trim();
+  if (assumption) sections.push(`**Premissa mais arriscada:** ${assumption}`);
+  const signal = input.successSignal?.trim();
+  if (signal) sections.push(`**Como saber que deu certo:** ${signal}`);
+  return { title, body: sections.join("\n\n") };
 }
 
 /**

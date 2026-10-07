@@ -1,40 +1,11 @@
-import { notFound } from "next/navigation";
-import { getBoard, listBoards } from "@/lib/storymap/repo";
-import { readStyleGuide } from "@/lib/storymap/sidecars";
-import { isEmptyStyleGuideDoc, styleGuideToPrompt } from "@/lib/storymap/style-guide";
-import { EstiloScreen } from "@/components/EstiloScreen";
+import { permanentRedirect } from "next/navigation";
 
-export const dynamic = "force-dynamic";
-
-/**
- * Server component (molde `canvas/page.tsx`) — reads the board + the canonical guide, runs every
- * KERNEL function that needs `node:crypto` (style-guide.ts) HERE, server-only, and hands the CLIENT
- * only plain data (booleans/strings). See derive-estilo-state.ts's header note: a "use client"
- * component may never import a RUNTIME value from style-guide.ts (it would drag node:crypto into the
- * browser bundle) — this boundary is where that kernel work happens instead. The guide is a PLAIN
- * source-of-truth document: it is either published, or empty (author it).
- */
-export default async function EstiloPage(props: { params: Promise<{ boardId: string }> }) {
-  const params = await props.params;
-
-  const [board, boards] = await Promise.all([getBoard(params.boardId), listBoards()]);
-  if (!board) notFound();
-
-  const styleGuide = await readStyleGuide(params.boardId);
-  const hasPublishedGuide = !!styleGuide && !isEmptyStyleGuideDoc(styleGuide);
-
-  // The "Editar guia" intake (Publicado state) reopens the authoring form PREFILLED with the current
-  // guide serialized back to a prompt (styleGuideToPrompt) — computed here (node:crypto-safe) as a
-  // plain string so the "use client" view never touches the kernel.
-  const prefillPrompt = hasPublishedGuide ? styleGuideToPrompt(styleGuide!) : null;
-
-  return (
-    <EstiloScreen
-      board={board}
-      boards={boards}
-      styleGuide={styleGuide}
-      hasPublishedGuide={hasPublishedGuide}
-      prefillPrompt={prefillPrompt}
-    />
-  );
+// O Guia de Estilo mora na página de Design (fase 2) — a rota é a do grupo, não a do arquivo.
+//
+// A rota antiga sobrevive como redirecionamento porque ela está escrita em lugares que este código não alcança:
+// cards antigos, `SKILL.md` de terceiros, deep links de agentes, o histórico do navegador. 308 (permanente) é o
+// estado honesto — a tela não vai voltar.
+export default async function RedirectPage(props: { params: Promise<{ boardId: string }> }) {
+  const { boardId } = await props.params;
+  permanentRedirect(`/board/${boardId}/design`);
 }

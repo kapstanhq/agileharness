@@ -119,8 +119,7 @@ describe("nextBuildStatus — mode/kinds-aware skip (refine)", () => {
   const reopenPipeline = cfg([
     { id: "enriquecer", name: "Especificar", trigger: "harness-enrich", autorun: true, column: "discovery" },
     { id: "interview", name: "Entrevista", trigger: "harness-interview", autorun: true, column: "discovery", skipForTypes: [...SKIP] },
-    { id: "priorizar", name: "Estimar", gate: "hasRefinement", trigger: "harness-prioritize", autorun: true, column: "discovery" },
-    { id: "pronta", name: "A fazer", gate: "hasPrioritization", autorun: false, column: "todo" },
+    { id: "pronta", name: "A fazer", gate: "hasRefinement", autorun: false, column: "todo" },
     { id: "design-ux", name: "Jornada", trigger: "harness-ux", autorun: true, column: "prepare", skipForTypes: [...SKIP] },
     { id: "design-ui", name: "Telas", trigger: "harness-ui", autorun: true, column: "prepare", skipForTypes: [...SKIP] },
     { id: "com-design", name: "Aprovar design", gate: "hasWireframe", autorun: false, column: "prepare", skipForTypes: [...SKIP] },
@@ -129,8 +128,8 @@ describe("nextBuildStatus — mode/kinds-aware skip (refine)", () => {
     { id: "concluida", name: "No ar", terminal: true, column: "live" },
   ]);
 
-  it("AC1: a refine[functionality] hops enriquecer → priorizar (skips the interview)", () => {
-    expect(nextBuildStatus(reopenPipeline, "enriquecer", refineCard(["functionality"]))?.status.id).toBe("priorizar");
+  it("AC1: a refine[functionality] hops enriquecer → pronta (skips the interview)", () => {
+    expect(nextBuildStatus(reopenPipeline, "enriquecer", refineCard(["functionality"]))?.status.id).toBe("pronta");
   });
 
   it("AC1: a refine[functionality] hops pronta → plano-tecnico (skips the whole design+ready run)", () => {
@@ -141,8 +140,8 @@ describe("nextBuildStatus — mode/kinds-aware skip (refine)", () => {
     expect(nextBuildStatus(reopenPipeline, "pronta", refineCard(["ui"]))?.status.id).toBe("design-ux");
   });
 
-  it("AC2: a refine[ux] lands on design-ux but still skips the interview (enriquecer → priorizar)", () => {
-    expect(nextBuildStatus(reopenPipeline, "enriquecer", refineCard(["ux"]))?.status.id).toBe("priorizar");
+  it("AC2: a refine[ux] lands on design-ux but still skips the interview (enriquecer → pronta)", () => {
+    expect(nextBuildStatus(reopenPipeline, "enriquecer", refineCard(["ux"]))?.status.id).toBe("pronta");
     expect(nextBuildStatus(reopenPipeline, "pronta", refineCard(["ux"]))?.status.id).toBe("design-ux");
   });
 
@@ -157,7 +156,7 @@ describe("nextBuildStatus — mode/kinds-aware skip (refine)", () => {
 
   it("a non-user build story still skips interview + design via the static base (regression)", () => {
     for (const t of SKIP) {
-      expect(nextBuildStatus(reopenPipeline, "enriquecer", sc(t))?.status.id).toBe("priorizar");
+      expect(nextBuildStatus(reopenPipeline, "enriquecer", sc(t))?.status.id).toBe("pronta");
       expect(nextBuildStatus(reopenPipeline, "pronta", sc(t))?.status.id).toBe("plano-tecnico");
     }
   });

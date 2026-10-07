@@ -11,6 +11,10 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  batchLeadDropped,
+  conductorHandoffTask,
+  findFeatureHolder,
+  finishedConductors,
   cardMissingDecision,
   conductorSessionSlug,
   conductorSlotFacts,
@@ -197,6 +201,42 @@ describe("pumpConductorQueue — o cap POR BOARD, a espera e a vaga que volta", 
     expect(modelOf("capped")).toBe("sonnet[1m]");
     // Sem teto no card, NADA muda — nem o modelo do board, nem o sufixo.
     expect(modelOf("plain")).toBe("opus[1m]");
+  });
+
+  // Decisão do dono (06/10): condutor em Sonnet por padrão para bug e manutenção; Opus em história de usuário e risco alto.
+  it("o TIPO do card dá o teto na admissão: bug/chore em sonnet (janela de 1M mantida); user e risco alto no modelo do board", async () => {
+    const h = harness({ config: cfg({ model: "opus[1m]", maxSessions: 10 }) });
+    const typed = (id: string, data: Record<string, unknown>) =>
+      coerceCard(id, { type: "story", status: "pronta", routing: { skips: [], decidedBy: "rules", decidedAt: "2026-09-25", driver: "conductor" }, ...data }, "");
+    h.cards.set("bug", typed("bug", { storyType: "bug" }));
+    h.cards.set("chore", typed("chore", { storyType: "chore" }));
+    h.cards.set("user", typed("user", { storyType: "user" }));
+    h.cards.set("bug-dinheiro", typed("bug-dinheiro", { storyType: "bug", businessClasses: { ids: ["money"], reason: "cobrança", by: "triage-judge", at: "2026-10-06" } }));
+    h.cards.set("bug-opus", { ...typed("bug-opus", { storyType: "bug" }), routing: { ...conducted("x").routing!, modelCap: "opus" } });
+    for (const id of ["bug", "chore", "user", "bug-dinheiro", "bug-opus"]) await admitConductorCard(h.deps, "b", id);
+    await pumpConductorQueue(h.deps);
+    const modelOf = (cardId: string) => h.spawns.find((s) => s.cardId === cardId)?.model;
+    expect(modelOf("bug")).toBe("sonnet[1m]");
+    expect(modelOf("chore")).toBe("sonnet[1m]");
+    expect(modelOf("user")).toBe("opus[1m]");
+    expect(modelOf("bug-dinheiro")).toBe("opus[1m]");
+    // o teto EXPLÍCITO do card vence o derivado do tipo
+    expect(modelOf("bug-opus")).toBe("opus[1m]");
+  });
+
+  it("o teto pelo tipo é CARIMBADO no card na admissão (antes da sessão nascer), para o card mostrar qual valeu", async () => {
+    const h = harness({ config: cfg({ model: "opus[1m]", maxSessions: 10 }) });
+    const order: string[] = [];
+    h.deps.stampModelCap = async (_b, cardId) => void order.push(`carimbo:${cardId}`);
+    const spawn = h.deps.spawn;
+    h.deps.spawn = async (input) => {
+      order.push(`spawn:${input.cardId}`);
+      return spawn(input);
+    };
+    h.cards.set("bug", coerceCard("bug", { type: "story", status: "pronta", storyType: "bug", routing: { skips: [], decidedBy: "rules", decidedAt: "2026-09-25", driver: "conductor" } }, ""));
+    await admitConductorCard(h.deps, "b", "bug");
+    await pumpConductorQueue(h.deps);
+    expect(order).toEqual(["carimbo:bug", "spawn:bug"]);
   });
 
   // Paradas por recurso, fatia 3: para um card conduzido o teto de gasto era só texto da skill. Agora a fila o respeita.
@@ -387,6 +427,8 @@ describe("pumpConductorQueue — o cap POR BOARD, a espera e a vaga que volta", 
     await admitConductorCard(h.deps, "b", "s1");
     expect((await pumpConductorQueue(h.deps)).dropped).toHaveLength(1);
     expect(h.spawns).toEqual([]);
+    // fase 6 — a história acabou: o driver sai junto (um card entregue não fica «conduzido» para sempre)
+    expect(h.cleared).toEqual(["s1"]);
   });
 });
 
@@ -705,30 +747,19 @@ describe("condutor que TERMINOU não segura vaga (num caso real, condutores ocio
   });
 });
 
-describe("a fila anda pela PRIORIDADE do board (a régua da Priorização), não pela hora do aceite", () => {
-  // O juiz da triagem aceita muitos cards de uma vez: a ordem de construção tem de ser a do board.
-  const scored = (id: string, rank: 0 | 1 | 2 | 3, wsjf?: { value: number; urgency: number; unlock: number; size: number }): Card =>
+describe("a fila anda pela POSIÇÃO do card na coluna (o «Fazer antes» do dono), não pela hora do aceite", () => {
+  // O juiz da triagem aceita muitos cards de uma vez: a ordem de construção tem de ser a do board — a coluna.
+  const placed = (id: string, order: number): Card =>
     coerceCard(
       id,
-      {
-        type: "story",
-        status: "pronta",
-        routing: { skips: [], decidedBy: "rules", decidedAt: "2026-09-25", driver: "conductor" },
-        priorityCall: {
-          rank,
-          rationale: "r",
-          source: "agent",
-          assessedAt: "2026-09-29",
-          ...(wsjf ? { wsjf: { ...wsjf, basis: [], cohortSize: 1, cohortAt: "2026-09-29" } } : {}),
-        },
-      },
+      { type: "story", status: "pronta", order, routing: { skips: [], decidedBy: "rules", decidedAt: "2026-09-25", driver: "conductor" } },
       "",
     );
 
-  it("um card de prioridade MAIOR que entrou DEPOIS nasce primeiro", async () => {
+  it("um card mais ACIMA na coluna que entrou DEPOIS nasce primeiro", async () => {
     const h = harness({ config: cfg({ maxSessions: 1 }) });
-    h.cards.set("cedo", scored("cedo", 1));
-    h.cards.set("tarde", scored("tarde", 3));
+    h.cards.set("cedo", placed("cedo", 20));
+    h.cards.set("tarde", placed("tarde", -10));
     await admitConductorCard(h.deps, "b", "cedo");
     await admitConductorCard(h.deps, "b", "tarde");
     const rep = await pumpConductorQueue(h.deps);
@@ -736,26 +767,34 @@ describe("a fila anda pela PRIORIDADE do board (a régua da Priorização), não
     expect(rep.waiting.map((w) => w.cardId)).toEqual(["cedo"]);
   });
 
-  it("tier, depois WSJF dentro do tier, avaliado antes de não-avaliado — e FIFO no empate e entre os sem nota", async () => {
+  it("a posição manda; no empate de posição, FIFO pela hora do aceite", async () => {
     const h = harness({ config: cfg({ maxSessions: 10 }) });
-    h.cards.set("a", conducted("a")); // sem nota
-    h.cards.set("b", scored("b", 2)); // Alta, sem WSJF
-    h.cards.set("c", conducted("c")); // sem nota
-    h.cards.set("d", scored("d", 2)); // Alta, sem WSJF — empata com b
-    h.cards.set("e", scored("e", 2, { value: 8, urgency: 8, unlock: 5, size: 3 })); // Alta, WSJF 7
-    h.cards.set("f", scored("f", 0)); // Baixa
-    for (const id of ["a", "b", "c", "d", "e", "f"]) await admitConductorCard(h.deps, "b", id);
+    h.cards.set("a", placed("a", 30));
+    h.cards.set("b", placed("b", 10));
+    h.cards.set("c", placed("c", 30)); // empata com a — entrou depois
+    h.cards.set("d", placed("d", -5));
+    for (const id of ["a", "b", "c", "d"]) await admitConductorCard(h.deps, "b", id);
     const rep = await pumpConductorQueue(h.deps);
-    expect(rep.spawned.map((s) => s.cardId)).toEqual(["e", "b", "d", "f", "a", "c"]);
+    expect(rep.spawned.map((s) => s.cardId)).toEqual(["d", "b", "a", "c"]);
+  });
+
+  it("um card legado que ainda carrega a nota antiga (priorityCall) não fura a fila: a nota não é mais lida", () => {
+    const legacy = coerceCard("legado", { type: "story", status: "pronta", order: 50, priorityCall: { rank: 3, rationale: "r", source: "agent", assessedAt: "2026-09-29" } }, "");
+    const entry = (cardId: string, queuedAt: string): ConductorQueueEntry => ({ board: "b", cardId, queuedAt, attempts: 0 });
+    const sorted = [
+      { entry: entry("legado", "2026-09-29T10:00:00.000Z"), card: legacy },
+      { entry: entry("topo", "2026-09-29T10:00:05.000Z"), card: placed("topo", 10) },
+    ].sort(compareConductorQueue);
+    expect(sorted.map((x) => x.entry.cardId)).toEqual(["topo", "legado"]);
   });
 
   it("a ordem é determinística: qualquer permutação da fila sai igual, e o empate cai na hora do aceite", () => {
     const entry = (cardId: string, queuedAt: string): ConductorQueueEntry => ({ board: "b", cardId, queuedAt, attempts: 0 });
     const cards: Record<string, Card> = {
-      x: scored("x", 2),
-      y: scored("y", 2),
-      z: conducted("z"),
-      w: scored("w", 3),
+      x: placed("x", 10),
+      y: placed("y", 10),
+      z: placed("z", 20),
+      w: placed("w", 0),
     };
     const queue = [
       entry("y", "2026-09-29T10:00:05.000Z"),
@@ -1045,7 +1084,7 @@ describe("conductorSlotFacts — as vagas do board para o nav, a MESMA conta do 
   });
 });
 
-describe("a fila sem priorityCall usa a SEVERIDADE do bug (um bug ALTO esperava horas atrás de um bug baixo mais antigo)", () => {
+describe("a fila usa a SEVERIDADE do bug antes da posição (um bug ALTO esperava horas atrás de um bug baixo mais antigo)", () => {
   const bug = (id: string, severity: string, extra: Record<string, unknown> = {}): Card =>
     coerceCard(id, { type: "story", storyType: "bug", status: "pronta", routing: { skips: [], decidedBy: "rules", decidedAt: "2026-10-01", driver: "conductor" }, bugReport: { brief: "b", severity, expected: null, actual: null, steps: [], target: null, screenshot: null, openedAt: null }, ...extra }, "");
   const entry = (cardId: string, queuedAt: string, resume = false): ConductorQueueEntry => ({ board: "b", cardId, queuedAt, attempts: 0, ...(resume ? { resume: true as const } : {}) });
@@ -1061,7 +1100,7 @@ describe("a fila sem priorityCall usa a SEVERIDADE do bug (um bug ALTO esperava 
     expect(derivedQueueTier(conducted("u"))).toBeNull();
   });
 
-  it("bug alto (sem priorityCall) passa à frente de bug baixo mais antigo — e de história sem nota", () => {
+  it("bug alto passa à frente de bug baixo mais antigo — e de história sem tier", () => {
     expect(
       order([
         [entry("bug-baixo", "2026-10-01T19:11:54Z"), bug("bug-baixo", "low")],
@@ -1071,12 +1110,13 @@ describe("a fila sem priorityCall usa a SEVERIDADE do bug (um bug ALTO esperava 
     ).toEqual(["bug-alto", "bug-baixo", "historia"]);
   });
 
-  it("o priorityCall explícito do card manda sobre a severidade derivada; no empate de tier, o explícito vem antes", () => {
-    const withCall = (id: string, rank: 0 | 1 | 2 | 3, severity: string) => ({ ...bug(id, severity), priorityCall: { rank, rationale: "r", source: "agent", assessedAt: "2026-10-01" } }) as Card;
-    // bug alto com chamada «Baixa»: a chamada vale (tier 0), e o bug médio sem chamada (tier 1) vem antes
-    expect(order([[entry("alto-baixa", "2026-10-01T10:00:00Z"), withCall("alto-baixa", 0, "high")], [entry("medio", "2026-10-01T11:00:00Z"), bug("medio", "medium")]])).toEqual(["medio", "alto-baixa"]);
-    // mesmo tier 2: a chamada explícita antes da severidade derivada, mesmo chegando depois
-    expect(order([[entry("derivado", "2026-10-01T10:00:00Z"), bug("derivado", "high")], [entry("explicito", "2026-10-01T12:00:00Z"), withCall("explicito", 2, "low")]])).toEqual(["explicito", "derivado"]);
+  it("o tier vem antes da posição; dentro do mesmo tier, manda a posição na coluna", () => {
+    const top = coerceCard("topo", { type: "story", status: "pronta", order: -10, routing: { skips: [], decidedBy: "rules", decidedAt: "2026-10-01", driver: "conductor" } }, "");
+    expect(order([[entry("medio", "2026-10-01T10:00:00Z"), bug("medio", "medium", { order: 40 })], [entry("topo", "2026-10-01T11:00:00Z"), top]])).toEqual(["medio", "topo"]);
+    // mesmo tier: a posição na coluna manda, mesmo chegando depois
+    expect(order([[entry("m1", "2026-10-01T10:00:00Z"), bug("m1", "medium", { order: 40 })], [entry("m2", "2026-10-01T11:00:00Z"), bug("m2", "medium", { order: 10 })]])).toEqual(["m2", "m1"]);
+    // tiers diferentes: o mais severo antes, mesmo chegando depois e mais abaixo na coluna
+    expect(order([[entry("alto", "2026-10-01T10:00:00Z"), bug("alto", "high", { order: 0 })], [entry("bloq", "2026-10-01T12:00:00Z"), bug("bloq", "blocker", { order: 90 })]])).toEqual(["bloq", "alto"]);
   });
 
   it("a retomada continua na frente de tudo", () => {
@@ -1460,5 +1500,225 @@ describe("escopo de tipos — o condutor leva a story de ponta a ponta, então s
       row.value = null;
       expect((await pumpConductorQueue(h.deps)).adopted).toEqual([{ board: "b", cardId: "o1" }]);
     });
+  });
+});
+
+// ── Fase 6 (6D): consertos da fila do condutor ──────────────────────────────────────────────────────────────────────
+describe("fila do condutor — fase 6 (6D)", () => {
+  const entry = (cardId: string, over: Partial<ConductorQueueEntry> = {}): ConductorQueueEntry => ({ board: "b", cardId, queuedAt: "2026-10-07T09:00:00.000Z", attempts: 0, ...over });
+
+  it("card que MUDOU DE BOARD (transfer_card): sem o alarme «sumiu» — a entrada segue o card para o board novo", async () => {
+    const h = harness();
+    const recorded: string[] = [];
+    h.deps.explainMissingCard = async () => ({ kind: "transferred", toBoard: "loja" });
+    h.deps.recordCardMissing = async (e) => void recorded.push(e.cardId);
+    await h.queue.persist([entry("story-ex9611")]);
+    const r = await pumpConductorQueue(h.deps);
+    expect(recorded).toEqual([]);
+    expect(r.dropped).toEqual([]);
+    expect(h.queue.entries).toEqual([expect.objectContaining({ board: "loja", cardId: "story-ex9611", lastWaitKind: "transferred" })]);
+  });
+
+  it("transferido para um board onde o card JÁ está na fila: a entrada antiga sai, sem duplicar", async () => {
+    const h = harness();
+    h.deps.explainMissingCard = async (board) => (board === "b" ? { kind: "transferred", toBoard: "loja" } : { kind: "unreadable", detail: "x" });
+    await h.queue.persist([entry("story-ex9612"), entry("story-ex9612", { board: "loja" })]);
+    await pumpConductorQueue(h.deps);
+    expect(h.queue.entries.filter((e) => e.cardId === "story-ex9612").map((e) => e.board)).toEqual(["loja"]);
+  });
+
+  it("esperando OUTRA história: a entrada fica com o driver e sem gastar vaga; a dependência chega ⇒ despacha", async () => {
+    const h = harness();
+    h.cards.set("story-ex9613", conducted("story-ex9613"));
+    let dependency: string | null = "«Catálogo» (story-ex9614) ainda não terminou";
+    h.deps.dependencyHold = async () => dependency;
+    await h.queue.persist([entry("story-ex9613", { resume: true })]);
+    const first = await pumpConductorQueue(h.deps);
+    expect(first.spawned).toEqual([]);
+    expect(h.cleared).toEqual([]);
+    expect(h.queue.entries[0]).toMatchObject({ cardId: "story-ex9613", lastWaitKind: "dependency" });
+    dependency = null;
+    const second = await pumpConductorQueue(h.deps);
+    expect(second.spawned.map((s) => s.cardId)).toEqual(["story-ex9613"]);
+  });
+
+  it("reabertura pendente: nenhum condutor — o driver do despacho sai e a entrada do card é reavaliada", async () => {
+    const h = harness();
+    h.cards.set("story-ex9615", { ...conducted("story-ex9615"), reopenPending: true });
+    const reevaluated: string[] = [];
+    h.deps.reevaluateEntry = async (_b, id) => void reevaluated.push(id);
+    await h.queue.persist([entry("story-ex9615")]);
+    const r = await pumpConductorQueue(h.deps);
+    expect(h.spawns).toEqual([]);
+    expect(h.cleared).toEqual(["story-ex9615"]);
+    expect(r.dropped[0].reason).toMatch(/reabertura pendente/);
+    expect(reevaluated).toEqual(["story-ex9615"]);
+  });
+
+  it("reserva do dono: o card de SINAL espera com a vez guardada; um card do dono não passa pela régua", async () => {
+    const h = harness();
+    h.cards.set("story-ex9616", { ...conducted("story-ex9616"), labels: ["sinal"] });
+    h.cards.set("story-ex9617", conducted("story-ex9617"));
+    const asked: string[] = [];
+    h.deps.signalSlotHold = async (_b, card) => {
+      asked.push(card.id);
+      return "reserva do dono: a fatia dos sinais está cheia";
+    };
+    await h.queue.persist([entry("story-ex9616"), entry("story-ex9617")]);
+    const r = await pumpConductorQueue(h.deps);
+    expect(r.spawned.map((s) => s.cardId)).toEqual(["story-ex9617"]);
+    expect(asked).toEqual(["story-ex9616"]);
+    expect(h.cleared).toEqual([]);
+    expect(h.queue.entries).toEqual([expect.objectContaining({ cardId: "story-ex9616", lastWaitKind: "signal-reserve" })]);
+  });
+});
+
+// ── fase 7 — nunca dois condutores na mesma funcionalidade; o lote ──────────────────────────────────────────────
+describe("pumpConductorQueue — a funcionalidade ocupada e os candidatos do lote (fase 7)", () => {
+  const keyOf = (map: Record<string, string>) => async (_b: string, c: Card) => {
+    const id = map[c.id];
+    if (!id) return null;
+    if (id === "outros") return { id: "outros", title: "Outros (fora do PRD)", self: false, source: "outros" as const };
+    return { id, title: `Funcionalidade ${id}`, self: false, source: "prd" as const };
+  };
+  const typed = (id: string, storyType: string, status = "pronta"): Card =>
+    coerceCard(id, { type: "story", storyType, status, routing: { skips: [], decidedBy: "rules", decidedAt: "2026-10-01", driver: "conductor" } }, "");
+  const liveConductor = (h: Harness, cardId: string, extra: Partial<AgentSession> = {}) => {
+    h.sessions.push({ sessionId: `live-${cardId}`, agentId: `live-${cardId}`, role: "implement", board: "b", cardId, task: "t", driver: "conductor", tmuxSession: `agent-live-${cardId}`, openedAt: "", heartbeatAt: "", ...extra });
+    h.live.add(`agent-live-${cardId}`);
+  };
+
+  it("duas histórias da mesma funcionalidade na fila ⇒ só uma nasce; a outra espera «feature-busy» sem gastar vaga", async () => {
+    const h = harness({ config: cfg({ maxSessions: 3 }) });
+    h.deps.featureKeyOf = keyOf({ "story-ex9301": "f1", "story-ex9302": "f1", "story-ex9303": "f2" });
+    for (const id of ["story-ex9301", "story-ex9302", "story-ex9303"]) {
+      h.cards.set(id, typed(id, "user"));
+      await admitConductorCard(h.deps, "b", id);
+    }
+    const rep = await pumpConductorQueue(h.deps);
+    expect(rep.spawned.map((s) => s.cardId)).toEqual(["story-ex9301", "story-ex9303"]);
+    expect(h.queue.entries).toEqual([expect.objectContaining({ cardId: "story-ex9302", lastWaitKind: "feature-busy" })]);
+  });
+
+  it("um condutor vivo segura a funcionalidade — também para um item do lote dele (sessionCardIds)", async () => {
+    const h = harness();
+    h.deps.featureKeyOf = keyOf({ "story-ex9310": "f1", "story-ex9311": "f1", "story-ex9312": "f2", "story-ex9320": "f2" });
+    liveConductor(h, "story-ex9310", { batch: { id: "lote-x", featureKey: "f2", cardIds: ["story-ex9312"], dropped: [] } });
+    h.cards.set("story-ex9310", typed("story-ex9310", "bug"));
+    h.cards.set("story-ex9312", typed("story-ex9312", "bug"));
+    for (const id of ["story-ex9311", "story-ex9320"]) {
+      h.cards.set(id, typed(id, "user"));
+      await admitConductorCard(h.deps, "b", id);
+    }
+    const rep = await pumpConductorQueue(h.deps);
+    expect(rep.spawned).toEqual([]);
+    expect(rep.waiting.map((w) => w.cardId).sort()).toEqual(["story-ex9311", "story-ex9320"]);
+    expect(h.queue.entries.every((e) => e.lastWaitKind === "feature-busy")).toBe(true);
+  });
+
+  it("uma entrega ainda no train ocupa a funcionalidade; a retomada do MESMO card não espera por ela", async () => {
+    const h = harness();
+    h.deps.featureKeyOf = keyOf({ "story-ex9330": "f1", "story-ex9331": "f1", "story-ex9332": "f1" });
+    h.deps.pendingHandoffs = async () => [{ board: "b", cardId: "story-ex9330", runId: "run-old", batchCardIds: ["story-ex9332"] }];
+    h.cards.set("story-ex9330", typed("story-ex9330", "bug"));
+    h.cards.set("story-ex9332", typed("story-ex9332", "bug"));
+    h.cards.set("story-ex9331", typed("story-ex9331", "user"));
+    await admitConductorCard(h.deps, "b", "story-ex9331");
+    let rep = await pumpConductorQueue(h.deps);
+    expect(rep.spawned).toEqual([]);
+    expect(rep.waiting[0]?.reason).toMatch(/merge train/);
+    // o veredito saiu: a passagem some do arquivo e o líder volta na frente, com handoff
+    h.deps.pendingHandoffs = async () => [];
+    await admitConductorCard(h.deps, "b", "story-ex9330", { resume: true, handoff: { runId: "run-old", status: "done", batchCardIds: ["story-ex9332"] } });
+    rep = await pumpConductorQueue(h.deps);
+    expect(rep.spawned.map((s) => s.cardId)).toEqual(["story-ex9330"]);
+    expect(h.spawns.at(-1)?.task).toMatch(/re-pegue os itens story-ex9332 com claim_batch/);
+  });
+
+  it("um líder loteável recebe na tarefa os candidatos da mesma funcionalidade (só correção/manutenção, sem solo)", async () => {
+    const h = harness({ config: cfg({ maxSessions: 1 }) });
+    h.deps.featureKeyOf = keyOf({ "story-ex9340": "f1", "story-ex9341": "f1", "story-ex9342": "f1", "story-ex9343": "f1", "story-ex9344": "f2" });
+    h.cards.set("story-ex9340", typed("story-ex9340", "bug"));
+    h.cards.set("story-ex9341", typed("story-ex9341", "chore"));
+    h.cards.set("story-ex9342", typed("story-ex9342", "user"));
+    h.cards.set("story-ex9343", typed("story-ex9343", "bug"));
+    h.cards.set("story-ex9344", typed("story-ex9344", "bug"));
+    for (const id of ["story-ex9340", "story-ex9341", "story-ex9342", "story-ex9343", "story-ex9344"]) await admitConductorCard(h.deps, "b", id);
+    await h.queue.persist(h.queue.entries.map((e) => (e.cardId === "story-ex9343" ? { ...e, solo: true as const } : e)));
+    const rep = await pumpConductorQueue(h.deps);
+    expect(rep.spawned.map((s) => s.cardId)).toEqual(["story-ex9340"]);
+    expect(h.spawns[0].task).toMatch(/LOTE possível: story-ex9341 esperam/);
+    expect(h.spawns[0].task).not.toMatch(/story-ex9342|story-ex9343|story-ex9344/);
+  });
+
+  it("«Outros» nunca ocupa nem forma lote", async () => {
+    const h = harness({ config: cfg({ maxSessions: 3 }) });
+    h.deps.featureKeyOf = keyOf({ "story-ex9350": "outros", "story-ex9351": "outros" });
+    h.cards.set("story-ex9350", typed("story-ex9350", "bug"));
+    h.cards.set("story-ex9351", typed("story-ex9351", "bug"));
+    await admitConductorCard(h.deps, "b", "story-ex9350");
+    await admitConductorCard(h.deps, "b", "story-ex9351");
+    const rep = await pumpConductorQueue(h.deps);
+    expect(rep.spawned.map((s) => s.cardId)).toEqual(["story-ex9350", "story-ex9351"]);
+    expect(h.spawns[0].task).not.toMatch(/LOTE/);
+  });
+
+  it("finishedConductors: a sessão de lote só acaba quando TODOS os cards dela acabaram", async () => {
+    const h = harness();
+    liveConductor(h, "story-ex9360", { batch: { id: "lote-y", featureKey: "f1", cardIds: ["story-ex9361"], dropped: [] } });
+    h.cards.set("story-ex9360", typed("story-ex9360", "bug", "concluida"));
+    h.cards.set("story-ex9361", typed("story-ex9361", "bug", "desenvolver"));
+    const s = h.sessions[0];
+    expect((await finishedConductors(h.deps, [s])).has(s.sessionId)).toBe(false);
+    h.cards.set("story-ex9361", typed("story-ex9361", "bug", "concluida"));
+    expect((await finishedConductors(h.deps, [s])).get(s.sessionId)).toMatch(/todos os itens do lote acabaram/);
+    // líder derrubado (sem driver) com item aberto: a sessão acaba e os itens são do fim da sessão
+    h.cards.set("story-ex9361", typed("story-ex9361", "bug", "desenvolver"));
+    h.cards.set("story-ex9360", coerceCard("story-ex9360", { type: "story", storyType: "bug", status: "desenvolver" }, ""));
+    expect((await finishedConductors(h.deps, [s])).has(s.sessionId)).toBe(true);
+    expect(batchLeadDropped(s, h.cards.get("story-ex9360") ?? null, h.config.value)).toBe(true);
+  });
+
+  it("o fim de cada sessão (tudo entregue) pede a limpeza da marca do lote", async () => {
+    const h = harness();
+    liveConductor(h, "story-ex9365", { batch: { id: "lote-z", featureKey: "f1", cardIds: ["story-ex9366"], dropped: [] } });
+    liveConductor(h, "story-ex9367");
+    for (const id of ["story-ex9365", "story-ex9366", "story-ex9367"]) h.cards.set(id, typed(id, "bug", "concluida"));
+    let t = Date.UTC(2026, 8, 29, 12, 0);
+    const cleared: string[] = [];
+    const deps: ConductorEndDeps = {
+      sessions: h.deps.sessions,
+      liveTmux: h.deps.liveTmux,
+      heartbeatAlive: h.deps.heartbeatAlive,
+      readCard: h.deps.readCard,
+      readBoardConfig: h.deps.readBoardConfig,
+      workSettled: async () => ({ settled: true, detail: "integrado" }),
+      requestExit: async () => true,
+      kill: async () => {},
+      releaseClaims: async () => {},
+      clearBatchMarks: async (s) => void cleared.push(s.cardId as string),
+      state: new Map(),
+      now: () => t,
+      log: () => {},
+    };
+    await endFinishedConductors(deps);
+    t += CONDUCTOR_END_GRACE_MS;
+    const rep = await endFinishedConductors(deps);
+    expect(rep.exited).toHaveLength(2);
+    expect(cleared.sort()).toEqual(["story-ex9365", "story-ex9367"]);
+  });
+
+  it("findFeatureHolder: a sessão viva antes da entrega no train, e a própria sessão não se bloqueia", () => {
+    const cands = [
+      { board: "b", sessionId: "run-1", cardId: "story-ex9370", via: "handoff" as const, featureKeys: ["f1"] },
+      { board: "b", sessionId: "s-2", cardId: "story-ex9371", via: "session" as const, featureKeys: ["f1", "f2"] },
+    ];
+    expect(findFeatureHolder(cands, "f1")).toEqual({ sessionId: "s-2", cardId: "story-ex9371", via: "session" });
+    expect(findFeatureHolder(cands, "f1", "s-2")).toEqual({ sessionId: "run-1", cardId: "story-ex9370", via: "handoff" });
+    expect(findFeatureHolder(cands, "f3")).toBeNull();
+  });
+
+  it("a tarefa da retomada dividida manda refazer o branch só com os commits do líder", () => {
+    expect(conductorHandoffTask("b", "story-ex9380", { runId: "r", status: "gate-failed", split: true })).toMatch(/DIVIDIU o lote.*Card: story-ex9380/);
   });
 });

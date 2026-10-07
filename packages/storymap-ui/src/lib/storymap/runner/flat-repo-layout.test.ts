@@ -22,7 +22,7 @@
 // encontrada, e o veredito mais fraco sobrevive) — não é perda de trabalho. Mas um sinal de "encalhado"
 // que mente é o sinal pelo qual o operador age.
 import { execFileSync, exec as nodeExec } from "node:child_process";
-import { promises as fsp, readFileSync } from "node:fs";
+import { existsSync, promises as fsp, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -191,13 +191,16 @@ describe("[CLASSE] a forma do repositório é DECLARADA, nunca fixada na fonte",
   // `engine.ts` e `instrumentation.ts` passavam `stageBranch: "stage"` explicitamente, o que SOBRESCREVE
   // o default e derrotava a correção em produção, enquanto o teste de comportamento (que chama sem opts)
   // ficava verde. Um guarda de fonte é o que fecha essa fresta.
-  const fontes = execFileSync("git", ["ls-files", "src"], {
-    cwd: new URL("../../../../", import.meta.url).pathname,
+  // O censo é a ÁRVORE DE TRABALHO, não só o índice: um arquivo apagado e ainda não commitado sai (lê-lo daria
+  // ENOENT), e um arquivo novo ainda não adicionado entra (senão escaparia do guarda até o commit).
+  const pastaDoPacote = new URL("../../../../", import.meta.url).pathname;
+  const fontes = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "src"], {
+    cwd: pastaDoPacote,
     encoding: "utf8",
   })
     .split("\n")
     .map((l) => l.trim())
-    .filter((p) => /\.tsx?$/.test(p) && !/\.test\.tsx?$/.test(p));
+    .filter((p) => /\.tsx?$/.test(p) && !/\.test\.tsx?$/.test(p) && existsSync(`${pastaDoPacote}${p}`));
 
   const semComentario = (t: string) =>
     t

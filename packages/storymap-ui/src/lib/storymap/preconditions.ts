@@ -87,6 +87,24 @@ export function runSkillRefusal(card: Pick<Card, "status" | "routing"> | null | 
 }
 
 /**
+ * Por que «Sincronizar» (syncCardAction — roda o harness-sync-card, que reescreve os campos do card e o REPOSICIONA) não
+ * rodaria neste card agora — ou null. As MESMAS recusas de «Rodar» que valem para qualquer coluna (o sync não depende da
+ * skill da coluna): o card CONDUZIDO (o sync reposicionaria por baixo de uma sessão que é dona do card e do lugar dele) e o
+ * card ADIADO (nada roda num card «não agora» até ele voltar). Fase 6 (6D) — antes o botão passava por cima das duas.
+ */
+export function syncRefusal(card: Pick<Card, "routing" | "deferred"> | null | undefined): string | null {
+  if (!card) return null;
+  if (card.deferred) return "Este card está adiado (não agora): nada roda nele até você trazê-lo de volta ao fluxo.";
+  if (isConducted(card)) {
+    return (
+      "Este card é conduzido por uma sessão condutora: o «Sincronizar» reescreveria e moveria o card por baixo dela. " +
+      "Fale com o condutor (ou peça ao Jido), ou pare o condutor / devolva o card ao fluxo antes de sincronizar."
+    );
+  }
+  return null;
+}
+
+/**
  * Por que «Re-publicar»/«Tentar de novo» (republishCardAction — re-roda o efeito de entrada do passo ONDE o card
  * está) não valeria agora — ou null. Só vale para um card parado num passo que declara efeito de entrada.
  */

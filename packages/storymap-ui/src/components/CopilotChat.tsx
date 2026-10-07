@@ -7,13 +7,14 @@
 // answers grounded — it recommends actions (the human/tick acts), never deploys/deletes on its own.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChatPanel, type ChatSendApi } from "@/components/chat/ChatPanel";
+import { ChatPanel, type ChatSendApi, type ExternalComposer } from "@/components/chat/ChatPanel";
+import { escalationRefLabel } from "@/components/chat/jido-context";
 import { NoticeBand } from "@/components/chat/ChatOutbox";
 import { BTN_GHOST, TXT } from "@/components/copilot/ui";
 import { cn } from "@/lib/cn";
 import { scariestRisk, type FaceSignals } from "@/lib/storymap/copilot/face";
 import type { CopilotStatusLevel } from "@/lib/storymap/copilot/copilot-status";
-import { CopilotChatControls } from "@/components/copilot/CopilotChatControls";
+import { CopilotChatControls, CopilotStatusProbe } from "@/components/copilot/CopilotChatControls";
 import { CopilotActivityFeed } from "@/components/copilot/CopilotActivityFeed";
 import { publishCopilotFace } from "@/components/copilot/face-bus";
 import {
@@ -26,7 +27,6 @@ import {
 import { answerQuestionAction, approveActionRequestAction, rejectActionRequestAction } from "@/app/actions";
 // WS-1 — escalation seed: composer prefill + item context (D4/D10).
 import type { CopilotSeed } from "@/lib/storymap/copilot/escalation-seed";
-import type { EscalationRef } from "@/lib/storymap/copilot/escalation";
 import {
   questionChipOptions,
   parseQuestionChipId,
@@ -35,46 +35,22 @@ import {
   type OpenQuestionRef,
 } from "@/lib/storymap/hitl/question-chips";
 import type { HitlTurn } from "@/lib/storymap/hitl/types";
+import { greetingSummary, inboxForGreeting, needsYouForBoard } from "@/lib/storymap/inbox/needs-you";
+import { readInboxSummary } from "@/components/useInboxSummary";
 
 // A FILA DE SAÍDA mudou de casa (components/chat/ChatOutbox): ela é corpo de QUALQUER conversa, e o núcleo
 // compartilhado precisa dela — deixá-la aqui faria o núcleo importar do seu próprio consumidor. Re-exportada
 // para não quebrar quem já a importava daqui.
 export { OutboxList } from "@/components/chat/ChatOutbox";
 
-/** WS-1 — a short, client-side label of an escalated item for the greeting line ("Item escalado: **…**").
- *  Uses only the ref's inocuous ids (the richer itemContextTitle needs the card, which loads server-side). */
-function refLabel(ref: EscalationRef): string {
-  switch (ref.kind) {
-    case "merge":
-      return `merge do run ${ref.runId}`;
-    case "run":
-      return `run do card ${ref.cardId}`;
-    case "deploy":
-      return `deploy do card ${ref.cardId}`;
-    case "finding":
-      return `bloqueio ${ref.findingId}`;
-    case "question":
-      return `pergunta do card ${ref.cardId}`;
-    case "branch":
-      return `branch ${ref.branch}`;
-    case "process":
-      return `sessão ${ref.session}`;
-    case "approval":
-      return `aprovação ${ref.approvalId}`;
-    case "governance":
-      return `draft ${ref.draftId}`;
-    case "move-blocked":
-      return `move para ${ref.target}`;
-    default:
-      return `card ${ref.cardId}`;
-  }
-}
+// O rótulo curto do item escalado ("Item escalado: **…**") mora em chat/jido-context — o MESMO nome que o chip
+// "Sobre <…>" do compositor do Jido mostra, numa função pura que os dois leem.
 
 /**
  * O CHAT em si, sem casca — layout-agnóstico: ocupa a altura que o host der.
  *
- * Duas cascas o usam: {@link CopilotChat} (o drawer overlay de sempre, montado pelo BoardHeader em
- * toda view) e o rail fixo de 492px da home. A regra que separa as duas é "montado = aberto": aqui
+ * Cascas que o usam: a conversa por cima da tela do compositor do Jido (chat/ChatOverlay, aberta pelo
+ * JidoComposer fixo no rodapé — com `externalComposer`) e um rail fixo. A regra que vale para todas é "montado = aberto": aqui
  * não existe prop `open` — o host monta quando quer conversa e desmonta quando não quer, e é o
  * desmonte que solta o lease de pareamento.
  *
@@ -83,7 +59,7 @@ function refLabel(ref: EscalationRef): string {
  *
  * ⚠️ Uma instância POR ROTA. Cada thread instancia `useCopilotAgent`, que faz poll da sessão
  * COMPARTILHADA do board e adquire lease por turno; dois painéis montados na mesma tela brigam pelo
- * mesmo turno (409) e o desmonte de um solta o lease do outro. Quem monta o rail suprime o drawer.
+ * mesmo turno (409) e o desmonte de um solta o lease do outro. Quem monta o rail suprime o compositor.
  * Com a FILA DE SAÍDA a invariante ficou mais séria: os dois painéis compartilhariam a MESMA chave
  * de fila em sessionStorage (é por-aba, não por-componente), e dois pumps sobre a mesma fila podem
  * despachar o mesmo envio duas vezes. A fila restaurada nasce PAUSADA, o que segura o caso comum —
@@ -94,6 +70,8 @@ export function CopilotChatPanel({
   boardName,
   onClose,
   seed,
+  externalComposer,
+  className,
 }: {
   boardId: string;
   boardName: string;
@@ -101,6 +79,14 @@ export function CopilotChatPanel({
   onClose?: () => void;
   /** WS-1 (D4) — escalação de item: instrução pré-preenchida + ref. Ausente ⇒ comportamento atual. */
   seed?: CopilotSeed;
+  /**
+   * O compositor do Jido mora FORA do painel (fixo no rodapé, a conversa aberta por cima da tela — ver
+   * chat/JidoComposer). O painel segue dono da conversa inteira e só entrega a mão que digita (ver
+   * `ChatComposerApi`). Nesse modo o host cuida da saída (Esc, "Fechar"): não passe `onClose`.
+   */
+  externalComposer?: ExternalComposer;
+  /** a moldura do painel; default o fundo de superfície (a conversa por cima do véu do Jido passa transparente). */
+  className?: string;
 }) {
   const [context, setContext] = useState<string | null>(null);
   // WS-1 — o contexto do ITEM escalado (bloco "## Item escalado", entra DENTRO do <contexto>) + a instrução
@@ -164,18 +150,18 @@ export function CopilotChatPanel({
           /* fail-soft */
         });
     }
-    void copilotContextAction(boardId)
-      .then((res) => {
+    // O número de «itens para decidir» vem do INBOX (o mesmo resumo do ícone da barra), não da contagem crua do
+    // cockpit que o contexto traz — senão o Jido dizia «19» com o Inbox em 0 (lib/storymap/inbox/needs-you.ts).
+    // A leitura do Inbox tem PRAZO (`inboxForGreeting`, 1,5 s): ela varre todos os boards e não pode segurar o
+    // «Lendo o board…» — lenta ou com erro, a saudação sai sem número.
+    void Promise.all([copilotContextAction(boardId), inboxForGreeting(readInboxSummary)])
+      .then(([res, inbox]) => {
         if (!alive) return;
         setOpenQuestions(res.openQuestions); // 3.1 — kept so a chip click maps back to the card question
         setPendingApprovals(res.pendingApprovals); // F5.8 — aprovações do tick autônomo, acionáveis inline
         const nQ = res.openQuestions.length;
         const nA = res.pendingApprovals.length;
-        const bits: string[] = [];
-        if (res.needsYouCount) bits.push(`${res.needsYouCount} ${res.needsYouCount === 1 ? "item" : "itens"} para revisar`);
-        if (nQ) bits.push(`${nQ} pergunta${nQ === 1 ? "" : "s"} em aberto`);
-        if (nA) bits.push(`${nA} açã${nA === 1 ? "o" : "ões"} do Jido aguardando aprovação`);
-        const summary = bits.length ? `Você tem ${bits.join(", ")}.` : "Nada urgente no momento.";
+        const summary = greetingSummary({ needsYou: needsYouForBoard(inbox, boardId), questions: nQ, approvals: nA });
         // F6.2 — SEM parede de chips: perguntas e aprovações NÃO viram N chips no greeting. Viram AÇÕES
         // (a lista aparece atrás de UM toque). Sentinels tratados no handleSend do CopilotThread.
         const actions = [
@@ -192,11 +178,11 @@ export function CopilotChatPanel({
           : nQ
             ? "Posso listar as perguntas para você responder, ou eu mesmo apuro as que dá (código/dados) e proponho — você decide as de produto. Ou pergunte o status / peça uma recomendação."
             : "Pergunte o status, peça uma recomendação, ou me diga o que fazer.";
-        const seedLine = seed ? `Item escalado: **${refLabel(seed.ref)}**. ` : "";
+        const seedLine = seed ? `Item escalado: **${escalationRefLabel(seed.ref)}**. ` : "";
         setGreeting([
           {
             role: "agent",
-            message: `${seedLine}Oi — sou o Jido do board **${boardName}**. ${summary} ${invite}`,
+            message: `${seedLine}Oi — sou o Jido do board **${boardName}**. ${summary ? `${summary} ` : ""}${invite}`,
             options: actions.length ? actions : undefined,
             mode: "single",
             // As três perguntas que o operador faz o tempo todo, a um toque. Elas não são "opções de uma
@@ -254,7 +240,8 @@ export function CopilotChatPanel({
     // topnav da aplicação, que fica visível o tempo todo e agora também fala; repeti-los aqui era moldura
     // dizendo o que a tela inteira já diz. E os CONTROLES (modo + engrenagem), que desceram para a barra de
     // ações do composer, junto do anexo e do anel de contexto: o que se opera fica na mão, não na testa.
-    <div className="flex h-full min-h-0 flex-col bg-surface">
+    <div className={cn("flex h-full min-h-0 flex-col", className ?? "bg-surface")}>
+        {externalComposer && <CopilotStatusProbe boardId={boardId} onStatus={handleStatus} />}
         <div className="min-h-0 flex-1">
           {/* Os dois estados de espera são TEXTO, não rosto: o mascote mora no topnav e já reage lá em cima —
               um rosto de 92px no meio do painel duplicaria o mesmo sinal a 40px de distância do original. */}
@@ -295,8 +282,16 @@ export function CopilotChatPanel({
               // o board. Eles vão para a barra do TOPO: o modo é o que governa a conversa inteira (o que o
               // Jido faz sem você), e essa decisão pertence a onde a leitura começa, não à mão que digita.
               // `placement="down"` porque um popover ancorado no topo tem de abrir para baixo.
-              controls={<CopilotChatControls boardId={boardId} placement="down" onStatus={handleStatus} />}
+              //
+              // Com o compositor de FORA (a conversa por cima da tela do Jido) os controles NÃO aparecem: o desenho
+              // só tem "Fechar" no canto (e o histórico/nova conversa ao lado dele). A autonomia vira UM controle na
+              // fase 4; o modelo e o esforço seguem no `/model`. O que os controles LIAM (o nível do board, o tick
+              // rodando — o rosto e o diário dependem disso) continua chegando pela sonda sem tela (`CopilotStatusProbe`, na raiz deste painel).
+              controls={
+                externalComposer ? undefined : <CopilotChatControls boardId={boardId} placement="down" onStatus={handleStatus} />
+              }
               onClose={onClose}
+              externalComposer={externalComposer}
             />
           )}
         </div>
@@ -304,48 +299,8 @@ export function CopilotChatPanel({
   );
 }
 
-/**
- * O DRAWER de sempre — a casca overlay em volta do {@link CopilotChatPanel}. Assinatura preservada
- * (`open`/`onClose` obrigatórios) para as ~18 views que o montam pelo BoardHeader não mudarem nada.
- *
- * `open=false` DESMONTA o painel (em vez de escondê-lo): é o desmonte que solta o lease de pareamento
- * e para o poll da sessão — um painel fechado-mas-montado seguraria o tick achando que você está no
- * comando.
- */
-export function CopilotChat({
-  boardId,
-  boardName,
-  open,
-  onClose,
-  seed,
-}: {
-  boardId: string;
-  boardName: string;
-  open: boolean;
-  onClose: () => void;
-  seed?: CopilotSeed;
-}) {
-  if (!open) return null;
-  return (
-    <div
-      // A gaveta começa ABAIXO do topnav (`--ah-topbar-h`, publicada pelo TopBar), não em `inset-0`.
-      // Com o mascote morando só na barra, um backdrop escuro+borrado por cima dela apagava a única cara
-      // do Jido exatamente enquanto ele trabalha — e "sempre visível no topnav" deixava de ser verdade na
-      // hora que mais importa. Agora a faixa do topo fica nítida (e alcançável: dá para trocar de board ou
-      // de seção sem fechar a conversa) e o escurecimento cobre só o que a gaveta de fato substitui.
-      // Fallback `0px`: sem a variável (SSR, ou um host que não monte o TopBar) é o comportamento antigo.
-      className="fixed inset-x-0 bottom-0 top-[var(--ah-topbar-h,0px)] z-50 flex justify-end"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Jido do board"
-    >
-      <button className="absolute inset-0 bg-black/40 backdrop-blur-sm" aria-label="Fechar" onClick={onClose} />
-      <div className="relative flex h-full w-full max-w-md flex-col border-l border-line shadow-2xl">
-        <CopilotChatPanel boardId={boardId} boardName={boardName} onClose={onClose} seed={seed} />
-      </div>
-    </div>
-  );
-}
+// (O DRAWER overlay — `CopilotChat`, a gaveta que o BoardHeader abria pelo Jido do centro da barra — saiu na fase 1: a
+// conversa do board abre pelo compositor fixo no rodapé, chat/JidoComposer → ChatOverlay, sobre este MESMO painel.)
 
 /**
  * O COCKPIT do board sobre o núcleo compartilhado ({@link ChatPanel}).
@@ -373,6 +328,7 @@ function CopilotThread({
   seedItemContext,
   controls,
   onClose,
+  externalComposer,
 }: {
   context: string;
   greeting: HitlTurn[];
@@ -393,6 +349,8 @@ function CopilotThread({
   controls?: React.ReactNode;
   /** presente ⇒ o host oferece saída: o ✕ entra na barra do composer (o painel não tem mais header). */
   onClose?: () => void;
+  /** o compositor de fora (chat/JidoComposer) — repassado ao núcleo. */
+  externalComposer?: ExternalComposer;
 }) {
   // WS-1 (D4) — seed lifecycle: prefill the composer, inject the item context into <contexto>, consume the seed
   // on the first completed turn. ALL additive — no seed ⇒ inert.
@@ -598,7 +556,9 @@ function CopilotThread({
       context={context}
       greeting={greeting}
       getContext={getContext}
-      placeholder={answering ? "Responda a pergunta acima…" : "Pergunte ou instrua o Jido…"}
+      // Com o compositor de FORA, só o modo resposta pede um placeholder próprio — fora dele o compositor do Jido
+      // mantém o convite dele ("Pergunte ao Jido ou digite / para comandos").
+      placeholder={answering ? "Responda a pergunta acima…" : externalComposer ? undefined : "Pergunte ou instrua o Jido…"}
       draft={draft}
       // `tickRunning` acelera o poll near-live: enquanto o ciclo autônomo escreve na sessão COMPARTILHADA, o
       // trabalho dele chega ao painel no ritmo do poll — 5s é o ritmo de fundo, não o de assistir alguém trabalhar.
@@ -606,6 +566,7 @@ function CopilotThread({
       onSignals={setTurnSignals}
       onIntercept={onIntercept}
       onClose={onClose}
+      externalComposer={externalComposer}
       slots={{
         // WS-4.2 — aviso PERSISTENTE de ciclo autônomo EM VOO. Com os dois slots de lease independentes, um run
         // autônomo iniciado ANTES de o operador parear continua terminando enquanto o chat está aberto; ele
@@ -625,8 +586,11 @@ function CopilotThread({
         controls,
         // O diário do Jido autônomo: faixa de uma linha ancorada acima do composer, e só quando o board está em
         // modo autônomo. TODA decisão dele continua a um toque; o que ele deixou de fazer é roubar 60px
-        // permanentes do transcript num modo (Chat) em que ele nem age sozinho.
-        beforeComposer: autonomous ? <CopilotActivityFeed boardId={boardId} /> : null,
+        // permanentes do transcript num modo (Chat) em que ele nem age sozinho. Na CONVERSA SOBRE A TELA (o
+        // compositor do rodapé, `externalComposer`) a faixa sai: o desenho não a tem, o mesmo diário já mora na
+        // Atividade da 2ª barra do Kanban (em palavras simples e com a marca de quem fez), e no celular a faixa
+        // fixa cobria a última sugestão da conversa.
+        beforeComposer: autonomous && !externalComposer ? <CopilotActivityFeed boardId={boardId} /> : null,
         // O ciclo autônomo trabalhando, VISÍVEL no corpo — o banner do topo diz que ele existe; esta linha fica
         // onde o trabalho dele aparece (os turnos que o poll near-live adota), e some quando ele termina.
         systemWorking: autonomousRunning ? "o Jido está trabalhando sozinho…" : null,

@@ -12,7 +12,7 @@ import type { StoryType } from "../frameworks";
  * One card the agent proposes to create. `parent` may reference an EXISTING card id
  * OR the `tempId` of another proposed item (so the agent can propose a new
  * activity/step and hang stories under it in the same batch) OR be null (unplaced
- * → kanban backlog). RICE/enrichment is a later stage; narrative/acceptance/body
+ * → kanban backlog). Enrichment is a later stage; narrative/acceptance/body
  * are optional seeds — only propagated when the source text already contains them.
  */
 /**
@@ -104,7 +104,6 @@ export interface ProposedItem {
   candidateSolutions?: string[];
   keyAssumption?: string | null;
   successSignal?: string | null;
-  valueSize?: { reach: number | null; impact: number | null } | null;
 }
 
 /**

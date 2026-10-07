@@ -121,14 +121,10 @@ The card must be `status: refinar` with `mode: refine` and a non-empty
    re-derivation of the whole feature. Keep them verifiable (Gherkin recommended). Keep
    `narrative` unless the brief changes the intent. Keep `mode: refine`.
 
-   **Priority (type-aware WSJF — see `storymap/frameworks.md` §4):**
-   - **NEW melhoria** (came from the Triagem, no prior feature prioritization): set the leve
-     melhoria axes — `rice.impact` (escala {0.25,0.5,1,2,3}) + `rice.effort` (> 0). These
-     yield the melhoria's `priorityScore` in the unified backlog. Leave reach/confidence/
-     kano/funnel unset (a melhoria isn't a feature).
-   - **REOPENED refine** (the card already has the shipped feature's `rice`/`kano`/
-     `funnelStage`): **PRESERVE** them untouched — the card keeps its original feature
-     `priorityScore`. See the guardrail.
+   **No priority to set.** There is no prioritization step and no priority field: the order
+   of the work is the card's POSITION in its Kanban column (the owner moves it with «Fazer
+   antes» / «Pode esperar»). Never invent RICE/KANO/funnel fields (they no longer exist; an
+   old card may still carry them in the frontmatter — leave them, nothing reads them).
 
    This new `acceptance` is the source of truth the task reconciliation in step 4 derives from.
 
@@ -158,11 +154,10 @@ The card must be `status: refinar` with `mode: refine` and a non-empty
    - **Plan sidecar:** if the delta changes architecture/data/contracts (aggressive
      functionality or a `fresh-slate` redesign), flag in `## Refino` that `plans/<id>.md` is
      stale and the build must revisit it; a surgical refine needs no replan.
-   **Why not route through `quebrar-tasks`/`priorizar`?** See the canonical rationale in
+   **Why not route through `quebrar-tasks`?** See the canonical rationale in
    **`@.claude/skills/harness-triage-shared/GUARDRAILS.md`** ("Por que não rotear por
-   quebrar-tasks/priorizar") — those columns auto-run `harness-prioritize`, which would
-   overwrite the already-decided `rice`/`kano`/`funnelStage`. Refine keeps the original
-   prioritization and reconciles tasks IN-PLACE here instead.
+   quebrar-tasks") — the refine reconciles tasks IN-PLACE here instead of re-entering the
+   shaping steps the shipped story already passed.
 
    **Per-instance skip routing (`card.routing.skips`) — only for an AMBIGUOUS mixed-kind refine.**
    The cascade decides which steps a refine BYPASSES deterministically: a refine/fix always skips
@@ -187,8 +182,8 @@ The card must be `status: refinar` with `mode: refine` and a non-empty
 
 Os guardrails comuns de reabertura e o ciclo de vida do `mode` são canônicos em
 **`@.claude/skills/harness-triage-shared/GUARDRAILS.md`** — leia-os: nunca recriar do zero ·
-reconciliar as build tasks (nunca deixar vazar) · uma reabertura não re-prioriza a story
-entregue · read-only no código de produto · **manter `mode: refine`** (quem o limpa é o
+reconciliar as build tasks (nunca deixar vazar) · uma reabertura não volta ao começo da
+fila nem ganha nota (a vez é a posição na coluna) · read-only no código de produto · **manter `mode: refine`** (quem o limpa é o
 `harness-qa` em `qa-automatizado → revisao`, NÃO o `harness-review`) · não auto-executar escritas
 de código · nunca tocar `packages/storymap-ui/`.
 

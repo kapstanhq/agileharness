@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   applyActiveProviders,
   buildCapabilityNote,
@@ -237,6 +240,39 @@ describe("the live _base board satisfies its own contract", () => {
     for (const board of subjectBoards()) {
       const cfg = (await readBoardConfig(board)) as BoardConfig;
       expect(lintToolkit(cfg).errors, board).toEqual([]);
+    }
+  });
+});
+
+// quick-fix cleanup (b): a rota reserva do QA visual (`scripts/visual-sweep.mjs`) resolvia o Playwright a partir do
+// diretório DA FERRAMENTA — que não o declara — e por isso o probe falhava no host mesmo com o produto tendo o
+// Playwright instalado. A ordem agora é: o alvo, o cwd do run, e só então a ferramenta.
+describe("visual-sweep — onde o Playwright é procurado", () => {
+  const fakePlaywright = (marker: string): string => {
+    const base = mkdtempSync(path.join(os.tmpdir(), "ah-pw-"));
+    const pkg = path.join(base, "node_modules", "playwright");
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(path.join(pkg, "package.json"), JSON.stringify({ name: "playwright", main: "index.js" }));
+    writeFileSync(path.join(pkg, "index.js"), `module.exports = { chromium: ${JSON.stringify(marker)} };`);
+    return base;
+  };
+
+  it("a ordem: alvo declarado, cwd do run, ferramenta — sem repetição", async () => {
+    const { playwrightSearchBases } = await import("../../../../../scripts/visual-sweep.mjs");
+    expect(playwrightSearchBases({ target: "/srv/alvo", cwd: "/srv/alvo", scriptDir: "/opt/ferramenta/scripts" })).toEqual(["/srv/alvo", "/opt/ferramenta/scripts"]);
+    expect(playwrightSearchBases({ target: undefined, cwd: "/srv/wt", scriptDir: "/opt/ferramenta/scripts" })).toEqual(["/srv/wt", "/opt/ferramenta/scripts"]);
+  });
+
+  it("carrega do PRIMEIRO lugar que resolve (o produto vence a ferramenta); sem nenhum, o erro nomeia todos", async () => {
+    const { loadPlaywright } = await import("../../../../../scripts/visual-sweep.mjs");
+    const alvo = fakePlaywright("do-alvo");
+    const ferramenta = fakePlaywright("da-ferramenta");
+    const vazio = mkdtempSync(path.join(os.tmpdir(), "ah-pw-vazio-"));
+    try {
+      expect(loadPlaywright([vazio, alvo, ferramenta])).toMatchObject({ from: alvo, playwright: { chromium: "do-alvo" } });
+      expect(() => loadPlaywright([vazio])).toThrow(new RegExp(`procurei em: ${vazio.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    } finally {
+      for (const d of [alvo, ferramenta, vazio]) rmSync(d, { recursive: true, force: true });
     }
   });
 });

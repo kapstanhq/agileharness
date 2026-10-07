@@ -5,10 +5,9 @@
 // normal de qualquer documento que ainda não ganhou (ou nunca vai ganhar) um arranjo próprio: o
 // quadro cai no fluxo automático e continua servindo.
 //
-// TESTE DO APAGAMENTO, na prática: apague este arquivo inteiro. O Lean Canvas continua abrindo em
-// documento, markdown, tabela e quadro — só perde as 5 colunas do arranjo clássico. Nada fica
-// órfão, porque nada do CONTEÚDO dependia daqui. Foi para isto que as strings de grid saíram do
-// registro de blocos.
+// TESTE DO APAGAMENTO, na prática: apague este arquivo inteiro. O Business Model Canvas continua abrindo no
+// quadro — só perde a grade clássica de Osterwalder e cai no fluxo automático. Nada fica órfão, porque nada do
+// CONTEÚDO dependia daqui. Foi para isto que as strings de grid saíram do registro de blocos.
 //
 // ⚠️ As classes são LITERAIS de propósito: o Tailwind varre texto de fonte, então uma
 // `lg:col-start-${n}` computada nunca seria gerada.
@@ -30,27 +29,33 @@ export interface BoardLayout {
 }
 
 /**
- * O Lean Canvas clássico (Ash Maurya): 5 colunas, três blocos altos (problema, proposta de valor e
- * segmentos ocupam duas linhas) e a faixa larga de custos/receita embaixo.
+ * O Business Model Canvas clássico (Osterwalder): na linha de cima, cinco colunas — Parcerias | Atividades sobre
+ * Recursos | Proposta de valor | Relacionamento sobre Canais | Segmentos —, com Parcerias, Proposta e Segmentos
+ * ocupando as duas linhas; embaixo, duas metades — Custos | Receitas. A grade tem 10 trilhas para as metades de
+ * baixo caberem sem meia coluna. Abaixo de `lg` nada é posicionado: o quadro vira LISTA na ordem do schema, que é a
+ * ordem de preenchimento (segmentos → proposta → canais → … → custos).
  */
-const LEAN_CANVAS_LAYOUT: BoardLayout = {
-  docType: "lean-canvas",
-  container: "lg:grid-cols-5 lg:grid-rows-[repeat(2,minmax(0,1fr))_auto]",
+const BMC_LAYOUT: BoardLayout = {
+  docType: "business-model-canvas",
+  // linhas pelo CONTEÚDO (auto) e cada célula do tamanho dela (`self-start`): com linhas iguais (`1fr`) uma Proposta
+  // de valor longa esticava as células curtas ao lado (Parcerias, Relacionamento) em centenas de px de cartão vazio
+  container: "lg:grid-cols-10 lg:grid-rows-[auto_auto_auto]",
   cells: {
-    problem: "lg:col-start-1 lg:row-start-1 lg:row-span-2",
-    solution: "lg:col-start-2 lg:row-start-1",
-    keyMetrics: "lg:col-start-2 lg:row-start-2",
-    uniqueValueProposition: "lg:col-start-3 lg:row-start-1 lg:row-span-2",
-    unfairAdvantage: "lg:col-start-4 lg:row-start-1",
-    channels: "lg:col-start-4 lg:row-start-2",
-    customerSegments: "lg:col-start-5 lg:row-start-1 lg:row-span-2",
-    costStructure: "lg:col-start-1 lg:col-span-3 lg:row-start-3",
-    revenueStreams: "lg:col-start-4 lg:col-span-2 lg:row-start-3",
+    keyPartners: "lg:col-start-1 lg:col-span-2 lg:row-start-1 lg:row-span-2 lg:self-start",
+    keyActivities: "lg:col-start-3 lg:col-span-2 lg:row-start-1 lg:self-start",
+    keyResources: "lg:col-start-3 lg:col-span-2 lg:row-start-2 lg:self-start",
+    valuePropositions: "lg:col-start-5 lg:col-span-2 lg:row-start-1 lg:row-span-2 lg:self-start",
+    customerRelationships: "lg:col-start-7 lg:col-span-2 lg:row-start-1 lg:self-start",
+    channels: "lg:col-start-7 lg:col-span-2 lg:row-start-2 lg:self-start",
+    customerSegments: "lg:col-start-9 lg:col-span-2 lg:row-start-1 lg:row-span-2 lg:self-start",
+    costStructure: "lg:col-start-1 lg:col-span-5 lg:row-start-3 lg:self-start",
+    revenueStreams: "lg:col-start-6 lg:col-span-5 lg:row-start-3 lg:self-start",
   },
-  compact: ["keyMetrics", "channels", "unfairAdvantage", "costStructure", "revenueStreams"],
+  // sem `compact`: os nove blocos leem os itens do MESMO jeito (nota) — três blocos em texto miúdo ao lado de seis em
+  // cartão pareciam outro tipo de conteúdo, e não eram
 };
 
-const LAYOUTS: readonly BoardLayout[] = [LEAN_CANVAS_LAYOUT];
+const LAYOUTS: readonly BoardLayout[] = [BMC_LAYOUT];
 
 /** O arranjo declarado deste docType, ou `null` — e `null` é um caminho de primeira classe. */
 export function boardLayoutFor(docType: string): BoardLayout | null {

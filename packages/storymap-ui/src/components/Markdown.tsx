@@ -64,7 +64,7 @@ const SCALES: Record<MarkdownVariant, MarkdownScale> = {
   doc: {
     h1: `mb-4 mt-0 ${DOC.title} text-fg`,
     // SEM `first:mt-0` (a compacta mantém): na superfície-documento um bloco de prosa raramente é o
-    // primeiro — `## Notas de execução` e `## Priorização` são ilhas <Markdown> próprias depois do
+    // primeiro — `## Notas de execução` e as demais seções são ilhas <Markdown> próprias depois do
     // canvas/bloqueios, e zerar o topo delas colava a seção na anterior. O `# título` já nasce mt-0.
     h2: `mb-2 mt-10 ${DOC.h1} text-fg`,
     h3: `mb-1.5 mt-8 ${DOC.h2} text-fg`,

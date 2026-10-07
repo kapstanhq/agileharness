@@ -1,116 +1,7 @@
 import { OWNER } from "./ownership.js";
 
-// Canonical prioritization frameworks — KANO (satisfaction shape) and the
-// AAARRR pirate funnel (business objective). These are FIXED, board-agnostic
-// vocabularies (unlike personas/systems/statuses in board.yaml): every board
-// classifies with the same categories so humans and agents stay consistent and
-// the agent rubric (storymap/frameworks.md) stays stable.
-//
-// RICE answers "how much bang per buck"; KANO answers "what kind of bet is it"
-// (must-have baseline vs linear lever vs delighter); the funnel answers "which
-// growth objective does it move" (acquisition … retention/churn … revenue).
-
-export type KanoCategory = "must-be" | "performance" | "attractive" | "indifferent" | "reverse";
-
-export interface KanoDef {
-  id: KanoCategory;
-  /** PT-BR display name */
-  name: string;
-  /** one-line meaning */
-  short: string;
-  /** what to do with stories in this category */
-  action: string;
-  color: string;
-}
-
-// Ordered from foundational → delight → cut. The lanes view renders in this order.
-export const KANO_CATEGORIES: KanoDef[] = [
-  {
-    id: "must-be",
-    name: "Must-be / Básico",
-    short: "Esperado: a ausência irrita, a presença não encanta.",
-    action: "Garanta todos — é o piso de qualidade.",
-    color: "#cc8585",
-  },
-  {
-    id: "performance",
-    name: "Performance / Linear",
-    short: "Quanto melhor, mais satisfação (proporcional).",
-    action: "Invista para competir; priorize por RICE.",
-    color: "#7e9ac2",
-  },
-  {
-    id: "attractive",
-    name: "Attractive / Encantador",
-    short: "Surpreende; a ausência não frustra.",
-    action: "Diferencie com alguns — gera encantamento e fidelidade.",
-    color: "#b08fc0",
-  },
-  {
-    id: "indifferent",
-    name: "Indiferente",
-    short: "Presença ou ausência não muda a satisfação.",
-    action: "Evite investir — não move a agulha.",
-    color: "#8f99a8",
-  },
-  {
-    id: "reverse",
-    name: "Reverso",
-    short: "Pode atrapalhar / irritar se presente ou exagerado.",
-    action: "Remova ou repense.",
-    color: "#9d9488",
-  },
-];
-
-export const KANO_BY_ID: Record<KanoCategory, KanoDef> = Object.fromEntries(
-  KANO_CATEGORIES.map((k) => [k.id, k]),
-) as Record<KanoCategory, KanoDef>;
-
-// AAARRR pirate funnel (Dave McClure + leading Awareness). Churn ↔ Retenção;
-// viralidade ↔ Referência.
-export type FunnelStage =
-  | "awareness"
-  | "acquisition"
-  | "activation"
-  | "retention"
-  | "referral"
-  | "revenue";
-
-export interface FunnelDef {
-  id: FunnelStage;
-  name: string;
-  short: string;
-  color: string;
-  /** funnel sequence position */
-  order: number;
-}
-
-export const FUNNEL_STAGES: FunnelDef[] = [
-  { id: "awareness", name: "Consciência", short: "Descobre que o produto existe.", color: "#9889c6", order: 10 },
-  { id: "acquisition", name: "Aquisição", short: "Vira usuário (signup, primeiro acesso).", color: "#5fa6a0", order: 20 },
-  { id: "activation", name: "Ativação", short: "Tem o primeiro valor (aha moment).", color: "#7daa76", order: 30 },
-  { id: "retention", name: "Retenção", short: "Volta e mantém o hábito (anti-churn).", color: "#9bab69", order: 40 },
-  { id: "referral", name: "Referência", short: "Convida e traz outros (viral / k-factor).", color: "#c4a261", order: 50 },
-  { id: "revenue", name: "Receita", short: "Paga / monetiza.", color: "#c389ab", order: 60 },
-];
-
-export const FUNNEL_BY_ID: Record<FunnelStage, FunnelDef> = Object.fromEntries(
-  FUNNEL_STAGES.map((f) => [f.id, f]),
-) as Record<FunnelStage, FunnelDef>;
-
-export const KANO_IDS = KANO_CATEGORIES.map((k) => k.id);
-export const FUNNEL_IDS = FUNNEL_STAGES.map((f) => f.id);
-
-export function isKanoCategory(v: unknown): v is KanoCategory {
-  return typeof v === "string" && (KANO_IDS as string[]).includes(v);
-}
-export function isFunnelStage(v: unknown): v is FunnelStage {
-  return typeof v === "string" && (FUNNEL_IDS as string[]).includes(v);
-}
-
 // ---------------------------------------------------------------------------
-// Story type (nature of a story) — a FIXED, board-agnostic vocabulary like KANO
-// and the funnel. RICE/KANO/funnel answer "how big / what bet / which objective";
+// Story type (nature of a story) — a FIXED, board-agnostic vocabulary.
 // `storyType` answers "what KIND of story is this", which in turn picks the
 // WRITING TEMPLATE for the narrative (Connextra for user-facing work; an
 // enabler/technical variant for infrastructure that has no direct user face).
@@ -422,11 +313,10 @@ export function isBugSeverity(v: unknown): v is BugSeverity {
 }
 
 // ---------------------------------------------------------------------------
-// Bug frequency (PRIORITIZE — bug kind) — how OFTEN the defect bites. The second
-// axis of a bug's Cost of Delay (severity × frequency × workaround), distinct from
+// Bug frequency (triage metadata) — how OFTEN the defect bites, distinct from
 // severity (how BAD when it bites). Board-agnostic fixed vocab, like BugSeverity.
 // Set on the card's first-class `frequency` field (by the triage agent or harness-fix);
-// feeds the WSJF `priorityScore` (see priority.ts + storymap/frameworks.md §4).
+// context for whoever fixes it — never a score (the work order is the column position).
 // Ordered worst → least so the segmented control reads top-down.
 // ---------------------------------------------------------------------------
 
@@ -438,16 +328,14 @@ export interface BugFrequencyDef {
   name: string;
   /** one-line meaning */
   short: string;
-  /** Cost-of-Delay multiplier (feeds the WSJF priorityScore) */
-  weight: number;
   color: string;
 }
 
 export const BUG_FREQUENCIES: BugFrequencyDef[] = [
-  { id: "always", name: "Sempre", short: "Acontece toda vez / para todo mundo.", weight: 1.5, color: "#c2706b" },
-  { id: "often", name: "Frequente", short: "Acontece com frequência ou para muitos.", weight: 1.2, color: "#cc8d63" },
-  { id: "sometimes", name: "Às vezes", short: "Intermitente ou em parte dos casos.", weight: 1.0, color: "#c4a261" },
-  { id: "rare", name: "Raro", short: "Caso de borda ou pouquíssimos usuários.", weight: 0.6, color: "#8f99a8" },
+  { id: "always", name: "Sempre", short: "Acontece toda vez / para todo mundo.", color: "#c2706b" },
+  { id: "often", name: "Frequente", short: "Acontece com frequência ou para muitos.", color: "#cc8d63" },
+  { id: "sometimes", name: "Às vezes", short: "Intermitente ou em parte dos casos.", color: "#c4a261" },
+  { id: "rare", name: "Raro", short: "Caso de borda ou pouquíssimos usuários.", color: "#8f99a8" },
 ];
 
 export const BUG_FREQUENCY_BY_ID: Record<BugFrequency, BugFrequencyDef> = Object.fromEntries(

@@ -3,7 +3,7 @@ id: story-chamado-historico
 type: story
 title: Ver o histórico do chamado
 storyType: user
-status: priorizar
+status: pronta
 parent: step-chamado
 release: r2
 personas:

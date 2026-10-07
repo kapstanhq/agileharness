@@ -83,6 +83,18 @@ async function registerImpl(): Promise<void> {
     console.error("[auth] FALHA ao preparar token/segredo de sessão — o serviço ficará trancado:", err);
   }
 
+  // OS DOCUMENTOS DOS BOARDS nos formatos novos (doc/migrate-board-docs.ts): PRD formato 1 → 2 + contexto.md,
+  // Lean Canvas → Business Model Canvas. ANTES do gate do motor: uma instância com o motor desligado também serve
+  // páginas e MCP, e sem isto nunca migraria. Idempotente (o que já migrou não é tocado), uma linha de log por
+  // arquivo, e NUNCA derruba o boot — o erro de um board vira log. Até aqui terminar, `loadDoc` já entrega a
+  // projeção nova em memória; e quem grava o PRD antes disto carrega o contexto junto (writeSchemaDoc).
+  try {
+    const { migrateAllBoardDocs } = await import("@/lib/storymap/doc/migrate-board-docs");
+    await migrateAllBoardDocs();
+  } catch (err) {
+    console.warn("[harness-boot] migração dos documentos dos boards falhou:", err instanceof Error ? err.message : err);
+  }
+
   // 0−−) O PORTÃO. Tudo daqui para baixo AGE sobre o repositório compartilhado — escreve o
   //      service.lock, remove worktree com `git worktree remove --force`, recupera o merge train
   //      (merge/push no mesmo `.git`), respawna runs, arma a fila que DEPLOYA e o tick que gasta.
@@ -383,6 +395,12 @@ async function registerImpl(): Promise<void> {
       } catch (err) {
         console.error("[harness-fleet] reconciliação falhou:", err instanceof Error ? err.message : err);
       }
+      // Fase 7 — a ÂNCORA (runner/feature-anchor.ts) pega carona no mesmo tick: no máximo a cada 5 min ela olha os boards
+      // com funcionalidades no PRD e abre UMA sessão (Sonnet) por board para ligar os cards sem funcionalidade. Solta (a
+      // sessão roda sozinha); obedece ao interruptor geral, à cota e ao ritmo do board. Nunca lança.
+      void import("@/lib/storymap/runner/feature-anchor")
+        .then((m) => m.maybeRunFeatureAnchor())
+        .catch((err) => console.error("[anchor] gatilho falhou:", err instanceof Error ? err.message : err));
     };
     const timer = setInterval(() => void tick(), fleetMs);
     timer.unref?.();
@@ -972,7 +990,8 @@ async function registerImpl(): Promise<void> {
         retryEtaMs,
         // A BORDA de "isto virou bloqueio". Um aviso só, na transição — nunca por tentativa (seriam
         // dezenas). `blocking` porque a publicação de fato não anda sem alguém: ou o trabalho sobreposto
-        // integra, ou alguém dispensa o embargo. Leva direto para a Entrega, onde ficam os dois botões.
+        // integra, ou alguém dispensa o embargo. Leva direto ao Inbox do board, onde o item «Publicação segurada» tem os
+        // dois botões (a Esteira saiu na fase 3).
         onBlocked: (req) => {
           publishAgentAlert({
             id: `publish-blocked-${req.id}`,
@@ -984,9 +1003,9 @@ async function registerImpl(): Promise<void> {
               `O pedido do board ${req.board} já foi adiado ${req.heldCount ?? 0}x. ` +
               (req.reason ?? "Sem motivo registrado."),
             tag: `publish-blocked-${req.board}`,
-            url: `/board/${req.board}/entrega`,
+            url: `/board/${req.board}/inbox`,
             boardId: req.board,
-            // se vai ao celular é a política de push (padrão: não — fica na tela aberta e na Entrega)
+            // se vai ao celular é a política de push (padrão: não — fica na tela aberta e no Inbox)
             event: "publish-blocked",
           });
         },

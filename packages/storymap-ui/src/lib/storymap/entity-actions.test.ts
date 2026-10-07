@@ -56,16 +56,8 @@ describe("entity-actions — o catálogo declarativo de ações", () => {
   // guarda pega o defeito, e não só descreve o conserto. Um teste de forma envelhece com o refactor; quando
   // ele quebrar por mudança legítima de shape, releia a intenção (o clique PERGUNTA) antes de afrouxar.
   const SURFACES: { file: string; mustNot: RegExp[]; why: string }[] = [
-    {
-      file: "../../components/IdeiasView.tsx",
-      mustNot: [/"generate-stories":\s*\{\s*run:\s*\(\)\s*=>\s*generateOne\(/],
-      why: "a linha da bancada disparava a captura no primeiro clique (o acidente)",
-    },
-    {
-      file: "../../components/IdeaDocActions.tsx",
-      mustNot: [/onClick=\{\s*run\s*\}/],
-      why: "o botão do documento chamava o executor direto",
-    },
+    // A bancada de Ideias e o documento de uma ideia (IdeiasView, IdeaDocActions) foram APAGADOS na fase 2 — a
+    // garantia segue na superfície que sobrou, e o teste abaixo prova que as duas não voltaram por baixo.
     {
       file: "../../components/SmartCaptureModal.tsx",
       mustNot: [
@@ -78,6 +70,12 @@ describe("entity-actions — o catálogo declarativo de ações", () => {
       why: "a modal disparava geração (em lote e por ideia) sem perguntar",
     },
   ];
+
+  it("as superfícies apagadas (bancada de Ideias) não voltaram", () => {
+    for (const gone of ["../../components/IdeiasView.tsx", "../../components/IdeaDocActions.tsx"]) {
+      expect(fs.existsSync(new URL(gone, import.meta.url)), `${gone} voltou — ele precisa do guarda do clique`).toBe(false);
+    }
+  });
 
   it.each(SURFACES)("$file: o clique PERGUNTA, não dispara", ({ file, mustNot, why }) => {
     const src = fs.readFileSync(new URL(file, import.meta.url), "utf8");

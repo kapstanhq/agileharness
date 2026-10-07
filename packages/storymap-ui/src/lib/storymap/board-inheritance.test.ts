@@ -104,6 +104,17 @@ describe("mergeRawConfig — pipeline merges by id, vocab is board-wins-else-bas
     expect(optOut.routeProfiles).toBeUndefined(); // NOT inherited (its own pipeline lacks the steps)
     expect(optOut.specialists).toEqual({ sec: { agent: "x", when: "y" } }); // registry still inherits
   });
+
+  // Fase 1 — the Kanban lanes (`view.lanes`) name pipeline steps too, so they follow the same gate; and a board's own
+  // view replaces the base's WHOLE (a lane map is not merged by id).
+  it("view (the lane map) is gated by inheritPipeline; a board's own view wins whole", () => {
+    const vBase = { view: { lanes: [{ id: "a", label: "A", statuses: ["s1"] }] } };
+    expect(mergeRawConfig(vBase, { id: "i" }).view).toEqual(vBase.view);
+    const own = { lanes: [{ id: "b", label: "B", statuses: ["s2"] }] };
+    expect(mergeRawConfig(vBase, { id: "i", view: own }).view).toEqual(own);
+    expect(mergeRawConfig(vBase, { id: "o", inheritPipeline: false }).view).toBeUndefined();
+    expect(mergeRawConfig(vBase, { id: "o", inheritPipeline: false, view: own }).view).toEqual(own);
+  });
 });
 
 // R1 / B5 incr. 2 — the canonical Stage→Step pipeline lives in boards/_base. The `storymap` board

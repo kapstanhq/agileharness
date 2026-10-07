@@ -118,9 +118,6 @@ describe("cardReadViewSpec", () => {
       acceptance: [],
       personas: [],
       systems: [],
-      kano: null,
-      funnelStage: null,
-      rice: { reach: null, impact: null, confidence: null, effort: null },
       body: "",
       ...over,
     };
@@ -128,7 +125,7 @@ describe("cardReadViewSpec", () => {
 
   it("all false + empty:true when card is completely blank (AC1 — vazios não aparecem)", () => {
     const r = cardReadViewSpec(makeCard({}));
-    expect(r).toEqual({ narrative: false, acceptance: false, personas: false, systems: false, kano: false, funnelStage: false, rice: false, body: false, empty: true });
+    expect(r).toEqual({ narrative: false, acceptance: false, personas: false, systems: false, body: false, empty: true });
   });
 
   it("narrative:true when any narrative field is non-empty", () => {
@@ -153,27 +150,23 @@ describe("cardReadViewSpec", () => {
     expect(cardReadViewSpec(makeCard({ systems: ["ui"] })).systems).toBe(true);
   });
 
-  it("kano:true when non-null", () => {
-    expect(cardReadViewSpec(makeCard({ kano: "must-be" })).kano).toBe(true);
-    expect(cardReadViewSpec(makeCard({ kano: null })).kano).toBe(false);
-  });
-
-  it("funnelStage:true when non-null", () => {
-    expect(cardReadViewSpec(makeCard({ funnelStage: "retention" })).funnelStage).toBe(true);
-  });
-
-  it("rice:true when all four RICE fields are present and effort > 0", () => {
-    expect(cardReadViewSpec(makeCard({ rice: { reach: 100, impact: 2, confidence: 0.8, effort: 2 } })).rice).toBe(true);
-    expect(cardReadViewSpec(makeCard({ rice: { reach: 100, impact: 2, confidence: 0.8, effort: null } })).rice).toBe(false);
-  });
-
   it("body:true when non-empty non-whitespace text", () => {
     expect(cardReadViewSpec(makeCard({ body: "## Contexto\ndetalhes" })).body).toBe(true);
     expect(cardReadViewSpec(makeCard({ body: "   \n  " })).body).toBe(false);
   });
 
   it("empty:false when at least one section is present", () => {
-    expect(cardReadViewSpec(makeCard({ kano: "performance" })).empty).toBe(false);
+    expect(cardReadViewSpec(makeCard({ systems: ["ui"] })).empty).toBe(false);
+  });
+
+  // A priorização saiu na fase 5: RICE/KANO/funil de um card ANTIGO (ainda no frontmatter) não contam como conteúdo.
+  it("um card antigo só com RICE/KANO/funil continua vazio — e o spec não tem mais essas chaves", () => {
+    const antigo = { kano: "performance", funnelStage: "retention", rice: { reach: 1, impact: 1, confidence: 1, effort: 1 } };
+    const r = cardReadViewSpec({ ...makeCard({}), ...antigo } as Parameters<typeof cardReadViewSpec>[0]);
+    expect(r.empty).toBe(true);
+    expect(r).not.toHaveProperty("kano");
+    expect(r).not.toHaveProperty("rice");
+    expect(r).not.toHaveProperty("funnelStage");
   });
 });
 

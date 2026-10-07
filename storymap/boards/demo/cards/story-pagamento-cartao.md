@@ -3,7 +3,7 @@ id: story-pagamento-cartao
 type: story
 title: Pagar com cartão de crédito
 storyType: user
-status: priorizar
+status: pronta
 parent: step-pagamento
 release: r2
 personas:
@@ -32,22 +32,6 @@ tasks:
 order: 10
 created: '2026-08-01'
 updated: '2026-08-01'
-priorityCall:
-  rank: 1
-  rationale: Estimado contra as âncoras já pontuadas do board.
-  source: reasoning
-  assessedAt: '2026-08-01'
-  wsjf:
-    value: 5
-    urgency: 13
-    unlock: 2
-    size: 8
-    basis:
-    - soThat
-    - aceite
-    - personas
-    cohortSize: 66
-    cohortAt: '2026-08-01T12:00:00.000Z'
 ---
 
 História de usuário do board de demonstração. Dado sintético: serve para exercitar o pipeline, não descreve um produto real.

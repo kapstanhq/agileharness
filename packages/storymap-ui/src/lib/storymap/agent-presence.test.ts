@@ -96,6 +96,13 @@ describe("reduceAgentPresence — o golden de um retrato vivo da frota", () => {
     expect(r.totals.working).toBe(3);
   });
 
+  it("fase 7 — a sessão de LOTE (uma linha por card no feed) é UM agente, no card líder", () => {
+    const lote = [session({ sessionId: "s-lote", cardId: "story-ex9401" }), session({ sessionId: "s-lote", cardId: "story-ex9402" }), session({ sessionId: "s-lote", cardId: "story-ex9403" })];
+    const r = reduceAgentPresence({ feed: { ...LIVE_FEED, sessions: lote } }, NOW);
+    expect(r.agents.map((a) => [a.key, a.cardId])).toEqual([["session:s-lote", "story-ex9401"]]);
+    expect(r.totals.agents).toBe(1);
+  });
+
   it("sem feed nenhum: zero, nunca lança", () => {
     expect(reduceAgentPresence({}, NOW).totals).toEqual({ agents: 0, working: 0, quiet: 0, asking: 0, waiting: 0, queued: 0 });
   });

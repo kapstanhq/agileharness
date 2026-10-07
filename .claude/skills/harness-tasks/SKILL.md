@@ -78,8 +78,7 @@ it already carries `acceptance` (written upstream by `/harness-enrich`) and a te
    gate is satisfied, so change the EXISTING `status:` line IN-PLACE from `quebrar-tasks` to `desenvolver` —
    replace the value on the current `status:` line, NEVER append a second `status:` line (a
    duplicate `status:` key corrupts the card). Bump the existing `updated:` field in-place to
-   today. Keep one task per line for clean diffs. Leave `rice`
-   at its safe default (four nulls) — RICE is filled at the priorização step.
+   today. Keep one task per line for clean diffs.
 
 5. **Report.** State the card moved `quebrar-tasks → desenvolver` and list the
    tasks created. In queue mode, summarize each card processed.

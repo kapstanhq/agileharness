@@ -12,7 +12,7 @@ import { agentLabel, undoLabel, undoRefusal, type FollowUpItem } from "../system
 import { cardHref } from "../deep-links";
 import type { BoardConfig, Card } from "../types";
 import type { DecisionOption } from "./decision";
-import { clip } from "./copy";
+import { clip, REOPEN_DEFAULT_NOTE } from "./copy";
 import type { InboxEntry } from "./entries";
 
 /** O que a entrada de uma decisão precisa ver: o board e o card FRESCO (a pré-condição do «Desfazer» lê o card). */
@@ -22,6 +22,9 @@ export interface SystemEntryCtx {
   config: BoardConfig;
   card?: Card | null;
 }
+
+// o motivo PADRÃO de reabrir uma entrega pelo «Desfazer» mora em copy.ts (puro: o UndoControl do cliente também o usa)
+export { REOPEN_DEFAULT_NOTE } from "./copy";
 
 /**
  * Por que o «Desfazer» desta decisão seria recusado AGORA — a MESMA régua do servidor (system-decisions `undoRefusal`),
@@ -46,10 +49,10 @@ export function systemDecisionEntry(d: FollowUpItem, ctx: SystemEntryCtx): Inbox
             label: undoLabel(d.undo),
             consequence: "Volta atrás desta decisão do sistema; se o card já andou, o botão diz por que não dá.",
             tone: "neutral",
-            ...(d.undo.kind === "reopen-card" ? { requires: "note" as const } : {}),
             ...(refusal ? { disabled: { reason: refusal } } : {}),
             auditCls: "write-board",
-            invoke: { kind: "undo-system-decision", boardId: ctx.boardId, decisionId: d.id },
+            // reabrir uma entrega pede um motivo: o clique roda com o motivo padrão (um clique, sem formulário antes)
+            invoke: { kind: "undo-system-decision", boardId: ctx.boardId, decisionId: d.id, ...(d.undo.kind === "reopen-card" ? { note: REOPEN_DEFAULT_NOTE } : {}) },
             done: "Desfeito.",
           },
         ]

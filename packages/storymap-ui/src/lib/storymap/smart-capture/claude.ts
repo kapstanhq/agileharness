@@ -85,6 +85,16 @@ export function runClaudeJson(
     model?: string;
     effort?: string;
     dangerouslySkipPermissions?: boolean;
+    /** tools NATIVAS a negar (`--disallowedTools`) — ex.: o `sincronizar` do bench nega as de escrita. */
+    disallowedTools?: readonly string[];
+    /** tools NATIVAS pré-aprovadas (`--allowedTools`) — ex.: o `sincronizar` lê com Read/Grep/Glob. */
+    allowedTools?: readonly string[];
+    /**
+     * O modo de permissão quando não há skip-permissions. Ausente ⇒ `plan` (extração sem ferramenta). `default` é para
+     * quem LÊ código e precisa devolver o VALOR, não um plano: em `-p`, o modo plan instrui o modelo a apresentar um
+     * plano e chamar ExitPlanMode — a contenção de quem pede `default` vem das listas de tools (negadas/permitidas).
+     */
+    permissionMode?: "plan" | "default";
     /** O teto de custo desta chamada (`--max-budget-usd`). Ausente ⇒ settings
      *  `autorun.surfaceMaxBudgetUSD.smartCapture` (default 2); `null`/`0` ⇒ sem teto. */
     maxBudgetUSD?: number | null;
@@ -123,7 +133,7 @@ export function runClaudeJson(
   // pedindo, em vez de herdando.
   const perm = opts.dangerouslySkipPermissions
     ? " --dangerously-skip-permissions"
-    : " --permission-mode plan";
+    : opts.permissionMode === "default" ? " --permission-mode default" : " --permission-mode plan";
   // ── A CONTENÇÃO DOS OUTROS SPAWNS, QUE ESTE NÃO TINHA (hotfix de contenção) ────────────────────────
   // (1) MCP: este comando não passava `--strict-mcp-config`, e o comentário abaixo dizia "este filho
   // nunca teve MCP para perder". Falso, e medido em flags.ts (`mcpContainmentFlags`): um `claude -p` sem a
@@ -144,7 +154,12 @@ export function runClaudeJson(
   // gastaria sem teto nenhum. O valor é um NÚMERO formatado por budgetFlags: seguro na linha de shell sem aspas.
   const maxBudget = opts.maxBudgetUSD !== undefined ? opts.maxBudgetUSD : surfaceBudgetUSD("smartCapture");
   const budget = budgetFlags(maxBudget).map((t) => ` ${t}`).join("");
-  const cmd = `${bin} -p --output-format json --model ${model} --effort ${effort}${perm}${contencao}${budget}`;
+  // Nomes de tool são [A-Za-z]: seguros na linha de shell; qualquer outra coisa é descartada, nunca citada.
+  const denied = (opts.disallowedTools ?? []).filter((t) => /^[A-Za-z]+$/.test(t));
+  const deny = denied.length ? ` --disallowedTools ${denied.join(",")}` : "";
+  const allowedList = (opts.allowedTools ?? []).filter((t) => /^[A-Za-z]+$/.test(t));
+  const allow = allowedList.length ? ` --allowedTools ${allowedList.join(",")}` : "";
+  const cmd = `${bin} -p --output-format json --model ${model} --effort ${effort}${perm}${deny}${allow}${contencao}${budget}`;
   // story-ex0069 — o env do filho passa pelo MESMO chokepoint das outras superfícies de spawn de Claude
   // (`sanitizeSpawnEnv`), em vez de `{ ...process.env }` cru. Esta era a única fora dele, e a de maior risco:
   // é a superfície que ingere TEXTO LIVRE não confiável (captura, triagem de `report_issue`, turno de HITL,

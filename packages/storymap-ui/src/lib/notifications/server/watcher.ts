@@ -14,7 +14,6 @@ import { watch, type FSWatcher } from "node:fs";
 import { existsSync } from "node:fs";
 import { boardsDir } from "@/lib/storymap/paths";
 import { readBoardConfig, readCards } from "@/lib/storymap/repo";
-import { riceScore } from "@/lib/storymap/rice";
 import { cardInboxSignal } from "@/lib/storymap/inbox/card-signal";
 import { formatDecisionText, localTimeFormatter } from "@/lib/storymap/inbox/copy";
 // o push diz as horas no fuso do DONO (o do Inbox — owner-timezone.ts), nunca no da VPS
@@ -80,10 +79,6 @@ function cardSignature(card: Card): string {
   // detected separately (before.status !== card.status → card.moved).
   // (JSON.stringify drops keys whose value is undefined, so this omits updatedMs.)
   return JSON.stringify({ ...card, updatedMs: undefined });
-}
-
-function roundRice(score: number | null): number | null {
-  return score == null ? null : Math.round(score * 10) / 10;
 }
 
 function snapOf(card: Card): CardSnap {
@@ -161,7 +156,6 @@ async function reconcileBoard(boardId: string): Promise<void> {
       statusName: statusName(card.status),
       releaseName: releaseName(card.release),
       parentTitle: parentTitle(card.parent),
-      riceScore: card.type === "story" ? roundRice(riceScore(card.rice)) : null,
       demand: dom ?? undefined,
     };
     const before = prev.get(card.id);

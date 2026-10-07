@@ -24,7 +24,7 @@ import type { TerminalAttention } from "@/lib/terminal/attention";
 import type { AgentAction } from "./agent-actions";
 import type { ConductorQueueEntry } from "./conductor";
 import { conductorQuiet, type QuietIo } from "./conductor-quiet";
-import type { AgentSession } from "./session-worktree";
+import { sessionCardIds, type AgentSession } from "./session-worktree";
 import { isSessionAlive } from "./session-liveness";
 import { parseShortstat } from "./diff";
 
@@ -95,7 +95,13 @@ export function sessionIsLive(s: AgentSession, liveTmux: ReadonlySet<string> | n
 /** A evidência de trabalho de UMA sessão viva, como o feed a carrega — quem decide com ela é agent-presence.ts. */
 export type SessionEvidence = Pick<CardSessionFact, "lastActivityAt" | "busy" | "zombie">;
 
-/** As sessões VIVAS que trabalham num card, no formato do feed, com a evidência medida. PURA. */
+/**
+ * As sessões VIVAS que trabalham num card, no formato do feed, com a evidência medida. PURA.
+ *
+ * Fase 7: uma sessão de LOTE sai uma vez por card dela (`sessionCardIds` — o líder PRIMEIRO, depois os itens), para que
+ * a linha de cada item diga que alguém trabalha nele em vez de «esquecido». Quem conta AGENTES (agent-presence.ts) conta
+ * cada `sessionId` uma vez só — a primeira linha, a do líder.
+ */
 export function sessionFacts(
   sessions: readonly AgentSession[],
   liveTmux: ReadonlySet<string> | null,
@@ -105,9 +111,10 @@ export function sessionFacts(
 ): CardSessionFact[] {
   return sessions
     .filter((s) => !!s.board && !!s.cardId && sessionIsLive(s, liveTmux, now))
-    .map((s) => ({
+    .flatMap((s) => sessionCardIds(s).map((cardId) => ({ s, cardId })))
+    .map(({ s, cardId }) => ({
       board: s.board!,
-      cardId: s.cardId!,
+      cardId,
       sessionId: s.sessionId,
       role: s.role,
       conductor: s.driver === "conductor",

@@ -55,6 +55,16 @@ describe("claim_card — a sessão sem claim (worktree_open/adopt) reserva o car
     expect(res.ok).toBe(false);
   });
 
+  it("fase 7 — o ITEM do lote da sessão renova pelo claim_card; o item que saiu do lote, não", async () => {
+    const batch = { id: "lote-a", featureKey: "func-a", cardIds: ["story-ex9302", "story-ex9303"], dropped: [{ cardId: "story-ex9303", reason: "falhou", at: "2026-10-01T10:00:00Z" }] };
+    const d = deps([session({ board: "b", cardId: "story-ex9301", tmuxSession: "agent-x", batch })]);
+    const res = await claimCardForSession(d, { sessionId: "s-1", board: "b", cardId: "story-ex9302" });
+    expect(res.ok).toBe(true);
+    expect(d.bound).toEqual([]); // a sessão segue com o líder; o item é do lote
+    expect((await claimCardForSession(d, { sessionId: "s-1", board: "b", cardId: "story-ex9303" })).ok).toBe(false);
+    expect((await claimCardForSession(d, { sessionId: "s-1", board: "outro", cardId: "story-ex9302" })).ok).toBe(false);
+  });
+
   it("sessão desconhecida é recusada", async () => {
     expect((await claimCardForSession(deps([]), { sessionId: "nada", board: "b", cardId: "c" })).ok).toBe(false);
   });

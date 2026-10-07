@@ -30,6 +30,7 @@
 // não: quem monta um chat docked suprime a gaveta do board (ver BoardHeader.dockedCopilot).
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { HitlConversation } from "@/components/hitl/HitlConversation";
@@ -73,7 +74,7 @@ import type { HitlTurn } from "@/lib/storymap/hitl/types";
  * Comando novo = UMA entrada aqui + um `case` no `runCommand`. Os quatro valem em QUALQUER raia — é por isso que
  * eles moram no núcleo e não no cockpit.
  */
-const COMMANDS: SlashCommand[] = [
+export const CORE_COMMANDS: readonly SlashCommand[] = [
   { name: "clear", hint: "Começa uma conversa nova (a atual fica no histórico)" },
   { name: "compact", hint: "Resume a conversa e libera contexto, na mesma sessão" },
   // whileBusy: é LEITURA. Perguntar quanto de contexto foi enquanto ele responde é justamente quando a pergunta
@@ -181,6 +182,49 @@ export interface ChatSendApi {
   send: (text: string, ids?: string[], images?: string[]) => void;
 }
 
+/**
+ * A PONTE para um compositor que mora FORA do painel — o do Jido (components/chat/JidoComposer), fixo no rodapé
+ * da tela, com a conversa aberta por cima dela.
+ *
+ * Por que existe: a conversa (sessão, lease por turno, fila, aprovações e perguntas inline, histórico, `/model`…)
+ * é UMA só, e a apresentação nova não pode ser um segundo motor. Então o painel continua dono de tudo isso e só
+ * ENTREGA a mão que digita: o envio passa pelo MESMO `handleSend` (o host intercepta primeiro, depois o núcleo),
+ * os comandos de barra pelo MESMO `runCommand`. O compositor de dentro do `HitlConversation` some nesse modo — dois
+ * campos de texto para a mesma conversa seriam dois lugares para escrever e um só para enviar.
+ *
+ * Só PRIMITIVOS mudam a identidade do objeto entregue (as funções são estáveis): o host guarda a API em estado, e
+ * um objeto novo a cada token re-renderizaria o compositor letra por letra.
+ */
+export interface ChatComposerApi {
+  /** envia como se o operador tivesse digitado no painel (interceptação do host → `/model` → fila do agente). */
+  send: (text: string, images?: string[]) => void;
+  /** roda um dos {@link CORE_COMMANDS} pelo nome, sem a barra. */
+  runCommand: (name: string) => void;
+  /** escreve um EVENTO no thread (uma confirmação de comando), sem chamar o agente. */
+  notice: (text: string) => void;
+  /** sobe imagens coladas/anexadas e devolve os paths que o turno lê. */
+  attachImages: (files: File[]) => Promise<string[]>;
+  /** um turno do agente em voo (o envio continua aceito: entra na fila). */
+  busy: boolean;
+  error: string | null;
+  /** o placeholder que o HOST pede agora (ex.: "Responda a pergunta acima…" no modo resposta). */
+  placeholder: string | null;
+  /** o prefill one-shot (escalação): aplique quando o `nonce` mudar. */
+  draft: { text: string; nonce: number } | null;
+}
+
+/** O compositor externo: quem recebe a API e ONDE desenhar o medidor da sessão (o anel), dentro da caixa dele. */
+export interface ExternalComposer {
+  onApi: (api: ChatComposerApi | null) => void;
+  /** o nó (na barra do compositor externo) onde o anel de contexto é desenhado por portal. Null ⇒ sem anel. */
+  meterSlot: HTMLElement | null;
+  /**
+   * o nó (no canto da moldura, ao lado do "Fechar") onde as ações da CONVERSA — histórico e nova conversa — são
+   * desenhadas por portal. Nesse modo o painel não tem barra do topo própria. Null/ausente ⇒ sem as duas ações.
+   */
+  actionsSlot?: HTMLElement | null;
+}
+
 export function ChatPanel({
   boardId,
   view,
@@ -199,6 +243,7 @@ export function ChatPanel({
   tickRunning,
   draft,
   className,
+  externalComposer,
 }: {
   boardId: string;
   /** a TELA dona da conversa (raia própria). Ausente ⇒ o chat do board — o cockpit. */
@@ -236,6 +281,8 @@ export function ChatPanel({
   /** one-shot prefill do composer (escalação de item). */
   draft?: { text: string; nonce: number };
   className?: string;
+  /** Presente ⇒ quem digita é um compositor de FORA (ver {@link ChatComposerApi}); o de dentro some. */
+  externalComposer?: ExternalComposer;
 }) {
   const lane = view ? `${boardId}--${view}` : boardId;
   const { technique, setTechnique, instruction } = useTechnique(lane, techniques);
@@ -506,6 +553,41 @@ export function ChatPanel({
     hitl.send(text, ids, images);
   };
 
+  // ── O COMPOSITOR DE FORA (ver ChatComposerApi) ─────────────────────────────────────────────────────────
+  // As funções entregues são ESTÁVEIS e leem a versão atual por ref: `handleSend`/`runCommand` mudam de
+  // identidade a cada render, e é o `useEffect` abaixo — por primitivos — que decide quando o host recebe outra API.
+  const external = Boolean(externalComposer);
+  const onApiRef = useRef(externalComposer?.onApi);
+  onApiRef.current = externalComposer?.onApi;
+  const handleSendRef = useRef(handleSend);
+  handleSendRef.current = handleSend;
+  const runCommandRef = useRef(runCommand);
+  runCommandRef.current = runCommand;
+  const { pushTurns } = hitl;
+  const stableApi = useMemo(
+    () => ({
+      send: (text: string, images?: string[]) => handleSendRef.current(text, undefined, images),
+      runCommand: (name: string) => runCommandRef.current(name),
+      notice: (text: string) => pushTurns([{ role: "notice", kind: "command", text }]),
+      attachImages: onAttachImages,
+    }),
+    [pushTurns, onAttachImages],
+  );
+  const draftText = draft?.text;
+  const draftNonce = draft?.nonce;
+  useEffect(() => {
+    if (!external) return;
+    onApiRef.current?.({
+      ...stableApi,
+      busy,
+      error: hitl.error,
+      placeholder: placeholder ?? null,
+      draft: draftText != null && draftNonce != null ? { text: draftText, nonce: draftNonce } : null,
+    });
+  }, [external, stableApi, busy, hitl.error, placeholder, draftText, draftNonce]);
+  // Desmontou (a conversa fechou): o compositor volta a não ter para onde enviar.
+  useEffect(() => () => onApiRef.current?.(null), []);
+
   // Ancorados acima do composer, em ordem de permanência:
   //   1. o que o HOST pendurou (o diário do tick, no cockpit);
   //   2. os ANEXOS — o que a conversa está olhando. Ficam SEMPRE: descrevem o que todo turno enxerga;
@@ -518,6 +600,31 @@ export function ChatPanel({
   // eram 6px: as pílulas encostavam no composer como se fossem parte dele. Empilhamento com respiro
   // desigual é o defeito que o Operador viu primeiro ("componentes colados, sem espaçamento embaixo").
   // Uma pilha tem UM dono de ritmo: `gap-2` entre as faixas, `pb-2` antes do composer.
+  // O medidor da sessão (anel de contexto + compactar + verbosidade) — dentro do composer de sempre, ou, com o
+  // compositor de fora, desenhado por portal dentro da caixa dele.
+  const sessionMenu = (
+    <SessionMenu
+      session={session}
+      active={busy}
+      onCompact={() => hitl.send("/compact", undefined, undefined, { command: "Compactando a conversa…" })}
+      responseMode={hitl.responseMode}
+      setResponseMode={hitl.setResponseMode}
+      placement={external && externalComposer?.actionsSlot ? "corner" : "composer"}
+    />
+  );
+
+  // As ações da CONVERSA (qual delas está na tela). `typing`, não `busy`: o que impede trocar de conversa é um TURNO
+  // EM VOO; depois de um erro, começar outra é justamente o que o operador quer.
+  const chatActions = (
+    <CopilotChatActions
+      boardId={boardId}
+      view={view}
+      busy={hitl.status === "typing"}
+      onNewChat={startNewChat}
+      onResume={(id) => void resumeChat(id)}
+    />
+  );
+
   const virgin = hitl.turns.filter((t) => t.role === "human").length === 0;
   const showQuick = Boolean(quickActions?.length) && virgin;
   const hasCtx = Boolean(contextRefs?.length);
@@ -569,9 +676,14 @@ export function ChatPanel({
           hasOlder={hitl.hasOlder}
           done={hitl.done}
           placeholder={placeholder ?? "Pergunte ou instrua…"}
-          className="h-full"
+          // Com o compositor de FORA, o rodapé do HitlConversation (erro + composer) sai da tela. Ele é SEMPRE o
+          // último filho direto da raiz da conversa — garantia fixada em chat/jido-composer.contract.test.ts, que
+          // quebra se o HitlConversation ganhar um irmão depois dele. O erro do turno não some: o compositor de
+          // fora o recebe pela API (`error`) e o mostra acima da caixa.
+          className={cn("h-full", external && "[&>div:last-child]:hidden")}
           layout="full"
-          draft={draft}
+          look={external ? "jido" : "default"}
+          draft={external ? undefined : draft}
           // Há FILA: digitar e enviar continua liberado com um turno em voo — a mensagem entra na fila (bolhas
           // tracejadas abaixo) e sai sozinha. `scrollKey` faz o transcript acompanhar a bolha recém-enfileirada.
           queueWhileBusy
@@ -589,48 +701,56 @@ export function ChatPanel({
           }
           beforeComposer={beforeComposer}
           streamCursor={streamCursor}
-          commands={COMMANDS}
+          commands={CORE_COMMANDS}
           onCommand={runCommand}
           // A BARRA DO TOPO — o que governa a CONVERSA INTEIRA. Ela flutua sobre o transcript com um degradê (o
           // texto passa por baixo), então o painel continua sendo conversa de ponta a ponta, sem header.
+          //
+          // Com o compositor de FORA não há barra: a moldura (chat/ChatOverlay) tem só o "Fechar" no canto, e o
+          // histórico/nova conversa vão para o lado dele por portal (`actionsSlot`, abaixo). O transcript começa
+          // no topo da coluna, sem a reserva da barra.
           topBar={
+            external ? undefined : (
             <>
               {slots?.controls}
               {techniques?.length ? (
                 <TechniquePicker techniques={techniques} active={technique} onPick={setTechnique} />
               ) : null}
               <span className="flex-1" />
-              {/* À DIREITA, as ações da CONVERSA (qual delas está na tela) — separadas do que governa o
-                  comportamento do agente, à esquerda. `typing`, não `busy`: o que impede trocar de conversa é um
-                  TURNO EM VOO; depois de um erro, começar outra é justamente o que o operador quer. */}
-              <CopilotChatActions
-                boardId={boardId}
-                view={view}
-                busy={hitl.status === "typing"}
-                onNewChat={startNewChat}
-                onResume={(id) => void resumeChat(id)}
-              />
+              {/* À DIREITA, as ações da CONVERSA — separadas do que governa o comportamento do agente, à esquerda. */}
+              {chatActions}
               {onClose && (
                 <button type="button" onClick={onClose} className={BTN_ICON} aria-label="Fechar" title="Fechar (Esc)">
                   <X className={ICON.inline} />
                 </button>
               )}
             </>
+            )
           }
           // DENTRO do campo ficam as ações da MENSAGEM (anexo) e da SESSÃO (o anel com contexto/custo/compactar) —
           // a mão que digita alcança as duas sem sair da caixa.
           showModeToggle={false}
-          composerExtra={
-            <SessionMenu
-              session={session}
-              active={busy}
-              onCompact={() => hitl.send("/compact", undefined, undefined, { command: "Compactando a conversa…" })}
-              responseMode={hitl.responseMode}
-              setResponseMode={hitl.setResponseMode}
-            />
-          }
+          composerExtra={external ? undefined : sessionMenu}
         />
       </div>
+      {/* As ferramentas da CONVERSA — o anel de contexto (que abre compactar/verbosidade), o histórico e a nova conversa —
+          vão para o canto da moldura, ao lado do "Fechar": o compositor do rodapé fica só com o do desenho (`/` e
+          enviar), e um anel sem rótulo na caixa de escrever não dizia nada. Sem o canto, o anel vai para a barra do
+          compositor de fora (o lugar antigo). */}
+      {external && externalComposer?.actionsSlot
+        ? createPortal(
+            <>
+              {/* a conversa de uma página de documento traz os MÉTODOS dela (as técnicas) — sem a barra do topo, o
+                  seletor vai para o canto, ao lado do anel */}
+              {techniques?.length ? <TechniquePicker techniques={techniques} active={technique} onPick={setTechnique} /> : null}
+              {sessionMenu}
+              {chatActions}
+            </>,
+            externalComposer.actionsSlot,
+          )
+        : external && externalComposer?.meterSlot
+          ? createPortal(sessionMenu, externalComposer.meterSlot)
+          : null}
     </div>
   );
 }

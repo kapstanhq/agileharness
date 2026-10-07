@@ -1,4 +1,6 @@
-// The CONDUCTOR dispatch — "the human's acceptance is the go".
+// The CONDUCTOR dispatch. Admission opens the session that SHAPES the story; the «vai» to BUILD is not the admission —
+// it is the service's PLAN CRITIC (runner/critics.ts: a clean-context reviewer of acceptance + plan), or the owner's
+// «Pode construir» when the board's `spec` box is off (fase 6, owner decision 2).
 //
 // The linear Kanban stops being the control flow for a conducted story: ONE interactive agent session (the
 // `harness-conductor` skill) carries the card through shape → build → verify → publish in one context, and
@@ -7,14 +9,22 @@
 //   board.yaml
 //     conductor: { enabled: true, fromStatus: <status id>, maxSessions: 2, model: opus }
 //
+// THE HYBRID PIPELINE: with the dispatch on, the board runs in the conductor mode (types.ts `pipelineMode`; a board
+// may still declare `pipeline: columns`). There the middle columns the conductor makes redundant — the `_base` steps
+// marked `autorunOnlyInColumns` — fire no skill. Only where the step also has `autorun: true` (Entrevista, Jornada,
+// Telas) does that change anything: their skills stay as manual commands, and a card nobody conducts just passes
+// through them (cascade-decision.ts), so a specified story reaches «A fazer» and waits there, in its column order, for
+// a slot (a card stuck in one of them is a passage stall — stall-watch.ts). The marked `autorun: false` steps (Dúvidas,
+// Pronto p/ dev, Revisão de código) stop for a manual move in both modes.
+//
 // When a story card ENTERS `fromStatus` (evaluateAutorunOnEntry — the single chokepoint every entry path
 // already funnels through: a drag, an MCP move, an accept, the watcher, the cascade forward):
 //
 //   1. ADMIT   — stamp `routing.driver: conductor` on the card (the SAME per-card lock every writer uses) and
 //                append it to a DURABLE queue. From this instant the cascade and the engine are silent for the
 //                card (cascade-decision.ts / engine.ts), so no column skill races the conductor into it.
-//   2. PUMP    — serialized; for each queued card, in the board's PRIORITY order (FIFO only where the priority is
-//                silent — compareConductorQueue), if the board has a free conductor slot (`maxSessions`, live
+//   2. PUMP    — serialized; for each queued card, in the board's ORDER (a bug's severity first, then the card's position
+//                in its column, FIFO on ties — compareConductorQueue), if the board has a free conductor slot (`maxSessions`, live
 //                conductors counted per board) spawn the session through the SAME door `claude_new` uses
 //                (`spawnWorkSession`: admission + resource probe, worktree, card claim, scoped MCP token,
 //                tmux, role `implement`), whose first prompt is `/harness-conductor <board>/<cardId>`.
@@ -37,7 +47,9 @@
 //   • re-dispatch a card whose conductor DIED. The driver stays (no stale column run), the claim is released
 //     by the fleet reconcile, and the operator decides: reopen a conductor (`claude_new` with the conductor
 //     task) or clear the driver (`set_card_driver`). An automatic respawn loop over a session that keeps dying
-//     is the failure mode a human must see, not one to paper over;
+//     is the failure mode a human must see, not one to paper over. (A conductor that ENDED on purpose after handing
+//     its submission to the merge train — `worktree_discard({…, handoff: true})` — is not a death: conductor-handoff.ts
+//     re-admits that card, once per verdict and with a cap on consecutive returns, when the train decides.)
 //   • spawn anything while the live master switch is off or the board gate holds (board-pace.ts: the board is
 //     disarmed or paused): the queue waits, and resumes by itself when the switch comes back.
 
@@ -46,19 +58,21 @@ import path from "node:path";
 import { runnerStateDir } from "@/lib/storymap/paths";
 import { withKeyedLock } from "@/lib/storymap/serialize";
 import { atomicWriteFile } from "@/lib/storymap/atomic-write";
-import { conductorCommand, conductorEntryVerdict, conductorModelFor, conductorTask, CONDUCTOR_SCOPE_WAIT_KIND, CONDUCTOR_SKILL, isConducted, resolveConductorPolicy } from "@/lib/storymap/driver";
-import { cardWsjf } from "@/lib/storymap/wsjf";
+import { conductorBatchTask, conductorCommand, conductorEntryVerdict, conductorModelCapFor, conductorModelFor, conductorTask, CONDUCTOR_SCOPE_WAIT_KIND, CONDUCTOR_SKILL, isConducted, resolveConductorPolicy } from "@/lib/storymap/driver";
+import type { FeatureKey } from "@/lib/storymap/feature-key";
 import type { BugSeverity } from "@/lib/storymap/frameworks";
 import type { BoardConfig, Card } from "@/lib/storymap/types";
 import type { SystemDecision } from "@/lib/storymap/system-decisions";
-import type { AgentSession, SessionWorkVerdict } from "./session-worktree";
+import { sessionCardIds, type AgentSession, type SessionWorkVerdict } from "./session-worktree";
 import type { SpawnSessionInput, SpawnSessionResult } from "./session-spawn";
 import type { GateVerdict } from "./capacity-governor";
 import { gateAdmitsCard, gateOf, paceCap, type BoardGate, type BoardGatePort } from "./board-pace";
+import { batchable, sharesFeature } from "./conductor-batch";
 
 // ── PURE policy (lives in ../driver.ts — isomorphic, so the move risk class can ask it too) ──────────────
 export {
   conductorEntryVerdict,
+  conductorModelCapFor,
   conductorModelFor,
   conductorTask,
   CONDUCTOR_DEFAULT_MODEL,
@@ -203,15 +217,48 @@ export async function finishedConductors(
   const out = new Map<string, string>();
   for (const s of live) {
     if (!s.board || !s.cardId) continue;
+    const board = s.board;
     const [card, config] = await Promise.all([
-      deps.readCard(s.board, s.cardId).then((c) => c, () => undefined),
-      deps.readBoardConfig(s.board).catch(() => null),
+      deps.readCard(board, s.cardId).then((c) => c, () => undefined),
+      deps.readBoardConfig(board).catch(() => null),
     ]);
     if (card === undefined) continue;
     const why = conductorDoneReason(card, config);
-    if (why) out.set(s.sessionId, why);
+    if (!why) continue;
+    // fase 7 — o LOTE: a sessão só acaba quando TODOS os cards dela acabaram. Um líder ENTREGUE com item aberto segura
+    // a sessão (o item ainda é dela); um líder que SAIU (lixeira, adiado, sem driver, descontinuado) é um líder
+    // derrubado — a sessão acaba e os itens voltam à fila ({@link batchLeadDropped}, no fim da sessão).
+    const items = sessionCardIds(s).filter((id) => id !== s.cardId);
+    if (items.length && isDeliveredOrTerminal(card, config)) {
+      let open = false;
+      for (const id of items) {
+        const item = await deps.readCard(board, id).then((c) => c, () => undefined);
+        if (item === undefined || !conductorDoneReason(item, config)) {
+          open = true; // ilegível agora conta como aberto (a direção segura para uma vaga)
+          break;
+        }
+      }
+      if (open) continue;
+      out.set(s.sessionId, `${why} (e todos os itens do lote acabaram)`);
+      continue;
+    }
+    out.set(s.sessionId, why);
   }
   return out;
+}
+
+/** O card acabou por ENTREGA ou status terminal (e não por ter saído do condutor)? PURA. */
+function isDeliveredOrTerminal(card: Card | null, config: BoardConfig | null): boolean {
+  const def = card?.status ? config?.statuses.find((x) => x.id === card.status) : undefined;
+  return !!card && isConducted(card) && card.mode !== "retire" && !card.deferred && !!(def?.delivered || def?.terminal);
+}
+
+/**
+ * A sessão de LOTE acabou porque o LÍDER saiu (lixeira, adiado, sem driver, descontinuado) com itens ainda dela? Esses
+ * itens perdem a marca do lote e voltam à fila normal no fim da sessão (plano §5, «Session end»). PURA.
+ */
+export function batchLeadDropped(s: Pick<AgentSession, "cardId" | "batch">, lead: Card | null, config: BoardConfig | null): boolean {
+  return sessionCardIds(s).length > 1 && !isDeliveredOrTerminal(lead, config);
 }
 
 // ── the durable queue ───────────────────────────────────────────────────────────────────────────────────
@@ -247,6 +294,99 @@ export interface ConductorQueueEntry {
    * que despacha outro card do mesmo board — servida a vez cedida, ele volta a disputar pelo seu tier.
    */
   yielded?: true;
+  /**
+   * A RETOMADA depois do veredito do merge train (conductor-handoff.ts): o condutor anterior passou a submissão
+   * `runId` ao train e encerrou; o train decidiu `status`. Vai na TAREFA da sessão nova (o PRE-VOO passo 9 não depende
+   * de a nota do card ter aterrissado) e, num `done`, isenta a entrada do teto de gasto: o código já está em stage e só
+   * falta a projeção — segurá-la no teto deixaria o trabalho integrado parado sem ninguém para pedir o aumento.
+   */
+  handoff?: {
+    runId: string;
+    status: string;
+    /** fase 7: os ITENS do lote que a submissão levou (além do líder) — a retomada pode re-pegá-los (`claim_batch`). */
+    batchCardIds?: string[];
+    /**
+     * fase 7: o serviço DIVIDIU o lote depois de uma devolução do train que não deu para atribuir a um item (ou da
+     * segunda devolução do mesmo lote): os itens voltaram à fila sozinhos e o líder retoma só com os commits dele.
+     */
+    split?: true;
+  };
+  /**
+   * fase 7: o item SAIU de um lote (`batch_drop`) ou o lote foi dividido pelo serviço — ele roda sozinho daqui em diante
+   * e nunca volta a entrar num lote.
+   */
+  solo?: true;
+}
+
+/** Quem já conduz uma funcionalidade ({@link conductorFeatureBusy}). */
+export interface ConductorFeatureHolder {
+  /** a sessão do condutor que segura a funcionalidade (ou a que submeteu, numa entrega ainda no train). */
+  sessionId: string;
+  /** o card líder dessa sessão / submissão. */
+  cardId: string;
+  /** `session` = um condutor vivo; `handoff` = uma submissão esperando o veredito do train. */
+  via: "session" | "handoff";
+}
+
+/**
+ * NUNCA DOIS CONDUTORES NA MESMA FUNCIONALIDADE (fase 7, decisão 9): quem já segura a funcionalidade `featureKey` do
+ * board — um condutor vivo (por `sessionCardIds`) ou uma entrega dele ainda no train (handoff sem veredito) —, exceto
+ * a sessão `exceptSessionId`. Null = livre. «Outros» e grupos `self` nunca ficam ocupados (o chamador não pergunta).
+ * Usado pelo pump e pela abertura à mão (`claude_new` implement, `claim_card` implement).
+ *
+ * STUB do commit de interfaces: a Trilha C implementa.
+ */
+export async function conductorFeatureBusy(board: string, featureKey: string, exceptSessionId?: string): Promise<ConductorFeatureHolder | null> {
+  const { featureHoldersNow } = await import("./conductor-batch-deps");
+  return findFeatureHolder(await featureHoldersNow(board), featureKey, exceptSessionId);
+}
+
+/** Um ocupante possível de funcionalidade, com as chaves dos cards dele (feature-key.ts `featureKeyOf(...).id`). */
+export interface FeatureHolderCandidate extends ConductorFeatureHolder {
+  board: string;
+  /** as funcionalidades que ele segura (as chaves que formam lote — {@link sharesFeature}). */
+  featureKeys: readonly string[];
+}
+
+/** Quem segura `featureKey` entre os candidatos (sessões vivas primeiro), exceto a sessão `exceptSessionId`. PURA. */
+export function findFeatureHolder(
+  candidates: readonly FeatureHolderCandidate[],
+  featureKey: string,
+  exceptSessionId?: string,
+): ConductorFeatureHolder | null {
+  const hits = candidates.filter((c) => c.sessionId !== exceptSessionId && c.featureKeys.includes(featureKey));
+  const hit = hits.find((c) => c.via === "session") ?? hits[0];
+  return hit ? { sessionId: hit.sessionId, cardId: hit.cardId, via: hit.via } : null;
+}
+
+/** A frase da espera / da recusa quando a funcionalidade está ocupada. PURA. */
+export function featureBusyReason(holder: ConductorFeatureHolder, featureTitle?: string): string {
+  const what = featureTitle ? `«${featureTitle}»` : "esta funcionalidade";
+  return holder.via === "handoff"
+    ? `a entrega de ${holder.cardId} (sessão ${holder.sessionId.slice(0, 8)}) em ${what} ainda está no merge train — outro condutor espera ela assentar`
+    : `outro condutor já trabalha em ${what} (sessão ${holder.sessionId.slice(0, 8)}, card ${holder.cardId})`;
+}
+
+/** A classe da espera por funcionalidade ocupada (decisão 9 do dono: nunca dois condutores na mesma funcionalidade). */
+export const CONDUCTOR_FEATURE_BUSY_WAIT_KIND = "feature-busy";
+
+/**
+ * A TAREFA de um condutor que retoma depois do train: a de sempre + o sessionId de quem submeteu e o veredito, para o
+ * PRE-VOO passo 9 ler o veredito sem depender da nota do card. PURA.
+ */
+export function conductorHandoffTask(board: string, cardId: string, handoff: NonNullable<ConductorQueueEntry["handoff"]>): string {
+  const items = (handoff.batchCardIds ?? []).filter((id) => /^[A-Za-z0-9_.-]{1,80}$/.test(id));
+  const batch = handoff.split
+    ? ` — o serviço DIVIDIU o lote (a devolução não deu para atribuir a um item): os itens voltaram à fila sozinhos; ` +
+      `refaça o seu branch só com os commits «Card: ${cardId}» e submeta de novo`
+    : items.length
+      ? ` — a submissão levou um LOTE: re-pegue os itens ${items.join(", ")} com claim_batch antes de seguir`
+      : "";
+  return (
+    `${conductorTask(board, cardId)} — RETOMADA depois do merge train: a submissão do condutor anterior ` +
+    `(sessionId ${handoff.runId}) teve veredito «${handoff.status}»; comece pelo PRE-VOO passo 9 ` +
+    `(wait_for_submit({sessionId: "${handoff.runId}"}))${batch}`
+  );
 }
 
 export interface ConductorQueueStore {
@@ -282,16 +422,16 @@ export function diskConductorQueueStore(file: string = conductorQueuePath()): Co
   };
 }
 
-/** A severidade do bug como tier da fila — a mesma escala do `priorityCall.rank` (3 Crítica → 0 Baixa). */
+/** A severidade do bug como tier da fila (3 bloqueante → 0 baixa) — urgência do FATO, nunca uma nota. */
 const SEVERITY_TIER: Readonly<Record<BugSeverity, number>> = { blocker: 3, high: 2, medium: 1, low: 0 };
 /** Rótulos que dizem «segurança ou dados de pessoas» — vocabulário genérico, nunca o nome de um produto. */
 const SECURITY_LABEL = /^(?:security|seguran[cç]a|privacy|privacidade|lgpd|gdpr|dados-pessoais|personal-data)$/i;
 
 /**
- * WP5-F2 — o tier que um card SEM `priorityCall` ganha dos próprios fatos: a severidade do bug (bloqueante 3, alta 2,
- * média 1, baixa 0) e +1 com rótulo de segurança/dados de pessoas (no máximo 3); só o rótulo, sem severidade, vale 1.
- * `null` = nada a derivar. PURA. Caso real: nenhum dos cards na fila tinha priorityCall (o card conduzido pula o
- * passo priorizar), a fila era FIFO, e um bug ALTO esperou horas atrás de um bug baixo.
+ * WP5-F2 — o tier que um card ganha dos próprios fatos: a severidade do bug (bloqueante 3, alta 2, média 1, baixa 0)
+ * e +1 com rótulo de segurança/dados de pessoas (no máximo 3); só o rótulo, sem severidade, vale 1. `null` = nada a
+ * derivar. PURA. Caso real: a fila era FIFO, e um bug ALTO esperou horas atrás de um bug baixo. O tier vem antes da
+ * posição na coluna (um card com tier passa à frente de um sem; o mais severo antes) — é fato do card, não uma nota.
  */
 export function derivedQueueTier(card: Pick<Card, "bugReport" | "labels">): number | null {
   const sev = card.bugReport?.severity;
@@ -302,20 +442,17 @@ export function derivedQueueTier(card: Pick<Card, "bugReport" | "labels">): numb
 }
 
 /**
- * The DISPATCH ORDER of the queue — the board's own priority ruler (the Priorização screen's, wsjf.ts), FIFO only
- * where the ruler is silent. PURE and total:
+ * The DISPATCH ORDER of the queue — the ORDER OF THE WORK is the card's POSITION in its column (`card.order`, what
+ * the owner arranges with «Fazer antes» / «Pode esperar»); there is no priority score. PURE and total:
  *   0. a RESUME of a parked card (`entry.resume`) goes before everything else — FIFO among resumes;
  *   0b. an entry that YIELDED its slot (`entry.yielded` — parked for being quiet) goes after every entry that did not,
- *      whatever its tier, until the pump serves the yielded turn (see {@link ConductorQueueEntry.yielded});
- *   1. the tier: `priorityCall.rank` (3 Crítica → 0 Baixa) when the card has one — an explicit call always wins over
- *      what the card's facts would derive — else the tier derived from the bug's severity and a security/personal-data
- *      label ({@link derivedQueueTier}, WP5-F2); a card with neither goes after every tiered one. On a tie, the
- *      explicit call goes before the derived tier;
- *   2. the WSJF ratio inside the tier, a ratio before none;
- *   3. FIFO by `queuedAt` for ties and for everything unscored — then board/card id, so any permutation of the
- *      same queue comes out in the same order.
- * A board expresses a sequence (e.g. the PRD's order of fronts) through its priority calls; the queue never reads
- * prose to guess one.
+ *      until the pump serves the yielded turn (see {@link ConductorQueueEntry.yielded});
+ *   1. the tier DERIVED from the card's facts ({@link derivedQueueTier}, WP5-F2: the bug's severity, +1 for a
+ *      security/personal-data label) — a tiered card goes before an untiered one, the more severe first; a fact of
+ *      the card, never a score;
+ *   2. the card's `order` in its column, top first (an entry whose card could not be read goes after the read ones);
+ *   3. FIFO by `queuedAt` for ties — then board/card id, so any permutation of the same queue comes out in the same
+ *      order.
  */
 export function compareConductorQueue(
   a: { entry: ConductorQueueEntry; card: Card | null },
@@ -328,16 +465,13 @@ export function compareConductorQueue(
     if (qa !== qb) return qa < qb ? -1 : 1;
   }
   if (!!a.entry.yielded !== !!b.entry.yielded) return a.entry.yielded ? 1 : -1;
-  const explicitA = a.card?.priorityCall?.rank;
-  const explicitB = b.card?.priorityCall?.rank;
-  const ra = explicitA ?? (a.card ? derivedQueueTier(a.card) : null) ?? -1;
-  const rb = explicitB ?? (b.card ? derivedQueueTier(b.card) : null) ?? -1;
-  if (ra !== rb) return rb - ra;
-  if ((explicitA == null) !== (explicitB == null)) return explicitA == null ? 1 : -1;
-  const wa = a.card ? cardWsjf(a.card) : null;
-  const wb = b.card ? cardWsjf(b.card) : null;
-  if (wa != null && wb != null && wa !== wb) return wb - wa;
-  if ((wa == null) !== (wb == null)) return wa == null ? 1 : -1;
+  const ta = (a.card ? derivedQueueTier(a.card) : null) ?? -1;
+  const tb = (b.card ? derivedQueueTier(b.card) : null) ?? -1;
+  if (ta !== tb) return tb - ta;
+  const oa = a.card && Number.isFinite(a.card.order) ? a.card.order : null;
+  const ob = b.card && Number.isFinite(b.card.order) ? b.card.order : null;
+  if (oa != null && ob != null && oa !== ob) return oa - ob;
+  if ((oa == null) !== (ob == null)) return oa == null ? 1 : -1;
   const qa = a.entry.queuedAt ?? ""; // an entry read from disk without it sorts first — the oldest shape
   const qb = b.entry.queuedAt ?? "";
   if (qa !== qb) return qa < qb ? -1 : 1;
@@ -381,6 +515,12 @@ export const CONDUCTOR_DISPATCH_FINDING_ID = "conductor-dispatch";
 export type QueuedCardMiss =
   | { kind: "unreadable"; detail: string }
   | { kind: "trashed" }
+  /**
+   * Fase 6 (6D) — o card MUDOU DE BOARD (card-transfer.ts, `transfer_card`): ele existe em `toBoard`. Não é um card que
+   * sumiu — a entrada segue o card para o board novo (o pump de lá julga driver, status e o condutor daquele board), sem
+   * o alarme «sumiu, recrie» (cinco alarmes falsos num único dia, num caso real).
+   */
+  | { kind: "transferred"; toBoard: string }
   | { kind: "missing"; lastHop: { from: string | null; to: string; at: string } | null };
 
 /** PURA — o registro durável de um card que sumiu do disco com a fila do condutor esperando por ele. */
@@ -423,6 +563,12 @@ export interface ConductorDeps {
   markDriver(board: string, cardId: string): Promise<void>;
   /** remove the driver the DISPATCH set (only used when the dispatch is abandoned before any conductor ran). */
   clearDriver(board: string, cardId: string): Promise<void>;
+  /**
+   * CARIMBA no card o teto de modelo que o TIPO dele dá (driver.ts `withTypeModelCap`: Sonnet para bug/manutenção sem
+   * risco alto), na admissão — o card, a tela e o histórico mostram qual teto valeu. Idempotente; um teto escolhido por
+   * alguém nunca é tocado. Ausente ⇒ o teto só é derivado no despacho (não fica visível no card).
+   */
+  stampModelCap?(board: string, cardId: string): Promise<void>;
   /** the operator-facing finding when spawning keeps failing (idempotent upsert). */
   stampDispatchFailure(board: string, cardId: string, detail: string): Promise<void>;
   /** the SAME spawn `claude_new` uses. */
@@ -478,9 +624,44 @@ export interface ConductorDeps {
    * card não é adotado. Ausente ⇒ só o registro de sessões responde.
    */
   cardInFlight?(board: string, cardId: string): Promise<boolean>;
+  /**
+   * Fase 6 (6D) — o card ESPERA OUTRA HISTÓRIA (um `depends-on` que não terminou, um bloqueio `blocked-by-*` aberto —
+   * cascade-decision.ts `dependencyWait`): o motivo, ou null. A entrada ESPERA na fila com o driver (nunca o solta — soltar
+   * deixava a cascata pegar o card e gastar runs) e é despachada na primeira passada depois de a dependência chegar.
+   * Ausente ⇒ ninguém espera dependência.
+   */
+  dependencyHold?(board: string, card: Card, config: BoardConfig | null): Promise<string | null>;
+  /**
+   * Fase 6 — a RESERVA DO DONO (signals.ts `conductorSlotAllowsSignal`, ≥ 40% das vagas para o PRD e os pedidos dele):
+   * um card de SINAL (rótulo `sinal`) só pega vaga se, com ele, os de sinal vivos no board não passarem da fatia. Recebe
+   * os cards com condutor vivo no board (inclusive os que esta passada já despachou), as vagas e se há trabalho do
+   * dono/PRD na fila do board (a exceção de board pequeno); devolve o motivo da espera, ou null. Ausente ⇒ sem reserva.
+   */
+  signalSlotHold?(board: string, card: Card, liveCardIds: readonly string[], maxSessions: number, ownerWorkQueued: boolean): Promise<string | null>;
+  /**
+   * Fase 6 (6D) — reavalia a ENTRADA do card (autorun-eval.ts `evaluateAutorunOnEntry`) depois de o pump devolvê-lo ao
+   * fluxo (a reabertura pendente: a skill da reabertura roda primeiro). Ausente ⇒ o card espera o próximo evento.
+   */
+  reevaluateEntry?(board: string, cardId: string): Promise<void>;
+  /**
+   * Fase 7 — a FUNCIONALIDADE do card (feature-key.ts `featureKeyOf`, com o contexto do board). Decide a espera
+   * «funcionalidade ocupada» (decisão 9 do dono) e os candidatos do lote. null / lançar ⇒ sem funcionalidade (não
+   * bloqueia nem forma lote). Ausente ⇒ nenhum dos dois (o comportamento de antes).
+   */
+  featureKeyOf?(board: string, card: Card): Promise<FeatureKey | null>;
+  /**
+   * Fase 7 — as entregas de condutor AINDA no merge train (`.runner/conductor-handoffs.json`, sem veredito assentado):
+   * o código delas ainda não chegou à base, então a funcionalidade segue ocupada. Ausente ⇒ nenhuma.
+   */
+  pendingHandoffs?(): Promise<Array<{ board: string; cardId: string; runId: string; batchCardIds?: string[] }>>;
   now?(): number;
   log?(line: string): void;
 }
+
+/** A classe da espera por OUTRA HISTÓRIA na fila (a vez fica guardada, o driver também). */
+export const CONDUCTOR_DEPENDENCY_WAIT_KIND = "dependency";
+/** A classe da espera de um card de SINAL pela reserva do dono (as vagas que sobram são do PRD e dos pedidos dele). */
+export const CONDUCTOR_SIGNAL_RESERVE_WAIT_KIND = "signal-reserve";
 
 const QUEUE_LOCK = "conductor-dispatch";
 
@@ -511,17 +692,31 @@ export async function admitConductorCard(
   deps: ConductorDeps,
   board: string,
   cardId: string,
-  /** `resume`: na frente da fila (retomada); `yielded`: depois das que esperavam (cedeu a vaga — {@link ConductorQueueEntry.yielded}). */
-  opts: { resume?: boolean; yielded?: boolean } = {},
+  /**
+   * `resume`: na frente da fila (retomada); `yielded`: depois das que esperavam (cedeu a vaga — {@link ConductorQueueEntry.yielded});
+   * `handoff`: a retomada depois do veredito do train ({@link ConductorQueueEntry.handoff}); `requireDriver`: NÃO carimba o
+   * driver — o card precisa já tê-lo (a passagem ao train: se o operador o limpou entre a leitura e a readmissão, a
+   * decisão dele vale e nada entra na fila).
+   */
+  opts: { resume?: boolean; yielded?: boolean; handoff?: ConductorQueueEntry["handoff"]; requireDriver?: boolean } = {},
 ): Promise<{ queued: boolean }> {
-  await deps.markDriver(board, cardId);
+  if (opts.requireDriver) {
+    const card = await deps.readCard(board, cardId); // lançar ⇒ quem chamou tenta de novo
+    if (!card || !isConducted(card)) {
+      logOf(deps)(`${board}/${cardId}: não volta à fila do condutor — o card não tem mais routing.driver: conductor`);
+      return { queued: false };
+    }
+  } else {
+    await deps.markDriver(board, cardId);
+  }
   return withKeyedLock(QUEUE_LOCK, async () => {
     const entries = await deps.queue.load();
     const waiting = entries.find((e) => e.board === board && e.cardId === cardId);
     if (waiting) {
       // já na fila: uma retomada só PROMOVE a entrada (nunca duplica, nunca rebaixa)
-      if (opts.resume && !waiting.resume) {
-        await deps.queue.persist(entries.map((e) => (e === waiting ? { ...e, resume: true as const } : e)));
+      if ((opts.resume && !waiting.resume) || (opts.handoff && !waiting.handoff)) {
+        const promoted = { ...waiting, ...(opts.resume ? { resume: true as const } : {}), ...(opts.handoff ? { handoff: opts.handoff } : {}) };
+        await deps.queue.persist(entries.map((e) => (e === waiting ? promoted : e)));
         logOf(deps)(`${board}/${cardId} passou para a frente da fila do condutor (retomada)`);
       }
       return { queued: false };
@@ -529,14 +724,24 @@ export async function admitConductorCard(
     const sessions = await deps.sessions().catch(() => [] as AgentSession[]);
     const live = await deps.liveTmux().catch(() => null);
     const already = sessions.some(
-      (s) => s.board === board && s.cardId === cardId && isLiveConductor(s, live, deps.heartbeatAlive, deps.treeGone),
+      // fase 7: um ITEM de lote vivo também já tem condutor (o da sessão do lote)
+      (s) => s.board === board && sessionCardIds(s).includes(cardId) && isLiveConductor(s, live, deps.heartbeatAlive, deps.treeGone),
     );
     if (already) return { queued: false }; // its conductor is on it (e.g. the conductor itself moved the card here)
     const place = opts.resume ? { resume: true as const } : opts.yielded ? { yielded: true as const } : {};
-    entries.push({ board, cardId, queuedAt: new Date((deps.now ?? Date.now)()).toISOString(), attempts: 0, ...place });
+    entries.push({
+      board,
+      cardId,
+      queuedAt: new Date((deps.now ?? Date.now)()).toISOString(),
+      attempts: 0,
+      ...place,
+      ...(opts.handoff ? { handoff: opts.handoff } : {}),
+    });
     await deps.queue.persist(entries);
     logOf(deps)(
-      opts.resume
+      opts.handoff
+        ? `${board}/${cardId} volta para a frente da fila do condutor (o train decidiu a submissão ${opts.handoff.runId.slice(0, 8)}: ${opts.handoff.status})`
+        : opts.resume
         ? `${board}/${cardId} volta para a frente da fila do condutor (retomada de card estacionado)`
         : opts.yielded
           ? `${board}/${cardId} volta à fila do condutor DEPOIS das que esperavam vaga (estacionou por quietude e cedeu a vaga)`
@@ -574,7 +779,7 @@ export function isConductorOrphan(card: Card, config: BoardConfig, gate?: Pick<B
 }
 
 /**
- * One PUMP pass over the queue (in priority order — {@link compareConductorQueue}), serialized with admission
+ * One PUMP pass over the queue (in the board's order — {@link compareConductorQueue}), serialized with admission
  * under one lock so the per-board count cannot race a concurrent pass into a third conductor. Every outcome of a
  * spawn attempt is decided HERE:
  *   • ok                       → out of the queue (the card now has its conductor);
@@ -591,6 +796,24 @@ export function isConductorOrphan(card: Card, config: BoardConfig, gate?: Pick<B
  */
 export async function pumpConductorQueue(deps: ConductorDeps): Promise<ConductorPumpReport> {
   return withKeyedLock(QUEUE_LOCK, () => pumpUnlocked(deps));
+}
+
+/**
+ * Fase 3 — a TRAVA do despacho para uma ação do OPERADOR sobre um card conduzido («Parar condutor», «Devolver ao fluxo»):
+ * a mesma da admissão e do pump, para que nenhuma passada concorrente re-admita o card ou abra um condutor novo enquanto
+ * a ação tira o card da fila, encerra a sessão e mexe no driver.
+ */
+export function withConductorDispatchLock<T>(fn: () => Promise<T>): Promise<T> {
+  return withKeyedLock(QUEUE_LOCK, fn);
+}
+
+/** Tira `board/cardId` da fila do condutor (chamar DENTRO de {@link withConductorDispatchLock}). Devolve se tirou. */
+export async function dropQueuedConductorCard(store: ConductorQueueStore, board: string, cardId: string): Promise<boolean> {
+  const entries = await store.load();
+  const kept = entries.filter((e) => !(e.board === board && e.cardId === cardId));
+  if (kept.length === entries.length) return false;
+  await store.persist(kept);
+  return true;
 }
 
 /** O registro do retido é escrituração — nunca pode travar o pump. */
@@ -637,7 +860,7 @@ async function adoptOrphans(deps: ConductorDeps, entries: ConductorQueueEntry[],
   const nowIso = new Date((deps.now ?? Date.now)()).toISOString();
   let changed = false;
   for (const { board, card } of candidates) {
-    if (sessions.some((s) => s.board === board && s.cardId === card.id && isLiveSession(s, live, deps.heartbeatAlive))) continue;
+    if (sessions.some((s) => s.board === board && sessionCardIds(s).includes(card.id) && isLiveSession(s, live, deps.heartbeatAlive))) continue;
     const inFlight = await (deps.cardInFlight?.(board, card.id) ?? Promise.resolve(false)).catch(() => true);
     if (inFlight) continue;
     const marked = await deps.markDriver(board, card.id).then(
@@ -672,9 +895,49 @@ async function pumpUnlocked(deps: ConductorDeps): Promise<ConductorPumpReport> {
   const finished = await finishedConductors(deps, liveConductors);
   const liveCount = countLiveConductorsByBoard(liveConductors.filter((s) => !finished.has(s.sessionId)));
 
+  // Fase 7 — NUNCA DOIS CONDUTORES NA MESMA FUNCIONALIDADE (decisão 9): quem já a ocupa — um condutor vivo (todos os
+  // cards dele, lote incluído), uma sessão de implementação aberta à mão, uma entrega ainda no train — e o que esta
+  // passada despachar. A chave de cada card é lida uma vez por passada.
+  const keyCache = new Map<string, Promise<FeatureKey | null>>();
+  const keyOf = (board: string, card: Card | null, cardId: string): Promise<FeatureKey | null> => {
+    if (!deps.featureKeyOf) return Promise.resolve(null);
+    const k = `${board}/${cardId}`;
+    let p = keyCache.get(k);
+    if (!p) {
+      p = (async () => {
+        const c = card ?? (await deps.readCard(board, cardId).catch(() => null));
+        if (!c) return null;
+        const key = await deps.featureKeyOf!(board, c).catch(() => null);
+        return sharesFeature(key) ? key : null;
+      })();
+      keyCache.set(k, p);
+    }
+    return p;
+  };
+  const busyFeatures = new Map<string, ConductorFeatureHolder>();
+  if (deps.featureKeyOf) {
+    const holders = sessions.filter(
+      (s) => (s.driver === "conductor" || s.role === "implement") && !!s.board && !finished.has(s.sessionId) && isLiveSession(s, live, deps.heartbeatAlive) && !deps.treeGone?.(s),
+    );
+    for (const s of holders) {
+      for (const id of sessionCardIds(s)) {
+        const key = await keyOf(s.board as string, null, id);
+        if (key && !busyFeatures.has(`${s.board}/${key.id}`)) busyFeatures.set(`${s.board}/${key.id}`, { sessionId: s.sessionId, cardId: s.cardId as string, via: "session" });
+      }
+    }
+    for (const h of (await deps.pendingHandoffs?.().catch(() => [])) ?? []) {
+      for (const id of [h.cardId, ...(h.batchCardIds ?? [])]) {
+        const key = await keyOf(h.board, null, id);
+        if (key && !busyFeatures.has(`${h.board}/${key.id}`)) busyFeatures.set(`${h.board}/${key.id}`, { sessionId: h.runId, cardId: h.cardId, via: "handoff" });
+      }
+    }
+  }
+
   const keep: ConductorQueueEntry[] = [];
   /** boards em que esta passada abriu um condutor — a vez cedida (`yielded`) de quem ficou nele foi servida */
   const servedBoards = new Set<string>();
+  /** os cards que ESTA passada despachou, por board — contam como vivos para a reserva do dono já na passada */
+  const spawnedThisPass = new Map<string, string[]>();
   let boxFull = false;
   /** a passada PERGUNTOU ao governador por alguma entrada (ver {@link ConductorDeps.reportHeld}) */
   let consulted = false;
@@ -697,8 +960,20 @@ async function pumpUnlocked(deps: ConductorDeps): Promise<ConductorPumpReport> {
     report.waiting.push({ board: e.board, cardId: e.cardId, reason });
     if (changed) log(`${e.board}/${e.cardId} esperando: ${reason}`);
   };
+  /** Os itens da fila que podem entrar no lote do líder `lead` (a régua barata; claim_batch valida tudo). */
+  const batchCandidates = async (lead: ConductorQueueEntry, key: FeatureKey): Promise<string[]> => {
+    const out: string[] = [];
+    for (const q of queued) {
+      const c = q.card;
+      if (q.entry.board !== lead.board || q.entry.cardId === lead.cardId || q.entry.solo || !c) continue;
+      if (!isConducted(c) || !batchable(c) || c.deferred || c.reopenPending) continue;
+      if ((await keyOf(q.entry.board, c, c.id))?.id !== key.id) continue;
+      out.push(c.id);
+    }
+    return out;
+  };
 
-  // The board's priority decides who gets a free slot first (compareConductorQueue) — the queue is persisted in
+  // The board's order (bug severity, then column position) decides who gets a free slot first (compareConductorQueue) — the queue is persisted in
   // that order too, so the file reads as the dispatch order.
   // Uma leitura que LANÇA não é um card que sumiu (WP5-F1): guarda o erro para a entrada ficar na fila.
   const queued = await Promise.all(
@@ -736,6 +1011,14 @@ async function pumpUnlocked(deps: ConductorDeps): Promise<ConductorPumpReport> {
         drop(e, "o card foi para a lixeira");
         continue;
       }
+      if (miss?.kind === "transferred") {
+        // A entrada segue o card (nenhum alarme): no board novo o pump julga o driver, o status e a política de lá. Uma
+        // entrada que já existe lá para o mesmo card vence (nunca duplica).
+        const already = entries.some((x) => x !== e && x.board === miss.toBoard && x.cardId === e.cardId);
+        if (already) drop(e, `o card mudou para o board «${miss.toBoard}» e já está na fila de lá`);
+        else wait(e, `o card mudou para o board «${miss.toBoard}» — a entrada o seguiu`, "transferred", { board: miss.toBoard });
+        continue;
+      }
       if (miss?.kind === "missing") {
         await deps.recordCardMissing?.(e, miss).catch((err) =>
           log(`${e.board}/${e.cardId}: o registro do card sumido falhou — ${err instanceof Error ? err.message : String(err)}`),
@@ -757,7 +1040,19 @@ async function pumpUnlocked(deps: ConductorDeps): Promise<ConductorPumpReport> {
       continue;
     }
     if (card.status && config?.statuses.find((s) => s.id === card.status)?.terminal) {
+      // fase 6 — a história acabou: o driver sai junto (dois cards entregues seguiam «conduzidos» para sempre, e a tela
+      // oferecia «Parar condutor» sobre ninguém)
+      if (isConducted(card)) await deps.clearDriver(e.board, e.cardId).catch(() => {});
       drop(e, `card já está num status terminal (${card.status})`);
+      continue;
+    }
+    // Fase 6 (6D) — a REABERTURA pendente roda a skill dela antes de qualquer condutor (driver.ts conductorEntryVerdict):
+    // chamar o condutor aqui gastava uma sessão que parava no PRE-VOO. O card volta ao fluxo (sem o driver do despacho) e
+    // a entrada dele é reavaliada — a cascata roda a skill da reabertura no passo onde ele está.
+    if (card.reopenPending) {
+      await deps.clearDriver(e.board, e.cardId).catch(() => {});
+      drop(e, "reabertura pendente — a skill da reabertura roda antes do condutor (driver do despacho removido)");
+      void deps.reevaluateEntry?.(e.board, e.cardId).catch(() => {});
       continue;
     }
     const policy = resolveConductorPolicy(config);
@@ -777,7 +1072,7 @@ async function pumpUnlocked(deps: ConductorDeps): Promise<ConductorPumpReport> {
       continue;
     }
     const maxSessions = paceCap(policy.maxSessions, boardGate);
-    if (liveConductors.some((s) => s.board === e.board && s.cardId === e.cardId)) {
+    if (liveConductors.some((s) => s.board === e.board && sessionCardIds(s).includes(e.cardId))) {
       drop(e, "já tem um condutor vivo");
       continue;
     }
@@ -789,6 +1084,35 @@ async function pumpUnlocked(deps: ConductorDeps): Promise<ConductorPumpReport> {
     if (!scope.admit) {
       wait(e, `${scope.why} — a fila espera`, CONDUCTOR_SCOPE_WAIT_KIND);
       continue;
+    }
+    // Fase 6 (6D) — o card ESPERA OUTRA HISTÓRIA: fica na fila COM o driver (a vez guardada) e não gasta vaga; a primeira
+    // passada depois de a dependência chegar o despacha (uma retomada, na frente). Uma leitura que falha não segura.
+    const dependency = await deps.dependencyHold?.(e.board, card, config).catch(() => null);
+    if (dependency) {
+      wait(e, `espera outra história: ${dependency}`, CONDUCTOR_DEPENDENCY_WAIT_KIND);
+      continue;
+    }
+    // Fase 6 — a reserva do dono: um card de SINAL não toma a fatia do PRD/pedidos (espera com a vez guardada). Os vivos
+    // são os do retrato do começo da passada MAIS os que esta passada já despachou (senão N sinais admitidos numa passada
+    // viam todos o mesmo retrato e passavam juntos da fatia); a fila do board diz se há trabalho do dono esperando.
+    if (card.labels?.includes("sinal")) {
+      const liveIds = [...liveConductors.filter((s) => s.board === e.board && s.cardId).map((s) => s.cardId as string), ...(spawnedThisPass.get(e.board) ?? [])];
+      const ownerWorkQueued = queued.some((q) => q.entry.board === e.board && q.entry.cardId !== e.cardId && !!q.card && !q.card.labels?.includes("sinal"));
+      const reserve = await deps.signalSlotHold?.(e.board, card, liveIds, maxSessions, ownerWorkQueued).catch(() => null);
+      if (reserve) {
+        wait(e, reserve, CONDUCTOR_SIGNAL_RESERVE_WAIT_KIND);
+        continue;
+      }
+    }
+    // Fase 7 — a funcionalidade ocupada: espera COM a vez guardada e sem gastar vaga. A retomada do train do MESMO card
+    // não espera por ela mesma (ela é a dona da funcionalidade).
+    const featureKey = await keyOf(e.board, card, e.cardId);
+    if (featureKey) {
+      const holder = busyFeatures.get(`${e.board}/${featureKey.id}`);
+      if (holder && holder.cardId !== e.cardId) {
+        wait(e, `${featureBusyReason(holder, featureKey.title)} — a fila espera`, CONDUCTOR_FEATURE_BUSY_WAIT_KIND);
+        continue;
+      }
     }
     const liveNow = liveCount.get(e.board) ?? 0;
     let viaExtraSlot: string | null = null;
@@ -805,7 +1129,10 @@ async function pumpUnlocked(deps: ConductorDeps): Promise<ConductorPumpReport> {
       }
       viaExtraSlot = extra.why;
     }
-    const overBudget = await deps.budgetRefusal?.(e.board, card).catch(() => null);
+    // A retomada de um `done` do train (só a projeção falta — o código já está em stage) não passa pelo teto: o gasto
+    // de quem passou ao train já entrou no ledger, e segurá-la deixaria o trabalho integrado parado sem condutor vivo
+    // para pedir o aumento (conductor-handoff.ts).
+    const overBudget = e.handoff?.status === "done" ? null : await deps.budgetRefusal?.(e.board, card).catch(() => null);
     if (overBudget) {
       wait(e, overBudget, "budget");
       continue;
@@ -818,22 +1145,32 @@ async function pumpUnlocked(deps: ConductorDeps): Promise<ConductorPumpReport> {
       continue;
     }
 
+    // o teto pelo tipo fica VISÍVEL no card antes da sessão nascer (o despacho abaixo o deriva igual, com ou sem o carimbo)
+    await deps.stampModelCap?.(e.board, e.cardId).catch(() => {});
+    // Fase 7 — o LOTE: um líder loteável (correção/manutenção, fora de «Outros») recebe na tarefa os itens da MESMA
+    // funcionalidade que esperam na fila (só os ids). Quem ESCOLHE é a sessão (claim_batch) — decisão 5 do dono.
+    const candidates = featureKey && !e.solo && !e.handoff && batchable(card) ? await batchCandidates(e, featureKey) : [];
     const res = await deps
       .spawn({
         role: "implement",
-        task: conductorTask(e.board, e.cardId),
+        task: e.handoff
+          ? conductorHandoffTask(e.board, e.cardId, e.handoff)
+          : candidates.length
+            ? conductorBatchTask(e.board, e.cardId, candidates)
+            : conductorTask(e.board, e.cardId),
         board: e.board,
         cardId: e.cardId,
-        // The board's model is the DEFAULT; the card's own route cap lowers it (see conductorModelFor).
-        model: conductorModelFor(policy.model, card.routing?.modelCap),
+        // The board's model is the DEFAULT; the card's cap lowers it (see conductorModelFor) — the explicit
+        // `routing.modelCap`, else the one its TYPE gets at admission (Sonnet for bug/chore, conductorModelCapFor).
+        model: conductorModelFor(policy.model, conductorModelCapFor(card)),
         // A per-DISPATCH suffix (the recycle path's convention): a card re-dispatched after its conductor died gets a
         // NEW tmux name, so the dead registry row — same card, same old name — never looks alive again through the
         // new process (measured v0.9.0: the re-dispatched session resurrected the killed one and the board counted
         // 2 conductors for 1, starving the next card of a slot).
         name: conductorSessionSlug(e.cardId, (deps.now ?? Date.now)()),
         actor: "service:conductor",
-        // The human's acceptance IS the go: the session is on the operator's behalf, not the copiloto's own
-        // (only copilot-spawned sessions are the steward's to reap — a conductor waiting at a pause must not be).
+        // The session is on the operator's behalf, not the copiloto's own (only copilot-spawned sessions are the
+        // steward's to reap — a conductor waiting at a pause must not be). The go to BUILD is the plan critic's.
         spawnedBy: "human",
         driver: "conductor",
         command: conductorCommand(e.board, e.cardId),
@@ -841,7 +1178,9 @@ async function pumpUnlocked(deps: ConductorDeps): Promise<ConductorPumpReport> {
       .catch((err): SpawnSessionResult => ({ ok: false, code: "spawn_failed", reason: err instanceof Error ? err.message : String(err) }));
 
     if (res.ok) {
+      if (featureKey) busyFeatures.set(`${e.board}/${featureKey.id}`, { sessionId: res.session.sessionId, cardId: e.cardId, via: "session" });
       liveCount.set(e.board, (liveCount.get(e.board) ?? 0) + 1);
+      spawnedThisPass.set(e.board, [...(spawnedThisPass.get(e.board) ?? []), e.cardId]);
       servedBoards.add(e.board);
       report.spawned.push({ board: e.board, cardId: e.cardId, sessionId: res.session.sessionId, tmuxSession: res.tmuxSession });
       log(`${e.board}/${e.cardId} → condutor ${res.tmuxSession} (${res.route.model ?? "?"}, sessão ${res.session.sessionId.slice(0, 8)})`);
@@ -911,6 +1250,18 @@ export interface ConductorEndDeps
   kill(s: AgentSession): Promise<void>;
   /** release the card claims the session holds (the tmux death would too, one tick later). */
   releaseClaims(s: AgentSession): Promise<void>;
+  /**
+   * Fase 7 — o LÍDER de um lote saiu (lixeira, adiado, sem driver): os ITENS ainda abertos da sessão perdem a marca do
+   * lote, o claim e voltam à fila normal ({@link batchLeadDropped}). Ausente ⇒ os itens esperam o operador.
+   */
+  releaseBatchItems?(s: AgentSession, why: string): Promise<void>;
+  /**
+   * Fase 7 — a sessão de LOTE acabou (tudo entregue, ou o líder saiu): a marca do lote sai do líder e de cada item que
+   * ainda a carrega (só a DESTE lote). Sem isso, um card reaberto depois herdaria o plano aprovado, o teto e o gasto do
+   * lote antigo. Chamado para toda sessão que acaba (a que retomou só depois de uma divisão não tem lote na linha, mas
+   * o líder dela guarda a marca). Ausente ⇒ as marcas ficam.
+   */
+  clearBatchMarks?(s: AgentSession): Promise<void>;
   state: ConductorEndState;
 }
 
@@ -963,6 +1314,16 @@ export async function endFinishedConductors(deps: ConductorEndDeps): Promise<Con
     }
     if (!(await deps.requestExit(s).catch(() => false))) continue; // tries again next tick
     st.exitAt = now;
+    if (deps.releaseBatchItems && s.board && s.cardId && sessionCardIds(s).length > 1) {
+      const [lead, config] = await Promise.all([deps.readCard(s.board, s.cardId).catch(() => null), deps.readBoardConfig(s.board).catch(() => null)]);
+      if (batchLeadDropped(s, lead, config)) {
+        await deps.releaseBatchItems(s, why).catch((err) => log(`${label}: os itens do lote não voltaram à fila (${err instanceof Error ? err.message : String(err)})`));
+        log(`${label}: o líder do lote saiu (${why}) — os itens abertos voltam à fila`);
+      }
+    }
+    if (deps.clearBatchMarks) {
+      await deps.clearBatchMarks(s).catch((err) => log(`${label}: a marca do lote não saiu dos cards (${err instanceof Error ? err.message : String(err)})`));
+    }
     await deps.releaseClaims(s).catch(() => {});
     report.exited.push(s.sessionId);
     log(`${label}: ${why} e ${work.detail} — /exit enviado ao condutor`);

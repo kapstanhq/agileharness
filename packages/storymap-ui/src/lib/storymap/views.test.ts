@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyViewFilter,
   archivedKanbanStatusIds,
   KANBAN_LOOSE_COLUMN,
   kanbanColumnOf,
@@ -8,7 +7,6 @@ import {
   kanbanStories,
   terminalStatusIds,
   unlistedKanbanStatusIds,
-  type Row,
 } from "./views";
 import { coerceCard } from "./repo";
 import type { BoardConfig, Card, StatusDef } from "./types";
@@ -35,11 +33,6 @@ const board: BoardConfig = {
   linkTypes: [],
 };
 
-const row = (id: string, statusId: string | null, score: number | null): Row => ({
-  card: coerceCard(id, { type: "story", status: statusId }, ""),
-  score,
-});
-
 describe("terminalStatusIds", () => {
   it("returns the explicitly-flagged terminal statuses (not the last by position)", () => {
     expect(terminalStatusIds(board)).toEqual(new Set(["concluida"]));
@@ -61,49 +54,6 @@ describe("terminalStatusIds", () => {
       statuses: [status("rascunho"), status("concluida", { terminal: true }), status("refinar")],
     };
     expect(terminalStatusIds(refinarLast)).toEqual(new Set(["concluida"]));
-  });
-});
-
-describe("applyViewFilter — scope", () => {
-  const rows: Row[] = [
-    row("a", "concluida", 10),
-    row("b", "desenvolver", 8),
-    row("c", "concluida", 6),
-    row("d", "rascunho", null),
-  ];
-
-  it('"open" hides terminal (concluida) cards — the bug the terminal flag fixes', () => {
-    const out = applyViewFilter(rows, { scope: "open", topN: null }, board);
-    expect(out.map((r) => r.card.id)).toEqual(["b", "d"]);
-  });
-
-  it('"all" shows every row', () => {
-    const out = applyViewFilter(rows, { scope: "all", topN: null }, board);
-    expect(out.map((r) => r.card.id)).toEqual(["a", "b", "c", "d"]);
-  });
-
-  it("a specific status keeps only that status", () => {
-    const out = applyViewFilter(rows, { scope: "concluida", topN: null }, board);
-    expect(out.map((r) => r.card.id)).toEqual(["a", "c"]);
-  });
-});
-
-describe("applyViewFilter — topN counts only scored rows", () => {
-  const rows: Row[] = [
-    row("a", "desenvolver", 10),
-    row("b", "desenvolver", 8),
-    row("c", "desenvolver", null), // unscored — must never fill a Top-N slot
-    row("d", "desenvolver", null),
-  ];
-
-  it("Top 2 returns the 2 scored rows, not the unscored tail", () => {
-    const out = applyViewFilter(rows, { scope: "all", topN: 2 }, board);
-    expect(out.map((r) => r.card.id)).toEqual(["a", "b"]);
-  });
-
-  it("Top N never pads with unscored cards when fewer than N are scored", () => {
-    const out = applyViewFilter(rows, { scope: "all", topN: 5 }, board);
-    expect(out.map((r) => r.card.id)).toEqual(["a", "b"]);
   });
 });
 

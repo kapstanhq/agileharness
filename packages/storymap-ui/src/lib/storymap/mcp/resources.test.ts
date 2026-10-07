@@ -85,9 +85,15 @@ describe("agileharness://pipeline/base — o template, medido contra uma leitura
     ).toEqual(noArquivo);
   });
 
-  it("`disparamQuandoArmado` é exatamente quem tem autorun E trigger no arquivo (a lista que o portão de armar pede)", async () => {
+  // O pipeline híbrido: um board registrado nasce no modo condutor, então os passos marcados `autorunOnlyInColumns` no
+  // arquivo NÃO entram na lista (eles só disparam no modo por colunas).
+  it("`disparamQuandoArmado` é exatamente quem tem autorun E trigger no arquivo, menos os passos só-do-modo-colunas", async () => {
     const doc = baseYaml();
-    const esperado = (doc.statuses ?? []).filter((s) => s.autorun === true && s.trigger).map((s) => s.id).sort();
+    const esperado = (doc.statuses ?? [])
+      .filter((s) => s.autorun === true && s.trigger && (s as { autorunOnlyInColumns?: boolean }).autorunOnlyInColumns !== true)
+      .map((s) => s.id)
+      .sort();
+    expect(esperado, "a Entrevista é passo só-do-modo-colunas: não dispara num board novo").not.toContain("interview");
     const publicado = ((await ler(URI_PIPELINE_BASE)) as { disparamQuandoArmado: string[] }).disparamQuandoArmado.slice().sort();
     expect(esperado.length, "nenhum passo dispara no _base — a lista não teria o que informar").toBeGreaterThan(0);
     expect(publicado).toEqual(esperado);

@@ -5,7 +5,8 @@
 //
 // When a run tries to write to a board.yaml and the write CHANGES a top-level field
 // that is owner:human (northStar, canvas, releases, personas), the write is BLOCKED
-// with an explicit error naming the field(s) and the run id.
+// with an explicit error naming the field(s) and the run id. A run's write to the owner's
+// markdown documents (docs/prd.md, docs/business-model-canvas.md) is BLOCKED by path.
 //
 // Writes to proposals/ (the draft zone) are always allowed regardless of content.
 // Writes to cards/*.md and code files are always allowed (owner:agent territory).
@@ -29,6 +30,9 @@ const fs = require('fs');
 
 // Matches storymap/boards/<board>/board.yaml
 const BOARD_YAML_RE = /storymap[\\/]+boards[\\/]+[^\\/]+[\\/]+board\.yaml$/i;
+// Matches storymap/boards/<board>/docs/{prd,business-model-canvas}.md — os documentos markdown do dono — e
+// storymap/boards/<board>/design/style-guide.md (o tom é do dono; o arquivo tem um escritor só, o servidor).
+const OWNER_DOC_RE = /storymap[\\/]+boards[\\/]+[^\\/]+[\\/]+(docs[\\/]+(prd|business-model-canvas)|design[\\/]+style-guide)\.md$/i;
 
 // ── Helpers (mirrored from validate-storymap-gate.js) ───────────────────────
 
@@ -187,12 +191,20 @@ module.exports = {
 
       const normalized = filePath.split(path.sep).join('/');
 
-      // Only board.yaml files carry human-owned fields.
-      // Cards and code are always allowed — skip them fast.
-      if (!BOARD_YAML_RE.test(normalized)) return null;
+      // Os arquivos do DONO: o board.yaml (campos owner:human) e os documentos markdown que são dele (o PRD e o
+      // Business Model Canvas). Cards e código são sempre permitidos — saem rápido. (Antes este recorte só
+      // deixava passar o board.yaml, e as linhas do PRD/BMC em `evaluateOwnerGuard` nunca eram alcançadas.)
+      const isOwnerDoc = OWNER_DOC_RE.test(normalized);
+      if (!BOARD_YAML_RE.test(normalized) && !isOwnerDoc) return null;
 
       const ownership = loadOwnership();
       if (!ownership) return null; // module unavailable → lenient
+
+      // Um documento do dono é bloqueado pelo CAMINHO, não pelo conteúdo — sem YAML para comparar.
+      if (isOwnerDoc) {
+        const verdict = ownership.evaluateOwnerGuard({ filePath: normalized, board: null, beforeYaml: null, afterYaml: null, runId });
+        return verdict ? { rule: 'business-intent-guard', message: verdict.message, fix: verdict.fix } : null;
+      }
 
       const yaml = loadYamlLib();
       if (!yaml) return null; // no YAML parser → lenient

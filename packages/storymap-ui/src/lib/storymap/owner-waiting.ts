@@ -7,6 +7,9 @@
 //      move_card do MCP) o leva adiante rumo ao ar — da saída de «Aprovar entrega» até entrar em Publicar — enquanto
 //      houver uma decisão do dono aberta nele (uma pergunta dele, ou o card tocar uma classe dele). O humano move
 //      pela UI, sem trava: é ele quem decide. Voltar (refinar, corrigir), arquivar e chegar à aprovação seguem livres.
+//      E, em QUALQUER modo, «Aprovar entrega» travada em CÓDIGO: com a caixa `delivery` do perfil desligada
+//      (autonomy-profile.ts — Mínima, ou o modo humano de antes), nenhum agente atravessa o passo de aprovação rumo ao
+//      ar. Antes isso era só texto da skill do condutor; agora é a régua que a cascata, o advance-card e o move_card leem.
 //   2. `ownerDecisionsWaiting` — o que espera o dono (as entradas de Decidir do Inbox), com há quantos dias: o
 //      lembrete semanal vai no resumo da semana (E), nunca num push por decisão. As propostas de PRD mantêm o vencimento de 14 dias
 //      (governance.ts) — a única que sai do Inbox sozinha, e o board fica como estava.
@@ -17,6 +20,7 @@ import type { InboxEntry } from "./inbox/entries";
 import { formatDecisionText, localTimeFormatter, type TimeFormatter } from "./inbox/copy";
 import { isDeliveryApprovalStep } from "./delivery-audit";
 import { ownerClassLabel } from "./owner-classes";
+import { storyDecides } from "./autonomy-profile";
 import { openQuestions } from "./questions";
 import type { BoardConfig, Card, StatusDef } from "./types";
 
@@ -56,6 +60,18 @@ function heldTargets(statuses: readonly StatusDef[]): Set<string> {
 }
 
 /**
+ * O movimento ATRAVESSA o passo de aprovação de entrega — sai dele, ou o pula — para frente? Sem passo de aprovação
+ * declarado, nunca. PURA.
+ */
+function crossesDeliveryApproval(from: Pick<StatusDef, "id"> | null | undefined, to: Pick<StatusDef, "id">, statuses: readonly StatusDef[]): boolean {
+  const approvalIdx = statuses.findIndex((s) => isDeliveryApprovalStep(s));
+  if (approvalIdx < 0) return false;
+  const toIdx = statuses.findIndex((s) => s.id === to.id);
+  const fromIdx = from ? statuses.findIndex((s) => s.id === from.id) : -1;
+  return fromIdx >= 0 && fromIdx <= approvalIdx && toIdx > approvalIdx;
+}
+
+/**
  * Este movimento de um AGENTE leva o card rumo ao ar por cima de uma decisão do dono? O motivo, em português — ou
  * null (livre). Só em só-negócio (no modo humano o dono já aprova cada passo). PURA — a cascata (decideForward), o
  * advance-card (decideAdvance) e o move_card do MCP leem esta mesma régua.
@@ -80,6 +96,11 @@ export function ownerPublishHold(
   // Um card ADIADO (deferral.ts — inclusive o «Parar» do teto de rodadas) não vai ao ar pela mão de um agente, em
   // qualquer modo: adiar é «não agora», e levar adiante rumo ao ar é exatamente o que o adiamento suspende.
   if (card.deferred) return `o card está adiado (${card.deferred.reason}) — só o dono o leva adiante`;
+  // «Aprovar entrega» TRAVADA EM CÓDIGO: atravessar o passo de aprovação (sair dele, ou pulá-lo) rumo ao ar, com a caixa
+  // `delivery` desligada para esta story, é do dono — salvo quando foi ele quem já atravessou (`ownerApproved`).
+  if (!opts.ownerApproved && crossesDeliveryApproval(from, to, config.statuses) && !storyDecides(card, config, "delivery")) {
+    return "espera o dono em «Aprovar entrega»: a autonomia deste board deixa a aprovação da entrega com ele";
+  }
   const decisions = ownerDecisionsOnCard(card, config, { questionsOnly: opts.ownerApproved === true });
   if (!decisions.length) return null;
   return `espera o dono antes de ir ao ar: ${decisions.join("; ")}`;

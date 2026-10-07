@@ -369,6 +369,64 @@ describe("S5/S7 — parados e fila", () => {
   });
 });
 
+// quick-fix health-red: uma espera que o dono ESCOLHEU (board pausado) não é a ferramenta travada.
+describe("S6/S7 — board pausado não conta, e a retomada zera o relógio", () => {
+  const wait = (board: string, n: number) => Array.from({ length: n }, (_, i) => ({ board, cardId: `story-ex91${i}${board.length}` }));
+  const entered = (board: string, cardId: string, hoursAgo: number) => ({ board, cardId, to: "release", at: NOW - hoursAgo * HOUR, actor: "cascade" });
+
+  it("S6: board pausado com cards em release ⇒ verde, e o detalhe ainda cita a espera", () => {
+    const w = wait("armazem", 3);
+    const held = w.map((c) => ({ ...c, phase: "needs-human", exitCode: 3 }));
+    const sick = green({ publishWaiting: w, publishHeld: held, transitions: w.map((c) => entered("armazem", c.cardId, 26)) });
+    expect(level(computeHealth(sick), "S6").level).toBe("red");
+    const s = level(computeHealth({ ...sick, pausedBoards: ["armazem"] }), "S6");
+    expect(s).toMatchObject({ value: 0, level: "ok" });
+    expect(s.detail).toMatch(/3 cards esperam em board pausado \(não conta\)/);
+  });
+
+  it("S7: etiqueta board-paused com o board NÃO pausado, 60 h ⇒ vermelho (etiqueta velha de despachante morto)", () => {
+    const q = [{ board: "armazem", cardId: "story-ex9101", queuedAt: NOW - 60 * HOUR, waitKind: "board-paused" }];
+    expect(level(computeHealth(green({ conductorQueue: q })), "S7")).toMatchObject({ value: 60, level: "red" });
+    // com o board de fato pausado, a mesma entrada sai da conta
+    expect(level(computeHealth(green({ conductorQueue: q, pausedBoards: ["armazem"] })), "S7")).toMatchObject({ value: 0, level: "ok" });
+  });
+
+  it("S7: entrada de board pausado ⇒ verde", () => {
+    const q2 = [{ board: "armazem", cardId: "story-ex9102", queuedAt: NOW - 60 * HOUR }];
+    const s = level(computeHealth(green({ conductorQueue: q2, pausedBoards: ["armazem"] })), "S7");
+    expect(s).toMatchObject({ value: 0, level: "ok" });
+    expect(s.detail).toMatch(/1 card espera em board pausado/);
+  });
+
+  it("mistura: o board pausado sai da conta, o NÃO pausado ainda fica vermelho", () => {
+    const deliveredStatuses = { armazem: ["concluida"], loja: ["concluida"] };
+    const w = [...wait("armazem", 1), ...wait("loja", 1)];
+    const s6 = level(
+      computeHealth(green({ deliveredStatuses, publishWaiting: w, transitions: [entered("armazem", w[0].cardId, 30), entered("loja", w[1].cardId, 5)], pausedBoards: ["armazem"] })),
+      "S6",
+    );
+    expect(s6).toMatchObject({ value: 5, level: "red" });
+    expect(s6.evidence).toEqual(["loja/" + w[1].cardId]);
+    const q = [
+      { board: "armazem", cardId: "story-ex9103", queuedAt: NOW - 50 * HOUR },
+      { board: "loja", cardId: "story-ex9104", queuedAt: NOW - 6 * HOUR },
+    ];
+    expect(level(computeHealth(green({ conductorQueue: q, pausedBoards: ["armazem"] })), "S7")).toMatchObject({ value: 6, level: "red" });
+  });
+
+  it("board recém-retomado conta DA RETOMADA, não de quando o card entrou na fila", () => {
+    const w = wait("armazem", 1);
+    const resumedAt = { armazem: NOW - 1 * HOUR };
+    const s6 = level(computeHealth(green({ publishWaiting: w, transitions: [entered("armazem", w[0].cardId, 40)], resumedAt })), "S6");
+    expect(s6).toMatchObject({ value: 1, level: "ok" });
+    const q = [{ board: "armazem", cardId: "story-ex9105", queuedAt: NOW - 40 * HOUR }];
+    expect(level(computeHealth(green({ conductorQueue: q, resumedAt: { armazem: NOW - 3 * HOUR } })), "S7")).toMatchObject({ value: 3, level: "amber" });
+    // a retomada é um CHÃO: espera que começou depois dela conta normalmente
+    const fresh = [{ board: "armazem", cardId: "story-ex9106", queuedAt: NOW - 30 * MIN }];
+    expect(level(computeHealth(green({ conductorQueue: fresh, resumedAt: { armazem: NOW - 3 * HOUR } })), "S7").value).toBe(0.5);
+  });
+});
+
 describe("S6 — vazão até o ar", () => {
   const w = (n: number) => Array.from({ length: n }, (_, i) => ({ board: "armazem", cardId: `c${i}` }));
   const delivered = (hoursAgo: number) => [{ board: "armazem", cardId: "x", to: "concluida", at: NOW - hoursAgo * HOUR, actor: "system" }];

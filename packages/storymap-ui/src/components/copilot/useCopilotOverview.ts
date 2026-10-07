@@ -48,6 +48,7 @@ export function useCopilotOverview(boardId: string): CopilotOverview {
               orchTokenPresent: o.orchTokenPresent,
               writeBoard: o.riskMatrix["write-board"],
               deploy: o.riskMatrix["deploy"],
+              paused: o.paused,
             }).level,
             // O tier sai da MESMA projeção que o guard por chamada lê (copilotTier ⇒ dispositionFor), a
             // partir da matriz RESOLVIDA — nunca de uma segunda regra escrita aqui.

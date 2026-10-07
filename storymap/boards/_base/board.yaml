@@ -137,8 +137,7 @@ toolConfigs:
 # WS4 (F3) — PERFIS DE ROTA nomeados (BoardConfig.routeProfiles). O harness-enrich escolhe um pela
 # classificação que já faz (storyType + hasUiSurface) e estampa o `routing` do card a partir dele. O
 # kernel só lê `routing.skips` (nunca o rótulo). `express` pula os passos DISPENSÁVEIS + capa o modelo/
-# effort — um technical trivial deixa de pagar entrevista/design/priorizar em opus. Regra de coerência: um
-# perfil que pula `priorizar` obriga o enrich a gravar um priorityCall mínimo no MESMO run (gate fail-closed).
+# effort — um technical trivial deixa de pagar entrevista/design em opus.
 routeProfiles:
   full:
     skips: []
@@ -147,15 +146,15 @@ routeProfiles:
     skips: []
     description: só os skips por tipo (comportamento atual)
   express:
-    skips: [interview, design-ux, design-ui, com-design, ready, priorizar]
+    skips: [interview, design-ux, design-ui, com-design, ready]
     modelCap: sonnet
     effortCap: medium
-    description: ajuste simples / technical trivial; o enrich grava priorityCall mínimo ao pular priorizar
+    description: ajuste simples / technical trivial
   # WS-7 (§7.2) — perfil MECÂNICO: trabalho FECHADO de máquina (reaplicar um delta, julgar hunks
   # cosmético×substantivo — o `harness-resolve` do WS-10 spawna SEMPRE nele). Só CAPA (skips vazio): a
   # economia aqui não é pular passo, é não pagar opus por tarefa determinística. É por rodar barato que a
   # escada do D14 pode tentar o juiz ANTES do humano sem culpa de custo. Sem `maxTurns`: um trabalho
-  # mecânico não tem RICE nem tasks ⇒ o baseline lean (40) do model-routing já cai em cima — knob novo
+  # mecânico não tem tasks ⇒ o baseline lean (40) do model-routing já cai em cima — knob novo
   # seria schema novo para o número que o mecanismo já dá.
   mechanical:
     skips: []
@@ -227,6 +226,31 @@ specialists:
 # estiverem em AGILEHARNESS_DEPLOY_RECIPES no env do SERVIÇO (ex.: "sha-no-ar meuapp"). Escape só HUMANO:
 # AGILEHARNESS_DEPLOY_FRESHNESS=off no env do serviço (lido a cada deploy; grita no log a cada uso).
 
+# AS RAIAS DO KANBAN (lib/storymap/lanes.ts + kanban-features.ts) — a VISTA padrão do quadro: seis raias, cada uma
+# com o seu trecho do fluxo em cima. Só apresentação: os cards guardam o status, e o passo aparece dentro do card
+# («Desenvolver · 2 de 3»). «Precisa de você» não é raia — é o estado do card (o Decidir do Inbox). Um board troca
+# o mapa declarando o seu `view.lanes` (o dele vence este inteiro).
+view:
+  lanes:
+    - id: triagem
+      label: Triagem
+      statuses: [capturando, triage, pronta]
+    - id: moldando
+      label: Moldando
+      statuses: [grill, enriquecer, interview, design-ux, design-ui, com-design, refinar, corrigir, descontinuar]
+    - id: construindo
+      label: Construindo
+      statuses: [ready, plano-tecnico, desenvolver]
+    - id: verificando
+      label: Verificando
+      statuses: [revisar-codigo, qa-automatizado]
+    - id: entrega
+      label: Entrega
+      statuses: [revisao, merge, stage, release, deploy]
+    - id: noar
+      label: No ar
+      statuses: [concluida]
+
 # STAGES (colunas visuais) — agrupam os STEPS (statuses) consecutivos. O engine anda
 # os STEPS por ordem do array `statuses`; estas colunas são só agrupamento de exibição
 # (um step = coluna simples; vários = fase com sub-lanes). `owner` indica quem atua na
@@ -236,15 +260,10 @@ columns:
     name: Triagem
     color: '#a78bfa'
     owner: agent
-    # A ferramenta ao lado desta fase: as IDEIAS (`/board/<id>/ideias`) — o que ainda NÃO foi decidido
-    # e por isso não tem card nenhum. A Triagem recebe TAREFA (já se sabe o que fazer); a
-    # Ideia é o outro lado da mesma pergunta, e o cabeçalho da coluna ganha a porta para ela.
-    tool: ideias
     description: >-
       Entrada crua. Steps: Capturando (lane OCULTA da captura inteligente — você descreve a dor/objetivo e o
       preview propõe os cards para você aceitar ali mesmo) e Triagem (inbox de report_issue/captura: classifica,
-      deduplica e roteia). Nada vira trabalho até passar para a Descoberta. O que ainda não está decidido não
-      entra aqui: vira Ideia (a porta acima), e volta como tarefa quando a exploração terminar.
+      deduplica e roteia). Nada vira trabalho até passar para a Descoberta.
   - id: discovery
     name: Descoberta
     color: '#3b82f6'
@@ -253,8 +272,7 @@ columns:
     description: >-
       Entender a story (sessão contínua — um agente, vários chapéus). Steps: Dúvidas (perguntas ao humano por
       contexto), Especificar (narrativa + aceite como hipótese), Entrevista (3 usuários sintéticos + 1 lente
-      crítica validam/ajustam o aceite), Estimar (RICE/KANO/funil conforme a natureza da story) e A fazer
-      (go/no-go: aprovar a story para construir).
+      crítica validam/ajustam o aceite) e A fazer (a fila do trabalho, na ordem da coluna).
   - id: prepare
     name: Design
     color: '#d946ef'
@@ -276,10 +294,6 @@ columns:
     name: Entrega
     color: '#a855f7'
     owner: human
-    # A ferramenta que aprofunda esta fase: a Esteira (`/board/<id>/entrega`) mostra ONDE o código
-    # de cada card está — worktree, merge train, stage ou no ar. O cabeçalho da coluna no Kanban
-    # ganha a porta para ela. A COLUNA é a fase da story; a ESTEIRA é a máquina por baixo.
-    tool: entrega
     description: >-
       Aprovar a entrega e publicar — UM card num stepper, 2 toques humanos. ① Aprovar (com o QA
       automatizado verde); daí integrar (código → stage), homologar e liberar acontecem automáticos.
@@ -304,6 +318,15 @@ columns:
     owner: system
     system: true
     description: Terminais — arquivados, duplicados e cancelados. Fora do kanban; acessível pela lixeira no header do board.
+# O PIPELINE HÍBRIDO (types.ts `pipelineMode`/`stepAutoruns`). Um board anda em um de dois modos: com CONDUTOR — o
+# padrão quando o despacho `conductor` está ligado: uma sessão carrega a story de ponta a ponta — ou POR COLUNAS
+# (`pipeline: columns` no board, ou sem condutor). Os passos marcados `autorunOnlyInColumns: true` são as colunas do
+# meio que o condutor dispensa. A marca só MUDA alguma coisa onde o passo tem `autorun: true` — hoje Entrevista,
+# Jornada e Telas: no modo por colunas a skill deles roda na cascata; no modo condutor não dispara sozinha (continua
+# disponível como comando manual) e um card que ninguém conduz só ATRAVESSA o passo. Em Dúvidas, Pronto p/ dev e
+# Revisão de código (`autorun: false`) a marca só registra que o condutor os dispensa: nos DOIS modos eles param e
+# esperam um move manual — assim como Desenvolver e QA automatizado, que não são marcados.
+# A ordem do trabalho é a POSIÇÃO do card na coluna (`order`), não uma nota de prioridade.
 statuses:
   - id: capturando
     name: Capturando
@@ -337,6 +360,7 @@ statuses:
     color: '#60a5fa'
     trigger: harness-grill
     autorun: false
+    autorunOnlyInColumns: true
     model: sonnet
     effort: medium
     maxTurns: 15
@@ -367,6 +391,7 @@ statuses:
     color: '#818cf8'
     trigger: harness-interview
     autorun: true
+    autorunOnlyInColumns: true
     model: sonnet
     effort: high
     maxTurns: 25
@@ -381,44 +406,29 @@ statuses:
     description: >-
       🤖 Automação: o harness-interview simula 3 entrevistas com as personas do board (1 com lente crítica/cética)
       CONTRA a narrativa + aceite já especificados, valida/ajusta os critérios onde a conversa contradiz a hipótese,
-      sintetiza dores/desejos/must-haves/riscos e avança para Estimar. Só stories user — technical/chore/spike/bug
-      pulam direto para Estimar (skipForTypes).
-  - id: priorizar
-    name: Estimar
-    short: EST
-    color: '#ec4899'
-    gate: hasRefinement
-    trigger: harness-prioritize
-    autorun: true
-    model: sonnet
-    effort: medium
-    maxTurns: 15
-    costGuard: true
-    dispensable: true
-    column: discovery
-    description: >-
-      🤖 Automação: o harness-prioritize pontua a story pela régua WSJF — valor, urgência e destravamento (cada um na
-      escala 1·2·3·5·8·13) divididos pelo tamanho — estimando contra as ÂNCORAS já pontuadas do board e contra o
-      que o produto já entregou, e a move para A fazer. A ordem do backlog cai dessa conta, então pontuar um card
-      novo não mexe no score de nenhum outro. Só entra aqui com a narrativa completa (role + quero/precisamos +
-      para/de modo que) e ≥1 critério de aceite (gate hasRefinement).
+      sintetiza dores/desejos/must-haves/riscos e avança para A fazer. Só stories user — technical/chore/spike/bug
+      pulam direto para A fazer (skipForTypes).
   - id: pronta
     name: A fazer
     short: TODO
     color: '#f59e0b'
-    gate: hasPrioritization
+    gate: hasRefinement
     autorun: false
     column: discovery
     description: >-
-      Priorizada — PARADA go/no-go (saída da Descoberta): só humano mexe e arrasta para fora o que deve ser
-      construído. Só entra aqui com a prioridade avaliada (gate hasPrioritization: uma nota WSJF, ou o tier
-      argumentado; a priorização numérica antiga — RICE/KANO/funil — ainda satisfaz o gate, mas é legado).
+      A fila do trabalho (saída da Descoberta), na ORDEM DA COLUNA: o que está no topo vai primeiro — «Fazer
+      antes» leva um card ao topo, «Pode esperar» ao fim; não há nota de prioridade. Num board com condutor, o
+      condutor pega o card daqui quando houver vaga, nessa ordem, para moldar a story; o «vai» para construir é do
+      crítico do plano (ou do dono, com a caixa «spec» desligada), não desta coluna. No modo por colunas é a parada
+      go/no-go: você arrasta para fora o que deve ser construído. Só entra aqui com a narrativa completa (role +
+      quero/precisamos + para/de modo que) e ≥1 critério de aceite (gate hasRefinement).
   - id: design-ux
     name: Jornada
     short: FLUXO
     color: '#d946ef'
     trigger: harness-ux
     autorun: true
+    autorunOnlyInColumns: true
     model: sonnet
     effort: medium
     maxTurns: 20
@@ -445,6 +455,7 @@ statuses:
     color: '#c084fc'
     trigger: harness-ui
     autorun: true
+    autorunOnlyInColumns: true
     model: sonnet
     effort: high
     maxTurns: 25
@@ -488,6 +499,7 @@ statuses:
     short: READY
     color: '#22d3ee'
     autorun: false
+    autorunOnlyInColumns: true
     skipForTypes:
       - technical
       - chore
@@ -549,6 +561,7 @@ statuses:
     gate: hasBuildEvidence
     trigger: harness-review
     autorun: false
+    autorunOnlyInColumns: true
     model: opus
     effort: high
     maxTurns: 80

@@ -49,20 +49,22 @@ describe("lockedExecItem", () => {
 });
 
 describe("a decisão no Inbox, por estado", () => {
-  it("pendente: Decidir em QUALQUER modo; aprovar leva o hash e confirma mostrando o comando, o desfazer e as conferências", () => {
+  // fase 3 — um clique: sem diálogo; o que roda (o bloco estruturado) está no item, ANTES das palavras do agente
+  it("pendente: Decidir em QUALQUER modo; aprovar leva o hash, e o item mostra o comando, o desfazer e as conferências", () => {
     for (const config of [HUMAN, ULTRA]) {
       const d = decide(rec(), config);
       expect(d.bucket).toBe("decidir");
       const approve = d.options.find((o) => o.id === "approve")!;
       expect(approve.invoke).toEqual({ kind: "approve-locked-exec", boardId: "b1", id: "lx-00000000b2", hash: "b".repeat(64) });
-      const body = approve.confirm!.body;
-      expect(body).toContain("Programa: /opt/cofre/bin/cofre-cli");
+      const body = d.details.map((x) => `${x.label}: ${x.value}`);
+      expect(body[0]).toBe("Programa: /opt/cofre/bin/cofre-cli");
       expect(body).toContain("Comando: cofre-cli rotate '--key=api nova'");
-      expect(body).toContain("Para desfazer: cofre-cli rollback");
-      expect(body).toContain("a chave nova está ativa: cofre-cli verifica — passa se terminar com código 0 e a saída contiver “ativa”");
+      expect(body.some((l) => l.startsWith("Desfazer: cofre-cli rollback"))).toBe(true);
+      expect(body).toContain("Confere depois: a chave nova está ativa: cofre-cli verifica — passa se terminar com código 0 e a saída contiver “ativa”");
       // o bloco estruturado vem ANTES das palavras do agente, que entram rotuladas
-      expect(body.indexOf("Explicação do agente:")).toBeGreaterThan(body.indexOf("Depois de rodar, confere:"));
-      expect(body.startsWith("Programa:")).toBe(true);
+      const agent = body.findIndex((l) => l.startsWith("Explicação do agente:"));
+      expect(agent).toBeGreaterThan(body.findIndex((l) => l.startsWith("Confere depois:")));
+      expect(approve.consequence).toMatch(/O que roda exatamente está acima/);
       expect(d.options.map((o) => o.id)).toEqual(["approve", "reject"]);
     }
   });
@@ -84,22 +86,22 @@ describe("a decisão no Inbox, por estado", () => {
     expect(decide(rec({ proposedBy: "session:trocar a chave da API" })).ask).toContain("que uma sessão de agente (trocar a chave da API) pede");
     expect(decide(rec({ proposedBy: "conductor:c1" })).ask).toContain("que o condutor do card c1 pede");
   });
-  it("pendente SEM desfazer: o botão e a confirmação dizem que não há volta, com o plano B", () => {
+  it("pendente SEM desfazer: o botão diz que não há volta, e o item traz o plano B", () => {
     const d = decide(rec({ undoArgv: null, noUndoPlan: "Voltar à chave anterior pelo painel do cofre, com o operador." }));
     const approve = d.options.find((o) => o.id === "approve")!;
     expect(approve.label).toMatch(/sem desfazer/);
     expect(approve.tone).toBe("danger");
-    expect(approve.confirm?.body).toMatch(/SEM DESFAZER — plano B: Voltar à chave anterior pelo painel/);
+    expect(d.details.find((x) => x.label === "Sem desfazer — plano B")?.value).toMatch(/^Voltar à chave anterior pelo painel/);
   });
   it("rodando: Acompanhar, sem botão", () => {
     const d = decide(rec({ status: "running" }));
     expect(d.bucket).toBe("acompanhar");
     expect(d.options).toEqual([]);
   });
-  it("deu certo: Manter (principal) e Desfazer com confirmação", () => {
+  it("deu certo: Manter (principal) e Desfazer, que diz o comando que roda", () => {
     const d = decide(rec({ status: "done" }));
     expect(d.options.map((o) => o.id)).toEqual(["keep", "undo"]);
-    expect(d.options[1].confirm?.body).toContain("cofre-cli rollback");
+    expect(d.options[1].consequence).toContain("cofre-cli rollback");
     expect(decide(rec({ status: "done", undoArgv: null, noUndoPlan: "Voltar à chave anterior pelo painel do cofre." })).options.map((o) => o.id)).toEqual(["keep"]);
   });
   it.each(["failed", "undone", "stale", "expired", "rejected"] as const)("%s: só «Ok» (arquiva), com o motivo", (status) => {

@@ -1,6 +1,6 @@
 // Board-aware "advance to the next pipeline step" — the decoupling seam that lets
 // ONE shared skill (harness-enrich, harness-ux, …) advance correctly on boards with DIFFERENT
-// pipelines. A skill no longer hardcodes `status: priorizar`; it asks for the NEXT step
+// pipelines. A skill no longer hardcodes its next status; it asks for the NEXT step
 // of THIS board (scripts/advance-card.ts wraps this for the headless skill runs).
 //
 // PURE — reuses the same primitives the autorun cascade uses, so manual `advance-card`

@@ -249,8 +249,9 @@ export async function measureTransferBusy(board: string, card: Card): Promise<Tr
     /* sem o engine (boot, testes) */
   }
   try {
-    const { allSessions } = await import("./session-worktree");
-    busy.session = (await allSessions()).some((s) => s.board === board && s.cardId === card.id);
+    const { allSessions, sessionCardIds } = await import("./session-worktree");
+    // fase 7: um ITEM de lote também está ocupado pela sessão que conduz o lote
+    busy.session = (await allSessions()).some((s) => s.board === board && sessionCardIds(s).includes(card.id));
   } catch {
     /* sem o registro de sessões */
   }

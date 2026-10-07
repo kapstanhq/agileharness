@@ -667,7 +667,7 @@ describe("threadResumeSessionId — session threading policy (one agent, many ha
 
   it("never threads across a column boundary (discovery → todo)", () => {
     const c = cfg();
-    expect(threadResumeSessionId("b", "c", c, next(c, "pronta"), "harness-prioritize", "harness-enrich")).toBeUndefined();
+    expect(threadResumeSessionId("b", "c", c, next(c, "pronta"), "harness-plan", "harness-enrich")).toBeUndefined();
   });
 
   it("never threads across a model switch within the column", () => {
@@ -734,7 +734,7 @@ describe("evaluateAutorunOnEntry — o condutor", () => {
 
   it("story ENTRANDO em fromStatus num board com conductor: despacha o condutor e NÃO roda a cascata", async () => {
     const config = withConductor([
-      { id: "pronta", name: "Pronta", trigger: "harness-prioritize", autorun: true }, // armada de propósito
+      { id: "pronta", name: "Pronta", trigger: "harness-plan", autorun: true }, // armada de propósito
     ]);
     vi.mocked(readBoardConfig).mockResolvedValue(config);
     vi.mocked(readCards).mockResolvedValue([card({ status: "pronta" })]);
@@ -762,7 +762,7 @@ describe("evaluateAutorunOnEntry — o condutor", () => {
   });
 
   it("board sem `conductor`: a mesma entrada segue a cascata de sempre", async () => {
-    vi.mocked(readBoardConfig).mockResolvedValue(cfg([{ id: "pronta", name: "Pronta", trigger: "harness-prioritize", autorun: true }]));
+    vi.mocked(readBoardConfig).mockResolvedValue(cfg([{ id: "pronta", name: "Pronta", trigger: "harness-plan", autorun: true }]));
     vi.mocked(readCards).mockResolvedValue([card({ status: "pronta" })]);
     await evaluateAutorunOnEntry("b", "c");
     expect(mockDispatchConductor).not.toHaveBeenCalled();
@@ -937,7 +937,7 @@ describe("evaluateAutorunOnEntry — o escopo de tipos do board (só consertos e
     expect(opts.scopeCard).toEqual({ id: "c", type: "story", storyType: "chore", mode: undefined, status: "desenvolver" });
   });
 
-  it.each(["capturando", "triage", "grill", "enriquecer", "interview", "priorizar", "pronta"])(
+  it.each(["capturando", "triage", "grill", "enriquecer", "interview", "pronta"])(
     "FORA da construção (%s): a funcionalidade nova continua andando para o tipo ser decidido",
     async (id) => {
       mockPaceRow.value = scopeRow();
@@ -1023,7 +1023,7 @@ describe("evaluateAutorunOnEntry — o escopo de tipos do board (só consertos e
   describe("o despacho do condutor", () => {
     it("funcionalidade nova entrando em fromStatus: NÃO despacha o condutor e fica anotada (espera o escopo alargar)", async () => {
       mockPaceRow.value = scopeRow();
-      vi.mocked(readBoardConfig).mockResolvedValue(withConductor([{ id: "pronta", name: "Pronta", trigger: "harness-prioritize", autorun: true }], "pronta"));
+      vi.mocked(readBoardConfig).mockResolvedValue(withConductor([{ id: "pronta", name: "Pronta", trigger: "harness-plan", autorun: true }], "pronta"));
       vi.mocked(readCards).mockResolvedValue([card({ status: "pronta", storyType: "user" })]);
       await evaluateAutorunOnEntry("b", "c");
       expect(mockDispatchConductor).not.toHaveBeenCalled();
@@ -1033,7 +1033,7 @@ describe("evaluateAutorunOnEntry — o escopo de tipos do board (só consertos e
 
     it("conserto entrando em fromStatus: o condutor é despachado normalmente", async () => {
       mockPaceRow.value = scopeRow();
-      vi.mocked(readBoardConfig).mockResolvedValue(withConductor([{ id: "pronta", name: "Pronta", trigger: "harness-prioritize", autorun: true }], "pronta"));
+      vi.mocked(readBoardConfig).mockResolvedValue(withConductor([{ id: "pronta", name: "Pronta", trigger: "harness-plan", autorun: true }], "pronta"));
       vi.mocked(readCards).mockResolvedValue([card({ status: "pronta", storyType: "bug" })]);
       await evaluateAutorunOnEntry("b", "c");
       expect(mockDispatchConductor).toHaveBeenCalledWith("b", "c");
@@ -1063,7 +1063,7 @@ describe("evaluateAutorunOnEntry — o escopo de tipos do board (só consertos e
 
     it("escopo alargado de volta (sem limite): a mesma funcionalidade nova é despachada", async () => {
       mockPaceRow.value = null;
-      vi.mocked(readBoardConfig).mockResolvedValue(withConductor([{ id: "pronta", name: "Pronta", trigger: "harness-prioritize", autorun: true }], "pronta"));
+      vi.mocked(readBoardConfig).mockResolvedValue(withConductor([{ id: "pronta", name: "Pronta", trigger: "harness-plan", autorun: true }], "pronta"));
       vi.mocked(readCards).mockResolvedValue([card({ status: "pronta", storyType: "user" })]);
       await evaluateAutorunOnEntry("b", "c");
       expect(mockDispatchConductor).toHaveBeenCalledWith("b", "c");

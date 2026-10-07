@@ -162,7 +162,7 @@ export function decideTriage(report: TriageReport, opts: { threshold?: number } 
 // --- Accept routing (Opção B, Fase 2) ---------------------------------------
 //
 // A card RESTS in triage until a human/agent ACCEPTS it. Acceptance routes it into
-// the right lane by the kind the intake persisted on the card (mirrors priorityKind):
+// the right lane by the kind the intake persisted on the card:
 //   bug  (storyType bug / mode fix)  → corrigir   (harness-fix)
 //   melhoria (mode refine)           → refinar    (harness-refine)
 //   feature (everything else)        → enriquecer (harness-enrich)

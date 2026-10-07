@@ -17,6 +17,22 @@ import { parseDocMd, serializeDocMd } from "./md-codec";
 export const STYLE_DOC_TYPE = "style";
 const HEADING_PREFIX = "style:";
 const READONLY_PREFIX = "style-ro:";
+/**
+ * As três listas do LÉXICO do tom (`voice.lexicon`), EDITÁVEIS pelo dono na página: o tom é dele, e o
+ * `write_styleguide` recusa a seção — sem isto ninguém mais conseguia mudar a lista de palavras. Cada lista é
+ * um subtítulo vinculado `style-lex:<lista>` dentro da região do tom; os itens dela são as linhas abaixo.
+ */
+const LEXICON_PREFIX = "style-lex:";
+/** O título de um GRUPO da página (`components/design/style-page.ts`) — apresentação, o commit o ignora. */
+export const GROUP_PREFIX = "style-group:";
+type LexiconList = "preferred" | "forbidden" | "exceptions";
+const LEXICON_LISTS: readonly { key: LexiconList; label: string }[] = [
+  { key: "preferred", label: "Prefira (use → em vez de)" },
+  { key: "forbidden", label: "Nunca use" },
+  { key: "exceptions", label: "Exceções" },
+];
+/** `use → evite` — o separador de um item de «Prefira» (aceita também `->`). */
+const PREFERRED_SEP = /\s*(?:→|->)\s*/;
 
 export const STYLE_ALLOWED_BLOCKS: DocBlock["kind"][] = [
   "paragraph",
@@ -35,7 +51,8 @@ type ProseKey =
   | "spacing"
   | "shape"
   | "motion"
-  | "voice";
+  | "voice"
+  | "components";
 
 const PROSE_KEYS: readonly ProseKey[] = [
   "identity",
@@ -46,6 +63,7 @@ const PROSE_KEYS: readonly ProseKey[] = [
   "shape",
   "motion",
   "voice",
+  "components",
 ];
 
 function proseOf(doc: StyleGuideDoc, key: string): string | null {
@@ -81,11 +99,42 @@ export function projectStyleDoc(doc: StyleGuideDoc): DocModel {
       if (prose.trim()) blocks.push(...reId(parseDocMd(prose).blocks, nextId));
       else blocks.push({ kind: "paragraph", id: nextId(), text: "" });
     }
+    if (def.key === "voice") blocks.push(...lexiconProjection(doc, nextId));
     const ro = readOnlyProjection(doc, def.key, nextId);
     if (ro) blocks.push(ro);
   }
 
   return { docType: STYLE_DOC_TYPE, title: "Guia de Estilo", blocks };
+}
+
+/** O léxico do tom como três listas editáveis (subtítulo vinculado + um item por linha; lista vazia = um item vazio). */
+function lexiconProjection(doc: StyleGuideDoc, nextId: () => string): DocBlock[] {
+  const out: DocBlock[] = [];
+  const lex = doc.voice.lexicon;
+  for (const list of LEXICON_LISTS) {
+    out.push({ kind: "heading", id: nextId(), level: 3, text: list.label, binding: `${LEXICON_PREFIX}${list.key}` });
+    const items = list.key === "preferred" ? lex.preferred.map((p) => `${p.use} → ${p.avoid}`) : lex[list.key];
+    if (!items.length) out.push({ kind: "bullet", id: nextId(), text: "" });
+    for (const text of items) out.push({ kind: "bullet", id: nextId(), text });
+  }
+  return out;
+}
+
+/** O texto de um bloco de lista/parágrafo, para virar item do léxico (`null` para o que não é linha de texto). */
+function lineText(block: DocBlock): string | null {
+  return block.kind === "bullet" || block.kind === "numbered" || block.kind === "paragraph" || block.kind === "todo"
+    ? block.text.trim()
+    : null;
+}
+
+/** As linhas de uma lista do léxico → o valor dela (linhas vazias somem; «Prefira» sem `→` vira `use` sem `avoid`). */
+function lexiconFromLines(key: LexiconList, lines: string[]): StyleGuideDoc["voice"]["lexicon"][LexiconList] {
+  const texts = lines.filter(Boolean);
+  if (key !== "preferred") return texts;
+  return texts.map((t) => {
+    const [use, ...rest] = t.split(PREFERRED_SEP);
+    return { use: use.trim(), avoid: rest.join(" ").trim() };
+  });
 }
 
 /** The structured half of a section, as ONE read-only section block (commit skips it). */
@@ -130,16 +179,16 @@ function readOnlyProjection(
     case "motion":
       body.push({ kind: "paragraph", id: nextId(), text: Object.entries(doc.motion.durations).map(([k, v]) => `${k}: \`${v}\``).join(" · ") || "—" });
       break;
-    case "voice":
-      if (doc.voice.lexicon.preferred.length)
+    // voice: o léxico é EDITÁVEL (lexiconProjection) — o tom é do dono, não do assistente
+    case "components":
+      // opcional: um guia de antes da seção (sem coerce) não a tem
+      if (doc.components?.items.length)
         body.push({
           kind: "table",
           id: nextId(),
-          header: ["Use", "Evite"],
-          rows: doc.voice.lexicon.preferred.map((p) => [p.use, p.avoid]),
+          header: ["Componente", "Regra"],
+          rows: doc.components.items.map((c) => [c.name, c.rule]),
         });
-      if (doc.voice.lexicon.forbidden.length)
-        body.push({ kind: "paragraph", id: nextId(), text: `Proibidos: ${doc.voice.lexicon.forbidden.map((f) => `\`${f}\``).join(", ")}` });
       break;
     case "antiPatterns":
       if (doc.antiPatterns.length)
@@ -158,8 +207,10 @@ function readOnlyProjection(
   return {
     kind: "section",
     id: nextId(),
-    label: "Estruturado (edite na view Estruturado)",
-    tone: "neutral",
+    // uma LEGENDA discreta (tom `note`), não um título por seção: o dado é mantido pelo assistente do guia
+    // (`write_styleguide`), e quem quer mudá-lo pede no compositor da página
+    label: "Mantido pelo assistente do guia — peça a mudança no compositor abaixo",
+    tone: "note",
     binding: `${READONLY_PREFIX}${key}`,
     body,
   };
@@ -175,12 +226,37 @@ export interface StyleCommitResult {
 export function commitStyleDoc(model: DocModel, prev: StyleGuideDoc): StyleCommitResult {
   const unbound: StyleCommitResult["unbound"] = [];
   const regions = new Map<string, DocBlock[]>();
+  const lexicon = new Map<LexiconList, string[]>();
   let currentKey: string | null = null;
+  let currentLex: LexiconList | null = null;
 
   for (const block of model.blocks) {
     if (block.kind === "properties") continue;
     if (block.kind === "section" && block.binding?.startsWith(READONLY_PREFIX)) continue;
+    // um título de GRUPO da página (Estética, Anti-padrões e dívidas): só apresentação
+    if (block.kind === "heading" && block.binding?.startsWith(GROUP_PREFIX)) {
+      currentKey = null;
+      currentLex = null;
+      continue;
+    }
+    // uma lista do léxico, dentro da região do tom
+    if (block.kind === "heading" && block.binding?.startsWith(LEXICON_PREFIX) && currentKey === "voice") {
+      const key = block.binding.slice(LEXICON_PREFIX.length) as LexiconList;
+      if (LEXICON_LISTS.some((l) => l.key === key)) {
+        currentLex = key;
+        if (!lexicon.has(key)) lexicon.set(key, []);
+        continue;
+      }
+    }
+    if (currentLex && currentKey === "voice" && block.kind !== "heading") {
+      const text = lineText(block);
+      if (text !== null) {
+        lexicon.get(currentLex)!.push(text);
+        continue;
+      }
+    }
     if (block.kind === "heading") {
+      currentLex = null;
       const bound = block.binding?.startsWith(HEADING_PREFIX)
         ? block.binding.slice(HEADING_PREFIX.length)
         : STYLE_SECTIONS.find((s) => s.label.toLowerCase() === block.text.trim().toLowerCase())?.key;
@@ -230,6 +306,16 @@ export function commitStyleDoc(model: DocModel, prev: StyleGuideDoc): StyleCommi
       changedSections.push(key);
     }
   }
+  // O léxico só muda quando a lista FOI editada (está no modelo): um modelo sem os subtítulos não apaga nada.
+  let lexChanged = false;
+  for (const [key, lines] of lexicon) {
+    const value = lexiconFromLines(key, lines);
+    if (JSON.stringify(value) !== JSON.stringify(prev.voice.lexicon[key])) {
+      (next.voice.lexicon as Record<LexiconList, unknown>)[key] = value;
+      lexChanged = true;
+    }
+  }
+  if (lexChanged && !changedSections.includes("voice")) changedSections.push("voice");
 
   return { doc: next, changedSections, unbound };
 }

@@ -46,7 +46,16 @@ const isAbort = (invoke: DecisionOption["invoke"]): boolean =>
   (invoke.kind === "resolve-merge" && invoke.action === "aborted") || (invoke.kind === "resolve-gate" && invoke.action === "abort");
 
 /**
- * O botão do card fechado: a opção PRINCIPAL do Inbox (`primaryOption`, a mesma régua do InboxItemCard) quando o card
+ * Um toque que ESCOLHE pelo dono: responder com uma alternativa que o agente não recomendou (só a recomendada é tom
+ * primary), ou liberar/aceitar o risco de um problema da revisão. A régua do primaryOption já não os promove por sobra;
+ * esta é a segunda trava, no próprio botão do card (uma alternativa de cobrança respondida com um toque no Kanban).
+ */
+const choosesForOwner = (o: DecisionOption): boolean =>
+  (o.invoke.kind === "answer-question" && Boolean(o.invoke.selectedOptionIds?.length) && o.tone !== "primary") ||
+  (o.invoke.kind === "update-finding" && (o.invoke.status === "wontfix" || o.invoke.status === "acknowledged"));
+
+/**
+ * O botão do card fechado: a opção PRINCIPAL do Inbox (`primaryOption`, a mesma régua das opções do item do Inbox) quando o card
  * consegue executá-la sozinho e com segurança — senão null, e a pílula leva ao Inbox, onde a decisão inteira está. PURA.
  *
  * Nunca cai para OUTRA opção. O defeito que a revisão achou: a régua antiga tirava conversa e leitura e pegava
@@ -69,6 +78,7 @@ function cardButtonOption(decision: Pick<ItemDecision, "options">, cardId: strin
   if (main.tone !== "primary" && decision.options.some((o) => o.tone === "primary" && o.disabled)) return null;
   if (main.auditCls === "read" || NOT_AN_OUTCOME.has(main.invoke.kind)) return null;
   if (main.tone === "danger" || main.auditCls === "destructive" || isAbort(main.invoke)) return null;
+  if (choosesForOwner(main)) return null;
   return main;
 }
 

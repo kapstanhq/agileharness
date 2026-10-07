@@ -1,8 +1,8 @@
 // @ts-nocheck
 /**
  * gate-core — the SINGLE SOURCE of the AgileHarness pipeline gates. Pure CommonJS with ZERO
- * imports, so it is ISOMORPHIC: the TS app imports it (typed via gate-core.d.ts — gates.ts /
- * rice.ts / priority.ts are thin re-export barrels over this file) AND the pre-write hook
+ * imports, so it is ISOMORPHIC: the TS app imports it (typed via gate-core.d.ts — gates.ts is a thin
+ * re-export barrel over this file) AND the pre-write hook
  * (`.claude/hooks/checks/pre-write/validate-storymap-gate.js`) `require()`s it directly,
  * after a js-yaml parse, instead of re-implementing the predicates in ~200 lines of regex.
  *
@@ -12,31 +12,6 @@
  * (the app's historical API); evaluateGate() returns the rich object the hook wraps. Keeping
  * ONE implementation is the whole point of B4 — there is no second copy to drift from.
  */
-
-/** RICE score — DERIVED, never persisted. score = (reach*impact*confidence)/effort; null unless
- *  all four are present AND effort > 0. (Was lib/storymap/rice.ts — now re-exported from here.) */
-function riceScore(rice) {
-  if (!rice) return null;
-  const { reach, impact, confidence, effort } = rice;
-  if (reach == null || impact == null || confidence == null || effort == null) return null;
-  if (!(effort > 0)) return null;
-  return (reach * impact * confidence) / effort;
-}
-
-/** Which prioritization shape a card scores under (DERIVED, so a reopened feature keeps its bet).
- *  (Was the head of lib/storymap/priority.ts — now re-exported from here.) */
-function priorityKind(card) {
-  if (card.kano != null && card.funnelStage != null && riceScore(card.rice) != null) return "feature";
-  if (card.storyType === "bug" || card.mode === "fix") return "bug";
-  if (card.mode === "refine") return "melhoria";
-  return "feature";
-}
-
-/** Canonical bug severity for prioritization: first-class `severity`, falling back to a
- *  reopened story's `bugReport.severity`. (Was lib/storymap/priority.ts — now re-exported.) */
-function bugSeverityOf(card) {
-  return card.severity ?? card.bugReport?.severity ?? null;
-}
 
 /** The Agile narrative is complete when all three clauses are written (non-empty after trim). */
 function hasNarrative(card) {
@@ -142,17 +117,16 @@ function qaHasEvidence(card) {
 
 /**
  * The gate map. Each entry: ok (predicate), label (UI chip), message (why blocked), fix (how to
- * unblock — surfaced by the pre-write hook). PT-BR throughout. Mirrors storymap/frameworks.md §4
- * for the prioritization rubric. THIS is the source; the hook reads board.yaml for which gate
+ * unblock — surfaced by the pre-write hook). PT-BR throughout. THIS is the source; the hook reads board.yaml for which gate
  * guards which status and runs these predicates on the parsed card.
  *
  * PARITY CONTRACT (raw js-yaml in the hook vs coerceCard() in the app) — proven by
  * gate-core-parity.test.ts. The predicates here check PRESENCE + the core gate logic, written to
  * be string/number/null-SAFE so a raw value and its coerced form reach the SAME verdict for every
- * WELL-FORMED card. They deliberately do NOT re-validate enums (kano/funnelStage/severity/frequency/
- * finding-status) nor re-coerce numbers to finite — that validation lives in coerceCard, and
+ * WELL-FORMED card. They deliberately do NOT re-validate enums (severity/finding-status) nor
+ * re-coerce numbers to finite — that validation lives in coerceCard, and
  * duplicating those constants here would re-create the drift B4 removed. So for MALFORMED inputs
- * (an invalid enum value, a non-finite RICE number) the hook is intentionally LENIENT: it never
+ * (an invalid enum value, a non-finite number) the hook is intentionally LENIENT: it never
  * FALSE-BLOCKS, and defers the strict check to the app's authoritative checkGate on the board move.
  */
 const GATES = {
@@ -166,7 +140,7 @@ const GATES = {
     label: "narrativa + aceite",
     ok: (card) => hasNarrative(card) && (card.acceptance?.length ?? 0) >= 1,
     message:
-      "Para entrar em Priorizar: escreva a narrativa da story (papel + quero/precisamos + para/de modo que) e ao menos 1 critério de aceite. Rode /harness-enrich — ou preencha os campos direto via update_card (MCP).",
+      "Para entrar em A fazer: escreva a narrativa da story (papel + quero/precisamos + para/de modo que) e ao menos 1 critério de aceite. Rode /harness-enrich — ou preencha os campos direto via update_card (MCP).",
     fix: "Escreva `narrative:` (role/want/soThat) + `acceptance:` (>= 1) no card (rode /harness-enrich, ou update_card no MCP). O gate valida o conteúdo final, não só a linha alterada.",
   },
   hasTasks: {
@@ -175,28 +149,6 @@ const GATES = {
     message:
       "Quebre a story em ao menos 1 task antes de mandá-la para Em desenvolvimento. Rode /harness-tasks (tasks NÃO é settável via update_card).",
     fix: "Preencha `tasks:` com >= 1 task — rode /harness-tasks (tasks NÃO está no update_card; é o único caminho). O gate valida o conteúdo final, não só a linha alterada.",
-  },
-  hasRice: {
-    label: "Prioridade",
-    // Prioridade argumentada (reasoning-first) satisfaz o gate — ninguém é forçado a inventar alcance/RICE.
-    ok: (card) => card.priorityCall != null || riceScore(card.rice) != null,
-    message: "Avalie a prioridade (rode /harness-prioritize) OU preencha o RICE (reach, impact, confidence e effort > 0) antes de marcar como Pronta p/ build.",
-    fix: "Rode /harness-prioritize (atribui um tier argumentado) OU complete os 4 campos de `rice:` (effort > 0). O gate valida o conteúdo final, não só a linha alterada.",
-  },
-  hasPrioritization: {
-    label: "Prioridade",
-    ok: (card) => {
-      // Prioridade ARGUMENTADA (reasoning-first) satisfaz o gate — ninguém é forçado a inventar alcance/RICE.
-      if (card.priorityCall) return true;
-      const kind = priorityKind(card);
-      if (kind === "bug") return bugSeverityOf(card) != null && card.frequency != null;
-      if (kind === "melhoria")
-        return card.rice?.impact != null && card.rice?.effort != null && card.rice.effort > 0;
-      return riceScore(card.rice) != null && card.kano != null && card.funnelStage != null;
-    },
-    message:
-      "Para marcar como Pronta p/ build, avalie a prioridade — rode /harness-prioritize (o agente atribui um TIER argumentado). Alternativa legada: preencher a priorização numérica do TIPO (feature → RICE+KANO+funil; bug → severidade+frequência; melhoria → impacto+esforço).",
-    fix: "Rode /harness-prioritize — grava a prioridade argumentada (priorityCall) e satisfaz o gate. Alternativa legada: feature → RICE+`kano`+`funnelStage` (update_card); bug → `severity`+`frequency` (SÓ via /harness-prioritize); melhoria → `impact`+`effort`. Espelha storymap/frameworks.md §4.",
   },
   hasTechPlan: {
     label: "plano técnico",
@@ -555,11 +507,25 @@ function describeCardKind(card) {
 /** Rótulo curto de cada gate, DERIVADO de GATES (substitui o Record paralelo que vivia na UI). */
 const GATE_LABELS = Object.fromEntries(Object.entries(GATES).map(([id, spec]) => [id, spec.label]));
 
-/** Resolve the gate id declared on a status in the board config, if any. Defensive: tolerates a
- *  malformed config (no statuses array) by returning undefined → "allow". */
+/**
+ * Gates APOSENTADOS, lidos como o sucessor — nunca descartados. A priorização saiu do pipeline e o `pronta` passou a
+ * exigir `hasRefinement`; um `board.yaml` antigo (o `_base` de um alvo que ainda não migrou) declara
+ * `pronta.gate: hasPrioritization`. Descartar o id desconhecido deixaria o `pronta` SEM gate — stories entrando em
+ * «A fazer» sem narrativa nem aceite —, o contrário do que o autor quis. Mesma régua dos tiers de modelo aposentados
+ * (types.ts `RETIRED_MODEL_TIERS`). Escrita nova passa pelos contratos (`oneOf(GATE_IDS)`) e é recusada.
+ */
+const RETIRED_GATE_SUCCESSORS = Object.freeze({ hasPrioritization: "hasRefinement", hasRice: "hasRefinement" });
+
+/** O id de gate canônico: o próprio, ou o sucessor de um aposentado. Qualquer outro valor passa como veio. */
+function canonicalGateId(id) {
+  return typeof id === "string" && Object.prototype.hasOwnProperty.call(RETIRED_GATE_SUCCESSORS, id) ? RETIRED_GATE_SUCCESSORS[id] : id;
+}
+
+/** Resolve the gate id declared on a status in the board config, if any (a retired id reads as its successor).
+ *  Defensive: tolerates a malformed config (no statuses array) by returning undefined → "allow". */
 function gateForStatus(config, statusId) {
   if (!statusId || !config || !Array.isArray(config.statuses)) return undefined;
-  return config.statuses.find((s) => s && s.id === statusId)?.gate;
+  return canonicalGateId(config.statuses.find((s) => s && s.id === statusId)?.gate);
 }
 
 /**
@@ -642,9 +608,6 @@ module.exports = {
   placementViolation,
   placementSpec,
   describeCardKind,
-  riceScore,
-  priorityKind,
-  bugSeverityOf,
   hasNarrative,
   hasUiSurface,
   qaVisualProof,
@@ -652,6 +615,8 @@ module.exports = {
   declaresCode,
   GATES,
   GATE_LABELS,
+  RETIRED_GATE_SUCCESSORS,
+  canonicalGateId,
   gateForStatus,
   evaluateGate,
   checkGate,

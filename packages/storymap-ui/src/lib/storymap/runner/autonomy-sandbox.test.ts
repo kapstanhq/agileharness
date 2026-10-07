@@ -1012,6 +1012,8 @@ describe("(6) LINT DE DÍVIDA — varre TODO o src, casa OS DOIS sinais, e a lis
     "lib/storymap/runner/proxy-spawn.ts",
     // política só-negócio: o revisor de segurança independente nasceu na postura (a forma do proxy e do revisor par).
     "lib/storymap/runner/security-review-spawn.ts",
+    // fase 6: os críticos do serviço nasceram na postura (a forma do revisor de segurança).
+    "lib/storymap/runner/critics-spawn.ts",
     "lib/storymap/runner/resolution-judge-spawn.ts",
     // v0.8.1 — DÍVIDA QUE JÁ EXISTIA, agora VISÍVEL. A sessão de trabalho (condutor, claude_new) sempre rodou
     // em bypass total por HERANÇA do `defaultMode: bypassPermissions` do operador — invisível a este lint,
@@ -1120,6 +1122,7 @@ describe("(6) LINT DE DÍVIDA — varre TODO o src, casa OS DOIS sinais, e a lis
       // mesmo motivo do revisor par — sem ele o CLI recusaria a flag da válvula como root.
       "lib/storymap/runner/proxy-spawn.ts": "nasceu na postura; o env só existe dentro da válvula explícita",
       "lib/storymap/runner/security-review-spawn.ts": "nasceu na postura; o env só existe dentro da válvula explícita",
+      "lib/storymap/runner/critics-spawn.ts": "nasceu na postura; o env só existe dentro da válvula explícita",
       // v0.8.1: a sessão de trabalho NÃO emite a flag (o fato 4 de session-spawn.ts) — o bypass vem HERDADO do
       // defaultMode do operador, e o env é o escape do guard de root do CLI para essa herança, só quando root +
       // bypass herdado (`hostNeedsRootBypass`). Sem ele toda sessão como root morre ao nascer.

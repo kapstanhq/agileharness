@@ -12,7 +12,7 @@
 // no enum só uma delas vai ser atualizada.
 //
 // PURO e sem imports de runtime (só o tipo), de propósito: assim o cliente também pode consumi-lo — é o
-// que deixa `delivery-view` (client-safe) derivar as raias daqui em vez de manter a sexta cópia.
+// que deixa a tela (a coluna do trem no Kanban) derivar daqui em vez de manter a sexta cópia.
 
 import type { MergeQueueStatus } from "./types";
 
@@ -42,10 +42,29 @@ export function isParkedMergeStatus(status: MergeQueueStatus): boolean {
  * ⚠️ `re-driving` está DELIBERADAMENTE de fora (story-ex0046): ele é TERMINAL para aquele branch — o
  * branch foi deletado e um run NOVO foi despachado —, então ele caduca como `done`/`failed` e não pode
  * bloquear a cabeça. Quem quiser "o train ainda vai mexer nisto?" (a pergunta da UI, que mostra
- * "re-executando" como algo em movimento) usa `delivery-view trainInFlight`, que é esta régua MAIS
+ * "re-executando" como algo em movimento) usa {@link trainInFlight}, que é esta régua MAIS
  * `re-driving`. As duas perguntas são diferentes e devem continuar sendo — o que não pode voltar a
  * existir é uma terceira lista escrita à mão.
  */
 export function isLiveMergeStatus(status: MergeQueueStatus): boolean {
   return isActiveMergeStatus(status) || isParkedMergeStatus(status);
+}
+
+/**
+ * O train está mexendo neste trabalho AGORA (vs. parado num desfecho)? `isActiveMergeStatus` MAIS `re-driving`:
+ * para o MOTOR, `re-driving` é terminal (o branch foi deletado, um run novo foi despachado); para quem OLHA a tela,
+ * "re-executando" é movimento. Derivar em vez de relistar deixa a diferença explícita: é UM termo somado.
+ */
+export function trainIsMoving(status: MergeQueueStatus): boolean {
+  return isActiveMergeStatus(status) || status === "re-driving";
+}
+
+/**
+ * A entrada pertence à raia do train na TELA — o train ainda vai mexer nela (anda) ou ela está parada esperando o
+ * OPERADOR (`gate-failed`/`conflict`). Fica de fora o que a fila guarda como HISTÓRIA (`done`, `failed`,
+ * `returned-to-session`): sem esse corte a raia mentia por acúmulo, com cadáveres de sessões que já não existem.
+ * Mudou-se de `delivery-view` para cá quando a Esteira saiu (fase 3): quem a consome é a coluna do trem do Kanban.
+ */
+export function trainInFlight(status: MergeQueueStatus): boolean {
+  return isLiveMergeStatus(status) || status === "re-driving";
 }

@@ -1,10 +1,9 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { overlayReserve } from "./useOverlayReserve";
 
 // O CELULAR e o AA do Inbox — o dono decide pelo celular, então o botão principal precisa ser lido
-// (contraste AA nos dois temas), tocado (alvos de 44–48 px) e visto (a pílula do feedback não cobre as opções).
+// (contraste AA nos dois temas), tocado (alvos de 44–48 px) e visto (nada preso por cima das opções).
 // Contraste medido sobre os TOKENS de globals.css (a fórmula do WCAG 2.x), não sobre um palpite.
 
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
@@ -59,21 +58,21 @@ describe("contraste AA nos dois temas", () => {
     const files = [
       ...readdirSync(fileURLToPath(new URL(".", import.meta.url))).filter((f) => f.endsWith(".tsx")).map((f) => `./${f}`),
       "../BoardHeader.tsx",
-      "../inicio/InboxPanel.tsx",
-      "../inicio/InboxItemScreen.tsx",
+      // a barra do topo: o ícone do Inbox e o seu painel (a home do Início saiu; a página do item mora em ./)
+      "../shell/InboxIconLink.tsx",
     ];
     // a classe crua (entre aspas/espaços), não a menção num comentário
     for (const f of files) expect(read(f), f).not.toMatch(/(?<=["' ])text-accent(?=["' ])/);
     expect(read("../nav/NavShell.tsx").slice(read("../nav/NavShell.tsx").indexOf("export function NavPopoverFooter("))).toMatch(/text-accent-ink/);
   });
 
-  it("a contagem da aba do celular é legível: a tinta escura do dono sobre o âmbar do dono, não branco sobre âmbar", () => {
-    // O âmbar da aba é o MESMO token do chip do desktop e da pílula do card (`--state-owner`), cuja
-    // legibilidade nos dois temas é medida em lib/storymap/presence-tone.test.ts. Era `amber-400`/`amber-950` cru.
-    const header = read("../BoardHeader.tsx");
-    const tab = header.slice(header.indexOf("function MobileInboxTab("), header.indexOf("function MobileInboxTab(") + 1400);
-    expect(tab).toMatch(/bg-state-owner[^"]*text-state-owner-fg/);
-    expect(tab).not.toMatch(/text-white/);
+  it("a contagem do Inbox na barra é legível: TINTA (`text-fg`) sobre a superfície, nunca branco nem o âmbar cru", () => {
+    // A aba do celular (âmbar do dono preenchido) saiu com a navegação inferior (fase 1). O número que ficou é o do
+    // ícone da barra, em tinta — 12,26:1 no claro (medido em globals.css); o âmbar ficou só para o ESTADO do card.
+    const link = read("../shell/InboxIconLink.tsx");
+    expect(link).toMatch(/<b className="[^"]*\btext-fg\b[^"]*">\{total == null \? "" : total\}<\/b>/);
+    expect(link).not.toMatch(/text-white/);
+    expect(read("../BoardHeader.tsx")).not.toMatch(/function MobileInboxTab\(/);
   });
 });
 
@@ -95,34 +94,53 @@ describe("alvos de toque de 44–48 px", () => {
     expect(small).toEqual([]);
   });
 
-  it("as opções do item têm 48 px; a página do item ausente leva a um alvo de 44 px", () => {
-    expect(read("./InboxItemCard.tsx")).toMatch(/min-h-12 w-full items-center justify-center/);
-    expect(read("../inicio/InboxItemScreen.tsx")).toMatch(/href=\{missing\.href\}[^>]*min-h-11/);
+  it("as opções do item têm 44 px e quebram linha (nada de rolagem de lado); a página do item ausente leva a um alvo de 44 px", () => {
+    const options = read("./InboxOptions.tsx");
+    expect(options).toMatch(/const BTN =\s*"inline-flex min-h-11 max-w-full /);
+    expect(options).toMatch(/<div className="flex flex-wrap gap-2">/);
+    expect(read("./InboxItemScreen.tsx")).toMatch(/href=\{missing\.href\}[^>]*min-h-11/);
+  });
+
+  // Visto no ar (v0.11.0, 390px): as faixas («Ative o aviso no celular…», «A ferramenta não está bem…») punham os
+  // botões AO LADO da frase, e o `flex-1` sem piso espremia a frase até uma palavra por linha. O contrato: a frase das
+  // faixas e avisos do Inbox tem PISO de largura numa linha que QUEBRA, e os botões andam juntos — no celular eles
+  // descem para baixo da frase, que fica com a largura inteira.
+  it("as faixas e os avisos do Inbox quebram as ações para BAIXO da frase no celular (a frase nunca é espremida)", () => {
+    const item = read("./InboxItem.tsx");
+    const banner = item.slice(item.indexOf('if (variant === "banner")'), item.indexOf('if (variant === "short")'));
+    expect(banner).toMatch(/data-host-notice=\{entry\.kind\}[^>]*className="flex flex-wrap /);
+    expect(banner).toMatch(/<p className="min-w-\[min\(100%,18rem\)\] flex-1 /);
+    // os botões num grupo só (descem juntos), cada um com 44 px
+    expect(banner).toMatch(/<div className="flex flex-wrap items-center gap-2" data-host-notice-actions>\s*\{shown\.map/);
+    expect(banner).toMatch(/"inline-flex min-h-11 items-center rounded-\[10px\]/);
+    const stale = read("./StaleArchive.tsx");
+    expect(stale).toMatch(/className="flex flex-wrap [^"]*" data-stale-archive>\s*<span className="min-w-\[min\(100%,18rem\)\] flex-1 /);
+    const caring = read("./AgentsCaring.tsx");
+    expect(caring).toMatch(/aria-controls="inbox-cuidando-body"[\s\S]{0,120}className="flex min-h-12 w-full flex-wrap /);
+    expect(caring).toMatch(/id="inbox-cuidando" className="min-w-\[min\(calc\(100%_-_1\.5rem\),14rem\)\] flex-1 /);
+    // e nenhuma frase de faixa volta ao `min-w-0 flex-1` sem piso (a forma que espremia)
+    for (const src of [banner, stale, caring]) expect(src).not.toMatch(/<(p|span)[^>]*className="min-w-0 flex-1/);
   });
 });
 
-describe("a pílula do feedback não cobre as opções", () => {
-  it("a barra de decisão reserva o espaço da pílula enquanto passa por baixo dela", () => {
-    // celular: a barra ocupa a largura toda, 180 px acima do fim da tela → a pílula sobe 180 px
-    expect(overlayReserve({ top: 664, bottom: 844, left: 0 }, 844)).toBe(180);
-    // desktop: a coluna começa à direita da pílula → nada a reservar
-    expect(overlayReserve({ top: 700, bottom: 900, left: 336 }, 900)).toBeNull();
-    // fora da tela → nada
-    expect(overlayReserve({ top: 900, bottom: 1080, left: 0 }, 844)).toBeNull();
+// A barra de decisão PRESA embaixo (a folha e a página do item) e a reserva da pílula do feedback saíram com ela na
+// fase 3: as opções moram no próprio item, na lista. O que prova que nada cobre as opções agora é a AUSÊNCIA de peça
+// presa e a reserva do rodapé do compositor nas duas páginas (o último item rola para cima dele).
+describe("nada preso por cima das opções", () => {
+  it("o item não tem barra presa nem folha modal; as páginas reservam o rodapé do compositor", () => {
+    const item = read("./InboxItem.tsx");
+    expect(item).not.toMatch(/\bsticky\b|aboveComposer|useOverlayReserve/);
+    expect(item).not.toMatch(/aria-modal/);
+    expect(read("../CockpitView.tsx")).toMatch(/\$\{composerGutter\}/);
+    expect(read("./InboxItemScreen.tsx")).toMatch(/\$\{composerGutter\}/);
   });
 
-  it("o cartão aberto liga a reserva na barra presa embaixo, e a reserva sai quando o item fecha", () => {
-    const card = read("./InboxItemCard.tsx");
-    expect(card).toMatch(/useOverlayReserve\(barRef\)/);
-    expect(card).toMatch(/<div ref=\{barRef\} className=\{cn\(sticky/);
-    const hook = read("./useOverlayReserve.ts");
-    expect(hook).toMatch(/setProperty\("--ah-bottom-reserve"/);
-    expect(hook).toMatch(/return \(\) => \{[\s\S]*removeProperty\("--ah-bottom-reserve"\)/);
-    // o overlay lê a MESMA variável (o contrato do host)
-    expect(read("../../../public/ah-overlay.js")).toContain("var(--ah-bottom-reserve, 0px)");
+  it("o foco é visível no item (a lista leva o foco ao próximo depois do clique) e nas opções", () => {
+    expect(read("./InboxItem.tsx")).toMatch(/tabIndex=\{-1\}[\s\S]{0,200}focus-visible:ring-2/);
+    expect(read("./InboxOptions.tsx")).toMatch(/focus-visible:ring-2 focus-visible:ring-accent/);
   });
 
-  it("a folha aberta deixa o fundo `inert` (o leitor de tela e o Tab não saem dela)", () => {
-    expect(read("./InboxSheet.tsx")).toMatch(/setAttribute\("inert", ""\)/);
+  it("a seta da linha recolhida respeita `prefers-reduced-motion`", () => {
+    expect(read("./AgentsCaring.tsx")).toMatch(/motion-reduce:transition-none/);
   });
 });

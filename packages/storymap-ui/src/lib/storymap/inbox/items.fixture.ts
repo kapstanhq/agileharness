@@ -46,9 +46,6 @@ const BASE_CARD = {
   narrative: { role: "", want: "", soThat: "" },
   acceptance: [],
   tasks: [],
-  rice: {},
-  kano: null,
-  funnelStage: null,
   findings: [],
   order: 10,
   created: "2026-09-20",
@@ -97,7 +94,7 @@ export const FIXTURES: Record<CockpitItemKind, { item: CockpitItem; card: Card }
       causeKey: "loja:owner:money",
       pkg: "loja",
       ownerClass: "money",
-      approvals: [{ hash: `sha256:${"b".repeat(64)}`, files: ["src/cobranca/precos.ts"], units: ["site"], rules: ["codigo-de-cobranca"] }],
+      approvals: [{ hash: `sha256:${"b".repeat(64)}`, files: ["src/cobranca/precos.ts"], units: ["face:loja"], rules: ["codigo-de-cobranca"] }],
       rerequesting: false,
       stale: false,
     }),
@@ -153,6 +150,36 @@ export const FIXTURES: Record<CockpitItemKind, { item: CockpitItem; card: Card }
     }),
     card: mkCard({ status: "desenvolver" }),
   },
+  // fase 3 — as alavancas da Esteira e os avisos do host (sem card: `cardId` "")
+  "publish-held": {
+    item: mkItem("publish-held", {
+      id: "pub:pub-ex9001",
+      cardId: "",
+      cardTitle: "Publicação do board",
+      status: null,
+      lane: "aprovar",
+      requestId: "pub-ex9001",
+      reason: "trabalho vivo nos mesmos arquivos — sessão s-ex9001, arquivos src/catalogo/busca.ts",
+      heldCount: 14,
+      nextAttemptAt: "2026-09-28T20:05:00Z",
+      blocked: true,
+    }),
+    card: mkCard(),
+  },
+  "stage-idle": { item: mkItem("stage-idle", { id: "stage:b1", cardId: "", cardTitle: "Entregas prontas", status: null, lane: "aprovar", severity: "medium", pending: 3, hours: 30, canPublish: true }), card: mkCard() },
+  "capacity-latch": {
+    item: mkItem("capacity-latch", { id: "host:latch:1", cardId: "", cardTitle: "Cota da conta", status: null, level: "soft", reason: "janela de 7 dias em 93% (trava em 92%)", trippedBy: "auto:week", halt: false }),
+    card: mkCard(),
+  },
+  "host-health": {
+    item: mkItem("host-health", { id: "host:health:S1", cardId: "", cardTitle: "Saúde da ferramenta", status: null, signals: [{ id: "S1", label: "Cards parados", detail: "4 cards parados há mais de um dia" }], at: "2026-09-28T19:55:00Z" }),
+    card: mkCard(),
+  },
+  sentinel: {
+    item: mkItem("sentinel", { id: "sentinel:stalled-run:b1:x", cardId: "c1", cardTitle: "Livro de exemplo", status: null, causeKey: "stalled-run:b1:x", causeId: "stalled-run-abc12", diagnosis: "A execução do card parou sem saída; a cópia de trabalho está limpa.", cardIds: ["c1"], tried: false }),
+    card: mkCard(),
+  },
+  "push-off": { item: mkItem("push-off", { id: "host:push-off", cardId: "", cardTitle: "Aviso no celular", status: null, lane: "aprovar", severity: "low", since: null }), card: mkCard() },
 };
 
 export const KINDS = Object.keys(FIXTURES) as CockpitItemKind[];
